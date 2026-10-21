@@ -5,8 +5,6 @@ with the fastembed stubs from conftest.py.  No HTTP involved.
 """
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
 
 import pytest
 
@@ -619,7 +617,7 @@ class TestS15_10_LegacyHistoryPathMigration:
     @pytest.mark.asyncio
     async def test_sync_migrates_archon_history_to_sessions_subpath(self, connected_store, tmp_path):
         """When archon-history table exists but sessions does not, sync migrates it."""
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock, MagicMock
 
         from archon_search._types import CollectionInfo
 

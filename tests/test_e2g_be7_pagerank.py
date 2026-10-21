@@ -776,7 +776,6 @@ def test_pageRankRecompute_hookFailureDoesNotPropagate(
     from archon_search.reranker import Reranker
 
     col = col_name
-    ns = "default"
 
     graph_config = GraphConfig(enabled=True)
 

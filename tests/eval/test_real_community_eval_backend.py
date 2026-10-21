@@ -192,7 +192,6 @@ class TestRealCommunityBackendIntegration:
         """RealCommunityEvalBackend.communities_table_exists returns correct status."""
         pytest.importorskip("leidenalg")
 
-        from pathlib import Path
 
         from archon_search.eval.backends import RealCommunityEvalBackend
         from archon_search.graph_store import GraphStore
@@ -248,7 +247,7 @@ class TestRealCommunityBackendIntegration:
 
         config = GraphConfig(enabled=True, leiden_resolution=1.0)
         builder = CommunityBuilder(gs, config)
-        communities = await builder.build(col, ns=ns, seed=42)
+        await builder.build(col, ns=ns, seed=42)
 
         # Now communities table should exist
         backend = RealCommunityEvalBackend(graph_store=gs)
@@ -272,16 +271,12 @@ class TestRealCommunityBackendIntegration:
         """RealCommunityEvalBackend.find_nodes_by_name returns matching entities."""
         pytest.importorskip("leidenalg")
 
-        from pathlib import Path
 
         from archon_search.eval.backends import RealCommunityEvalBackend
         from archon_search.graph_store import GraphStore
         from archon_search.graph_types import (
             EntityType,
-            GraphEdge,
             GraphNode,
-            RelationshipType,
-            make_stable_edge_id,
             make_stable_entity_id,
         )
 

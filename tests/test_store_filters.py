@@ -7,7 +7,6 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 

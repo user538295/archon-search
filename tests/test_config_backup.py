@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.config import BackupConfig, SearchConfig, load_config
+from archon_search.config import SearchConfig, load_config
 from archon_search.paths import get_data_dir
 
 

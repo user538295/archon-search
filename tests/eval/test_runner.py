@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import textwrap
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -281,7 +280,6 @@ from dataclasses import asdict
 
 from archon_search.eval.runner import (
     EvalBaseline,
-    EvalReport,
     load_baseline,
     run_eval_suite,
 )
@@ -615,7 +613,6 @@ contract_enabled = false
     corpus_root.mkdir()
     big_corpus = corpus_root / "corpus"
     (big_corpus / "alpha").mkdir(parents=True)
-    big_text = ("retry timeout http client " * 400 + "\n")  # large enough to chunk
     docs = []
     # 10 alpha docs but only first 3 have query-matching content; rest are off-topic dense docs
     # Actually trigger relies on fewer unique docs in TOP candidate_depth. Use 10 identical-content
@@ -1355,7 +1352,6 @@ def test_render_report_includes_all_metric_categories() -> None:
 
 def test_routing_mrr_centroid_in_eval_metrics() -> None:
     """EvalMetrics has routing_mrr_centroid field accessible and defaults to None."""
-    from archon_search.eval.types import EvalMetrics
     m = _make_metrics()
     assert hasattr(m, "routing_mrr_centroid")
     assert m.routing_mrr_centroid is None
@@ -1539,8 +1535,6 @@ def test_hybrid_and_centroid_metrics_are_independent() -> None:
             latency_ms=1.0,
         )
     ]
-    hybrid_traces: list[QueryEvalTrace] = list(centroid_traces)  # shallow copy
-
     # Append to centroid — hybrid must not grow if it was a separate list
     centroid_traces2: list[QueryEvalTrace] = list(centroid_traces)
     hybrid_traces2: list[QueryEvalTrace] = []  # separate object
@@ -1565,8 +1559,6 @@ async def test_hybrid_metric_differs_from_centroid_when_description_changes_orde
     tmp_path: Path, monkeypatch
 ) -> None:
     """When the hybrid router returns a different ranking, routing_mrr_hybrid != routing_mrr_centroid."""
-    from unittest.mock import AsyncMock, patch, MagicMock
-    from archon_search.collection_meta import CollectionMeta
     from archon_search.eval import runner as runner_mod
 
     corpus_root = tmp_path / "corpus_root"
@@ -1577,7 +1569,6 @@ async def test_hybrid_metric_differs_from_centroid_when_description_changes_orde
     # We'll intercept _run_router_for_query so centroid returns ["alpha", "beta"]
     # and hybrid returns ["beta", "alpha"] for the routing query q-r-01.
     # q-r-01's gold collection is "alpha", so centroid MRR=1.0, hybrid MRR=0.5.
-    real_run_router = runner_mod._run_router_for_query
     call_counts: dict[str, int] = {"centroid": 0, "hybrid": 0}
 
     async def fake_run_router(pipeline, query_text, collection_metas, *, strategy="centroid", description_weight=0.3):
@@ -1615,7 +1606,6 @@ async def test_hybrid_router_receives_metas_with_populated_description_embedding
     get_all_collections_meta to return metas that simulate post-`recompute_collection_meta`
     state with descriptions populated.
     """
-    from unittest.mock import AsyncMock
     import archon_search.router as router_mod
     from archon_search.eval import runner as runner_mod
     from archon_search.collection_meta import CollectionMeta
@@ -1658,8 +1648,6 @@ async def test_hybrid_router_receives_metas_with_populated_description_embedding
         ),
     ]
 
-    real_run_router = runner_mod._run_router_for_query
-
     async def patched_get_metas(pipeline):
         return fake_metas
 
@@ -1677,7 +1665,6 @@ async def test_hybrid_router_receives_metas_with_populated_description_embedding
 
     # Also patch get_all_collections_meta on the pipeline class to return fake metas.
     from archon_search.pipeline import SearchPipeline
-    original_get_all = SearchPipeline.get_all_collections_meta
 
     async def fake_get_all(self):
         # Return metas with description_embedding populated
@@ -1685,7 +1672,7 @@ async def test_hybrid_router_receives_metas_with_populated_description_embedding
 
     monkeypatch.setattr(SearchPipeline, "get_all_collections_meta", fake_get_all)
 
-    report = await run_eval_suite(corpus_root, runtime)
+    await run_eval_suite(corpus_root, runtime)
 
     assert len(received_metas_for_hybrid) >= 1, (
         "_run_router_for_query was never called with strategy='hybrid'"

@@ -3,10 +3,9 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-import pytest
 
 from archon_search.jobs.store import JobStore
-from archon_search.types import DeleteJob, IngestJob, JobStatus, ReindexJob
+from archon_search.types import DeleteJob, JobStatus, ReindexJob
 
 
 def _now():

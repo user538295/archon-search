@@ -630,7 +630,6 @@ async def _build_pipeline_with_eval_backends(
     await store.connect()
 
     graph_expander = None
-    community_store_stub = None
     if backend == "live":
         from archon_search.embedder import ModelEmbedder
         from archon_search.reranker import ModelReranker

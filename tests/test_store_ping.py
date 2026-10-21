@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -93,7 +93,6 @@ async def test_ping_ttl_cache_expires(tmp_path):
     mock_tables_result.tables = []
     mock_db.list_tables = AsyncMock(return_value=mock_tables_result)
     s._db = mock_db
-    t0 = 1000.0
     # Let ping() run normally for the first call so _ping_cache is written with a
     # real timestamp, then force monotonic to return a value past the TTL for the
     # second call's TTL check, guaranteeing the cache is seen as expired.

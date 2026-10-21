@@ -285,8 +285,8 @@ def test_e2e_mcp_search_multi_collection_file_type_filter(
         # Results must be non-empty — both collections have .py files
         results = payload["results"]
         assert results, (
-            f"Expected non-empty results from .py filter across both collections; "
-            f"got empty results. Both collections have .py files ingested."
+            "Expected non-empty results from .py filter across both collections; "
+            "got empty results. Both collections have .py files ingested."
         )
 
         # All results must have file_type == 'py' — .md file from col_b must be excluded

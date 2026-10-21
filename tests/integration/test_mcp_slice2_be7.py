@@ -198,7 +198,7 @@ def test_namespace_isolation_via_mcp(tmp_path, monkeypatch) -> None:
             f"Full result: {result_a!r}"
         )
         tool_text_a = content_a[0].get("text", "")
-        assert tool_text_a, f"Expected non-empty text in col-a search result content"
+        assert tool_text_a, "Expected non-empty text in col-a search result content"
         parsed_a = json.loads(tool_text_a)
         assert isinstance(parsed_a, dict) and "results" in parsed_a, (
             f"Expected results dict from col-a search, got: {parsed_a!r}"

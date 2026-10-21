@@ -6,7 +6,6 @@ Tests that _schema() includes acl_source (utf8 nullable), acl_sidecar_path
 from __future__ import annotations
 
 import pyarrow as pa
-import pytest
 
 from archon_search.store import SearchStore
 

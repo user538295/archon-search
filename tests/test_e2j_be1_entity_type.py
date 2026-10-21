@@ -6,7 +6,6 @@ Tests (TDD — written before implementation):
 """
 from __future__ import annotations
 
-import pytest
 
 from archon_search.graph_inspector import GraphNodeInspection
 

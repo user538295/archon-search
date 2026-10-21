@@ -23,7 +23,6 @@ def _tokenize(text: str) -> list[str]:
 def _token_to_vec(token: str, dim: int = 128) -> list[float]:
     """Map a token to a dim-dimensional float vector via SHA-256 with block salting."""
     token_bytes = token.encode("utf-8")
-    block_size = 32  # SHA-256 produces 32 bytes
     vec: list[float] = []
     block = 0
     while len(vec) < dim:

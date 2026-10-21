@@ -34,7 +34,7 @@ The authoritative contract is `GET /openapi.json` on the running server. Everyth
 - **No streaming search results.** Responses are fully buffered JSON. The MCP `ingest_directory` tool streams *progress*, not results.
 - **No webhooks or push notifications.** Job state is poll-only (`GET /jobs/{id}`); watcher-triggered reindexing is observable only through `GET /indexing-state` and `GET /status`.
 - **No client SDKs published.** Use any HTTP client. Examples in this guide use `httpx` (Python) and `fetch` (TypeScript); the "30-line" sizing in earlier drafts is editorial and not enforced by anything in the codebase. #Unverified
-- **No per-request `top_k`.** The `top_k` field on `SearchRequest` is still declared and validated (`routes_search.py`: `top_k: int = Field(default=5, ge=1, le=100)`) but is never passed through to the pipeline, which uses `self._top_k_return` from `[search] top_k_return` in `archon-search.toml`. `BREAKING.md` frames this as the current behavior rather than a backwards-compatibility shim.
+- **No per-request `top_k`.** The `top_k` field on `SearchRequest` is still declared and validated (`routes_search.py`: `top_k: int = Field(default=5, ge=1)`, plus the route's `[search].top_k_max` check) but is never passed through to the pipeline, which uses `self._top_k_return` from `[database] top_k_return` in `archon-search.toml`. `BREAKING.md` frames this as the current behavior rather than a backwards-compatibility shim.
 
 ## A 60-second mental model
 

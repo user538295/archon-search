@@ -10,7 +10,7 @@ Run with:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,12 +18,9 @@ from archon_search.config import GraphConfig
 from archon_search.graph_store import GraphStore
 from archon_search.graph_types import (
     EntityType,
-    GraphEdge,
     GraphExtractionResult,
     GraphMention,
     GraphNode,
-    RelationshipType,
-    make_stable_edge_id,
     make_stable_entity_id,
 )
 

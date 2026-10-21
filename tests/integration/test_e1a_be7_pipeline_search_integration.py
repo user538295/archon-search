@@ -6,7 +6,6 @@ real embedder stubs are used so the full hybrid-search path is exercised.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -74,7 +73,6 @@ async def test_pipeline_search_naive_expands_query(connected_store, col_name, tm
     await pipeline.ingest_file(doc, col_name, embedder=embedder)
 
     # Patch _search_standard to capture what query it receives
-    from archon_search.pipeline import SearchPipelineResult
     received_queries: list[str] = []
     original_search_std = pipeline._search_standard
 

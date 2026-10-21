@@ -9,7 +9,6 @@ import importlib.resources
 import re
 from pathlib import Path
 
-import pytest
 
 _SERVER_PKG = importlib.resources.files("archon_search.server")
 _HTML_PATH = Path(__file__).resolve().parents[2] / "archon_search" / "server" / "graph_viewer.html"

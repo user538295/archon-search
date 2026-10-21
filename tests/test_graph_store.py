@@ -425,7 +425,6 @@ def test_get_neighbours_returns_first_degree() -> None:
 
     node_a = _node("A", EntityType.concept)
     node_b = _node("B", EntityType.concept)
-    node_c = _node("C", EntityType.concept)
 
     # Edge A→B (node_a is source, node_b is target)
     edge_ab = _edge(node_a, node_b)

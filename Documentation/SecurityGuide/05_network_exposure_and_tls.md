@@ -23,8 +23,8 @@ For threat-model context, see [`01_threat_model.md`](./01_threat_model.md). For 
 | --- | --- | --- |
 | `[server].host` | `127.0.0.1` | `archon_search/config.py` `SearchConfig.host` |
 | `[server].port` | `8765` | `archon_search/config.py` `SearchConfig.port` |
-| TLS | not supported natively | `archon_search/server/app.py:156` `run_server` calls `uvicorn.run(app, host=config.host, port=config.port)` with no `ssl_certfile`/`ssl_keyfile` |
-| CORS allow-origin | `*` | `archon_search/server/app.py:122` `app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])` |
+| TLS | not supported natively | `archon_search/server/app.py:1225` `run_server` calls `uvicorn.run(app, host=config.host, port=config.port)` (`app.py:1261–1265`) with no `ssl_certfile`/`ssl_keyfile` |
+| CORS allow-origin | `*` | `archon_search/server/app.py:1002` `app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])` |
 | CORS preflight bypass of auth | yes, by design (FastAPI `CORSMiddleware` is added *after* `APIKeyMiddleware`, so it runs first on the request path) | `tests/server/test_openapi_schema.py:79` (`test_cors_preflight_to_protected_endpoint_not_blocked`) documents the preflight contract |
 
 A consequence of the middleware ordering: `OPTIONS /<any>` preflight requests do **not** require a bearer token. This is necessary for browsers, but it means CORS is the only layer governing whether a remote origin can attempt cross-origin requests.

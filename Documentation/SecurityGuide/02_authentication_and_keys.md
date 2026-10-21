@@ -56,7 +56,7 @@ The directory `~/.archon-search/` is created with `os.makedirs(..., exist_ok=Tru
 | `ARCHON_SEARCH_KEY_FILE` | Read/write the key file at this path instead of the default. Resolved lazily on every call via `key_manager.get_key_file()` (no module import-time capture), so the container entrypoint or test harness can set it after Python imports `archon_search`. | Must be an absolute path; empty/whitespace falls through to the `DATA_DIR`-derived default; `~` is expanded; a tilde with HOME unset raises `ValueError`. |
 | `ARCHON_SEARCH_DATA_DIR` | Re-roots the default key file to `$DATA_DIR/.search.env` when `ARCHON_SEARCH_KEY_FILE` is not set. Set this in the container image (`ENV ARCHON_SEARCH_DATA_DIR=/data`) to land the key on the mounted volume. | Validated by `archon_search.paths.get_data_dir()` — must be absolute, non-empty. |
 
-There is no env override for the per-namespace map — those are loaded from `[namespaces]` in `archon-search.toml` (`archon_search/config.py:225–233`).
+There is no env override for the per-namespace map — those are loaded from `[namespaces]` in `archon-search.toml` (`archon_search/config.py:806–820`).
 
 ## Per-namespace keys
 
@@ -68,7 +68,7 @@ The `[namespaces]` block maps a hex key to a namespace identifier:
 "cafef00d…" = "team-b"
 ```
 
-Each entry adds another bearer token that, when presented, scopes the request to its namespace. Keys are validated only for type at config load (string-to-string); the format check (`^[0-9a-f]+$`) is not currently re-applied at this layer — invalid hex will simply never match a token, with no early diagnostic. Namespace values are validated by `_validate_namespace` at request time (`middleware_auth.py:56`); a malformed value returns `500` to the client and logs an error.
+Each entry adds another bearer token that, when presented, scopes the request to its namespace. Keys are validated only for type at config load (string-to-string); the format check (`^[0-9a-f]+$`) is not currently re-applied at this layer — invalid hex will simply never match a token, with no early diagnostic. Namespace values are validated by `_validate_namespace` at config load (`archon_search/config.py:813–818`, a malformed value raises `ConfigError`) and again at request time (`middleware_auth.py:99–103`), where a malformed value returns `500` to the client and logs an error.
 
 ## Current limitations
 

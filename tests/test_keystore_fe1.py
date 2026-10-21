@@ -7,7 +7,6 @@ Covers:
 """
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -27,7 +26,6 @@ def test_duration_parser_30d():
 
     before = datetime.now(UTC)
     result = _parse_expires("30d")
-    after = datetime.now(UTC)
 
     assert result is not None
     assert result.tzinfo is not None

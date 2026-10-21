@@ -76,10 +76,10 @@ def test_accept_fasttext_license_flag_present(runner: CliRunner) -> None:
 
 def test_install_multilingual_non_interactive_with_flag(runner: CliRunner) -> None:
     """When --accept-fasttext-license is set, _prompt_fasttext_license is called with accept_fasttext_license=True."""
-    with patch("archon_search.install.installer._prompt_fasttext_license") as mock_prompt, \
-         patch("archon_search.install.installer._download_fasttext_model") as mock_download, \
+    with patch("archon_search.install.installer._prompt_fasttext_license"), \
+         patch("archon_search.install.installer._download_fasttext_model"), \
          patch("archon_search.install.BaseInstaller.run", return_value=0) as mock_run:
-        result = runner.invoke(
+        runner.invoke(
             main,
             ["wizard", "--multilingual", "--accept-fasttext-license", "--non-interactive",
              "--accept-jina-license"],
@@ -96,7 +96,7 @@ def test_install_multilingual_non_interactive_with_flag(runner: CliRunner) -> No
 def test_install_without_fasttext_flag_passes_false(runner: CliRunner) -> None:
     """When --accept-fasttext-license is NOT set, accept_fasttext_license=False is passed."""
     with patch("archon_search.install.BaseInstaller.run", return_value=0) as mock_run:
-        result = runner.invoke(
+        runner.invoke(
             main,
             ["wizard", "--multilingual", "--non-interactive", "--accept-jina-license"],
         )

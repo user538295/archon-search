@@ -12,7 +12,7 @@ from archon_search._types import ChunkRecord
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder import Embedder
 from archon_search.pipeline import ExplainPipelineResult, ExplainStageError, SearchPipeline
-from archon_search.reranker import Reranker, RerankerBackend
+from archon_search.reranker import Reranker
 
 
 # ---------------------------------------------------------------------------

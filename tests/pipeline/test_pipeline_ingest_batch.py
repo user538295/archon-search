@@ -6,12 +6,11 @@ and related behavioural guarantees using a mock store.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from archon_search._types import ChunkRecord, IngestResult
+from archon_search._types import ChunkRecord
 from archon_search.config import SearchConfig
 from archon_search.constants import _INGEST_CHUNK_BATCH_SIZE as _BATCH_SIZE
 from archon_search.store import ChunkIngestResult
@@ -19,7 +18,7 @@ from archon_search.chunker import DocumentChunker
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
 
-from .conftest import MockEmbedderBackend, MockRerankerBackend, make_embedder, make_reranker
+from .conftest import make_embedder, make_reranker
 
 
 def _make_records(n: int, doc_id: str = "test-doc-id") -> list[ChunkRecord]:
@@ -246,7 +245,6 @@ async def test_ensure_collection_and_delete_called_once(tmp_path: Path):
     call_order: list[str] = []
     original_ensure = store.ensure_collection.side_effect
     original_delete = store.delete_document.side_effect
-    original_ingest = store.ingest_chunks.side_effect
 
     async def _track_ensure(*a, **kw):
         call_order.append("ensure")

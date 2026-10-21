@@ -25,7 +25,7 @@ from archon_search.graph_expander import tokenize_and_generate_ngrams
 
 if TYPE_CHECKING:
     from archon_search.graph_store import GraphStore
-    from archon_search.graph_types import GraphEdge, GraphNode, GraphMention
+    from archon_search.graph_types import GraphEdge, GraphNode
 
 _logger = logging.getLogger(__name__)
 

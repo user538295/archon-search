@@ -10,7 +10,7 @@ from archon_search.observability import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable
     from typing import Any
 
 
@@ -37,7 +37,6 @@ class RequestContextMiddleware:
         request_id = sanitized if sanitized is not None else new_correlation_id()
         token = correlation_id.set(request_id)
 
-        header_pair = (b"x-request-id", request_id.encode())
         # Use the configured header name for the response too
         response_header_bytes = self._header_name_bytes
 

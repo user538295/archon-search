@@ -10,7 +10,6 @@ Covers:
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -439,7 +438,6 @@ async def test_get_status_graph_fields_after_gc(
     from fastapi.testclient import TestClient
 
     from archon_search.collection_meta import CollectionMeta
-    from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
 
     # Use the fixed test API key from conftest to avoid env-var contamination.

@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search.config import GraphConfig
 from archon_search.graph_types import Community
 from archon_search.pipeline import GraphCommunitiesNotBuiltError, SearchPipelineResult

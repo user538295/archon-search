@@ -141,7 +141,6 @@ def test_startup_migration_runs_on_server_start(tmp_path, monkeypatch) -> None:
     import lancedb
     import pyarrow as pa
 
-    from archon_search.collection_meta import CollectionMeta
     from archon_search.store import SearchStore
     from archon_search._types import normalize_iso_utc
 
@@ -317,7 +316,6 @@ async def test_candidate_builder_reads_provenance_from_row(tmp_path) -> None:
     pre-migration null row yields None/[] without error.
     """
     import lancedb
-    import pyarrow as pa
 
     from archon_search._types import normalize_iso_utc
     from archon_search.store import SearchStore
@@ -579,7 +577,7 @@ async def test_do_ingest_guard_no_warning_for_null_provenance(tmp_path, caplog) 
         ]
         assert positive_warnings, (
             "Expected a G15/acl_provenance WARNING when ingesting a non-null-provenance chunk "
-            f"into an unmigrated table, but none were emitted. Guard may be broken."
+            "into an unmigrated table, but none were emitted. Guard may be broken."
         )
     finally:
         await store.disconnect()

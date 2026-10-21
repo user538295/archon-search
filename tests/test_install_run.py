@@ -2170,7 +2170,6 @@ def _run_with_key_source(
     """
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
-    key_file = tmp_path / ".search.env"
 
     with (
         patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}),
@@ -2218,8 +2217,6 @@ def test_run_success_prints_full_key_env_var(tmp_path: Path, capsys) -> None:
 
 def test_run_success_prints_full_key_auto_generated(tmp_path: Path, capsys) -> None:
     """Success output includes full key + 'generated fresh' + key file path."""
-    key_file = tmp_path / ".search.env"
-
     rc, stdout = _run_with_key_source(
         tmp_path,
         _FAKE_KEY,

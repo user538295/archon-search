@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -18,6 +19,9 @@ from archon_search.config import SearchConfig
 from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 
 def _make_client(
@@ -268,7 +272,7 @@ def test_H3_6b_all_collections_below_confidence_threshold(tmp_path: Path) -> Non
 def _make_ingest_client(
     tmp_path: Path,
     pipeline_fn=None,
-) -> tuple[TestClient, "FastAPI"]:  # type: ignore[name-defined]
+) -> tuple[TestClient, "FastAPI"]:
     """Create a TestClient with optional injected pipeline function.
 
     Used as a context manager by the job-lifecycle tests below: without one,

@@ -188,7 +188,7 @@ def test_mcp_ingest_then_search_round_trip(tmp_path, monkeypatch) -> None:
             f"search 'results' must be a list, got: {type(results)!r}"
         )
         assert len(results) > 0, (
-            f"search must return at least one result after MCP ingest_file, got empty list"
+            "search must return at least one result after MCP ingest_file, got empty list"
         )
         # The ingested document's path should appear in at least one result
         found_paths = [r.get("source_path", "") for r in results if isinstance(r, dict)]
@@ -246,7 +246,7 @@ def test_mcp_ingest_directory_then_search(tmp_path, monkeypatch) -> None:
             f"ingest_directory must return a list of results, got: {type(ingest_parsed)!r}: {ingest_parsed!r}"
         )
         assert len(ingest_parsed) > 0, (
-            f"ingest_directory must return at least one result for a non-empty directory"
+            "ingest_directory must return at least one result for a non-empty directory"
         )
         # At least one file must have been ingested successfully
         ok_results = [r for r in ingest_parsed if isinstance(r, dict) and r.get("status") == "ok"]
@@ -278,7 +278,7 @@ def test_mcp_ingest_directory_then_search(tmp_path, monkeypatch) -> None:
             f"search 'results' must be a list, got: {type(results)!r}"
         )
         assert len(results) > 0, (
-            f"search must return at least one result after MCP ingest_directory, got empty list"
+            "search must return at least one result after MCP ingest_directory, got empty list"
         )
         # Verify at least one result belongs to the ingested directory (proves S5)
         found_paths_dir = [r.get("source_path", "") for r in results if isinstance(r, dict)]

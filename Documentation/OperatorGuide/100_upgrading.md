@@ -185,7 +185,7 @@ The relevant `BREAKING.md` entry changes the MCP `search` tool from a bare list 
 
 ### REST `/search` per-request `top_k`
 
-Where a release ignores the per-request `top_k` field in `POST /search`, set `[database].top_k_return` in `archon-search.toml` to the desired value before upgrading. (`BREAKING.md` may refer to this as `[search] top_k_return`; the key the code actually reads is `[database].top_k_return` — follow the code.)
+Where a release ignores the per-request `top_k` field in `POST /search`, set `[database].top_k_return` in `archon-search.toml` to the desired value before upgrading.
 
 ### C2 — multilingual retrieval
 

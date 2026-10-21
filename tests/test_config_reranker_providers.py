@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from archon_search.config import SearchConfig, resolve_reranker_providers
 

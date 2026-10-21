@@ -299,7 +299,6 @@ async def test_ingest_two_docs_merges_graph(tmp_path: Path):
     assert edge_count == 2, f"Expected 2 edges, got {edge_count}"
 
     # Verify AuthService (merged node) has both TokenValidator and UserStore as neighbours
-    from archon_search.graph_types import EntityType, make_stable_entity_id
     auth_id = make_stable_entity_id(EntityType.concept.value, "authservice")
     neighbours = await graph_store.get_neighbours(collection, [auth_id], ns="default")
     neighbour_names = {n.entity_name for n in neighbours}

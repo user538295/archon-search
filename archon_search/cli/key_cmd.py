@@ -211,7 +211,7 @@ def create_subcommand(
         "WARNING: Store this token safely — it will not be shown again.",
         err=True,
     )
-    click.echo(f"Key created:", err=True)
+    click.echo("Key created:", err=True)
     click.echo(f"  id:         {key_id}", err=True)
     click.echo(f"  namespace:  {namespace}", err=True)
     if label:

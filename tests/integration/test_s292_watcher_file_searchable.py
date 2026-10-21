@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import make_real_app, ingest_file_via_path, search
+from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 

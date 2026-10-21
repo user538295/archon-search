@@ -6,6 +6,7 @@ These tests do not require model weights and run in the PR eval suite.
 import pytest
 import tomllib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from archon_search.eval.types import EvalMetrics
 from archon_search.eval.runner import (
@@ -16,6 +17,9 @@ from archon_search.eval.runner import (
     EvalLatencyCeilings,
     EvalRuntimeConfig,
 )
+
+if TYPE_CHECKING:
+    from archon_search.eval.live_report import LiveEvalReport
 
 PYPROJECT_PATH = Path(__file__).resolve().parents[2] / "pyproject.toml"
 CORPUS_ROOT = Path(__file__).resolve().parent

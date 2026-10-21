@@ -93,13 +93,13 @@ There is no body and no `detail` field on `401` responses — that envelope is r
 "4f1b2d..." = "team-beta"
 ```
 
-Each entry maps a token (hex string) to a namespace name. The middleware iterates every entry in this map without an early `break`, keeping comparison time independent of which token matched *within the map*. It then falls back to the default key (this fallback is short-circuited via `and`, so timing is not strictly uniform between a map hit and a default-key check), which resolves to `DEFAULT_NAMESPACE = "default"` (`archon_search/constants.py:12`).
+Each entry maps a token (hex string) to a namespace name. The middleware iterates every entry in this map without an early `break`, keeping comparison time independent of which token matched *within the map*. It then falls back to the default key (this fallback is short-circuited via `and`, so timing is not strictly uniform between a map hit and a default-key check), which resolves to `DEFAULT_NAMESPACE = "default"` (`archon_search/constants.py:36`).
 
 Consequences for clients:
 
 - **A client picks a namespace by picking a key.** There is no `?namespace=` parameter. The token *is* the tenant identity.
 - **Collections and jobs are namespace-scoped server-side.** `GET /collections/`, `GET /jobs/{id}`, and `POST /search` only see resources that belong to the caller's namespace. Cross-namespace access returns `404`.
-- **Namespace names are validated.** `_validate_namespace` (`constants.py:17`) restricts them to `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$` and additionally rejects the reserved name `"deny-all"`; an invalid configured namespace produces a `500` from the middleware. Treat namespace names as opaque from the client side.
+- **Namespace names are validated.** `_validate_namespace` (`constants.py:123`) restricts them to `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$` and additionally rejects the reserved name `"deny-all"`, a trailing `_` and `__` (`_validate_segment_safe`); an invalid `[namespaces]` value fails config load with `ConfigError` (`config.py:813–818`). Treat namespace names as opaque from the client side.
 
 If you need to support multiple teams with one process, give each team a distinct token from the `[namespaces]` map. Do not share the default `~/.archon-search/.search.env` key between tenants — that key always resolves to `default`.
 

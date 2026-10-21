@@ -152,7 +152,7 @@ r = client.post("/ingest", json={
 })
 ```
 
-`ingested_by` defaults to `"archon-search-cli"`; supplying it via the `X-Ingested-By` header is the recommended pattern (the JSON body field is overwritten by the header — see `routes_jobs.py:98`).
+`ingested_by` is taken from the `X-Ingested-By` header: the JSON body field is always overwritten by the header value, and a missing or unknown header records `"http"` (`routes_jobs.py:707-708`, `parse_ingested_by_header` in `server/_ingested_by.py`).
 
 ## Searching
 
@@ -176,13 +176,13 @@ for hit in payload["results"]:
 
 **Gotchas verified against `routes_search.py`:**
 
-- `top_k` in the request body is accepted (Pydantic validates `1 ≤ top_k ≤ 100`) but **ignored** — the pipeline uses `[search] top_k_return`. See `BREAKING.md`.
+- `top_k` in the request body is accepted (Pydantic validates `top_k ≥ 1`; the route rejects a value above `[search].top_k_max` with `422`) but **ignored** — the pipeline uses `[database] top_k_return`. See `BREAKING.md`.
 - Empty `query` or empty `collection` → `422` from Pydantic validators.
 - Unknown / cross-namespace collection → `404 {"detail": "collection not found"}`.
 - Meta lookup failure → `503 {"detail": "service unavailable"}`.
 - Pipeline failure mid-search → HTTP 500 with a **plain-text** body `Internal Server Error` (Content-Type `text/plain`), produced by Starlette's `ServerErrorMiddleware` after the route bare-re-raises. Do NOT call `response.json()` on the 500 body — it is not JSON and `requests`/`httpx` will raise `JSONDecodeError`. Use `response.text` or branch on `response.status_code` before parsing. Pipeline timeout → HTTP 504 with `{"detail": "Search timed out"}` (JSON, safe to parse). HTTP 200 with `results=[]` means no matches found on a healthy pipeline.
 
-There is no REST `/search/with_context` endpoint. That capability is exposed only as the MCP tool `search_with_context` (`mcp.py:77`). If you need it from REST today, ingest the document and issue follow-up `/search` calls; or use the MCP transport.
+There is no REST `/search/with_context` endpoint. That capability is exposed only as the MCP tool `search_with_context` (`mcp.py:771`). If you need it from REST today, ingest the document and issue follow-up `/search` calls; or use the MCP transport.
 
 ## Routing across collections
 

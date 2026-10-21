@@ -25,7 +25,6 @@ import pytest
 
 from archon_search.config import GraphConfig, SearchConfig
 from archon_search.model_validation import (
-    _EXTRACTION_MODEL_PROBE_ECONOMIC_CEILING_SECONDS,
     EXTRACTION_MODEL_PROBE_ERROR_WARNING,
     EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING,
     ModelValidationResult,

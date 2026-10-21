@@ -12,7 +12,6 @@ seam end-to-end against a real LanceDB store.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import time
 import uuid
@@ -20,7 +19,6 @@ from pathlib import Path
 
 import pytest
 
-from archon_search._types import ChunkRecord
 from archon_search.embedder import Embedder
 from archon_search.reranker import Reranker
 from archon_search.store import SearchStore
@@ -105,7 +103,6 @@ def test_watcher_replace_no_stale_duplicates(
     assert rows_after, "post-replace ingest must leave rows"
     # No stale duplicates: pipeline deletes the old doc before re-adding,
     # so the row count reflects only the new ingest.
-    new_count = len(rows_after)
     # Different content + chunk_size -> likely different count; even if equal,
     # the rows are fresh (updated_at advanced and ingested_by=="watcher").
     assert all(r["ingested_by"] == "watcher" for r in rows_after)

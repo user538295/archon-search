@@ -7,13 +7,17 @@ Moved from tests/test_pipeline.py as part of C11 pipeline test split.
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from archon_search.embedder import Embedder
 
-from .conftest import MockEmbedderBackend, MockRerankerBackend, make_embedder, make_reranker, make_pipeline
+from .conftest import make_embedder, make_reranker
+
+if TYPE_CHECKING:
+    from archon_search._diagnostics import ScoredSearchCandidate
 
 
 # ===========================================================================
@@ -961,7 +965,7 @@ async def test_search_with_context_rag_fusion_forwarded() -> None:
     from archon_search.chunker import DocumentChunker
     from archon_search.config import RAGFusionConfig
     from archon_search.parser import DocumentParser
-    from archon_search.pipeline import SearchPipeline, SearchPipelineResult, SearchWithContextResult
+    from archon_search.pipeline import SearchPipeline, SearchWithContextResult
 
     def _cand(chunk_id: str) -> ScoredSearchCandidate:
         return ScoredSearchCandidate(
@@ -1015,7 +1019,7 @@ async def test_search_with_context_rag_fusion_forwarded() -> None:
 @pytest.mark.asyncio
 async def test_search_rag_fusion_reranker_uses_original_query() -> None:
     """Reranker is called once with the original query, not any variant text."""
-    from unittest.mock import AsyncMock, call
+    from unittest.mock import AsyncMock
 
     from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
     from archon_search.chunker import DocumentChunker
@@ -1062,7 +1066,7 @@ async def test_search_rag_fusion_reranker_uses_original_query() -> None:
     await pipeline._global_embedder.embed(["warmup"])
 
     original_query = "my original question"
-    result = await pipeline.search(
+    await pipeline.search(
         original_query,
         "col",
         embedder=pipeline._global_embedder,
@@ -1314,7 +1318,6 @@ async def test_search_rag_fusion_ignores_caller_query_vector() -> None:
     from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
     from archon_search.chunker import DocumentChunker
     from archon_search.config import RAGFusionConfig
-    from archon_search.embedder import Embedder
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
@@ -1333,7 +1336,6 @@ async def test_search_rag_fusion_ignores_caller_query_vector() -> None:
         )
 
     embed_call_count = 0
-    original_backend = MockEmbedderBackend()
 
     class TrackingEmbedderBackend:
         model_name: str = "mock-embedder"
@@ -1644,7 +1646,6 @@ async def test_search_many_rag_fusion_embedding_fallback_sets_attempted() -> Non
 
     # Fail on the 2nd embed call (first is query, rest are variants) to simulate embedding failure.
     call_count = 0
-    original_embed = embedder.embed_one.side_effect
 
     async def failing_embed(q):
         nonlocal call_count

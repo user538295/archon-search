@@ -1,17 +1,13 @@
 """Tests for extended chunk metadata schema ."""
 from __future__ import annotations
 
-import re
-import shutil
-import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import pytest
 
 from archon_search._types import ChunkRecord
-from archon_search.store import SearchStore, is_valid_chunk_id, parse_metadata, validate_metadata
+from archon_search.store import SearchStore, parse_metadata, validate_metadata
 
 
 # ---------------------------------------------------------------------------
@@ -72,21 +68,23 @@ async def _read_first_row(store: SearchStore, collection: str) -> dict[str, Any]
 
 @pytest.mark.asyncio
 async def test_ingested_chunk_has_doc_id(tmp_path):
-    """doc_id must be a 64-hex-char SHA-256 digest."""
+    """A 64-hex-char SHA-256 doc_id is persisted verbatim."""
     doc_id = "b" * 64
     chunk = _make_chunk(doc_id=doc_id)
     store, col = await _store_with_chunk(chunk, str(tmp_path))
     try:
         row = await _read_first_row(store, col)
         assert row["doc_id"] == doc_id
-        assert re.match(r"^[a-f0-9]{64}$", row["doc_id"])
     finally:
         await store.disconnect()
 
 
 @pytest.mark.asyncio
 async def test_ingested_chunk_has_chunk_id(tmp_path):
-    """chunk_id must follow the "{doc_id}-{idx:06d}" format."""
+    """A well-formed "{doc_id}-{idx:06d}" chunk_id is persisted verbatim.
+
+    Malformed ids are rejected at ingest — see ``test_store_ingest_chunks_rejects_*`` in test_store.py.
+    """
     doc_id = "c" * 64
     chunk_id = f"{doc_id}-000042"
     chunk = _make_chunk(doc_id=doc_id, chunk_id=chunk_id)
@@ -94,7 +92,6 @@ async def test_ingested_chunk_has_chunk_id(tmp_path):
     try:
         row = await _read_first_row(store, col)
         assert row["chunk_id"] == chunk_id
-        assert is_valid_chunk_id(row["chunk_id"])
     finally:
         await store.disconnect()
 

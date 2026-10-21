@@ -861,6 +861,14 @@ def test_register_dry_run_refuses_interpreter_path_systemd_cannot_run(
         SystemdSearchService().register(dry_run=True, config_path=_CONFIG_PATH)
 
 
+def test_register_dry_run_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """register(dry_run=True) with valid values returns without writing the unit or running systemctl."""
+    with _isolated_service(tmp_path, monkeypatch, tmp_path / "data") as (svc, unit, run):
+        svc.register(dry_run=True, config_path=_CONFIG_PATH)
+        assert not unit.exists(), "dry_run must not write the unit file"
+        run.assert_not_called()
+
+
 # The data dir reaches the unit twice; WorkingDirectory= is checked first, so its label names a bad data dir.
 _VALUE_LABELS = ["interpreter path", "working directory", "config path", "secrets file path"]
 
@@ -1069,7 +1077,10 @@ def _assert_register_refused(
 ) -> None:
     """Run register() expecting ``refusal``; assert it wrote no unit and ran no systemctl.
 
-    ``data_dir_env`` is set as ARCHON_SEARCH_DATA_DIR verbatim (a Path would drop a trailing ``/``).
+    The no-write asserts bite in both modes only if a write slips in ahead of the validation;
+    ``test_register_dry_run_writes_nothing`` pins dry-run's no-write contract for a value that
+    passes. ``data_dir_env`` is set as ARCHON_SEARCH_DATA_DIR verbatim (a Path would drop a
+    trailing ``/``).
     """
     with _isolated_service(tmp_path, monkeypatch, tmp_path / "data") as (svc, unit, run):
         if data_dir_env is not None:

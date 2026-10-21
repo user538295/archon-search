@@ -1,9 +1,8 @@
 """Tests for _execute_force_reinstall() in archon_search/install.py."""
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import tomlkit
@@ -75,7 +74,7 @@ def test_force_reinstall_confirms_before_delete(tmp_path, capsys):
     original_content = config_path.read_text()
 
     with (
-        patch("builtins.input", return_value="no") as mock_input,
+        patch("builtins.input", return_value="no"),
         patch("archon_search.install.prewarm.get_search_service") as mock_svc,
         patch("archon_search.install.prewarm._write_profile_config") as mock_write,
         patch("archon_search.install.shutil.rmtree") as mock_rmtree,

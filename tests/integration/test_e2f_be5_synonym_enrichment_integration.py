@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -99,7 +99,6 @@ async def test_post_ingest_synonym_enrichment_fires_and_creates_edges(
         EntityType,
         GraphExtractionResult,
         GraphNode,
-        RelationshipType,
         make_stable_entity_id,
     )
     from archon_search.store import SearchStore

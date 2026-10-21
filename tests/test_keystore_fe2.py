@@ -260,7 +260,6 @@ def test_cli_key_list_integration(tmp_path, monkeypatch):
         created_id = resp.json()["id"]
 
         # Use the runner to invoke the CLI list command, calling the real server.
-        api_url = f"http://testserver"
         with patch("httpx.Client") as mock_client_cls:
             mock_client = MagicMock()
             mock_client_cls.return_value.__enter__.return_value = mock_client

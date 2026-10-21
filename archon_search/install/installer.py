@@ -70,7 +70,11 @@ from .prewarm import (
 )
 from .provisioning import BYTES_PER_MB, GPU_EXECUTION_PROVIDER, TORCH_DEVICE_CPU
 from .render import _print_next_steps, _render_provision_failure, _render_summary
-from .service_ops import _create_secrets_env, _legacy_service_path, _remove_legacy_service
+from .service_ops import _create_secrets_env
+# Deliberately unused by run(): these names are the patch seam for the S194/S201/S202
+# regression guards asserting run() never calls the race-prone legacy cleanup.
+from .service_ops import _legacy_service_path as _legacy_service_path
+from .service_ops import _remove_legacy_service as _remove_legacy_service
 from .wizard import (
     _graph_candidate_providers,
     _prompt_graph_accelerator,

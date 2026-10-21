@@ -13,7 +13,6 @@ Doc contract:
   fields (including ``warnings``, ``code``).
 """
 
-import inspect
 from pathlib import Path
 
 from archon_search.server.mcp_schemas import IngestResultSchema

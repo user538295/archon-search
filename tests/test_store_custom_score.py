@@ -5,11 +5,9 @@ Implements Task 2.1 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 

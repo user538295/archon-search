@@ -103,8 +103,6 @@ def _community(
 async def test_pipeline_explain_local_community_steps() -> None:
     """graph_mode='local': mock E1b returning community candidates;
     TraversalStep has community_id set, relationship null (S3)."""
-    comm = _community("comm-1", ["entity-foo"], ["chunk-a", "chunk-b"])
-
     # Store returns two chunk rows
     mock_store = MagicMock()
     mock_store.get_chunks_by_ids = AsyncMock(return_value=[

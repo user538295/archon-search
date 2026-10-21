@@ -428,11 +428,6 @@ async def test_run_one_pass_includes_prune_policy(tmp_path: Path) -> None:
 
     loop = _make_loop(tmp_path, prune_expired_chunks=True, search_store=ss)
 
-    fts_mock = AsyncMock()
-    orphan_mock = AsyncMock()
-    prune_mock = AsyncMock()
-    retry_mock = AsyncMock()
-
     call_order: list[str] = []
 
     async def _fts(col: str, ns: str) -> None:

@@ -526,7 +526,6 @@ def test_status_maintenance_partial_collection_error(
     assert body["maintenance"]["expired_chunk_count"] == 5
 
 
-import asyncio
 import inspect
 
 

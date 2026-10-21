@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests.integration.conftest import make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration

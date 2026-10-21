@@ -61,7 +61,7 @@ D7 introduces `KeyStore`, a durable multi-key store backed by `get_data_dir() / 
 - The key file (`.search.env`) is created with mode `0600` (owner read/write only) at creation time by `atomic_write_bytes` — there is no chmod-after-rename window on the write path.
 - `keys.json` is also written with mode `0600` on every `atomic_write_bytes` call.
 - On subsequent reads, if the mode has drifted, `_chmod_600` attempts to retighten it. Failure is logged as a warning, not fatal.
-- On Windows, the read-path chmod step is skipped (`key_manager.py:112–115`).
+- On Windows, the read-path chmod step is skipped (`key_manager.py:818–820`).
 
 ### Bearer enforcement (`archon_search/server/middleware_auth.py`)
 
@@ -231,7 +231,7 @@ This is reinforced by `CLAUDE.md`'s "Structural invariant" note and is the priva
 
 **Threat-model scope (salt co-location).** The salt at `get_data_dir() / ".telemetry-salt"` sits alongside LanceDB, which stores the raw `source_path` in plaintext. HMAC hashing protects telemetry logs **shared or exported separately** from the data directory (the stated threat). It does **not** protect against an attacker with read access to the whole `~/.archon-search/` directory — they hold both the salt and the plaintext paths. This scope is stated in [`Documentation/SecurityGuide/04_telemetry_privacy.md`](../SecurityGuide/04_telemetry_privacy.md) and in the D8 plan.
 
-Note: archon-search does **not** explicitly set mode `0700` on `~/.archon-search/`; the directory is created via `os.makedirs(..., exist_ok=True)` (`key_manager.py:83`), so its mode is governed by the process umask. Only the key file and salt file are enforced to mode `0600`. The effective protection of the parent directory depends on the user's home-directory permissions, which vary by platform.
+Note: archon-search does **not** explicitly set mode `0700` on `~/.archon-search/`; the directory is created via `os.makedirs(..., exist_ok=True)` (`key_manager.py:789`), so its mode is governed by the process umask. Only the key file and salt file are enforced to mode `0600`. The effective protection of the parent directory depends on the user's home-directory permissions, which vary by platform.
 
 ### HyDE external LLM transmission (C4, extended by G10/LLCP) — explicit opt-in exception
 
@@ -303,7 +303,7 @@ See `Documentation/ADRs/C6-local-llm-provider.md` for the full decision record a
 
 ### No external transmission (baseline — non-HyDE traffic)
 
-`config.py:209–217`: `[telemetry].export_enabled = true` is logged as a warning and forced to `false`. There is no corresponding code path in `telemetry/` to send entries anywhere — the writer's only sink is `~/.archon-search/search-logs/<date>.jsonl`. Removing this guarantee requires both a config-loader change *and* a new transport implementation; neither is shipped in v1.
+`config.py:775–783`: `[telemetry].export_enabled = true` is logged as a warning and forced to `false`. There is no corresponding code path in `telemetry/` to send entries anywhere — the writer's only sink is `~/.archon-search/search-logs/<date>.jsonl`. Removing this guarantee requires both a config-loader change *and* a new transport implementation; neither is shipped in v1.
 
 **Third-party library telemetry.** Official `onnxruntime` wheels (pulled in by `fastembed`, `gliner`, `magika`) run Microsoft's 1DS telemetry uploader by default on macOS and Linux, sending to `mobile.events.data.microsoft.com` (onnxruntime `docs/Privacy.md`). `archon_search/__init__.py` sets `ORT_DISABLE_TELEMETRY=1` via `os.environ.setdefault` before any onnxruntime import, the only runtime switch that stops the uploader from being created (`disable_telemetry_events()` runs too late to suppress the initialization event). Besides the egress, the uploader crashed processes at exit with SIGABRT (`recursive_mutex lock failed`) when an upload response raced `PosixTelemetry::Shutdown`. An operator-set value (e.g. `ORT_DISABLE_TELEMETRY=0`) is preserved. Guarded by `tests/test_onnxruntime_telemetry_disabled.py`.
 

@@ -370,7 +370,7 @@ async def test_pipeline_explain_naive_get_edges_raises_returns_empty_steps() -> 
 
     # Inject a mock graph store: find_nodes_by_name succeeds but get_edges_for_nodes raises.
     # Also stub get_neighbours so the code reaches the edges step.
-    from archon_search.graph_types import EntityType as ET, GraphNode, RelationshipType as RT
+    from archon_search.graph_types import EntityType as ET, GraphNode
 
     matched_node = GraphNode(
         id="entity-foo",

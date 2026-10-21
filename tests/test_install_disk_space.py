@@ -1,7 +1,6 @@
 """Tests for _check_disk_space() in archon_search/install.py (Task C0-2.2)."""
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest

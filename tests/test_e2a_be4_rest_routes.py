@@ -20,12 +20,10 @@ from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.server.routes_jobs import IngestRequest
 from archon_search.server.schemas import (
-    DocumentInfoItem,
     ExpiringChunkItem,
     ExpiringChunksResponse,
     PatchCollectionBody,
 )
-from archon_search.store import STORE_SCHEMA_VERSION
 from archon_search.sync import path_to_collection_name
 
 from tests.integration.conftest import make_real_app
@@ -524,7 +522,6 @@ def test_patch_collection_default_ttl_new_ingest_picks_it_up(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """After PATCH sets default_ttl_seconds, new ingested files get expires_at (S13)."""
-    from archon_search._types import normalize_iso_utc
 
     col_path = tmp_path / "col13"
     col_path.mkdir()

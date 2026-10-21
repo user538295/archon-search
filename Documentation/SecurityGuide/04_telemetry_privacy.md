@@ -23,20 +23,20 @@ For the architectural commitment, see ADR [`../ADRs/05_opt_in_local_telemetry_no
 | --- | --- | --- |
 | `[telemetry].enabled` | `false` | `archon_search/config.py` `TelemetryConfig.enabled = False` |
 | `[telemetry].retention_days` | `30` | `archon_search/config.py` `TelemetryConfig.retention_days = 30` |
-| `[telemetry].export_enabled` | `false` (always — coerced from `true` with a warning) | `archon_search/config.py:213–215` |
+| `[telemetry].export_enabled` | `false` (always — coerced from `true` with a warning) | `archon_search/config.py:779–781` |
 | `[telemetry].log_dir` | `~/.archon-search/search-logs` | `archon_search/config.py` `TelemetryConfig.log_dir` |
 | `[telemetry].hash_doc_ids` | `false` | `archon_search/config.py` `TelemetryConfig.hash_doc_ids = False` |
 
-When `enabled = false`, the `TelemetryWriter` is never started and `app.state.telemetry_writer` is `None` (`archon_search/server/app.py:104–105`).
+When `enabled = false`, the `TelemetryWriter` is never started and `app.state.telemetry_writer` is `None` (`archon_search/server/app.py:750–751`).
 
-Note: `retention_days` is validated at config load — values `< 1` raise `ConfigError` (`archon_search/config.py:206–207`), so the minimum reachable value is `1`.
+Note: `retention_days` is validated at config load — values `< 1` raise `ConfigError` (`archon_search/config.py:772–773`), so the minimum reachable value is `1`.
 
 ## Structural no-raw-query invariant
 
 The Pydantic model in `archon_search/telemetry/entry.py` enforces the privacy contract by construction:
 
 - `TelemetryEntry.model_config = ConfigDict(extra="forbid", frozen=True)` — extra fields cannot be added at runtime, and instances are immutable.
-- The documented field set (`DOCUMENTED_SCHEMA_FIELDS` at `entry.py:39–54`) is exactly: `query_id`, `timestamp`, `endpoint`, `latency_ms`, `status`, `collection`, `result_count`, `result_doc_ids`, `truncated`, `collections`, `decomposer_invoked`, `error_kind`, `doc_ids_hashed`. **There is no `query` field.**
+- The documented field set (`DOCUMENTED_SCHEMA_FIELDS` at `entry.py:87–109`) is exactly: `query_id`, `timestamp`, `endpoint`, `latency_ms`, `status`, `collection`, `result_count`, `result_doc_ids`, `truncated`, `collections`, `decomposer_invoked`, `fanout_count`, `excluded_count`, `error_kind`, `filter_flags`, `correlation_id`, `rag_fusion_applied`, `rag_fusion_queries_used`, `doc_ids_hashed`. **There is no `query` field.**
 - The factory classmethods are keyword-only and none accepts a `query` parameter:
   - `from_search_tool_result(*, endpoint, collection, result_doc_ids, latency_ms, doc_id_hasher=None)`
   - `from_route_response(*, collections, decomposer_invoked, latency_ms)`
@@ -94,11 +94,11 @@ See `SEC-2` (now closed) in [`../Architecture/530_technical_debt_refactoring_roa
 - **Location.** One file per UTC date, `~/.archon-search/search-logs/<YYYY-MM-DD>.jsonl`. Lines are appended; one JSON object per call.
 - **Retention.** `archon_search/telemetry/pruner.py::Pruner.prune_once` deletes `*.jsonl` files whose stem date is older than `today - retention_days`. **Today's file is never deleted** regardless of cutoff (`pruner.py:44–45` — `if file_date == now: continue`). Note that `retention_days` is validated at config load to be `>= 1`, so `retention_days = 0` is unreachable through configuration; the smallest reachable value (`retention_days = 1`) still preserves today's file. The pruner runs once at startup and then on a 24-hour interval.
 - **No per-entry redaction.** Old entries are deleted by *file age*, not by per-line policy.
-- **Directory permissions.** The directory is created with `mkdir(..., parents=True, exist_ok=True)` (`server/app.py:97`) and inherits the user's umask. The operator is responsible for ensuring the parent home directory is not world-readable on shared hosts.
+- **Directory permissions.** The directory is created with `mkdir(..., parents=True, exist_ok=True)` (`server/app.py:743`) and inherits the user's umask. The operator is responsible for ensuring the parent home directory is not world-readable on shared hosts.
 
 ## No external transmission
 
-`[telemetry].export_enabled = true` is **silently coerced** to `false` and a warning is logged (`archon_search/config.py:213–215`):
+`[telemetry].export_enabled = true` is **silently coerced** to `false` and a warning is logged (`archon_search/config.py:779–781`):
 
 > `telemetry: export_enabled is reserved for a future release and will be ignored`
 
@@ -127,7 +127,7 @@ Three independent checks:
 
 1. **No writer object.** On a process started with telemetry off, no JSONL files are created. After issuing a few `/search` calls, `ls ~/.archon-search/search-logs/` should still be empty or unchanged.
 2. **Telemetry endpoints behave consistently.** `GET /telemetry/stats` (`routes_telemetry.py`) reads from the log directory; with telemetry off it has no data to summarize. A non-empty response on a quiet system is a signal something is writing.
-3. **Startup log.** When telemetry is enabled, the lifespan creates `log_dir`, runs an initial prune, and starts the writer (`server/app.py:95–103`). The application log shows no such activity when disabled.
+3. **Startup log.** When telemetry is enabled, the lifespan creates `log_dir`, runs an initial prune, and starts the writer (`server/app.py:741–749`). The application log shows no such activity when disabled.
 
 Note: the `grep` recipe below uses a regex anchored on the JSON key boundary to avoid false positives from substrings such as `query_id`.
 

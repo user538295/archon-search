@@ -1,18 +1,12 @@
 """Tests for E2b graph inspection REST endpoints (BE-7, BE-8) — GET /graph routes."""
 from __future__ import annotations
 
-import sys
-import types
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
-from archon_search.graph_inspector import GraphEdgeInspection, GraphNodeInspection
-from archon_search.collection_meta import CollectionMeta
-from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests.integration.conftest import make_real_app
 
 
 # Stub the extraction engine to allow graph-enabled app creation

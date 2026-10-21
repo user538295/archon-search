@@ -6,9 +6,8 @@ TDD: tests are written first; implementation goes in pipeline.py.
 """
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -461,13 +460,11 @@ async def test_pipeline_search_many_scope_filter_filters_across_collections(
     """Integration: search_many with scope_filter='user:alice' — only alice-scoped and
     unscoped chunks appear across two collections; bob-scoped are excluded.
     """
-    from archon_search.collection_meta import CollectionMeta
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     store, pipeline = await _make_real_pipeline(tmp_path)
     col_a = "smany_col_a"
     col_b = "smany_col_b"
-    embedder = pipeline._global_embedder
 
     # Col A: alice + unscoped
     await _ingest_scoped_doc(

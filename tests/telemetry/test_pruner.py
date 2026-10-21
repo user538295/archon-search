@@ -6,7 +6,7 @@ import asyncio
 import os
 from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import unittest.mock
 
@@ -130,7 +130,7 @@ class TestPruneOnce:
         """OSError during unlink is caught, WARNING logged via archon.search, count not incremented."""
         import logging
         today = date(2025, 6, 15)
-        old_file = _make_file(tmp_path, today - timedelta(days=60))
+        _make_file(tmp_path, today - timedelta(days=60))
         pruner = Pruner(tmp_path, retention_days=30)
         with unittest.mock.patch.object(Path, "unlink", side_effect=OSError("permission denied")):
             with caplog.at_level(logging.WARNING, logger="archon.search"):

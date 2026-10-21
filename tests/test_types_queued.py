@@ -1,5 +1,4 @@
 """Tests for Task 1.1 — QUEUED status, progress field, ExportJob, ImportJob in types.py."""
-import pytest
 
 from archon_search.types import (
     DeleteJob,

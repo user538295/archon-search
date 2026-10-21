@@ -2240,7 +2240,6 @@ def test_wizard_server_key_writes_key_file(runner: CliRunner, tmp_path: Path) ->
 def test_wizard_server_key_prints_history_warning(runner: CliRunner, tmp_path: Path) -> None:
     """--server-key prints shell history warning to output."""
     config_path = tmp_path / "archon-search.toml"
-    key_file = tmp_path / ".search.env"
 
     with _patched_wizard():
         with _no_anthropic_key():
@@ -2261,7 +2260,6 @@ def test_wizard_server_key_prints_history_warning(runner: CliRunner, tmp_path: P
 def test_wizard_server_key_prints_restart_note(runner: CliRunner, tmp_path: Path) -> None:
     """--server-key prints restart note to output."""
     config_path = tmp_path / "archon-search.toml"
-    key_file = tmp_path / ".search.env"
 
     with _patched_wizard():
         with _no_anthropic_key():
@@ -2284,7 +2282,6 @@ def test_wizard_server_key_with_env_var_set_prints_priority_warning(
 ) -> None:
     """--server-key with ARCHON_SEARCH_API_KEY set prints env-var priority warning."""
     config_path = tmp_path / "archon-search.toml"
-    key_file = tmp_path / ".search.env"
 
     with _patched_wizard():
         with patch.dict("os.environ", {"ARCHON_SEARCH_API_KEY": "b" * 64}, clear=False):

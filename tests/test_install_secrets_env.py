@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import stat
 import subprocess
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -87,8 +86,6 @@ def test_wizard_creates_secrets_env_and_wrapper_on_macos_positive(tmp_path: Path
 
     # Mock macOS platform — use LaunchdSearchService writing to tmp_path
     from archon_search.platform.macos import LaunchdSearchService
-
-    plist_path = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
 
     with (
         patch("archon_search.install.installer.get_default_config_path", return_value=config_path),

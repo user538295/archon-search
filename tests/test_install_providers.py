@@ -40,6 +40,7 @@ class TestConfigureProviders:
         installer = create_installer(config_file=str(toml_file))
         installer.configure_providers(GpuType.NONE)
 
+        assert toml_file.read_text() == original_content
         doc = tomlkit.parse(toml_file.read_text())
         assert "providers" not in doc.get("database", {})
 

@@ -14,7 +14,7 @@ import secrets
 import pytest
 from fastapi.testclient import TestClient
 
-from archon_search.key_manager import KeyRecord, KeyStore
+from archon_search.key_manager import KeyStore
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ def _make_minimal_app(tmp_path, monkeypatch, *, namespaces: dict[str, str] | Non
 def test_create_app_exposes_key_store(tmp_path, monkeypatch):
     """app.state.key_store is a KeyStore instance after create_app()."""
     app, api_key = _make_minimal_app(tmp_path, monkeypatch)
-    with TestClient(app) as client:
+    with TestClient(app):
         assert hasattr(app.state, "key_store"), "app.state.key_store not set by create_app()"
         assert isinstance(app.state.key_store, KeyStore), (
             f"app.state.key_store is {type(app.state.key_store)}, expected KeyStore"
@@ -72,7 +72,7 @@ def test_toml_synthetic_key_records_loaded_at_startup(tmp_path, monkeypatch):
     namespaces = {toml_token: "toml-ns"}
 
     app, api_key = _make_minimal_app(tmp_path, monkeypatch, namespaces=namespaces)
-    with TestClient(app) as client:
+    with TestClient(app):
         key_store = app.state.key_store
         import asyncio
         records = asyncio.run(key_store.load())

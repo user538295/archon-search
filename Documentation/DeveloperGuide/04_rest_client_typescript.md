@@ -63,7 +63,7 @@ export interface SearchRequest {
   collection: string;
   query: string;
   // Accepted (server bounds it to [1, 100]) but ignored at runtime —
-  // see BREAKING.md. Pipeline uses `[search] top_k_return` from config.
+  // see BREAKING.md. Pipeline uses `[database] top_k_return` from config.
   top_k?: number;
 }
 
@@ -298,7 +298,7 @@ for (const hit of results) {
 }
 ```
 
-`top_k` is accepted but ignored — set `[search] top_k_return` in `archon-search.toml`. See `BREAKING.md`.
+`top_k` is accepted but ignored — set `[database] top_k_return` in `archon-search.toml`. See `BREAKING.md`.
 
 ## Flow: register a collection and wait for ingest
 

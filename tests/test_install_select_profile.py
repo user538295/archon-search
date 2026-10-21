@@ -1,7 +1,6 @@
 """Tests for _select_profile() in archon_search.install (Task C0-3.3)."""
 from __future__ import annotations
 
-import sys
 from unittest.mock import patch
 
 import click
@@ -127,7 +126,6 @@ def test_profile_table_minimal_no_recommended():
     from archon_search.install import _render_profile_table
     table = _render_profile_table(multilingual=False, width=80)
     lines = table.splitlines()
-    minimal_lines = [l for l in lines if "Minimal" in l and "Recommended" not in l]
     # Minimal lines exist and do NOT contain "Recommended"
     assert any("Minimal" in l for l in lines)
     assert not any("Minimal" in l and "Recommended" in l for l in lines)

@@ -12,7 +12,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
 
 # tomllib is stdlib >= 3.11
 import tomllib

@@ -10,11 +10,10 @@ import asyncio
 import uuid
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from archon_search._types import IngestResult
 from archon_search.store import ChunkIngestResult
 
 

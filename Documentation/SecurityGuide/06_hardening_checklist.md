@@ -28,7 +28,7 @@ stat -f '%Lp' ~/.archon-search/.search.env  # macOS
 # Expected: 600
 ```
 
-If the mode has drifted, the loader will retighten it on the next read (`archon_search/key_manager.py:54–59`), but verify explicitly during review. Also confirm the parent directory `~/.archon-search/` is not group/world-readable.
+If the mode has drifted, the loader will retighten it on the next read (`archon_search/key_manager.py:753–759`), but verify explicitly during review. Also confirm the parent directory `~/.archon-search/` is not group/world-readable.
 
 **Backed by**: [`02_authentication_and_keys.md`](./02_authentication_and_keys.md) "File permissions"; `archon_search/key_manager.py`.
 
@@ -58,7 +58,7 @@ If the deployment must bind to a non-loopback interface, a host firewall must re
 
 ### 4. CORS is hardened at the proxy
 
-The application sets `Access-Control-Allow-Origin: *` (`archon_search/server/app.py:122`). On any non-loopback bind, the proxy **must** override this with a tight allow-list (or drop the headers entirely if you have no browser clients).
+The application sets `Access-Control-Allow-Origin: *` (`archon_search/server/app.py:1002`). On any non-loopback bind, the proxy **must** override this with a tight allow-list (or drop the headers entirely if you have no browser clients).
 
 ```bash
 curl -i -H "Origin: https://evil.example" \
@@ -141,7 +141,7 @@ Releases happen by tag push and are visible in the repo's tag/release stream. Ca
 
 These are not strictly pre-production gates, but a deployment that ignores them will degrade quietly:
 
-- **Watch the server log** for ACL parse warnings and for the auth middleware's `Middleware: resolved namespace … is invalid` error (`archon_search/server/middleware_auth.py:58`). The latter means a `[namespaces]` entry has a name that fails validation — clients using that key will receive `500`.
+- **Watch the server log** for ACL parse warnings and for the auth middleware's `Middleware: resolved namespace … is invalid` error (`archon_search/server/middleware_auth.py:102`). The latter means a `[namespaces]` entry has a name that fails validation — clients using that key will receive `500`.
 - **Watch `acl_filtered`** in search responses on namespaces that should never see filtered hits. A persistent `true` may mean a document is mis-tagged.
 - **Periodically reread this guide** when upgrading. The `Last reviewed` and `Next review` headers tell you when each doc was last validated against the code.
 
@@ -151,7 +151,7 @@ These are explicitly out of scope for v1 hardening; recording them so operators 
 
 - **No request-correlation IDs** across middleware → pipeline → telemetry (`ARCH-3` in the debt register). Incident triage across modules is harder than it should be.
 - **No native rate limiting.** The reverse proxy must provide it.
-- **No CORS config knob.** Hardcoded wildcard in `app.py:122`; reverse-proxy override only.
+- **No CORS config knob.** Hardcoded wildcard in `app.py:1002`; reverse-proxy override only.
 - ~~**No key expiry / revocation list.** `SEC-1`, roadmap item D7.~~ **Resolved by D7** — `archon-search key create/revoke/rotate`, `POST /keys`, `DELETE /keys/{id}`, `POST /keys/rotate`.
 - ~~**Path-derived `doc_id` in telemetry.** `SEC-2`, roadmap item D8.~~ **Resolved by D8** — enable `[telemetry] hash_doc_ids = true` in `archon-search.toml` to HMAC-SHA256 hash `result_doc_ids` before logging. Recommended for any deployment where telemetry logs may be shared or forwarded off-host.
 

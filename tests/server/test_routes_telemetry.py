@@ -5,14 +5,13 @@ import asyncio
 import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from archon_search.config import SearchConfig, TelemetryConfig
-from archon_search.server.schemas_telemetry import DisabledResponse, StatsResponse
 
 
 # ---------------------------------------------------------------------------

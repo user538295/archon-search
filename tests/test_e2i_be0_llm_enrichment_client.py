@@ -7,9 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+if TYPE_CHECKING:
+    from archon_search.enrichment.anthropic import AnthropicEnrichmentClient
 
 
 # ---------------------------------------------------------------------------

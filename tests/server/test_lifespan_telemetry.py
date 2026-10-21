@@ -4,9 +4,8 @@ from __future__ import annotations
 import asyncio
 import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from archon_search.config import SearchConfig, TelemetryConfig

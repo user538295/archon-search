@@ -13,17 +13,12 @@ Run with:
 """
 from __future__ import annotations
 
-import sys
-import types
-from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.server.middleware_auth import APIKeyMiddleware
 
 VALID_KEY = "a" * 64
@@ -225,7 +220,7 @@ class TestMiddlewareExemptionEndToEnd:
             client = TestClient(app, raise_server_exceptions=False)
             # Valid header present → middleware validates header, not exempt even with ?token=
             resp = client.get(
-                f"/graph/test-col/view?token=invalid",
+                "/graph/test-col/view?token=invalid",
                 headers={"Authorization": f"Bearer {VALID_KEY}"},
             )
         # Valid header → middleware accepts → handler runs → 200

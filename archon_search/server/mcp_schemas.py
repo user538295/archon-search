@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """MCP-specific Pydantic schemas for all MCP tool return shapes.
 
 Every MCP tool in mcp.py validates its return value through one of these
@@ -9,8 +7,10 @@ dataclass changes fail loudly at the schema boundary rather than silently
 drifting the MCP contract.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from archon_search._types import IngestErrorCode
 

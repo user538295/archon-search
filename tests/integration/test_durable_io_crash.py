@@ -18,7 +18,6 @@ is meaningless, so each test skips when ``tmp_path`` is on tmpfs (rerun with
 from __future__ import annotations
 
 import json
-import os
 import stat
 import subprocess
 import sys
