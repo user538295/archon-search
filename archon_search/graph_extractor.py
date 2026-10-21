@@ -60,7 +60,7 @@ _logger = logging.getLogger(__name__)
 
 # Wire-facing degradation notices for the prose extraction backend (BE-11,
 # tightened by BE-12 for S14/S17/S46). Sanitized (never carry exception text
-# or str(exc)), like the message from ``gliner_not_installed_message`` below, and per
+# or str(exc)), like model_validation.py's ``GLINER_NOT_INSTALLED_WARNING``, and per
 # parser.py's ``PARSE_WORKER_LOST_DETAIL`` convention — a DETAIL-only
 # constant, since ``GraphExtractionResult.warnings`` is plain ``list[str]``
 # with no separate wire-facing "code" field (graph_types.py) to pair it with.
@@ -90,14 +90,14 @@ _LOAD_WAIT_TIMEOUT_DETAIL: str = (
 )
 
 def gliner_not_installed_message() -> str:
-    """The "[graph] extra missing" message, with the install command for this
-    interpreter's install method (``uv tool install …`` in a uv tool env,
+    """The operator-local "[graph] extra missing" message, with the install command
+    for this interpreter's install method (``uv tool install …`` in a uv tool env,
     ``pip install …`` elsewhere — see :func:`archon_search.uv_tool.extra_install_hint`).
 
-    Public: shared with model_validation.py's graph_ner_status so the message
-    reads identically whether it is surfaced from
-    ensure_graph_engine_importable's construction-time guard or from
-    GET /status (2026-08-19-030 T6, renamed off the prior NER engine in cycle-2 C2-A-01).
+    Never wire-facing: the command can replay the uv tool receipt (credentials,
+    local paths). Used by ensure_graph_engine_importable's construction-time guard
+    and logged by model_validation.py's graph_ner_status; GET /status carries
+    model_validation.GLINER_NOT_INSTALLED_WARNING instead.
     """
     return f"gliner is not installed. Install the graph extras: {extra_install_hint('graph')}"
 
@@ -110,12 +110,12 @@ def gliner_absent() -> bool:
     two presence checks cannot drift apart (C3-B-1).
 
     `find_spec` avoids paying gliner's own multi-second cold import (it pulls
-    torch/transformers transitively) just to probe presence — but a
-    present-but-`__spec__`-less entry in `sys.modules` (the shape the test
-    suite's `sys.modules["gliner"] = None` absence stub takes) makes the bare
-    form raise `ValueError` instead of returning a clean `None`. A
-    `ValueError` only happens when *something* is already reachable under
-    that name, so it reads as "found", never as "absent".
+    torch/transformers transitively) just to probe presence. It returns `None`
+    for a `None` entry in `sys.modules` (the test suite's
+    `sys.modules["gliner"] = None` absence stub), but raises `ValueError` for a
+    module present in `sys.modules` whose `__spec__` is `None`. That
+    `ValueError` only happens when *something* is already reachable under that
+    name, so it reads as "found", never as "absent".
     """
     try:
         return importlib.util.find_spec("gliner") is None

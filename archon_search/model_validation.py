@@ -60,6 +60,13 @@ VALIDATION_TASK_FAILED_WARNING: Final[str] = "validation task failed unexpectedl
 GRAPH_NER_UNDETERMINED_WARNING: Final[str] = (
     "graph NER model presence could not be determined; see the log for details"
 )
+# graph_ner_status's "gliner is not importable" outcome. The install command
+# (graph_extractor.gliner_not_installed_message) can replay the uv tool receipt's index
+# credentials and local paths, so it goes to the log only.
+GLINER_NOT_INSTALLED_WARNING: Final[str] = (
+    "graph prose entity extraction is disabled: gliner is not installed. "
+    "Install archon-search[graph] to use graph prose entity extraction"
+)
 # validate_providers_shared's per-probe handlers. A failed probe is an expected outcome (e.g. a
 # CoreML/CUDA fallback), so it logs a WARNING with the exception message and keeps the
 # traceback at DEBUG: the wizard configures no logging, and Python's last-resort handler would
@@ -234,17 +241,20 @@ def graph_ner_status(config: SearchConfig) -> list[str]:
     import-ability the same way ``ensure_graph_engine_importable`` gates
     ``GraphExtractor`` construction (``importlib.util.find_spec``, BE-11) so a
     missing ``[graph]`` extra surfaces on ``GET /status`` instead of only
-    failing every ingest — reusing
-    ``graph_extractor.gliner_not_installed_message`` so the two surfaces agree
-    (T6). Unlike the prior NER engine, gliner has no separate "installed but wrong model
+    failing every ingest. The wire warning is the fixed
+    ``GLINER_NOT_INSTALLED_WARNING``; the exact install command
+    (``gliner_not_installed_message``, which can replay the uv tool receipt's index
+    credentials and local paths) is logged at WARNING, never sent. Unlike the
+    prior NER engine, gliner has no separate "installed but wrong model
     artifact" state to probe here: ``ProseExtractionBackend.load()`` fetches
     the pinned revision from the Hugging Face cache lazily and any load
     failure there degrades per-ingest (``GraphExtractor._ensure_backend``),
     not at startup.
 
-    Never raises (T7): every branch below is inside the ``try``; an import
+    Never raises (T7): the presence probe is inside a ``try``; an import
     failure other than an absent module, or any other surprise, reads as
-    "cannot determine" rather than propagating.
+    "cannot determine" rather than propagating. Building or logging the install
+    command is guarded separately, so its failure never masks a known-missing gliner.
     """
     if not config.graph.enabled:
         return []
@@ -253,18 +263,29 @@ def graph_ner_status(config: SearchConfig) -> list[str]:
     # artifact load permanently once it happens, degrading every subsequent
     # ingest for the process lifetime — that state is invisible here.
     try:
-        from archon_search.graph_extractor import (  # noqa: PLC0415
-            gliner_absent,
-            gliner_not_installed_message,
-        )
+        from archon_search.graph_extractor import gliner_absent  # noqa: PLC0415
 
-        if gliner_absent():
-            return [f"graph prose entity extraction is disabled: {gliner_not_installed_message()}"]
+        absent = gliner_absent()
     except Exception as exc:  # never raises — validate_models_async must not fail
         logger.warning("graph NER model probe failed: %s", exc, exc_info=True)
         return [GRAPH_NER_UNDETERMINED_WARNING]
 
-    return []
+    if not absent:
+        return []
+    _log_gliner_install_command()
+    return [GLINER_NOT_INSTALLED_WARNING]
+
+
+def _log_gliner_install_command() -> None:
+    """Log the exact gliner install command at WARNING; never raises."""
+    try:
+        from archon_search.graph_extractor import gliner_not_installed_message  # noqa: PLC0415
+
+        logger.warning("graph prose entity extraction is disabled: %s", gliner_not_installed_message())
+    except Exception:  # the wire warning is already decided; a bad hint must not change it
+        logger.warning(
+            "could not build the gliner install command; install the archon-search[graph] extra", exc_info=True
+        )
 
 
 async def _probe_extraction_model(

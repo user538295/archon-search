@@ -124,6 +124,22 @@ _CASES = [
         id="graph-ner-undetermined",
     ),
     pytest.param(
+        lambda: model_validation.GLINER_NOT_INSTALLED_WARNING,
+        "graph prose entity extraction is disabled: gliner is not installed. "
+        "Install archon-search[graph] to use graph prose entity extraction",
+        (
+            _API_REFERENCE,
+            _COMPONENT_CATALOG,
+            _ERROR_STRATEGY,
+            _GRAPH_OPERATIONS,
+            _INCIDENT_RUNBOOK,
+            _MONITORING,
+            _BREAKING_INDEX,
+        ),
+        True,
+        id="gliner-not-installed",
+    ),
+    pytest.param(
         lambda: model_validation.VALIDATION_TIMED_OUT_TEMPLATE.format(seconds="<N>"),
         "validation timed out after <N>s",
         (_INCIDENT_RUNBOOK, _MONITORING),

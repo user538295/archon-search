@@ -35,7 +35,7 @@ pip install 'archon-search[graph,code]'        # or, for a uv tool install:
 archon-search wizard   # pre-warms the prose extraction checkpoint (~1.2 GB)
 ```
 
-The startup and status messages for a missing extra print the install command for the running install method (`pip install …`, or in a `uv tool` install a `uv tool install …` command that keeps the extras recorded in the receipt; when the receipt cannot be reproduced, a plain `uv tool install 'archon-search[<extra>]'` with a `#` note to repeat the original install options). See [Optional extras](../UserManual/10_installation.md#optional-extras).
+The startup messages for a missing extra print the install command for the running install method (`pip install …`, or in a `uv tool` install a `uv tool install …` command that keeps the extras recorded in the receipt; when the receipt cannot be reproduced, a plain `uv tool install 'archon-search[<extra>]'` with a `#` note to repeat the original install options). The `GET /status` warning for a missing `[graph]` extra does not carry the command: in a `uv tool` install it replays the receipt, which can hold `--index-url` credentials, `--find-links` and local source paths, so the wire warning names the extra only and the command goes to the server log at WARNING. See [Optional extras](../UserManual/10_installation.md#optional-extras).
 
 Because `leidenalg`/`igraph` are lazy, a graph-enabled server boots fine without them — you only discover the gap when a community rebuild runs. Install them proactively if you use `local`/`global` search.
 
@@ -106,15 +106,14 @@ Do **not** set `HF_HUB_OFFLINE=1` process-wide on the server to force this: it i
 When `[graph].enabled = true`, startup validation probes the engine *package* the same way `GraphExtractor` construction does and reports a missing package in `GET /status` → `model_validation.provider_warnings`, so this never hides in per-file ingest logs (`graph_ner_status`, `model_validation.py`). It emits exactly two messages:
 
 ```
-graph prose entity extraction is disabled: gliner is not installed. Install
-the graph extras: pip install 'archon-search[graph]'
+graph prose entity extraction is disabled: gliner is not installed. Install archon-search[graph] to use graph prose entity extraction
 ```
 
 ```
 graph NER model presence could not be determined; see the log for details
 ```
 
-The second means the probe itself failed unexpectedly — it never raises, so a surprise reads as "cannot determine" rather than failing startup.
+The first carries no install command; the server log has it at WARNING (`graph prose entity extraction is disabled: gliner is not installed. Install the graph extras: <install command>`) — the install command described under the extras table above. The second means the probe itself failed unexpectedly — it never raises, so a surprise reads as "cannot determine" rather than failing startup.
 
 **One component, several spellings.** This guide calls it the **prose extraction engine** (and the artifact it loads the prose extraction model, or checkpoint). The probe function is named `graph_ner_status`, its second message says "graph NER model", and the pinned constants are `GRAPH_NER_MODEL_NAME` / `GRAPH_NER_MODEL_REVISION` — all naming holdovers from the engine this one replaced. They refer to the same `gliner` engine and the same checkpoint, not to a second component.
 
