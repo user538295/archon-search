@@ -1,16 +1,13 @@
 """The tools a real ``FastMCP`` app registers, for doc-contract tests that derive wire truth.
 
-Sibling MCP tests (``test_keystore_be9.py``, ``test_integration_rag_fusion.py``) swap
-``fastmcp.FastMCP`` for a stub and reload ``archon_search.server.mcp`` at module scope, so under
-xdist the module object may still hold that ``_StubFastMCP``. ``create_app`` is therefore always
-called with the defining-module class pinned on the module.
+Call these outside any ``stubbed_fastmcp()`` scope (``tests/_fastmcp_stub.py``):
+they rely on ``archon_search.server.mcp.FastMCP`` being the real class.
 """
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from fastmcp.server.server import FastMCP as _RealFastMCP
 from fastmcp.tools import Tool
 
 from archon_search.key_manager import KeyStore
@@ -21,8 +18,7 @@ _DEFAULT_COLLECTION = "default"
 
 def registered_tools(key_store: KeyStore | None) -> dict[str, Tool]:
     """Return ``{tool name: tool}`` as the real FastMCP ``tools/list`` advertises them."""
-    with patch.object(mcp_module, "FastMCP", _RealFastMCP):
-        app = mcp_module.create_app(MagicMock(), _DEFAULT_COLLECTION, key_store=key_store)
+    app = mcp_module.create_app(MagicMock(), _DEFAULT_COLLECTION, key_store=key_store)
     return {tool.name: tool for tool in asyncio.run(app.list_tools())}
 
 

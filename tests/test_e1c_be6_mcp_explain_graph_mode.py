@@ -17,26 +17,12 @@ Scenarios: S12 (partial).
 from __future__ import annotations
 
 import inspect
-import sys
-import types
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 pytestmark = pytest.mark.xdist_group("mcp")
-
-# Stub fastmcp so mcp.py can be imported without the real package interfering.
-if "fastmcp" not in sys.modules:
-    try:
-        import fastmcp as _real_fastmcp  # type: ignore[import-not-found]
-        sys.modules["fastmcp"] = _real_fastmcp  # type: ignore[assignment]
-    except ImportError:
-        _fastmcp = types.ModuleType("fastmcp")
-        _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-        _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-        sys.modules["fastmcp"] = _fastmcp
-
 
 # ---------------------------------------------------------------------------
 # FastMCP stub (captures registered tools in a dict)

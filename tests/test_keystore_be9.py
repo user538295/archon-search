@@ -13,102 +13,27 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-import sys
-import types
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Own xdist group ("mcp_stub"): this module installs a module-scoped global
-# FastMCP stub via sys.modules mutation. Isolating it in a separate worker keeps
-# that stub from leaking into real-FastMCP HTTP tests in the "mcp" group.
-pytestmark = pytest.mark.xdist_group("mcp_stub")
+from tests._fastmcp_stub import stub_mcp_tools
 
-# ---------------------------------------------------------------------------
-# FastMCP stub — must support tool() decorator so create_app() can register
-# tools and we can retrieve the inner functions via _tools dict.
-# ---------------------------------------------------------------------------
+_DEFAULT_COLLECTION = "default"
 
 
-class _StubFastMCP:
-    def __init__(self, *args, **kwargs):
-        self._tools: dict = {}
-
-    def tool(self):
-        def decorator(fn):
-            self._tools[fn.__name__] = fn
-            return fn
-        return decorator
-
-    def custom_route(self, *args, **kwargs):
-        def decorator(fn):
-            return fn
-        return decorator
-
-
-_MCP_MODULE = "archon_search.server.mcp"
-_FASTMCP_MODULE = "fastmcp"
-
-# Save the real FastMCP class (if available) before we stub it. The Starlette
-# HTTP layer needs the real fastmcp package (3.4.x) whose FastMCP exposes
-# http_app(); the low-level mcp.server.fastmcp only has the removed
-# streamable_http_app(), so it cannot be used here.
-try:
-    import fastmcp as _real_fastmcp_pkg  # type: ignore[import]
-    _real_fastmcp_class = _real_fastmcp_pkg.FastMCP
-    _real_fastmcp_context = getattr(_real_fastmcp_pkg, "Context", None)
-except (ImportError, AttributeError):
-    _real_fastmcp_class = None
-    _real_fastmcp_context = None
-
-# Install stub into sys.modules so archon_search.server.mcp can be imported.
-if _FASTMCP_MODULE not in sys.modules:
-    _fastmcp_mod = types.ModuleType(_FASTMCP_MODULE)
-    _fastmcp_mod.FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-    _fastmcp_mod.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules[_FASTMCP_MODULE] = _fastmcp_mod
-else:
-    sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-
-# Force-reload the MCP module so it picks up the stub.
-sys.modules.pop(_MCP_MODULE, None)
-
-from archon_search.server.mcp import create_app as _mcp_create_app  # noqa: E402
-
-# Restore the real FastMCP so other test modules are not broken.
-if _real_fastmcp_class is not None:
-    sys.modules[_FASTMCP_MODULE].FastMCP = _real_fastmcp_class  # type: ignore[attr-defined]
-    if _real_fastmcp_context is not None:
-        sys.modules[_FASTMCP_MODULE].Context = _real_fastmcp_context  # type: ignore[attr-defined]
-sys.modules.pop(_MCP_MODULE, None)
-
-
-@pytest.fixture(autouse=True, scope="module")
-def _stub_fastmcp_for_module():
-    """Reinstall the stub for the duration of this module's tests, then restore."""
-    sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-    sys.modules.pop(_MCP_MODULE, None)
-    yield
-    if _real_fastmcp_class is not None:
-        sys.modules[_FASTMCP_MODULE].FastMCP = _real_fastmcp_class  # type: ignore[attr-defined]
-        if _real_fastmcp_context is not None:
-            sys.modules[_FASTMCP_MODULE].Context = _real_fastmcp_context  # type: ignore[attr-defined]
-    sys.modules.pop(_MCP_MODULE, None)
-
-
-# ---------------------------------------------------------------------------
-# Helper — build a minimal MCP app and return its registered tool closures
-# ---------------------------------------------------------------------------
+class _InternalBoomError(Exception):
+    """An unexpected key-store failure whose message must never reach the MCP response."""
 
 
 def _get_tools(tmp_path: Path, monkeypatch):
     """Build a minimal create_app() and return (tools_dict, key_store, config)."""
     from archon_search.config import SearchConfig
-    from archon_search.key_manager import KeyStore, ENV_VAR
+    from archon_search.key_manager import ENV_VAR, KeyStore
     from archon_search.paths import get_data_dir
     from archon_search.pipeline import SearchPipeline
-    from archon_search.server.mcp import create_app
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv(ENV_VAR, raising=False)
@@ -122,13 +47,7 @@ def _get_tools(tmp_path: Path, monkeypatch):
 
     key_store = KeyStore(path=get_data_dir() / "keys.json")
 
-    app = create_app(
-        pipeline=pipeline,
-        default_collection="default",
-        config=cfg,
-        key_store=key_store,
-    )
-    return app._tools, key_store, cfg
+    return stub_mcp_tools(pipeline, _DEFAULT_COLLECTION, config=cfg, key_store=key_store), key_store, cfg
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +85,7 @@ def _make_http_app(tmp_path: Path, monkeypatch):
 
 def test_mcp_create_key_returns_token_once(tmp_path, monkeypatch):
     """create_key tool response includes token; no other MCP key response does (S1)."""
-    tools, key_store, _ = _get_tools(tmp_path, monkeypatch)
+    tools, _, _ = _get_tools(tmp_path, monkeypatch)
     assert "create_key" in tools
 
     result = asyncio.run(tools["create_key"](namespace="default", label=None, expires_at=None))
@@ -218,16 +137,15 @@ def test_mcp_create_key_invalid_namespace_error(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Unit: test_mcp_create_key_no_auth_401
 # These tests exercise the Starlette auth middleware wrapping the FastMCP app.
-# They use the real create_mcp_http_app() which needs the real FastMCP — so we
-# restore the real FastMCP before creating the app.
+# They use the real create_mcp_http_app() which needs the real FastMCP — so they
+# build the app outside any stubbed_fastmcp() block.
 # ---------------------------------------------------------------------------
 
 
 def test_mcp_create_key_no_auth_401(tmp_path, monkeypatch):
     """MCP create_key endpoint with no Bearer token → 401."""
-    from archon_search.key_manager import ENV_VAR, get_data_dir
     from archon_search.config import SearchConfig
-    from archon_search.key_manager import KeyStore
+    from archon_search.key_manager import ENV_VAR, KeyStore, get_data_dir
     from archon_search.pipeline import SearchPipeline
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
@@ -247,36 +165,26 @@ def test_mcp_create_key_no_auth_401(tmp_path, monkeypatch):
 
     key_store = KeyStore(path=get_data_dir() / "keys.json")
 
-    # Temporarily restore real FastMCP for Starlette HTTP layer.
-    if _real_fastmcp_class is not None:
-        sys.modules[_FASTMCP_MODULE].FastMCP = _real_fastmcp_class  # type: ignore[attr-defined]
-    sys.modules.pop(_MCP_MODULE, None)
+    from starlette.testclient import TestClient
 
-    try:
-        from archon_search.server.mcp import create_mcp_http_app
-        from starlette.testclient import TestClient
+    from archon_search.server.mcp import create_mcp_http_app
 
-        app = create_mcp_http_app(
-            pipeline=pipeline,
-            default_collection="default",
-            config=cfg,
-            key_store=key_store,
-        )
-        client = TestClient(app, raise_server_exceptions=False)
-        # No Authorization header → 401 from auth middleware.
-        resp = client.get("/mcp")
-        assert resp.status_code == 401
-    finally:
-        # Re-stub for remaining unit tests.
-        sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-        sys.modules.pop(_MCP_MODULE, None)
+    app = create_mcp_http_app(
+        pipeline=pipeline,
+        default_collection="default",
+        config=cfg,
+        key_store=key_store,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    # No Authorization header → 401 from auth middleware.
+    resp = client.get("/mcp")
+    assert resp.status_code == 401
 
 
 def test_mcp_revoke_key_invalid_auth_401(tmp_path, monkeypatch):
     """MCP revoke_key with bad token → 401 from the Starlette auth middleware."""
-    from archon_search.key_manager import ENV_VAR, get_data_dir
     from archon_search.config import SearchConfig
-    from archon_search.key_manager import KeyStore
+    from archon_search.key_manager import ENV_VAR, KeyStore, get_data_dir
     from archon_search.pipeline import SearchPipeline
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
@@ -295,27 +203,20 @@ def test_mcp_revoke_key_invalid_auth_401(tmp_path, monkeypatch):
 
     key_store = KeyStore(path=get_data_dir() / "keys.json")
 
-    if _real_fastmcp_class is not None:
-        sys.modules[_FASTMCP_MODULE].FastMCP = _real_fastmcp_class  # type: ignore[attr-defined]
-    sys.modules.pop(_MCP_MODULE, None)
+    from starlette.testclient import TestClient
 
-    try:
-        from archon_search.server.mcp import create_mcp_http_app
-        from starlette.testclient import TestClient
+    from archon_search.server.mcp import create_mcp_http_app
 
-        app = create_mcp_http_app(
-            pipeline=pipeline,
-            default_collection="default",
-            config=cfg,
-            key_store=key_store,
-        )
-        client = TestClient(app, raise_server_exceptions=False)
-        # Wrong Bearer token → 401.
-        resp = client.get("/mcp", headers={"Authorization": "Bearer wrongtoken"})
-        assert resp.status_code == 401
-    finally:
-        sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-        sys.modules.pop(_MCP_MODULE, None)
+    app = create_mcp_http_app(
+        pipeline=pipeline,
+        default_collection="default",
+        config=cfg,
+        key_store=key_store,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    # Wrong Bearer token → 401.
+    resp = client.get("/mcp", headers={"Authorization": "Bearer wrongtoken"})
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -331,20 +232,14 @@ def test_mcp_revoke_key_then_401(tmp_path, monkeypatch):
     key_store = http_app.state.key_store
 
     from fastapi.testclient import TestClient
+
     from archon_search.pipeline import SearchPipeline
-    from archon_search.server.mcp import create_app as create_mcp_app
 
     pipeline = MagicMock(spec=SearchPipeline)
     pipeline.store = MagicMock()
     pipeline.store.get_collection_meta = AsyncMock(return_value=None)
 
-    mcp = create_mcp_app(
-        pipeline=pipeline,
-        default_collection="default",
-        config=cfg,
-        key_store=key_store,
-    )
-    tools = mcp._tools
+    tools = stub_mcp_tools(pipeline, _DEFAULT_COLLECTION, config=cfg, key_store=key_store)
     assert "revoke_key" in tools
 
     with TestClient(http_app) as client:
@@ -386,24 +281,18 @@ def test_mcp_rotate_key_returns_new_token(tmp_path, monkeypatch):
     key_store = http_app.state.key_store
 
     from fastapi.testclient import TestClient
+
     from archon_search.key_manager import ENV_VAR, get_key_file
     from archon_search.pipeline import SearchPipeline
-    from archon_search.server.mcp import create_app as create_mcp_app
 
     pipeline = MagicMock(spec=SearchPipeline)
     pipeline.store = MagicMock()
     pipeline.store.get_collection_meta = AsyncMock(return_value=None)
 
-    mcp = create_mcp_app(
-        pipeline=pipeline,
-        default_collection="default",
-        config=cfg,
-        key_store=key_store,
-    )
-    tools = mcp._tools
+    tools = stub_mcp_tools(pipeline, _DEFAULT_COLLECTION, config=cfg, key_store=key_store)
     assert "rotate_key" in tools
 
-    with TestClient(http_app) as client:
+    with TestClient(http_app):
         # First rotation: auto-generated key → creates a managed record.
         result1 = asyncio.run(tools["rotate_key"](grace_seconds=None))
         assert "token" in result1
@@ -477,19 +366,12 @@ def test_mcp_rotate_key_grace_sets_expires_at(tmp_path, monkeypatch):
     key_store = http_app.state.key_store
 
     from archon_search.pipeline import SearchPipeline
-    from archon_search.server.mcp import create_app as create_mcp_app
 
     pipeline = MagicMock(spec=SearchPipeline)
     pipeline.store = MagicMock()
     pipeline.store.get_collection_meta = AsyncMock(return_value=None)
 
-    mcp = create_mcp_app(
-        pipeline=pipeline,
-        default_collection="default",
-        config=cfg,
-        key_store=key_store,
-    )
-    tools = mcp._tools
+    tools = stub_mcp_tools(pipeline, _DEFAULT_COLLECTION, config=cfg, key_store=key_store)
 
     from fastapi.testclient import TestClient
 
@@ -561,7 +443,7 @@ def test_mcp_list_keys_status_revoked_and_all_filters(tmp_path, monkeypatch):
     """list_keys returns correct sets for status='revoked' and status='all'."""
     tools, key_store, _ = _get_tools(tmp_path, monkeypatch)
 
-    r1 = asyncio.run(key_store.create(ns="default", label=None, expires_at=None))
+    asyncio.run(key_store.create(ns="default", label=None, expires_at=None))
     r2 = asyncio.run(key_store.create(ns="default", label=None, expires_at=None))
     asyncio.run(key_store.revoke(r2["id"]))
 
@@ -629,9 +511,8 @@ def test_mcp_revoke_key_null_id_returns_toml_hint(tmp_path, monkeypatch):
 def test_mcp_key_tools_not_registered_when_no_key_store(tmp_path, monkeypatch):
     """When key_store=None, none of the four key-management tools are registered."""
     from archon_search.config import SearchConfig
-    from archon_search.pipeline import SearchPipeline
     from archon_search.key_manager import ENV_VAR
-    from archon_search.server.mcp import create_app
+    from archon_search.pipeline import SearchPipeline
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv(ENV_VAR, raising=False)
@@ -642,8 +523,7 @@ def test_mcp_key_tools_not_registered_when_no_key_store(tmp_path, monkeypatch):
     pipeline.store.get_collection_meta = AsyncMock(return_value=None)
 
     # key_store=None → tools must not be registered.
-    app = create_app(pipeline=pipeline, default_collection="default", config=cfg)
-    tools = app._tools
+    tools = stub_mcp_tools(pipeline, _DEFAULT_COLLECTION, config=cfg)
     assert "create_key" not in tools
     assert "list_keys" not in tools
     assert "revoke_key" not in tools
@@ -665,10 +545,9 @@ def test_mcp_rotate_key_env_var_set_returns_conflict(tmp_path, monkeypatch):
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
 
     from archon_search.config import SearchConfig
-    from archon_search.pipeline import SearchPipeline
     from archon_search.key_manager import KeyStore
     from archon_search.paths import get_data_dir
-    from archon_search.server.mcp import create_app
+    from archon_search.pipeline import SearchPipeline
 
     cfg = SearchConfig()
     pipeline = MagicMock(spec=SearchPipeline)
@@ -676,8 +555,7 @@ def test_mcp_rotate_key_env_var_set_returns_conflict(tmp_path, monkeypatch):
     pipeline.store.get_collection_meta = AsyncMock(return_value=None)
 
     key_store = KeyStore(path=get_data_dir() / "keys.json")
-    app = create_app(pipeline=pipeline, default_collection="default", config=cfg, key_store=key_store)
-    tools = app._tools
+    tools = stub_mcp_tools(pipeline, _DEFAULT_COLLECTION, config=cfg, key_store=key_store)
 
     result = asyncio.run(tools["rotate_key"](grace_seconds=None))
     assert "error" in result
@@ -745,7 +623,7 @@ def test_mcp_create_key_exception_path(tmp_path, monkeypatch):
     tools, key_store, _ = _get_tools(tmp_path, monkeypatch)
 
     async def _raise(*args, **kwargs):
-        raise Exception("boom internal detail")
+        raise _InternalBoomError("boom internal detail")
 
     key_store.create = _raise
 
@@ -782,25 +660,18 @@ def test_mcp_rotate_key_valueerror_from_rotate_default(tmp_path, monkeypatch):
 @pytest.mark.integration
 def test_mcp_rotate_key_grace_expires_at_timestamp(tmp_path, monkeypatch):
     """rotate_key with grace_seconds=60: old key's expires_at is within 10s of now+60s."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     http_app, cfg = _make_http_app(tmp_path, monkeypatch)
     key_store = http_app.state.key_store
 
     from archon_search.pipeline import SearchPipeline
-    from archon_search.server.mcp import create_app as create_mcp_app
 
     pipeline = MagicMock(spec=SearchPipeline)
     pipeline.store = MagicMock()
     pipeline.store.get_collection_meta = AsyncMock(return_value=None)
 
-    mcp = create_mcp_app(
-        pipeline=pipeline,
-        default_collection="default",
-        config=cfg,
-        key_store=key_store,
-    )
-    tools = mcp._tools
+    tools = stub_mcp_tools(pipeline, _DEFAULT_COLLECTION, config=cfg, key_store=key_store)
 
     from fastapi.testclient import TestClient
 
@@ -809,10 +680,10 @@ def test_mcp_rotate_key_grace_expires_at_timestamp(tmp_path, monkeypatch):
         result1 = asyncio.run(tools["rotate_key"](grace_seconds=None))
         first_new_id = result1["new_key_id"]
 
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         # Second rotation with grace — first managed key gets expires_at.
         asyncio.run(tools["rotate_key"](grace_seconds=60))
-        after = datetime.now(timezone.utc)
+        after = datetime.now(UTC)
 
         keys_records = asyncio.run(key_store.list_keys())
         old_record = next((r for r in keys_records if r.id == first_new_id), None)

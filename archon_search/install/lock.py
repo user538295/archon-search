@@ -79,7 +79,7 @@ def _acquire_install_lock() -> Iterator[None]:
             if _pid_is_alive(pid):
                 raise InstallLockError(
                     f"Install is already running (PID {pid}). "
-                    "Wait for it to finish or remove ~/.archon-search/.install.lock if stale."
+                    f"Wait for it to finish or remove {lock_path} if stale."
                 )
 
             # PID is dead → stale lock

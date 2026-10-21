@@ -1008,13 +1008,13 @@ On timeout the wizard also prints the last import-time error it found in the ser
 
 ```
 Install is already running (PID 12345). Wait for it to finish or remove
-~/.archon-search/.install.lock if stale.
+/Users/you/.archon-search/.install.lock if stale.
 ```
 
-If you are certain no install is running (e.g., a previous run crashed), remove the stale lock file:
+The message names the actual lock file, `<data dir>/.install.lock`: `~/.archon-search/.install.lock` by default, or under `ARCHON_SEARCH_DATA_DIR` when that is set. If you are certain no install is running (e.g., a previous run crashed), remove the stale lock file at the exact path the message prints (shown here for the example above):
 
 ```bash
-trash ~/.archon-search/.install.lock   # or: rm ~/.archon-search/.install.lock
+trash /Users/you/.archon-search/.install.lock   # or: rm /Users/you/.archon-search/.install.lock
 ```
 
 Then re-run the wizard.

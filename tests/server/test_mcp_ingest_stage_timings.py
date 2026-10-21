@@ -2,9 +2,6 @@
 from __future__ import annotations
 
 import logging
-import sys
-import time
-import types
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,16 +9,9 @@ import pytest
 
 pytestmark = pytest.mark.xdist_group("mcp")
 
-# Stub fastmcp so mcp.py can be imported without the real package.
-if "fastmcp" not in sys.modules:
-    _fastmcp = types.ModuleType("fastmcp")
-    _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-    _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules["fastmcp"] = _fastmcp
-
 from archon_search._types import IngestResult
 from archon_search.config import SearchConfig
-from archon_search.observability import _stage_recorder, bind_stage_recorder, record_stage
+from archon_search.observability import _stage_recorder, record_stage
 
 
 # ---------------------------------------------------------------------------

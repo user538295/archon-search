@@ -18,11 +18,8 @@ test_live_rag_fusion_recall_at_5_meets_floor must pass with a real LLM.
 
 from __future__ import annotations
 
-import importlib
 import os
 import shutil
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -33,6 +30,7 @@ from archon_search.eval.runner import (
     _ingest_corpus,
     load_thresholds,
 )
+from tests._fastmcp_stub import stub_mcp_tool
 
 
 # ---------------------------------------------------------------------------
@@ -155,68 +153,6 @@ async def _build_live_pipeline(tmp_path: Path):
     await _ingest_corpus(pipeline, _EVAL_CORPUS_ROOT, corpus)
     return pipeline
 
-
-# ---------------------------------------------------------------------------
-# Helper: get a MCP tool function using the integration test stub pattern
-# ---------------------------------------------------------------------------
-
-class _StubFastMCP:
-    """Minimal FastMCP stub that records registered tools."""
-
-    def __init__(self, *args, **kwargs):
-        self._tools: dict = {}
-
-    def tool(self, *args, **kwargs):
-        def decorator(fn):
-            name = kwargs.get("name", fn.__name__)
-            self._tools[name] = fn
-            return fn
-        return decorator
-
-    def custom_route(self, *args, **kwargs):
-        def decorator(fn):
-            return fn
-        return decorator
-
-    def __call__(self, *args, **kwargs):
-        return self
-
-
-def _get_mcp_tool_fn(tool_name: str, pipeline, config, rf_generator=None, writer=None):
-    """Build a stub-backed MCP app with the real pipeline and return the named tool.
-
-    Mirrors the pattern from tests/test_integration_rag_fusion.py to avoid using
-    FastMCP private internals.
-    """
-    _fastmcp_module = "fastmcp"
-    _prev = sys.modules.get(_fastmcp_module)
-    _prev_class = getattr(_prev, "FastMCP", None) if _prev else None
-
-    if _fastmcp_module not in sys.modules:
-        _mod = types.ModuleType(_fastmcp_module)
-        _mod.FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-        _mod.Context = type("Context", (), {})  # type: ignore[attr-defined]
-        sys.modules[_fastmcp_module] = _mod
-    else:
-        sys.modules[_fastmcp_module].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-
-    _mcp_module = "archon_search.server.mcp"
-    sys.modules.pop(_mcp_module, None)
-    mcp_mod = importlib.import_module(_mcp_module)
-
-    app = mcp_mod.create_app(
-        pipeline,
-        _COLLECTION,
-        config=config,
-        rag_fusion_generator=rf_generator,
-        writer=writer,
-    )
-
-    if _prev_class is not None:
-        sys.modules[_fastmcp_module].FastMCP = _prev_class  # type: ignore[attr-defined]
-    sys.modules.pop(_mcp_module, None)
-
-    return app._tools[tool_name]
 
 
 # ---------------------------------------------------------------------------
@@ -530,7 +466,7 @@ async def test_live_mcp_search_rag_fusion(
     archon_search/server/mcp.py; the more granular rag_fusion_* fields are
     exposed by the HTTP /search route and pipeline.search(), not this tool).
 
-    Uses the _get_mcp_tool_fn stub pattern (same as test_integration_rag_fusion.py)
+    Uses the shared ``stub_mcp_tool`` helper (tests/_fastmcp_stub.py)
     to avoid relying on FastMCP private internals.
     """
     _skip_if_no_llm_available()
@@ -567,7 +503,9 @@ async def test_live_mcp_search_rag_fusion(
         rf_generator = app.state.rag_fusion_generator
 
         # Invoke the MCP tool function inside the context so the store remains connected
-        tool_fn = _get_mcp_tool_fn("search", pipeline, config, rf_generator=rf_generator)
+        tool_fn = stub_mcp_tool(
+            "search", pipeline, _COLLECTION, config=config, rag_fusion_generator=rf_generator
+        )
         result = await tool_fn(
             query="document retrieval architecture",
             collection=_COLLECTION,

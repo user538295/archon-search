@@ -1797,16 +1797,7 @@ async def test_mcp_explain_emits_stage_timings_log_record(
 ) -> None:
     """MCP explain with valid request emits a log record with event_type=='stage_timings'
     containing 'total' in stage_timings_ms."""
-    import sys
-    import types
     from unittest.mock import patch
-
-    # Stub fastmcp if not present
-    if "fastmcp" not in sys.modules:
-        _fastmcp = types.ModuleType("fastmcp")
-        _fastmcp.FastMCP = type("FastMCP", (), {})
-        _fastmcp.Context = type("Context", (), {})
-        sys.modules["fastmcp"] = _fastmcp
 
     from archon_search.store import SearchStore
 
@@ -1949,15 +1940,7 @@ async def test_explain_stage_timings_fts_absent_degradation(tmp_path: Path) -> N
 @pytest.mark.asyncio
 async def test_rest_mcp_explain_key_parity(tmp_path: Path) -> None:
     """For identical inputs, set(REST stage_timings_ms keys) == set(MCP stage_timings_ms keys)."""
-    import sys
-    import types
     from unittest.mock import patch
-
-    if "fastmcp" not in sys.modules:
-        _fastmcp = types.ModuleType("fastmcp")
-        _fastmcp.FastMCP = type("FastMCP", (), {})
-        _fastmcp.Context = type("Context", (), {})
-        sys.modules["fastmcp"] = _fastmcp
 
     from archon_search.store import SearchStore
 

@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import io
 import json
-import sys
 import tarfile
-import types
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -51,13 +49,6 @@ def _make_mcp_app(
     config: Any = None,
     job_store: Any = None,
 ) -> _FakeApp:
-    # Ensure fastmcp is in sys.modules before patching so the import in mcp.py works.
-    if "fastmcp" not in sys.modules:
-        _fastmcp_stub = types.ModuleType("fastmcp")
-        _fastmcp_stub.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-        _fastmcp_stub.Context = type("Context", (), {})  # type: ignore[attr-defined]
-        sys.modules["fastmcp"] = _fastmcp_stub
-
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         from archon_search.server import mcp as mcp_module
         return mcp_module.create_app(

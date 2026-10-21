@@ -33,9 +33,10 @@ pytestmark = pytest.mark.integration
 def _noop_install_lock() -> Generator[None, None, None]:
     """No-op replacement for _acquire_install_lock.
 
-    The real lock writes to ~/.archon-search/.install.lock.  Without this
-    patch, parallel xdist workers running wizard tests concurrently with the
-    install xdist_group can deadlock on the shared advisory lock.
+    Only the ``dry_run=False`` runs reach it (via ``RealInstaller.install_lock``).
+    The real lock would not contend — it lives under the per-worker data dir set by
+    the autouse ``_archon_isolated_data_dir`` fixture — so the patch only spares
+    these tests creating and removing a lock file they do not assert on.
     """
     yield
 
@@ -347,5 +348,5 @@ def test_wizard_hyde_and_rag_fusion_work_without_anthropic_api_key(
     doc = tomlkit.parse(config_path.read_text())
     # Both flags were passed in the last _run_wizard call (--enable-rag-fusion)
     assert doc.get("rag_fusion", {}).get("enabled") is True, (
-        f"Expected [rag_fusion] enabled = true after --enable-rag-fusion without API key"
+        "Expected [rag_fusion] enabled = true after --enable-rag-fusion without API key"
     )

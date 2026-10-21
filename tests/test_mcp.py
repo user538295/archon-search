@@ -1,88 +1,14 @@
 """Tests for _needs_install_trigger() and MCP tools in archon_search.server.mcp."""
 from __future__ import annotations
 
-import sys
-import types
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Own xdist group ("mcp_stub"): this module installs a module-scoped global
-# FastMCP stub via sys.modules mutation. Isolating it in a separate worker keeps
-# that stub from leaking into real-FastMCP HTTP tests in the "mcp" group.
-pytestmark = pytest.mark.xdist_group("mcp_stub")
-
-
-# ---------------------------------------------------------------------------
-# fastmcp stub — must support tool() decorator and custom_route() so
-# create_app() can register tools and we can retrieve the inner functions.
-# ---------------------------------------------------------------------------
-class _StubFastMCP:
-    def __init__(self, *args, **kwargs):
-        self._tools: dict = {}
-
-    def tool(self):
-        def decorator(fn):
-            self._tools[fn.__name__] = fn
-            return fn
-        return decorator
-
-    def custom_route(self, *args, **kwargs):
-        def decorator(fn):
-            return fn
-        return decorator
-
-
-_MCP_MODULE = "archon_search.server.mcp"
-_FASTMCP_MODULE = "fastmcp"
-
-# Always load the real fastmcp classes directly from source, regardless of
-# what's in sys.modules at collection time. This survives any collection order.
-# Use the real ``fastmcp`` package (3.4.x) whose FastMCP exposes http_app() — the
-# low-level mcp.server.fastmcp class lacks it and would break create_mcp_http_app()
-# for any sibling test that builds a real HTTP app after this module restores.
-try:
-    import fastmcp as _real_fastmcp_pkg  # type: ignore[import]
-    _real_fastmcp_class = _real_fastmcp_pkg.FastMCP
-    _real_fastmcp_context = getattr(_real_fastmcp_pkg, "Context", None)
-except (ImportError, AttributeError):
-    _real_fastmcp_class = None
-    _real_fastmcp_context = None
-
-# Install stub into sys.modules["fastmcp"] so archon_search.server.mcp can be imported.
-if _FASTMCP_MODULE not in sys.modules:
-    _fastmcp_mod = types.ModuleType(_FASTMCP_MODULE)
-    _fastmcp_mod.FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-    _fastmcp_mod.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules[_FASTMCP_MODULE] = _fastmcp_mod
-else:
-    sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-
 from archon_search.progress import CollectionProgress, IndexingState, IndexingStatus, IndexingStateStore
 from archon_search.server.mcp import _needs_install_trigger
-
-# Restore real FastMCP immediately after the module-level import so that other
-# test modules (test_mcp_auth.py, test_mcp_search.py) see the real class whether
-# they are collected before or after this module.
-if _real_fastmcp_class is not None:
-    sys.modules[_FASTMCP_MODULE].FastMCP = _real_fastmcp_class  # type: ignore[attr-defined]
-    if _real_fastmcp_context is not None:
-        sys.modules[_FASTMCP_MODULE].Context = _real_fastmcp_context  # type: ignore[attr-defined]
-sys.modules.pop(_MCP_MODULE, None)
-
-
-@pytest.fixture(autouse=True, scope="module")
-def _stub_fastmcp_for_module():
-    """Reinstall _StubFastMCP only for this module's test execution, then restore."""
-    sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-    sys.modules.pop(_MCP_MODULE, None)  # force reload with stub in _get_tool_fn
-    yield
-    if _real_fastmcp_class is not None:
-        sys.modules[_FASTMCP_MODULE].FastMCP = _real_fastmcp_class  # type: ignore[attr-defined]
-        if _real_fastmcp_context is not None:
-            sys.modules[_FASTMCP_MODULE].Context = _real_fastmcp_context  # type: ignore[attr-defined]
-    sys.modules.pop(_MCP_MODULE, None)
+from tests._fastmcp_stub import stub_mcp_tool
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +96,6 @@ def _make_meta_with_embeddings():
 
 def _make_pipeline_mock(meta):
     """Return a minimal pipeline mock whose get_all_collections_meta returns [meta]."""
-    from unittest.mock import AsyncMock, MagicMock
     pipeline = MagicMock()
     pipeline.get_all_collections_meta = AsyncMock(return_value=[meta])
     pipeline.get_collection_meta = AsyncMock(return_value=meta)
@@ -178,14 +103,9 @@ def _make_pipeline_mock(meta):
 
 
 def _get_tool_fn(tool_name: str, meta):
-    """Build a _StubFastMCP-backed app and return the named tool's inner function."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-    # Force re-import so create_app picks up the stub FastMCP class.
-    importlib.reload(mcp_mod)
+    """Build a StubFastMCP-backed app and return the named tool's inner function."""
     pipeline = _make_pipeline_mock(meta)
-    app = mcp_mod.create_app(pipeline, "col1")
-    return app._tools[tool_name]
+    return stub_mcp_tool(tool_name, pipeline, "col1")
 
 
 def test_list_collections_strips_description_embedding() -> None:
@@ -264,11 +184,7 @@ def _make_pipeline_mock_with_delete(delete_side_effect=None, delete_return=0):
 
 def _get_delete_tool_fn(pipeline):
     """Build a stub-backed app with the given pipeline and return delete_document tool fn."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-    importlib.reload(mcp_mod)
-    app = mcp_mod.create_app(pipeline, "col1")
-    return app._tools["delete_document"]
+    return stub_mcp_tool("delete_document", pipeline, "col1")
 
 
 def test_mcp_delete_document_maps_store_busy_to_store_busy_code() -> None:
@@ -324,13 +240,10 @@ def test_mcp_search_tool_maps_embedder_not_ready_to_embedder_not_ready_code() ->
     ``'embedder_not_ready'``.
     """
     import asyncio
-    import importlib
 
     from archon_search.collection_meta import CollectionMeta
     from archon_search.embedder_cache import EmbedderNotReadyError
-    import archon_search.server.mcp as mcp_mod
 
-    importlib.reload(mcp_mod)
     # active_embedding_model must be non-empty: resolve_active_model() falls
     # back to pipeline._global_embedder (never calling embedder_cache) when the
     # resolved model name is empty.
@@ -343,8 +256,7 @@ def test_mcp_search_tool_maps_embedder_not_ready_to_embedder_not_ready_code() ->
         side_effect=EmbedderNotReadyError("model still loading")
     )
 
-    app = mcp_mod.create_app(pipeline, "col1", embedder_cache=embedder_cache)
-    tool_fn = app._tools["search"]
+    tool_fn = stub_mcp_tool("search", pipeline, "col1", embedder_cache=embedder_cache)
 
     result = asyncio.run(tool_fn(query="test", collection="col1"))
 
@@ -417,13 +329,7 @@ def _make_hyde_generator_mock(vector=None):
 
 def _get_hyde_tool_fn(tool_name: str, pipeline, config=None, hyde_generator=None):
     """Build a stub-backed MCP app and return the named tool function."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-    importlib.reload(mcp_mod)
-    app = mcp_mod.create_app(
-        pipeline, "col1", config=config, hyde_generator=hyde_generator
-    )
-    return app._tools[tool_name]
+    return stub_mcp_tool(tool_name, pipeline, "col1", config=config, hyde_generator=hyde_generator)
 
 
 def test_mcp_search_tool_hyde_parameter_accepted() -> None:
@@ -438,7 +344,8 @@ def test_mcp_search_tool_hyde_parameter_accepted() -> None:
     result = asyncio.run(tool_fn(query="what is archon?", collection="col1", hyde=True))
 
     assert isinstance(result, dict)
-    assert "error" not in result or result.get("code") != "internal_error"
+    assert "error" not in result, result
+    assert result["results"] == []
 
 
 def test_mcp_search_tool_hyde_applied_in_result() -> None:
@@ -676,17 +583,14 @@ def _get_rag_fusion_tool_fn(
     rag_fusion_generator=None,
 ):
     """Build a stub-backed MCP app and return the named tool function."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-    importlib.reload(mcp_mod)
-    app = mcp_mod.create_app(
+    return stub_mcp_tool(
+        tool_name,
         pipeline,
         "col1",
         config=config,
         hyde_generator=hyde_generator,
         rag_fusion_generator=rag_fusion_generator,
     )
-    return app._tools[tool_name]
 
 
 def test_mcp_search_tool_rag_fusion_parameter_accepted() -> None:
@@ -701,7 +605,8 @@ def test_mcp_search_tool_rag_fusion_parameter_accepted() -> None:
     result = asyncio.run(tool_fn(query="what is archon?", collection="col1", rag_fusion=True))
 
     assert isinstance(result, dict)
-    assert "error" not in result or result.get("code") != "internal_error"
+    assert "error" not in result, result
+    assert result["results"] == []
 
 
 def test_mcp_search_tool_rag_fusion_applied_in_result() -> None:
@@ -733,14 +638,10 @@ def test_mcp_search_tool_rag_fusion_true_skips_hyde() -> None:
     hyde_gen = MagicMock()
     hyde_gen.generate = AsyncMock(return_value=[0.5] * 5)
 
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-    importlib.reload(mcp_mod)
-    app = mcp_mod.create_app(
-        pipeline, "col1", config=config,
+    tool_fn = stub_mcp_tool(
+        "search", pipeline, "col1", config=config,
         hyde_generator=hyde_gen, rag_fusion_generator=rf_gen,
     )
-    tool_fn = app._tools["search"]
 
     with patch("archon_search.server.mcp.resolve_hyde_vector", new=AsyncMock(return_value=([0.5] * 5, True))) as mock_resolve:
         result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True, hyde=True))
@@ -785,11 +686,7 @@ def test_mcp_search_with_context_telemetry_includes_feature_flags() -> None:
 
     writer = MagicMock(spec=TelemetryWriter)
 
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-    importlib.reload(mcp_mod)
-    app = mcp_mod.create_app(pipeline, "col1", config=config, writer=writer)
-    tool_fn = app._tools["search_with_context"]
+    tool_fn = stub_mcp_tool("search_with_context", pipeline, "col1", config=config, writer=writer)
 
     asyncio.run(tool_fn(query="test query", collection="col1", hyde=False, rag_fusion=False))
 
@@ -832,14 +729,10 @@ def test_mcp_search_with_context_rag_fusion_true_skips_hyde() -> None:
     hyde_gen = MagicMock()
     hyde_gen.generate = AsyncMock(return_value=[0.5] * 5)
 
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-    importlib.reload(mcp_mod)
-    app = mcp_mod.create_app(
-        pipeline, "col1", config=config,
+    tool_fn = stub_mcp_tool(
+        "search_with_context", pipeline, "col1", config=config,
         hyde_generator=hyde_gen, rag_fusion_generator=rf_gen,
     )
-    tool_fn = app._tools["search_with_context"]
 
     with patch("archon_search.server.mcp.resolve_hyde_vector", new=AsyncMock(return_value=([0.5] * 5, True))) as mock_resolve:
         result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True, hyde=True))
@@ -902,12 +795,7 @@ def _make_search_pipeline_with_result(result=None, acl_filtered=False, excluded=
 
 def _get_search_tool_fn(pipeline, config=None):
     """Build a stub-backed MCP app and return the search tool function."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-
-    importlib.reload(mcp_mod)
-    app = mcp_mod.create_app(pipeline, "col1", config=config)
-    return app._tools["search"]
+    return stub_mcp_tool("search", pipeline, "col1", config=config)
 
 
 def test_search_returns_mcp_search_response_shape() -> None:
@@ -954,12 +842,7 @@ def test_search_multi_collection_returns_mcp_search_response_shape() -> None:
     )
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-
-    importlib.reload(mcp_mod)
-    app = mcp_mod.create_app(pipeline, "col1")
-    tool_fn = app._tools["search"]
+    tool_fn = stub_mcp_tool("search", pipeline, "col1")
 
     result = asyncio.run(tool_fn(query="hello", collections=["col1", "col2"]))
 
@@ -1081,12 +964,7 @@ def _make_swc_pipeline_with_result(result=None, hyde_applied=False, with_context
 
 def _get_swc_tool_fn(pipeline, config=None):
     """Build a stub-backed MCP app and return the search_with_context tool function."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-
-    importlib.reload(mcp_mod)
-    app = mcp_mod.create_app(pipeline, "col1", config=config)
-    return app._tools["search_with_context"]
+    return stub_mcp_tool("search_with_context", pipeline, "col1", config=config)
 
 
 def test_search_with_context_result_shape() -> None:
@@ -1156,10 +1034,8 @@ def test_search_with_context_include_metadata_false_clears_metadata() -> None:
 
 def test_chunk_to_context_dict_removed() -> None:
     """_chunk_to_context_dict helper must not exist in mcp module after migration."""
-    import importlib
     import archon_search.server.mcp as mcp_module
 
-    importlib.reload(mcp_module)
     assert not hasattr(mcp_module, "_chunk_to_context_dict")
 
 
@@ -1283,12 +1159,7 @@ def _make_ingest_pipeline_with_result(needs_recompute=True):
 
 def _get_ingest_tool_fn(tool_name: str, pipeline, config=None):
     """Build a stub-backed MCP app and return the ingest tool function."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-
-    importlib.reload(mcp_mod)
-    app = mcp_mod.create_app(pipeline, "col1", config=config)
-    return app._tools[tool_name]
+    return stub_mcp_tool(tool_name, pipeline, "col1", config=config)
 
 
 def test_ingest_file_result_excludes_needs_recompute() -> None:
@@ -1413,14 +1284,9 @@ def _make_full_collection_meta():
 
 def _get_collections_tool_fn(tool_name: str, meta, config=None):
     """Build a stub-backed MCP app and return the named tool function."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-
-    importlib.reload(mcp_mod)
     pipeline = MagicMock()
     pipeline.get_all_collections_meta = AsyncMock(return_value=[meta])
-    app = mcp_mod.create_app(pipeline, "col1", config=config)
-    return app._tools[tool_name]
+    return stub_mcp_tool(tool_name, pipeline, "col1", config=config)
 
 
 _INTERNAL_FIELDS = {
@@ -1551,14 +1417,9 @@ def test_get_collections_meta_schema_drift_returns_schema_validation_error() -> 
 def test_list_collections_pipeline_error_returns_internal_error() -> None:
     """list_collections outer exception handler returns internal_error on pipeline failure."""
     import asyncio
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-
-    importlib.reload(mcp_mod)
     pipeline = MagicMock()
     pipeline.get_all_collections_meta = AsyncMock(side_effect=RuntimeError("db down"))
-    app = mcp_mod.create_app(pipeline, "col1")
-    tool_fn = app._tools["list_collections"]
+    tool_fn = stub_mcp_tool("list_collections", pipeline, "col1")
 
     result = asyncio.run(tool_fn())
 
@@ -1569,14 +1430,9 @@ def test_list_collections_pipeline_error_returns_internal_error() -> None:
 def test_get_collections_meta_pipeline_error_returns_internal_error() -> None:
     """get_collections_meta outer exception handler returns internal_error on pipeline failure."""
     import asyncio
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-
-    importlib.reload(mcp_mod)
     pipeline = MagicMock()
     pipeline.get_all_collections_meta = AsyncMock(side_effect=RuntimeError("db down"))
-    app = mcp_mod.create_app(pipeline, "col1")
-    tool_fn = app._tools["get_collections_meta"]
+    tool_fn = stub_mcp_tool("get_collections_meta", pipeline, "col1")
 
     result = asyncio.run(tool_fn())
 
@@ -1591,17 +1447,12 @@ def test_get_collections_meta_pipeline_error_returns_internal_error() -> None:
 
 def _get_single_collection_tool_fn(tool_name: str, meta, pipeline_override=None, config=None):
     """Build a stub-backed MCP app for single-collection tools."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-
-    importlib.reload(mcp_mod)
     if pipeline_override is not None:
         pipeline = pipeline_override
     else:
         pipeline = MagicMock()
         pipeline.get_collection_meta = AsyncMock(return_value=meta)
-    app = mcp_mod.create_app(pipeline, "col1", config=config)
-    return app._tools[tool_name]
+    return stub_mcp_tool(tool_name, pipeline, "col1", config=config)
 
 
 def test_get_collection_meta_excludes_internal_fields() -> None:
@@ -1842,29 +1693,19 @@ def _make_document_info():
 
 def _get_list_documents_tool_fn(doc_infos):
     """Build a stub-backed MCP app and return the list_documents tool function."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-
-    importlib.reload(mcp_mod)
     pipeline = MagicMock()
     pipeline.list_documents = AsyncMock(return_value=(doc_infos, None, len(doc_infos)))
-    app = mcp_mod.create_app(pipeline, "col1")
-    return app._tools["list_documents"]
+    return stub_mcp_tool("list_documents", pipeline, "col1")
 
 
 def _get_delete_document_tool_fn_v2(delete_return=1, delete_side_effect=None):
     """Build a stub-backed MCP app and return the delete_document tool function."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-
-    importlib.reload(mcp_mod)
     pipeline = MagicMock()
     pipeline.delete_document = AsyncMock(
         return_value=delete_return if delete_side_effect is None else None,
         side_effect=delete_side_effect,
     )
-    app = mcp_mod.create_app(pipeline, "col1")
-    return app._tools["delete_document"]
+    return stub_mcp_tool("delete_document", pipeline, "col1")
 
 
 def test_list_documents_returns_document_info_schema_shape() -> None:

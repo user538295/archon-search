@@ -5,9 +5,9 @@ Uses the real ``create_app()`` + ``TestClient`` pattern (matching
 ``RAGFusionGenerator.generate_variants`` to return deterministic variants,
 avoiding real Anthropic API calls.
 
-MCP tool tests build a FastMCP app backed by the real pipeline extracted from
-``app.state``, using the same ``_StubFastMCP``+``importlib.reload`` pattern as
-``tests/test_mcp.py``, then invoke tool functions directly.
+MCP tool tests take the real pipeline from the FastAPI app's ``app.state``, register
+the MCP tools against it on the tool-capturing ``StubFastMCP`` via ``stub_mcp_tool()``
+(``tests/_fastmcp_stub.py``), then invoke tool functions directly.
 
 Run with:
     uv run pytest tests/test_integration_rag_fusion.py -m integration --no-cov -q
@@ -15,7 +15,6 @@ Run with:
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
 import sys
 import types
@@ -32,6 +31,7 @@ from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.store import SearchStore
+from tests._fastmcp_stub import stub_mcp_tool
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
 
@@ -102,62 +102,6 @@ def _make_app(tmp_path: Path, *, rag_fusion_enabled: bool = True, hyde_enabled: 
 
 
 # ---------------------------------------------------------------------------
-# Stub FastMCP (mirrors the one in test_mcp.py) for MCP tool invocation
-# ---------------------------------------------------------------------------
-
-class _StubFastMCP:
-    def __init__(self, *args, **kwargs):
-        self._tools: dict = {}
-
-    def tool(self):
-        def decorator(fn):
-            self._tools[fn.__name__] = fn
-            return fn
-        return decorator
-
-    def custom_route(self, *args, **kwargs):
-        def decorator(fn):
-            return fn
-        return decorator
-
-
-def _get_mcp_tool_fn(tool_name: str, pipeline, config, rf_generator=None, writer=None):
-    """Build a stub-backed MCP app with the real pipeline and return the named tool."""
-    _fastmcp_module = "fastmcp"
-    # Save current state
-    _prev = sys.modules.get(_fastmcp_module)
-    _prev_class = getattr(_prev, "FastMCP", None) if _prev else None
-
-    # Install stub
-    if _fastmcp_module not in sys.modules:
-        _mod = types.ModuleType(_fastmcp_module)
-        _mod.FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-        _mod.Context = type("Context", (), {})  # type: ignore[attr-defined]
-        sys.modules[_fastmcp_module] = _mod
-    else:
-        sys.modules[_fastmcp_module].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-
-    _mcp_module = "archon_search.server.mcp"
-    sys.modules.pop(_mcp_module, None)
-    mcp_mod = importlib.import_module(_mcp_module)
-
-    app = mcp_mod.create_app(
-        pipeline,
-        _COLLECTION,
-        config=config,
-        rag_fusion_generator=rf_generator,
-        writer=writer,
-    )
-
-    # Restore real FastMCP
-    if _prev_class is not None:
-        sys.modules[_fastmcp_module].FastMCP = _prev_class  # type: ignore[attr-defined]
-    sys.modules.pop(_mcp_module, None)
-
-    return app._tools[tool_name]
-
-
-# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -168,15 +112,17 @@ async def test_search_rag_fusion_true_returns_200_applied_true(tmp_path: Path) -
     await _ingest_chunk(tmp_path)
     app = _make_app(tmp_path, rag_fusion_enabled=True)
 
-    with patch(
-        "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
-        new=AsyncMock(return_value=_FIXED_VARIANTS),
+    with (
+        patch(
+            "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
+            new=AsyncMock(return_value=_FIXED_VARIANTS),
+        ),
+        TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client,
     ):
-        with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
-            response = client.post(
-                "/search",
-                json={"query": "hello world", "collection": _COLLECTION, "rag_fusion": True},
-            )
+        response = client.post(
+            "/search",
+            json={"query": "hello world", "collection": _COLLECTION, "rag_fusion": True},
+        )
 
     assert response.status_code == 200, response.text
     data = response.json()
@@ -211,21 +157,23 @@ async def test_search_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path)
     app = _make_app(tmp_path, rag_fusion_enabled=True)
 
     mock_generate_variants = AsyncMock(return_value=_FIXED_VARIANTS)
-    with patch(
-        "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
-        new=mock_generate_variants,
+    with (
+        patch(
+            "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
+            new=mock_generate_variants,
+        ),
+        patch("archon_search.server.routes_search.resolve_hyde_vector") as mock_resolve_hyde,
+        TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client,
     ):
-        with patch("archon_search.server.routes_search.resolve_hyde_vector") as mock_resolve_hyde:
-            with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
-                response = client.post(
-                    "/search",
-                    json={
-                        "query": "hello world",
-                        "collection": _COLLECTION,
-                        "rag_fusion": True,
-                        "hyde": True,
-                    },
-                )
+        response = client.post(
+            "/search",
+            json={
+                "query": "hello world",
+                "collection": _COLLECTION,
+                "rag_fusion": True,
+                "hyde": True,
+            },
+        )
 
     assert response.status_code == 200, response.text
     data = response.json()
@@ -241,15 +189,17 @@ async def test_search_rag_fusion_generator_returns_empty_fallback(tmp_path: Path
     await _ingest_chunk(tmp_path)
     app = _make_app(tmp_path, rag_fusion_enabled=True)
 
-    with patch(
-        "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
-        new=AsyncMock(return_value=[]),
+    with (
+        patch(
+            "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
+            new=AsyncMock(return_value=[]),
+        ),
+        TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client,
     ):
-        with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
-            response = client.post(
-                "/search",
-                json={"query": "hello world", "collection": _COLLECTION, "rag_fusion": True},
-            )
+        response = client.post(
+            "/search",
+            json={"query": "hello world", "collection": _COLLECTION, "rag_fusion": True},
+        )
 
     assert response.status_code == 200, response.text
     data = response.json()
@@ -267,15 +217,17 @@ async def test_search_rag_fusion_disabled_config_skips(tmp_path: Path) -> None:
     app = _make_app(tmp_path, rag_fusion_enabled=False)
 
     mock_generate_variants = AsyncMock(return_value=_FIXED_VARIANTS)
-    with patch(
-        "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
-        new=mock_generate_variants,
+    with (
+        patch(
+            "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
+            new=mock_generate_variants,
+        ),
+        TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client,
     ):
-        with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
-            response = client.post(
-                "/search",
-                json={"query": "hello world", "collection": _COLLECTION, "rag_fusion": True},
-            )
+        response = client.post(
+            "/search",
+            json={"query": "hello world", "collection": _COLLECTION, "rag_fusion": True},
+        )
 
     assert response.status_code == 200, response.text
     data = response.json()
@@ -298,24 +250,26 @@ async def test_search_rag_fusion_requested_but_disabled_hyde_still_applies(tmp_p
     app = _make_app(tmp_path, rag_fusion_enabled=False, hyde_enabled=True)
 
     mock_generate_variants = AsyncMock(return_value=_FIXED_VARIANTS)
-    with patch(
-        "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
-        new=mock_generate_variants,
-    ):
-        with patch(
+    with (
+        patch(
+            "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
+            new=mock_generate_variants,
+        ),
+        patch(
             "archon_search.hyde.HyDEGenerator.generate",
             new=AsyncMock(return_value=[0.1] * 384),
-        ):
-            with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
-                response = client.post(
-                    "/search",
-                    json={
-                        "query": "hello world",
-                        "collection": _COLLECTION,
-                        "rag_fusion": True,
-                        "hyde": True,
-                    },
-                )
+        ),
+        TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client,
+    ):
+        response = client.post(
+            "/search",
+            json={
+                "query": "hello world",
+                "collection": _COLLECTION,
+                "rag_fusion": True,
+                "hyde": True,
+            },
+        )
 
     assert response.status_code == 200, response.text
     data = response.json()
@@ -333,15 +287,17 @@ async def test_explain_rag_fusion_true_returns_sub_queries(tmp_path: Path) -> No
     await _ingest_chunk(tmp_path)
     app = _make_app(tmp_path, rag_fusion_enabled=True)
 
-    with patch(
-        "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
-        new=AsyncMock(return_value=_FIXED_VARIANTS),
+    with (
+        patch(
+            "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
+            new=AsyncMock(return_value=_FIXED_VARIANTS),
+        ),
+        TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client,
     ):
-        with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
-            response = client.post(
-                "/explain",
-                json={"query": "hello world", "collection": _COLLECTION, "rag_fusion": True},
-            )
+        response = client.post(
+            "/explain",
+            json={"query": "hello world", "collection": _COLLECTION, "rag_fusion": True},
+        )
 
     assert response.status_code == 200, response.text
     data = response.json()
@@ -366,21 +322,23 @@ async def test_explain_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path
     await _ingest_chunk(tmp_path)
     app = _make_app(tmp_path, rag_fusion_enabled=True)
 
-    with patch(
-        "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
-        new=AsyncMock(return_value=_FIXED_VARIANTS),
+    with (
+        patch(
+            "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
+            new=AsyncMock(return_value=_FIXED_VARIANTS),
+        ),
+        patch("archon_search.server.routes_explain.resolve_hyde_vector") as mock_resolve_hyde,
+        TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client,
     ):
-        with patch("archon_search.server.routes_explain.resolve_hyde_vector") as mock_resolve_hyde:
-            with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
-                response = client.post(
-                    "/explain",
-                    json={
-                        "query": "hello world",
-                        "collection": _COLLECTION,
-                        "rag_fusion": True,
-                        "hyde": True,
-                    },
-                )
+        response = client.post(
+            "/explain",
+            json={
+                "query": "hello world",
+                "collection": _COLLECTION,
+                "rag_fusion": True,
+                "hyde": True,
+            },
+        )
 
     assert response.status_code == 200, response.text
     data = response.json()
@@ -407,15 +365,17 @@ async def test_search_rag_fusion_telemetry_entry_written(tmp_path: Path) -> None
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
 
-    with patch(
-        "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
-        new=AsyncMock(return_value=_FIXED_VARIANTS),
+    with (
+        patch(
+            "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
+            new=AsyncMock(return_value=_FIXED_VARIANTS),
+        ),
+        TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client,
     ):
-        with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
-            response = client.post(
-                "/search",
-                json={"query": "hello world", "collection": _COLLECTION, "rag_fusion": True},
-            )
+        response = client.post(
+            "/search",
+            json={"query": "hello world", "collection": _COLLECTION, "rag_fusion": True},
+        )
 
     assert response.status_code == 200, response.text
 
@@ -445,7 +405,8 @@ def test_mcp_search_rag_fusion_true_applied_in_result(tmp_path: Path) -> None:
     The MCP search response schema (McpSearchResponse) does not expose
     rag_fusion_applied/rag_fusion_queries_used/rag_fusion_attempted in the
     response dict — those fields are internal to the pipeline and written to
-    telemetry only. This test verifies the call succeeds and returns results.
+    telemetry only. This test verifies the call succeeds, returns results, and actually
+    awaited the variant generator (so a skipped fusion branch cannot pass silently).
     """
     asyncio.run(_ingest_chunk(tmp_path))
     app = _make_app(tmp_path, rag_fusion_enabled=True)
@@ -458,7 +419,9 @@ def test_mcp_search_rag_fusion_true_applied_in_result(tmp_path: Path) -> None:
 
         mock_generate_variants = AsyncMock(return_value=_FIXED_VARIANTS)
         with patch.object(rf_generator, "generate_variants", new=mock_generate_variants):
-            tool_fn = _get_mcp_tool_fn("search", pipeline, config, rf_generator=rf_generator)
+            tool_fn = stub_mcp_tool(
+                "search", pipeline, _COLLECTION, config=config, rag_fusion_generator=rf_generator
+            )
             result = asyncio.run(
                 tool_fn(
                     query="hello world",
@@ -467,6 +430,7 @@ def test_mcp_search_rag_fusion_true_applied_in_result(tmp_path: Path) -> None:
                 )
             )
 
+    mock_generate_variants.assert_awaited_once_with("hello world")
     assert isinstance(result, dict), f"Expected dict, got {type(result)}: {result}"
     assert "results" in result
     assert "hyde_applied" in result
@@ -489,7 +453,9 @@ def test_mcp_search_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path) -
 
         mock_generate_variants = AsyncMock(return_value=_FIXED_VARIANTS)
         with patch.object(rf_generator, "generate_variants", new=mock_generate_variants):
-            tool_fn = _get_mcp_tool_fn("search", pipeline, config, rf_generator=rf_generator)
+            tool_fn = stub_mcp_tool(
+                "search", pipeline, _COLLECTION, config=config, rag_fusion_generator=rf_generator
+            )
             result = asyncio.run(
                 tool_fn(
                     query="hello world",
@@ -499,6 +465,7 @@ def test_mcp_search_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path) -
                 )
             )
 
+    mock_generate_variants.assert_awaited_once_with("hello world")
     assert isinstance(result, dict)
     assert result.get("hyde_applied") is False
 
@@ -525,8 +492,13 @@ def test_mcp_search_with_context_rag_fusion_result_and_telemetry(tmp_path: Path)
 
         mock_generate_variants = AsyncMock(return_value=_FIXED_VARIANTS)
         with patch.object(rf_generator, "generate_variants", new=mock_generate_variants):
-            tool_fn = _get_mcp_tool_fn(
-                "search_with_context", pipeline, config, rf_generator=rf_generator, writer=writer
+            tool_fn = stub_mcp_tool(
+                "search_with_context",
+                pipeline,
+                _COLLECTION,
+                config=config,
+                rag_fusion_generator=rf_generator,
+                writer=writer,
             )
             result = asyncio.run(
                 tool_fn(

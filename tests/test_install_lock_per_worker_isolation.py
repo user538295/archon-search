@@ -4,10 +4,9 @@ These tests confirm that two pytest workers with DISTINCT DATA_DIRs can both
 acquire the install lock simultaneously (no collision), and that two workers
 sharing the same DATA_DIR contend correctly (one wins, one gets InstallLockError).
 
-Phase-2 xfail note: install.py still uses Path.home() for the lock path; the
-per-child DATA_DIR env override has no effect until Phase 3 migrates those three
-callsites to get_data_dir(). The method-level xfail on
-test_two_workers_with_distinct_data_dirs_both_acquire is removed in Task 3.1.
+The lock path is ``get_data_dir() / ".install.lock"`` (``_install_lock_path`` in
+``archon_search/install/lock.py``), so each child's ARCHON_SEARCH_DATA_DIR selects
+its lock file.
 """
 from __future__ import annotations
 
@@ -37,7 +36,7 @@ def _child_acquire(
 
     Sets ARCHON_SEARCH_DATA_DIR to *data_dir* BEFORE importing
     archon_search.install so that _install_lock_path() resolves to the correct
-    per-worker directory (once Phase 3 migrates it to get_data_dir()).
+    per-worker directory.
 
     Pushes ("ok", None) on success or ("err", <ExceptionClassName>) on failure.
     """
@@ -69,9 +68,7 @@ def _child_acquire(
 def test_two_workers_with_distinct_data_dirs_both_acquire(tmp_path: Path) -> None:
     """Two processes with distinct DATA_DIRs must both acquire the lock without contention.
 
-    Before Phase 3, _install_lock_path() still returns Path.home() / ... for all
-    children, so both land on the same global lock and this test xfails.
-    After Phase 3 migration the lock path is DATA_DIR-relative and they diverge.
+    The lock path is DATA_DIR-relative, so the two children use different lock files.
     """
     dir_a = tmp_path / "worker_a"
     dir_b = tmp_path / "worker_b"

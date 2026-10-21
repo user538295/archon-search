@@ -4,9 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sys
-import types
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,13 +13,6 @@ import httpx
 import pytest
 
 pytestmark = pytest.mark.xdist_group("mcp")
-
-# Stub fastmcp so mcp.py can be imported without the real package interfering.
-if "fastmcp" not in sys.modules:
-    _fastmcp = types.ModuleType("fastmcp")
-    _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-    _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules["fastmcp"] = _fastmcp
 
 from archon_search._types import ChunkRecord
 from archon_search.collection_meta import CollectionMeta

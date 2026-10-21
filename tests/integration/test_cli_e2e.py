@@ -35,11 +35,11 @@ pytestmark = pytest.mark.integration
 
 @contextlib.contextmanager
 def _noop_install_lock() -> Generator[None, None, None]:
-    """No-op replacement for _acquire_install_lock to avoid lock contention.
+    """No-op replacement for _acquire_install_lock.
 
-    The real lock writes to ~/.archon-search/.install.lock.  Without this
-    patch, parallel xdist workers running wizard tests concurrently with the
-    install xdist_group can deadlock on the shared advisory lock.
+    Currently inert: every wizard run in this module is ``--dry-run``, and
+    ``DryRunInstaller.install_lock`` returns a null context without calling
+    ``_acquire_install_lock``. Kept only as a guard should a non-dry-run case be added.
     """
     yield
 
@@ -282,8 +282,8 @@ def _make_wizard_patches() -> dict:
 def _run_wizard_dry_run(tmp_path: Path) -> object:
     """Invoke wizard --dry-run --non-interactive on a clean tmp_path via CliRunner.
 
-    Patches ``_acquire_install_lock`` to a no-op so parallel xdist workers
-    do not contend on ``~/.archon-search/.install.lock``.
+    Patches ``_acquire_install_lock`` to a no-op (inert under ``--dry-run``; see
+    ``_noop_install_lock``).
     """
     from archon_search.cli.main import main
     from archon_search.install import RealInstaller

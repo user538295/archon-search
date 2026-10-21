@@ -14,75 +14,9 @@ Scenarios: C1, S5
 from __future__ import annotations
 
 import asyncio
-import sys
-import types
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
-# ---------------------------------------------------------------------------
-# fastmcp stub — mirrors the approach in test_mcp.py (xdist_group isolation)
-# ---------------------------------------------------------------------------
-pytestmark = pytest.mark.xdist_group("mcp_stub_be9")
-
-
-class _StubFastMCP:
-    def __init__(self, *args, **kwargs):
-        self._tools: dict = {}
-
-    def tool(self):
-        def decorator(fn):
-            self._tools[fn.__name__] = fn
-            return fn
-        return decorator
-
-    def custom_route(self, *args, **kwargs):
-        def decorator(fn):
-            return fn
-        return decorator
-
-
-_MCP_MODULE = "archon_search.server.mcp"
-_FASTMCP_MODULE = "fastmcp"
-
-try:
-    import fastmcp as _real_fastmcp_pkg  # type: ignore[import]
-    _real_fastmcp_class = _real_fastmcp_pkg.FastMCP
-    _real_fastmcp_context = getattr(_real_fastmcp_pkg, "Context", None)
-except (ImportError, AttributeError):
-    _real_fastmcp_class = None
-    _real_fastmcp_context = None
-
-if _FASTMCP_MODULE not in sys.modules:
-    _fastmcp_mod = types.ModuleType(_FASTMCP_MODULE)
-    _fastmcp_mod.FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-    _fastmcp_mod.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules[_FASTMCP_MODULE] = _fastmcp_mod
-else:
-    sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-
-# Immediately restore the real FastMCP so workers that collect but do NOT run
-# these tests (xdist collects all test files in every worker) don't see the stub
-# when they later import archon_search.server.mcp.  The module-scoped fixture
-# below reinstalls the stub for the duration of THIS module's own test execution.
-if _real_fastmcp_class is not None:
-    sys.modules[_FASTMCP_MODULE].FastMCP = _real_fastmcp_class  # type: ignore[attr-defined]
-    if _real_fastmcp_context is not None:
-        sys.modules[_FASTMCP_MODULE].Context = _real_fastmcp_context  # type: ignore[attr-defined]
-sys.modules.pop(_MCP_MODULE, None)
-
-
-@pytest.fixture(autouse=True, scope="module")
-def _stub_fastmcp_for_module():
-    """Reinstall _StubFastMCP for this module's tests, then restore."""
-    sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-    sys.modules.pop(_MCP_MODULE, None)
-    yield
-    if _real_fastmcp_class is not None:
-        sys.modules[_FASTMCP_MODULE].FastMCP = _real_fastmcp_class  # type: ignore[attr-defined]
-        if _real_fastmcp_context is not None:
-            sys.modules[_FASTMCP_MODULE].Context = _real_fastmcp_context  # type: ignore[attr-defined]
-    sys.modules.pop(_MCP_MODULE, None)
+from tests._fastmcp_stub import stub_mcp_tool
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +57,7 @@ def _make_config_with_graph_enabled():
 
 def _get_tool_fn(tool_name: str, pipeline, config=None):
     """Build a stub-backed MCP app and return the named tool function."""
-    import importlib
-    import archon_search.server.mcp as mcp_mod
-    importlib.reload(mcp_mod)
-    app = mcp_mod.create_app(pipeline, "col1", config=config)
-    return app._tools[tool_name]
+    return stub_mcp_tool(tool_name, pipeline, "col1", config=config)
 
 
 # ---------------------------------------------------------------------------

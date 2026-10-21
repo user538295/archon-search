@@ -15,8 +15,6 @@ Run with:
 """
 from __future__ import annotations
 
-import sys
-import types
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -26,31 +24,6 @@ import pytest
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
-
-# ---------------------------------------------------------------------------
-# FastMCP stub — same pattern as test_mcp_error_paths.py.
-# Must be installed before archon_search.server.mcp is imported.
-# ---------------------------------------------------------------------------
-
-if "fastmcp" not in sys.modules:
-    try:
-        # Prefer the real ``fastmcp`` package (3.4.x) whose FastMCP exposes
-        # ``http_app()``. The low-level ``mcp.server.fastmcp`` class only has the
-        # removed ``streamable_http_app()`` and would poison sys.modules for any
-        # sibling test that builds a real MCP HTTP app via ``http_app(path='/')``.
-        import fastmcp as _real_fastmcp_pkg  # type: ignore[import]
-
-        sys.modules["fastmcp"] = _real_fastmcp_pkg  # type: ignore[assignment]
-    except ImportError:
-        _stub_fastmcp = types.ModuleType("fastmcp")
-        _stub_fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-        _stub_fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-        sys.modules["fastmcp"] = _stub_fastmcp
-
-import importlib as _importlib
-
-_importlib.import_module("archon_search.server.mcp")
-
 
 # ---------------------------------------------------------------------------
 # Fake FastMCP app — only needs tool registration and direct invocation.

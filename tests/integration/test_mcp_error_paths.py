@@ -13,8 +13,6 @@ Run with:
 """
 from __future__ import annotations
 
-import sys
-import types
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,9 +22,8 @@ pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# FastMCP stub — same pattern as tests/server/test_mcp_error_responses.py.
-# Must be installed in sys.modules BEFORE archon_search.server.mcp is imported
-# so the module-level ``from fastmcp import FastMCP, Context`` succeeds.
+# FastMCP stand-in, installed per app build by a scoped patch() in _make_mcp_app
+# (same pattern as tests/server/test_mcp_error_responses.py).
 # ---------------------------------------------------------------------------
 
 
@@ -51,30 +48,6 @@ class _FakeApp:
 class _FakeFastMCP:
     def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
         return _FakeApp(name)
-
-
-# Install a fastmcp stub if the real package is not present, so that
-# archon_search.server.mcp can be imported.  When the real fastmcp is
-# already loaded (from other test modules), preserve it and only swap
-# FastMCP for the duration of _make_mcp_app calls.
-if "fastmcp" not in sys.modules:
-    try:
-        # Prefer the real ``fastmcp`` package (3.4.x) whose FastMCP exposes
-        # ``http_app()``. The low-level ``mcp.server.fastmcp`` class only has the
-        # removed ``streamable_http_app()`` and would poison sys.modules for any
-        # sibling test that builds a real MCP HTTP app via ``http_app(path='/')``.
-        import fastmcp as _real_fastmcp_pkg  # type: ignore[import]
-        sys.modules["fastmcp"] = _real_fastmcp_pkg  # type: ignore[assignment]
-    except ImportError:
-        _stub_fastmcp = types.ModuleType("fastmcp")
-        _stub_fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-        _stub_fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-        sys.modules["fastmcp"] = _stub_fastmcp
-
-# Force archon_search.server.mcp to be importable (it may not be cached yet).
-# We import it here so the patch() calls below can resolve the attribute path.
-import importlib as _importlib
-_importlib.import_module("archon_search.server.mcp")
 
 
 # ---------------------------------------------------------------------------
