@@ -6,9 +6,9 @@ TDD: tests are written first; implementation goes in store_filters.py and store.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -126,8 +126,6 @@ def test_build_where_scope_filter_none_filters_no_scope() -> None:
 @pytest.mark.asyncio
 async def test_hybrid_search_with_trace_passes_scope_predicate() -> None:
     """exact scope_filter → WHERE predicate applied to both vector and FTS legs."""
-    import asyncio
-    from unittest.mock import AsyncMock, MagicMock, patch, call
 
     from archon_search.store import SearchStore
 
@@ -176,7 +174,6 @@ async def test_hybrid_search_with_trace_passes_scope_predicate() -> None:
 @pytest.mark.asyncio
 async def test_hybrid_search_with_trace_combined_filters_and_scope() -> None:
     """Both filters and scope_filter → combined ANDed predicate applied to both legs."""
-    from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.filters import SearchFilters
     from archon_search.store import SearchStore, _hybrid_search_with_trace
@@ -221,7 +218,6 @@ async def test_hybrid_search_with_trace_combined_filters_and_scope() -> None:
 @pytest.mark.asyncio
 async def test_hybrid_search_with_trace_wildcard_scope_no_where_call() -> None:
     """Wildcard scope_filter → no SQL predicate; .where() not called (post-filter is caller's job)."""
-    from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.store import SearchStore, _hybrid_search_with_trace
 
@@ -264,7 +260,6 @@ async def test_hybrid_search_with_trace_wildcard_scope_no_where_call() -> None:
 @pytest.mark.asyncio
 async def test_hybrid_search_with_trace_no_scope_filter_no_where_call() -> None:
     """No scope_filter and no filters → .where() not called (empty predicate)."""
-    from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.store import SearchStore, _hybrid_search_with_trace
 

@@ -41,7 +41,6 @@ from archon_search.graph_extractor import (
 from archon_search.graph_types import (
     ChunkInput,
     EntityType,
-    GraphMention,
     RelationshipType,
     make_stable_edge_id,
     make_stable_entity_id,

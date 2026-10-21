@@ -1,11 +1,9 @@
 """Integration tests for JobScheduler lifespan wiring — Task 3.2."""
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from starlette.testclient import TestClient
 
 from archon_search.config import SearchConfig

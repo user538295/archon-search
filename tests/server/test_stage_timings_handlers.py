@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
-from archon_search.observability import correlation_id as _correlation_id, record_stage
+from archon_search.observability import record_stage
 from archon_search.pipeline import SearchPipelineResult
 
 

@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.install import DryRunInstaller, _execute_force_reinstall, create_installer
+from archon_search.install import DryRunInstaller, create_installer
 from archon_search.platform.types import GpuType
 from archon_search.profiles import get_profile
 
@@ -145,7 +145,6 @@ def test_dry_run_branch_b_no_bak_written(tmp_path: Path) -> None:
 
 def test_dry_run_branch_b_cfg_reflects_profile(tmp_path: Path) -> None:
     """After dry-run, installer.cfg must reflect the selected profile, not stale defaults."""
-    from archon_search.profiles import get_profile
 
     installer, rc, _ = _run_dry_run_fresh(tmp_path, profile="balanced")
     assert rc == 0
@@ -158,7 +157,6 @@ def test_dry_run_branch_b_cfg_reflects_profile(tmp_path: Path) -> None:
 def test_dry_run_branch_b_cfg_not_stale_defaults(tmp_path: Path) -> None:
     """installer.cfg.embedding_model must NOT be the SearchConfig() default after balanced dry-run."""
     from archon_search.config import SearchConfig
-    from archon_search.profiles import get_profile
 
     installer, rc, _ = _run_dry_run_fresh(tmp_path, profile="balanced")
     assert rc == 0

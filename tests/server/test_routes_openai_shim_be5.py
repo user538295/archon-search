@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from fastapi.testclient import TestClient
@@ -109,7 +109,6 @@ def _make_search_result(text: str = "chunk text", source_path: str = "doc.txt") 
 
 def _make_pipeline_result(results=None, excluded_collections=None):
     """Return a mock SearchPipelineResult."""
-    from archon_search._types import ExcludedCollection
     from archon_search.pipeline import SearchPipelineResult
 
     pipeline_result = MagicMock(spec=SearchPipelineResult)
@@ -792,8 +791,6 @@ class TestAllCollectionsExcludedReturnsEmpty200:
     def test_all_collections_excluded_returns_empty_200(self, tmp_path, monkeypatch, caplog):
         """All collections excluded → 200 with content='', finish_reason='stop'; WARNING logged."""
         import logging
-        from archon_search._types import ExcludedCollection
-        from archon_search.pipeline import SearchPipelineResult
 
         app = _make_stub_app(
             tmp_path,

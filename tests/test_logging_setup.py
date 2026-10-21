@@ -341,7 +341,6 @@ def test_configure_logging_directory_created(tmp_path):
 
 def test_configure_logging_directory_failure_does_not_crash(tmp_path, monkeypatch):
     from pathlib import Path
-    original_mkdir = Path.mkdir
 
     def fail_mkdir(self, *args, **kwargs):
         raise OSError("simulated failure")
@@ -357,8 +356,6 @@ def test_configure_logging_directory_failure_does_not_crash(tmp_path, monkeypatc
 
 def test_configure_logging_handler_construction_failure_does_not_crash(tmp_path, monkeypatch):
     import archon_search.logging_setup as ls_module
-
-    original_init = TimedRotatingFileHandler.__init__
 
     def fail_init(self, *args, **kwargs):
         raise PermissionError("simulated permission error")

@@ -284,8 +284,6 @@ def test_get_status_graph_null_when_disabled(
     mock_graph_store_ignored.disconnect = AsyncMock()
     app.state.graph_store = mock_graph_store_ignored
 
-    from archon_search.collection_meta import CollectionMeta
-    from archon_search.constants import DEFAULT_NAMESPACE
 
     mock_store = MagicMock()
     mock_store.get_all_collections_meta = AsyncMock(return_value=[])
@@ -304,5 +302,5 @@ def test_get_status_graph_null_when_disabled(
         resp = client.get("/status", headers={"Authorization": f"Bearer {api_key}"})
         assert resp.status_code == 200, f"GET /status failed: {resp.status_code} {resp.text}"
         data = resp.json()
-        assert "graph" in data, f"'graph' key missing from status response"
+        assert "graph" in data, "'graph' key missing from status response"
         assert data["graph"] is None, f"graph should be null when disabled, got: {data['graph']}"

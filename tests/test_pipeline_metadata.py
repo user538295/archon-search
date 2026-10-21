@@ -8,13 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from archon_search._types import ChunkRecord, IngestResult
 from archon_search.embedder import Embedder
 from archon_search.reranker import Reranker
 

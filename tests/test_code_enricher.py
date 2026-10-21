@@ -1041,9 +1041,7 @@ class TestEnrichChunk:
 
     def test_enrich_chunk_unknown_ext_lang_label_fallback(self):
         """When _ext is unknown, _lang_label raises KeyError and fallback ext.lstrip('.') is used."""
-        from pathlib import Path
 
-        import archon_search.code_enricher as ce
         from archon_search.code_enricher import CodeEnricher, ScopeEntry
 
         # Build an enricher with an unknown extension manually

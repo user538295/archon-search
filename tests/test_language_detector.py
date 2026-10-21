@@ -1,7 +1,6 @@
 """Tests for LanguageDetector (Task 3.1)."""
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,7 +19,6 @@ def test_detect_model_not_installed(tmp_path: Path) -> None:
 
     with patch.dict(sys.modules, {"fasttext": None}):
         # Remove cached module reference to force fresh import attempt
-        import importlib
         import archon_search.language_detector as ld_module
 
         with patch.object(ld_module, "fasttext", None):
@@ -40,7 +38,7 @@ def test_detect_model_file_missing(tmp_path: Path) -> None:
 
     missing_path = tmp_path / "nonexistent.ftz"
 
-    with patch("archon_search.language_detector.fasttext") as mock_ft:
+    with patch("archon_search.language_detector.fasttext"):
         with pytest.raises(FileNotFoundError):
             LanguageDetector(missing_path)
 

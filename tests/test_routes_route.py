@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from archon_search.collection_meta import CollectionMeta
@@ -465,7 +464,6 @@ def test_build_router_called_once_per_request(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 def test_build_router_passes_strategy(tmp_path: Path) -> None:
     """_build_router must pass strategy and description_weight to MultiCollectionRouter."""
-    from unittest.mock import call
     from archon_search.server.routes_route import _build_router
 
     config = SearchConfig()

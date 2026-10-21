@@ -9,10 +9,9 @@ import pytest
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search.chunker import DocumentChunker
 from archon_search.config import SearchConfig
-from archon_search.embedder import Embedder, EmbedderBackend
+from archon_search.embedder import Embedder
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
-from archon_search.reranker import Reranker, RerankerBackend
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +152,6 @@ def test_candidate_to_search_result_uses_rrf_score_when_reranker_none() -> None:
 
 @pytest.mark.asyncio
 async def test_search_many_without_reranker_returns_results() -> None:
-    from archon_search._types import CollectionInfo
 
     candidates = [_make_candidate(rrf_score=0.7)]
     store = _make_mock_store(candidates)

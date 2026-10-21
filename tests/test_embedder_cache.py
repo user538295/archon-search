@@ -446,7 +446,6 @@ async def test_concurrent_waiters_retry_after_failed_load():
 
     # At least 2 of the 3 should succeed (one may raise from the first failure)
     successes = [t for t in done if not t.cancelled() and t.exception() is None]
-    failures = [t for t in done if not t.cancelled() and t.exception() is not None]
     assert len(pending) == 0, "Deadlock: some tasks did not complete within 2 s"
     assert len(successes) >= 1, "Expected at least one successful result"
     for t in successes:

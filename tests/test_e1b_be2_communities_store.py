@@ -155,7 +155,7 @@ def test_get_chunks_by_ids_empty_input_returns_empty() -> None:
 def test_get_chunks_for_doc_returns_all_chunks() -> None:
     """get_chunks_for_doc returns all chunks matching the given doc_id.
 
-    Setup: 4 chunks for doc_a, 2 for doc_b.
+    Setup: the DB mock returns the 4 chunks of doc_a.
     When get_chunks_for_doc(doc_a) is called, DB returns 4 rows.
     Expect exactly 4 dicts returned.
     """
@@ -164,7 +164,6 @@ def test_get_chunks_for_doc_returns_all_chunks() -> None:
     store = SearchStore("/tmp/fake-be2-chunks-for-doc")
 
     doc_a = "a" * 64
-    doc_b = "b" * 64
     doc_a_rows = [{"chunk_id": f"{doc_a}-{i:06d}", "doc_id": doc_a, "text": f"chunk {i}"} for i in range(4)]
 
     query_mock = MagicMock()
@@ -221,7 +220,6 @@ def test_get_communities_for_entities_uses_python_side_filter() -> None:
     This verifies that a scan is performed (to_list() called), and the returned
     Community objects contain only those where any entity_id matches.
     """
-    import pyarrow as pa
 
     from archon_search.graph_types import Community
     from archon_search.graph_store import GraphStore

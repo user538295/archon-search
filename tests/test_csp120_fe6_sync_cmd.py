@@ -76,7 +76,6 @@ def test_sync_wait_polls_to_done() -> None:
     assert result.exit_code == 0, result.output
     assert "Sync complete." in result.output
     # Assert poll targeted the correct job_id
-    from unittest.mock import call
     poll_calls = mock_get.call_args_list
     assert len(poll_calls) == 2
     for c in poll_calls:

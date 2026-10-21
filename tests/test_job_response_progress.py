@@ -1,5 +1,4 @@
 """Tests for Task 1.5 — job_to_dict() and JobResponse include progress field."""
-import pytest
 
 from archon_search.jobs.model import job_to_dict
 from archon_search.server.schemas import JobResponse

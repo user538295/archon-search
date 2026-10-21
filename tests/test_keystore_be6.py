@@ -16,8 +16,6 @@ from __future__ import annotations
 import secrets
 from datetime import UTC, datetime
 
-import pytest
-from pydantic import ValidationError
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +443,7 @@ def test_get_keys_label_and_expires_at_in_response(tmp_path, monkeypatch):
         k = matching[0]
         assert k["label"] == "my-label", f"Expected label='my-label', got {k['label']}"
         assert k["expires_at"] is not None, "expires_at must appear in GET /keys response"
-        from datetime import datetime, UTC
+        from datetime import datetime
         expires_dt = datetime.fromisoformat(k["expires_at"])
         assert expires_dt.year == 2030
 

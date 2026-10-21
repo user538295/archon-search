@@ -32,7 +32,6 @@ def _make_mock_store(meta_rows: list[CollectionMeta]) -> MagicMock:
 
 
 def _make_client(tmp_db: Path, *, mock_store: MagicMock | None = None) -> TestClient:
-    from archon_search.constants import DEFAULT_NAMESPACE
 
     config = SearchConfig()
     config.db_path = str(tmp_db)

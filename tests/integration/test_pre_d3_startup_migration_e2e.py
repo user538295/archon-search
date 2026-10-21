@@ -255,7 +255,6 @@ def test_apply_in_place_migrations_bumped_schema_version_e2e(
     import asyncio
 
     import lancedb
-    import pyarrow as pa
 
     from archon_search.store import SearchStore
     from archon_search.sync import path_to_collection_name

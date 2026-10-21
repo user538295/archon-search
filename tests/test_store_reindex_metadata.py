@@ -5,7 +5,6 @@ Implements Task 6.2 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path

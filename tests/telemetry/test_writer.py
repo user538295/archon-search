@@ -282,7 +282,7 @@ async def test_writer_drain_respects_bounded_timeout(
     # the whole _run with one that blocks awaitably.
     async def wedged_run() -> None:
         while True:
-            entry = await writer._queue.get()
+            await writer._queue.get()
             try:
                 await asyncio.sleep(60)
             finally:

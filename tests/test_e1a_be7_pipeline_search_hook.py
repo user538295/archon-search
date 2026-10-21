@@ -11,13 +11,10 @@ Tests:
 """
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from archon_search._types import SearchResult
-from archon_search.config import GraphConfig
 from archon_search.graph_expander import ExpandedQuery
 from archon_search.pipeline import SearchPipelineResult
 
@@ -190,8 +187,6 @@ async def test_search_expanded_text_reaches_embedder(connected_store, col_name):
     pipeline = _make_pipeline(connected_store, graph_expander=expander)
 
     embedded_texts: list[str] = []
-    original_embed = pipeline._global_embedder.embed_one
-
     async def _capture_embed(text: str) -> list[float]:
         embedded_texts.append(text)
         return [0.1] * 4

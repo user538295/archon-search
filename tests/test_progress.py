@@ -787,7 +787,7 @@ class TestComputeEtaSeconds:
 
     def test_compute_eta_naive_started_at_treated_as_utc(self) -> None:
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timezone
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         # Naive ISO string — no timezone suffix
         started_naive = "2026-04-04T09:58:20"  # 100 seconds before now
@@ -831,7 +831,7 @@ class TestComputeEtaSeconds:
     def test_compute_eta_naive_now_treated_as_utc(self) -> None:
         """Naive `now` kwarg should be treated as UTC (spec-mandated behavior)."""
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timezone
         # started_at is UTC-aware
         started_utc = datetime(2026, 4, 4, 9, 58, 20, tzinfo=timezone.utc)
         # now is naive (no tzinfo) — 100 seconds after started

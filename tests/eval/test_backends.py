@@ -4,7 +4,6 @@ from __future__ import annotations
 import inspect
 import math
 
-import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -104,13 +103,8 @@ def test_eval_backends_ignore_metadata_fields_that_look_like_gold_ids() -> None:
 
     query = "machine learning algorithms"
 
-    # Same semantic content, different ID-like prefixes — scores MUST be equal
+    # Pure-content docs must score the same as their ID-prefixed equivalents
     doc_with_id_a = "doc-001 gold-123 machine learning algorithms"
-    doc_with_id_b = "doc-999 gold-456 machine learning algorithms"
-
-    scores = reranker.predict([(query, doc_with_id_a), (query, doc_with_id_b)])
-    # Scores differ because "doc" and "gold" appear as tokens too — but the
-    # meaningful test is that pure-content docs score the same as their ID-prefixed equivalents
     doc_content_only = "machine learning algorithms"
 
     scores_with_id = reranker.predict([(query, doc_with_id_a)])

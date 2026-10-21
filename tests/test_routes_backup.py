@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from archon_search._types import CollectionInfo
-from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.store import JobStore

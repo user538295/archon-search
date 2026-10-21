@@ -1,12 +1,10 @@
 """Integration tests for ACL propagation in SearchPipeline.ingest_file ."""
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-import pyarrow as pa
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 
@@ -18,7 +16,6 @@ from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdo
 
 def _make_pipeline(tmp_path: Path):
     """Return a SearchPipeline wired to a real LanceDB store with stub embedder/chunker/parser."""
-    import asyncio
 
     from archon_search.store import SearchStore
     from archon_search.pipeline import SearchPipeline
@@ -221,7 +218,6 @@ async def test_ingest_directory_skips_acl_sidecar_files(tmp_path):
     try:
         results = await pipeline.ingest_directory(content_dir, collection, embedder=pipeline._global_embedder)
         # Only the .md file should be ingested, not the .acl sidecar
-        source_paths = [r for r in results]
         assert len(results) == 1, (
             f"Expected 1 result (page.md only), got {len(results)}: "
             f"{[str(r) for r in results]}"
@@ -422,7 +418,7 @@ async def test_ingest_file_front_matter_block_stripped_from_chunk_text(tmp_path)
 
 
 def _chunk_to_candidate(chunk) -> "ScoredSearchCandidate":
-    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search._diagnostics import ScoredSearchCandidate
     return ScoredSearchCandidate(
         doc_id=chunk.doc_id, chunk_id=chunk.chunk_id, text=chunk.text,
         source_path=chunk.source_path,
@@ -438,7 +434,7 @@ def _chunk_to_candidate(chunk) -> "ScoredSearchCandidate":
 @pytest.mark.asyncio
 async def test_search_pipeline_search_acl_filter_applied(tmp_path):
     """SearchPipeline.search() with namespace='ns1' excludes chunks with acl=['ns2']."""
-    from archon_search._types import ChunkRecord, SearchResult
+    from archon_search._types import ChunkRecord
     from archon_search.pipeline import SearchPipeline
 
     # Arrange — stub pipeline with controlled hybrid_search output
@@ -487,7 +483,7 @@ async def test_search_pipeline_search_acl_filter_applied(tmp_path):
 @pytest.mark.asyncio
 async def test_search_pipeline_search_default_namespace_denies_protected(tmp_path):
     """SearchPipeline.search() with namespace='' (empty) denies protected chunks."""
-    from archon_search._types import ChunkRecord, SearchResult
+    from archon_search._types import ChunkRecord
     from archon_search.pipeline import SearchPipeline
 
     store = MagicMock()
@@ -535,7 +531,7 @@ async def test_search_pipeline_search_default_namespace_denies_protected(tmp_pat
 @pytest.mark.asyncio
 async def test_search_with_context_acl_filter_applied(tmp_path):
     """search_with_context() with namespace='ns1' excludes restricted chunks and adjacent chunks."""
-    from archon_search._types import ChunkRecord, SearchResult
+    from archon_search._types import ChunkRecord
     from archon_search.pipeline import SearchPipeline
 
     store = MagicMock()
@@ -606,8 +602,6 @@ async def test_e2e_ingest_and_search_acl_enforcement(tmp_path):
     collection = "acl_e2e"
     await _setup(pipeline, store, collection)
 
-    from archon_search._types import SearchResult
-    from archon_search.reranker import Reranker
 
     # Stub reranker to pass all candidates through
     async def _passthrough_rerank_candidates(query, candidates, top_k):
@@ -638,7 +632,7 @@ async def test_e2e_ingest_and_search_acl_enforcement(tmp_path):
 @pytest.mark.asyncio
 async def test_search_context_expansion_acl_filtered(tmp_path):
     """Adjacent chunks with ACL for different namespace are excluded from context expansion."""
-    from archon_search._types import ChunkRecord, SearchResult
+    from archon_search._types import ChunkRecord
     from archon_search.pipeline import SearchPipeline
 
     store = MagicMock()

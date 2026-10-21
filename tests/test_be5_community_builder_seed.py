@@ -60,7 +60,6 @@ class TestCommunityBuilderDeterminism:
         from archon_search.config import GraphConfig
         from archon_search.graph_store import GraphStore
         from archon_search.graph_types import GraphEdge, GraphNode
-        from archon_search.store import SearchStore
         from archon_search.community_builder import CommunityBuilder
 
         # Config with graph enabled
@@ -182,7 +181,6 @@ class TestCommunityBuilderDeterminism:
         from archon_search.config import GraphConfig
         from archon_search.graph_store import GraphStore
         from archon_search.graph_types import GraphEdge, GraphNode
-        from archon_search.store import SearchStore
         from archon_search.community_builder import CommunityBuilder
 
         # Config with small max_community_size to trigger splitting

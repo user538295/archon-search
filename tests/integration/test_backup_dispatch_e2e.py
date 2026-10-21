@@ -177,7 +177,7 @@ def test_backup_trigger_queued_jobs_eventually_complete(
                 f"manifest 'collection' mismatch: expected {col!r}, got {manifest.get('collection')!r}"
             )
             assert "schema_version" in manifest, (
-                f"manifest.json missing 'schema_version'"
+                "manifest.json missing 'schema_version'"
             )
 
         # Confirm each queued job is DONE with an output_path on disk.

@@ -5,8 +5,8 @@ Each split file imports these explicitly:
 """
 from __future__ import annotations
 
-from archon_search.embedder import Embedder, EmbedderBackend
-from archon_search.reranker import Reranker, RerankerBackend
+from archon_search.embedder import Embedder
+from archon_search.reranker import Reranker
 
 
 class MockEmbedderBackend:

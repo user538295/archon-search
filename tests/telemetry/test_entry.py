@@ -320,7 +320,6 @@ def test_filter_flags_language_filter_used_false() -> None:
 
 def test_filter_flags_no_raw_language_value() -> None:
     """FilterFlags must store only a boolean — no field carrying the actual language code."""
-    import inspect
 
     fields = FilterFlags.model_fields
     for field_name in fields:

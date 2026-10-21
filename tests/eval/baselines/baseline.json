@@ -1,6 +1,6 @@
 {
   "command": "pytest -m eval tests/eval/test_eval_suite.py::test_eval_suite_report_only_smoke",
-  "eval_hash": "e7a84d75f05e974eeb1b008eb455a1b1f8280fa9cea2c455c1687ad932aeca1f",
+  "eval_hash": "e8e2338a40c4e60cd75c26395f47d383d4806e1886017759a6b0f07ab747437a",
   "metrics": {
     "code_chunking_recall_at_5": 1.0,
     "code_defref_recall_at_5": 0.6666666666666666,

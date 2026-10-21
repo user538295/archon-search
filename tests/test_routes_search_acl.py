@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from archon_search._types import SearchResult
@@ -14,7 +13,7 @@ from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.pipeline import SearchPipelineResult
 from archon_search.server.app import create_app
-from archon_search.server.routes_search import SearchResponse, SearchResultSchema
+from archon_search.server.routes_search import SearchResponse
 
 
 # ---------------------------------------------------------------------------

@@ -10,8 +10,6 @@ Five tests:
 from __future__ import annotations
 
 import secrets
-import sys
-import types
 from pathlib import Path
 
 import pytest

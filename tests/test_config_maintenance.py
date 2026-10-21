@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.config import MaintenanceConfig, SearchConfig, load_config
+from archon_search.config import load_config
 
 
 @pytest.fixture

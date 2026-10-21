@@ -1,6 +1,7 @@
 """Tests for archon_search.server.mcp_schemas — MCP-specific Pydantic schemas."""
 from __future__ import annotations
 
+import ast
 import inspect
 
 import pytest
@@ -18,11 +19,21 @@ from archon_search._types import (
 
 
 def test_mcp_schemas_has_future_annotations():
-    """mcp_schemas.py must start with 'from __future__ import annotations'."""
+    """mcp_schemas.py enables postponed annotations and keeps its docstring first.
+
+    A ``from __future__`` import placed above the docstring silently demotes the
+    docstring to a no-op string expression, leaving ``__doc__`` as ``None``.
+    """
     import archon_search.server.mcp_schemas as m
 
-    src = inspect.getsource(m)
-    assert src.startswith("from __future__ import annotations")
+    tree = ast.parse(inspect.getsource(m))
+    assert m.__doc__, "module docstring must precede the __future__ import"
+    assert any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "__future__"
+        and any(alias.name == "annotations" for alias in node.names)
+        for node in tree.body
+    )
 
 
 def test_mcp_search_result_schema_fields():
@@ -231,7 +242,6 @@ def test_search_with_context_item_schema_fields():
 
 def test_search_with_context_item_schema_extra_forbid():
     from archon_search.server.mcp_schemas import (
-        ContextChunkSchema,
         McpSearchResultSchema,
         SearchWithContextItemSchema,
     )

@@ -22,7 +22,7 @@ import pytest
 @pytest.mark.integration
 def test_async_ingest_warnings_in_job_result(tmp_path: Path, monkeypatch) -> None:
     """POST /ingest with oversized ACL sidecar → job result includes warnings list."""
-    from tests.integration.conftest import ingest_file_via_path, make_real_app
+    from tests.integration.conftest import make_real_app
 
     # Write a document + oversized .acl sidecar
     doc = tmp_path / "doc.md"

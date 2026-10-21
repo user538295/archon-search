@@ -228,7 +228,6 @@ def test_job_to_dict_includes_job_type_for_all_job_types(tmp_path):
         DeleteJob,
         ExportJob,
         ImportJob,
-        MigrationJob,
         MigrationKind,
         ReindexJob,
     )

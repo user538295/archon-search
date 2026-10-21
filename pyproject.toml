@@ -120,6 +120,11 @@ raw-options.fallback_version = "0.0.0+local"
 # to look for a directory named `archon-search`.
 packages = ["archon_search"]
 
+[tool.ruff]
+# The eval corpus `.py` files are retrieval fixture DATA, not code: "fixing" them
+# changes the indexed text and shifts the eval metrics against the baselines.
+extend-exclude = ["tests/eval/corpus"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

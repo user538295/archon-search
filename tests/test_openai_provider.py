@@ -235,7 +235,6 @@ def test_openai_package_absent_raises_config_error(
 
     Requires lazy import — DA-TEST-C1-I-4.
     """
-    import os
 
     monkeypatch.setitem(sys.modules, "openai", None)
     monkeypatch.delitem(sys.modules, "archon_search.providers.openai_provider", raising=False)

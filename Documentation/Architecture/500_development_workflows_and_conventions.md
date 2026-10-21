@@ -108,7 +108,7 @@ For details on the marker layout, the eval harness, and how the 85% floor is enf
 
 ### Warning-Free Codebase
 
-- Resolve all warnings — Python `DeprecationWarning`, `RuntimeWarning`, and library-emitted deprecations. (Ruff and mypy are not configured as merge gates in this repo: no `[tool.ruff]` or `[tool.mypy]` sections exist in `pyproject.toml`, and neither is a declared dev dependency. If a contributor runs them locally, the warning-free expectation extends there too.) By config, every `StarletteDeprecationWarning` is escalated to an error (`[tool.pytest.ini_options].filterwarnings` — the whole category on purpose, which among other things makes a missing `httpx2` fail test collection); no other warning category fails the run.
+- Resolve all warnings — Python `DeprecationWarning`, `RuntimeWarning`, and library-emitted deprecations. (Ruff and mypy are not configured as merge gates in this repo: neither is a declared dev dependency, there is no `[tool.mypy]` section, and `[tool.ruff]` in `pyproject.toml` only excludes the eval corpus (`tests/eval/corpus` — retrieval fixture data, not code). If a contributor runs them locally — e.g. `uvx ruff check --select F archon_search tests`, which is clean — the warning-free expectation extends there too.) By config, every `StarletteDeprecationWarning` is escalated to an error (`[tool.pytest.ini_options].filterwarnings` — the whole category on purpose, which among other things makes a missing `httpx2` fail test collection), as are `ResourceWarning` and `pytest.PytestUnraisableExceptionWarning`; no other warning category fails the run.
 - If a warning is genuinely unavoidable (e.g. an upstream bug), silence it at the narrowest possible scope and add a comment explaining why.
 
 ### No Backward Compatibility

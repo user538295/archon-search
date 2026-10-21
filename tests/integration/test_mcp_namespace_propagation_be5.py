@@ -8,7 +8,6 @@ Scenarios completed: S8 (namespace propagation via real HTTP request), C4.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pytest
@@ -73,12 +72,7 @@ def test_mcp_namespace_propagation_cross_ns_tool_call(tmp_path, monkeypatch) -> 
     Complementary isolation: the ns-a token cannot see ns-b data, proving propagation
     is in the correct direction.
     """
-    import secrets
 
-    from archon_search.key_manager import KeyStore
-
-    # Create a managed key for ns-a and set up the app
-    ns_a_key_raw = secrets.token_hex(32)
 
     with make_real_app(
         tmp_path,

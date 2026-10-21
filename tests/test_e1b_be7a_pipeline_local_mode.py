@@ -136,7 +136,6 @@ def _make_scored_candidate(
     acl: list[str] | None = None,
 ) -> ScoredSearchCandidate:
     """Return a ScoredSearchCandidate (as returned by hybrid_search_with_trace)."""
-    from archon_search._types import IngestedBy
     return ScoredSearchCandidate(
         chunk_id=chunk_id,
         source_path=source_path,
@@ -720,7 +719,6 @@ async def test_local_mode_acl_filters_community_chunks(tmp_path, monkeypatch):
 
     from archon_search.chunker import DocumentChunker
     from archon_search.config import GraphConfig
-    from archon_search.constants import DEFAULT_NAMESPACE
     from archon_search.embedder import Embedder
     from archon_search.graph_store import GraphStore
     from archon_search.graph_types import Community, GraphNode, EntityType, make_stable_entity_id

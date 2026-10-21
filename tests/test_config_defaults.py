@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.config import GraphConfig, HyDEConfig, OpenAIShimConfig, RAGFusionConfig, SearchConfig, load_config
+from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig, load_config
 from archon_search.constants import (
     DEFAULT_DOCLING_MAX_TASKS_PER_CHILD,
     DEFAULT_FAST_MODEL,

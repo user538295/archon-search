@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-from archon_search.key_manager import KeyRecord, KeyStore
+from archon_search.key_manager import KeyStore
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ class TestKeyStoreListKeys:
         """list_keys() returns all records including revoked."""
         store = _make_store(tmp_path)
         r1 = asyncio.run(store.create(ns="ns", label=None, expires_at=None))
-        r2 = asyncio.run(store.create(ns="ns2", label=None, expires_at=None))
+        asyncio.run(store.create(ns="ns2", label=None, expires_at=None))
 
         asyncio.run(store.revoke(r1["id"]))
 

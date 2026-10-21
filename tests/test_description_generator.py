@@ -1,7 +1,6 @@
 """Tests for archon_search.description_generator — TDD for ."""
 from __future__ import annotations
 
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

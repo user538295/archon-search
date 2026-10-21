@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from archon_search.jobs.store import JobStore
-from archon_search.types import ExportJob
 
 
 @pytest.fixture()

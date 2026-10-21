@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from archon_search._types import normalize_iso_utc
 from archon_search.collection_meta import CollectionMeta
 from archon_search.constants import DEFAULT_NAMESPACE
 

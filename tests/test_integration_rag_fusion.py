@@ -455,9 +455,18 @@ def test_mcp_search_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path) -
         rf_generator = app.state.rag_fusion_generator
 
         mock_generate_variants = AsyncMock(return_value=_FIXED_VARIANTS)
-        with patch.object(rf_generator, "generate_variants", new=mock_generate_variants):
+        with (
+            patch.object(rf_generator, "generate_variants", new=mock_generate_variants),
+            # HyDE enabled with a generator, so only the rag_fusion suppression keeps it off.
+            rest_hyde_generating(app, return_value=[0.5, 0.5]) as hyde_generate,
+        ):
             tool_fn = stub_mcp_tool(
-                "search", pipeline, _COLLECTION, config=config, rag_fusion_generator=rf_generator
+                "search",
+                pipeline,
+                _COLLECTION,
+                config=config,
+                rag_fusion_generator=rf_generator,
+                hyde_generator=app.state.hyde_generator,
             )
             result = asyncio.run(
                 tool_fn(
@@ -471,6 +480,7 @@ def test_mcp_search_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path) -
     mock_generate_variants.assert_awaited_once_with("hello world")
     assert isinstance(result, dict)
     assert result.get("hyde_applied") is False
+    hyde_generate.assert_not_awaited()
 
 
 def test_mcp_search_with_context_rag_fusion_result_and_telemetry(tmp_path: Path) -> None:

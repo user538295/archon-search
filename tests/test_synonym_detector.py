@@ -15,15 +15,12 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 
 from archon_search.config import GraphConfig, SearchConfig
 from archon_search.graph_types import (
     EntityType,
-    GraphEdge,
     GraphNode,
     RelationshipType,
-    make_stable_edge_id,
     make_stable_entity_id,
 )
 

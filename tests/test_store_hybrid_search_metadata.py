@@ -7,14 +7,12 @@ Implements Task 4.3 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
 from datetime import datetime, timezone
 
 import pytest
 
-from archon_search._types import ChunkRecord, SearchResult
-from archon_search.store import SearchStore
+from archon_search._types import ChunkRecord
 
 _DIM = 4
 

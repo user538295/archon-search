@@ -22,7 +22,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request
-from starlette.responses import Response
 
 from archon_search.key_manager import KeyRecord, KeyStore
 from archon_search.server.middleware_auth import APIKeyMiddleware
@@ -319,7 +318,7 @@ class TestMiddlewareExpiredKeyBlocksLegacyFallback:
             r.expires_at is not None and r.expires_at <= now
         (the Cycle-1 fix that replaced the dead 'expired' status literal check).
         """
-        from datetime import UTC, datetime, timedelta
+        from datetime import UTC, datetime
 
         expired_token = "n" * 64
         # status="active" but expires_at is 1 hour in the past
@@ -362,10 +361,6 @@ class TestMiddlewareEnvKeyWinsOverRevoked:
         path when key_store is None (legacy-only mode).
         """
         env_token = "j" * 64
-        # The token IS revoked in keys.json
-        revoked_record = _make_active_record(
-            env_token, namespace="default", status="revoked"
-        )
         # Critically: the key_store is None here (S16 is for env-var-only mode)
         # When ARCHON_SEARCH_API_KEY is set, app.py passes key_store=None to the middleware
         # to avoid the negative check. S16 requires 200.

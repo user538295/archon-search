@@ -374,7 +374,6 @@ def _make_client_with_readiness(
     job_store = JobStore(path=tmp_db / "jobs.json")
     app = create_app(config, job_store)
 
-    from archon_search.constants import DEFAULT_NAMESPACE
     from unittest.mock import AsyncMock, MagicMock
 
     mock_store = MagicMock()

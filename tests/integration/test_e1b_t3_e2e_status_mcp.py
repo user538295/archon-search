@@ -252,13 +252,16 @@ def test_e2e_status_community_fields(
         assert isinstance(last_built_at, str), (
             f"Expected last_built_at to be a string; got {type(last_built_at).__name__!r}"
         )
-        # Must be parseable as an ISO 8601 datetime.
+        # Must be the seeded community's ISO 8601 build time.
         try:
             parsed_dt = datetime.fromisoformat(last_built_at)
         except ValueError as exc:
             pytest.fail(
                 f"last_built_at {last_built_at!r} is not valid ISO 8601: {exc}"
             )
+        assert parsed_dt == built_at, (
+            f"last_built_at {last_built_at!r} must be the seeded build time {built_at.isoformat()!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

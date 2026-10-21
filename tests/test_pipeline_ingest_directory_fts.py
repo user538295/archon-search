@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from archon_search._types import IngestResult
 from archon_search.store import ChunkIngestResult
 
 

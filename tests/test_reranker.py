@@ -606,10 +606,8 @@ def test_reranker_is_warm_propagates_backend_exception() -> None:
     """Reranker.is_warm propagates exceptions raised by the backend property."""
 
     class _BrokenBackend:
-        is_warm: bool = False  # satisfy Protocol at class level
-
-        @property  # type: ignore[override]
-        def is_warm(self) -> bool:  # type: ignore[misc]
+        @property
+        def is_warm(self) -> bool:
             raise RuntimeError("backend broken")
 
         def predict(self, pairs: list[tuple[str, str]]) -> list[float]:

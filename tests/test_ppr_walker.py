@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 from archon_search.graph_types import (
     EntityType,
@@ -185,7 +184,6 @@ def test_pprWalker_personalizationWeightedByRawMentionRowCount() -> None:
 
 def test_pprWalker_mentionCountFlipsEntityOrdering() -> None:
     """Symmetric graph topology: mention count alone determines chunk ordering."""
-    import networkx as nx  # verify real PPR
 
     node_a = _node("alpha-entity")
     node_b = _node("beta-entity")

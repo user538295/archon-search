@@ -44,6 +44,27 @@
 
 ---
 
+### [next release] — `install` / `wizard` on Linux and macOS refuse service paths the systemd unit or launchd plist cannot carry: outer whitespace, an undetermined interpreter, unrepresentable characters (2026-10-20)
+
+**Surface**: CLI `archon-search install` and `archon-search wizard` (`--dry-run` included) exit code and stderr on Linux and macOS (and, for the early refusal, Windows); the systemd user unit (`~/.config/systemd/user/archon-search.service`) and the launchd plist / `<data-dir>/run-server.sh` wrapper they write.
+
+**Behaviour-only change — no CLI flag, REST or MCP field was added, removed or retyped.**
+
+**What changed:** The interpreter, data-dir, config and secrets-file paths were formatted into the unit, plist and wrapper unescaped and unchecked, so some values produced a service that could not start (`ExecStart="" -m archon_search.server` for an empty `sys.executable`; an unparseable plist for a path containing `&` or `<`) or that ran on a different path than the one installed (the server strips `ARCHON_SEARCH_DATA_DIR` / `ARCHON_SEARCH_CONFIG`). Every value is now escaped for its directive, and `validate_registration()` (`archon_search/platform/linux.py`, `archon_search/platform/macos.py`, shared checks in `archon_search/platform/service.py`) refuses the values that have no correct encoding:
+
+- **Both platforms**: an empty or missing interpreter path (Python could not determine it), and a data-dir or config path that still has leading or trailing whitespace once resolved — the env vars are already stripped, so this is e.g. `ARCHON_SEARCH_DATA_DIR='/srv/data /'` (the trailing `/` is dropped, leaving `/srv/data `) or a `--config` value with outer whitespace.
+- **Linux**: an interpreter path containing `"`, `'`, `\`, `$`, `*`, `?` or `[`; any interpreter, data-dir, config or secrets-file path containing a control character or bytes that are not valid UTF-8; a `WorkingDirectory=` or `EnvironmentFile=` path ending in an odd number of `\`, starting or ending in whitespace, or still containing `..` after resolution.
+- **macOS**: a data-dir or config path that does not read back unchanged from the plist (a C0 control character other than tab and newline, `\r` included; U+FFFE or U+FFFF; bytes that are not valid UTF-8), and an interpreter or secrets-file path containing NUL or bytes that are not valid UTF-8.
+- **Windows**: service management is still unsupported, but `wizard` now refuses it up front (`Windows service management not yet supported — run archon-search start manually`) and exits `1` before any download or config write, instead of failing only when it registers the service.
+
+On a refused value, `wizard` (before any download or config write, `--dry-run` too) and `install` (before stopping the running service) write nothing and exit `1` with one stderr line: `Error during install:`, the reason, then the offending value (as a quoted Python repr). Before, both went on to write a unit or plist the service manager could not run correctly (a `None` interpreter on Linux crashed with a `TypeError` traceback instead). Paths free of these characters are unaffected; in the unit, values are now double-quoted (`ExecStart=`, `Environment=`) with `%` doubled and `\` / `"` escaped, so spaces and `%` no longer break it; the plist XML-escapes `&`, `<` and `>`, and the wrapper `shlex.quote`s its paths, so quotes, `$` and backticks stay literal. The full refused-value lists live in `Documentation/OperatorGuide/10_deployment_topologies.md`.
+
+**Migration:** if `install` or `wizard` now exits `1` with `Error during install:`, fix the value the line names — run the CLI from an interpreter whose `sys.executable` resolves, remove whitespace before a trailing `/` in `ARCHON_SEARCH_DATA_DIR` / `ARCHON_SEARCH_CONFIG` and outer whitespace from `--config`, or move the data dir, config file or interpreter to a path without the refused characters — then re-run it. An existing unit or plist is left as it is until the service is registered again.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — export/import: imported chunks carry the metadata marker `_imported`, and maintenance orphan cleanup no longer deletes them (2026-10-20)
 
 **Surface**: the `metadata` of every chunk an import writes (`POST /collections/{name}/import`, `archon-search import`, MCP `import_collection`) — returned by `POST /explain` always, by `POST /search` and the MCP `search` / `search_with_context` tools when `include_metadata` is set, and written into later export archives; `MaintenanceLoop` orphan cleanup (`[maintenance].orphan_cleanup`) and its `orphans_removed_last_run`; the per-document refusals of an import job (the 50-field metadata limit).
@@ -1554,7 +1575,7 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 
 **Surface**: REST (`/search` POST)
 **Change**: The `top_k` field in `SearchRequest` is now ignored at the route level; the pipeline uses `config.top_k_return` instead. Previously, each request could specify its own `top_k`.
-**Migration**: Configure `[search] top_k_return` in `archon-search.toml` to set the desired result count.
+**Migration**: Configure `[database] top_k_return` in `archon-search.toml` to set the desired result count.
 **Announced in**: this release (the behavior was supported but never documented as stable).
 
 ### [next release] — D3 migration tooling: new REST endpoints and `STORE_SCHEMA_VERSION` policy

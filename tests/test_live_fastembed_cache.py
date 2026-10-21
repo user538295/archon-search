@@ -42,7 +42,7 @@ def test_real_model_lane_conftest_imports_the_cache_pin(lane: str) -> None:
 
 
 def test_pin_restores_the_session_cache_after_the_root_isolation(
-    live_fastembed_cache_dir: Path,
+    live_fastembed_cache_dir: Path,  # noqa: F811 — pytest injects the imported fixture by name
 ) -> None:
     """The root ``_archon_isolated_data_dir`` deletes FASTEMBED_CACHE_PATH and points
     the data dir at an empty per-worker dir; the autouse pin re-sets it afterwards, so

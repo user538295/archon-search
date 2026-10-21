@@ -10,13 +10,13 @@ success. Tests here verify propagation via monkeypatched generate_variants().
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from archon_search.pipeline import SearchPipelineResult
 
-from .conftest import make_embedder, make_pipeline, make_reranker
+from .conftest import make_pipeline
 
 
 # ---------------------------------------------------------------------------

@@ -58,11 +58,11 @@ flowchart LR
 | Boundary | Where it is enforced | What crosses it |
 | --- | --- | --- |
 | Network → process | `uvicorn.run(host, port)` in `archon_search/server/app.py`; default `127.0.0.1:8765`. | HTTP requests only on loopback by default. |
-| Process → bearer auth | `APIKeyMiddleware.dispatch` in `archon_search/server/middleware_auth.py:25`. A validated namespace is stamped onto `request.state.namespace`. The middleware exempts five paths: `/health`, `/ready`, `/docs`, `/openapi.json`, `/redoc` (`middleware_auth.py:_EXEMPT_PATHS`). | Bearer-validated HTTP requests (and the five exempt paths). |
+| Process → bearer auth | `APIKeyMiddleware.dispatch` in `archon_search/server/middleware_auth.py:131`. A validated namespace is stamped onto `request.state.namespace`. The middleware exempts five paths: `/health`, `/ready`, `/docs`, `/openapi.json`, `/redoc` (`middleware_auth.py:_EXEMPT_PATHS`). | Bearer-validated HTTP requests (and the five exempt paths). |
 | REST vs MCP | Two ASGI apps in one process: the MCP `Starlette` app returned by `create_mcp_http_app` (`archon_search/server/mcp.py`) is mounted at `/mcp` on the REST FastAPI app by the `create_app` lifespan (`archon_search/server/app.py`). Each has its own `APIKeyMiddleware` instance, both built with `namespaces=config.namespaces` and the shared `key_store`; the MCP instance also gets `api_key_state=app.state`, so both read the same current default key (`app.state.api_key`). | MCP is not a privileged surface: managed keys, TOML `[namespaces]` tokens and the default key authenticate on `/mcp` exactly as on REST, each resolving to its own namespace, and a key rotation through either surface takes effect on both at once. |
 | Control plane vs data plane | Control routes (`/state`, `/status`, `/collections`, `/jobs`, `/telemetry`) and data routes (`/search`, `/route`) all sit behind the same bearer check. | The boundary is logical, not enforced by separate keys today. |
 | Namespace → ACL | `archon_search/acl.py::apply_acl_filter` invoked from `SearchPipeline`. | Chunks tagged with an `acl` list (see `02_authentication_and_keys.md` and `03_authorization_and_acl.md`). |
-| Host → outside world | None for telemetry — there is no transport. `[telemetry].export_enabled = true` is coerced to `false` in `archon_search/config.py:209–217` and a warning is logged (`config.py:214`). | Nothing in v1. |
+| Host → outside world | None for telemetry — there is no transport. `[telemetry].export_enabled = true` is coerced to `false` in `archon_search/config.py:775–783` and a warning is logged (`config.py:780`). | Nothing in v1. |
 
 ## In scope
 
@@ -71,8 +71,8 @@ The v1 threat model considers and mitigates:
 - **Casual misuse by a second local client without the API key.** Bearer auth blocks unauthenticated traffic on every endpoint except the five exempt paths declared in `middleware_auth.py::_EXEMPT_PATHS` — `/health`, `/ready`, `/docs`, `/openapi.json`, `/redoc`. FastAPI does not register `/docs`, `/openapi.json`, or `/redoc` in this build's OpenAPI schema (see `app.py`), but the middleware exemption means they are reachable unauthenticated if mounted. See `02_authentication_and_keys.md`.
 - **Cross-namespace data leakage between cooperating local clients.** Per-chunk ACL columns and namespace-scoped writes prevent one namespace from reading another's protected chunks. See `03_authorization_and_acl.md`.
 - **Accidental persistence of raw query text in telemetry.** Structural — `TelemetryEntry` has no `query` field and no factory accepts one (`archon_search/telemetry/entry.py`). See `04_telemetry_privacy.md`.
-- **Drift of the API key file permissions.** `_load_from_file` re-tightens the mode to `0600` on every read (`archon_search/key_manager.py:54–59`).
-- **Timing side channel on key comparison.** `secrets.compare_digest` + a deliberately non-short-circuiting loop in `middleware_auth.py:41–47`.
+- **Drift of the API key file permissions.** `_load_from_file` re-tightens the mode to `0600` on every read (`archon_search/key_manager.py:753–759`).
+- **Timing side channel on key comparison.** `secrets.compare_digest` + a deliberately non-short-circuiting loop in `middleware_auth.py:70–73`.
 
 ## Out of scope (deliberate non-goals)
 

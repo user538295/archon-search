@@ -182,7 +182,6 @@ async def test_excluded_chunks_absent_with_acl_context(
     Ingests a document restricted to namespace "ns-only" (via YAML frontmatter _acl).
     Searches as namespace "default" — the document must not appear in results.
     """
-    from pathlib import Path
 
     from archon_search.filters import SearchFilters
 

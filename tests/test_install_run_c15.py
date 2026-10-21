@@ -253,7 +253,6 @@ def _run_with_server_key(
     key_file = tmp_path / ".search.env"
     atomic_calls: list = []
 
-    real_atomic_write = None
     from archon_search._durable_io import atomic_write_bytes as _real_aw
 
     def capturing_atomic_write(path, data, **kwargs):
@@ -313,9 +312,6 @@ def test_run_server_key_sets_mode_600(tmp_path: Path) -> None:
     method_patches = _method_patches()
 
     # Track all os.chmod calls and record them
-    import os as _os
-    real_os_chmod = _os.chmod
-
     def capturing_chmod(path, mode, **kwargs):
         chmod_calls.append((path, mode))
         # Don't actually chmod in tests (key_file doesn't need real mode change)

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.config import OpenAIShimConfig, SearchConfig, load_config
+from archon_search.config import OpenAIShimConfig, load_config
 
 
 # ---------------------------------------------------------------------------

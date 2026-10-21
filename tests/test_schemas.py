@@ -1,7 +1,6 @@
 """Tests for Pydantic schema structure (Tasks 6.x)."""
 from __future__ import annotations
 
-import pytest
 
 
 # ---------------------------------------------------------------------------

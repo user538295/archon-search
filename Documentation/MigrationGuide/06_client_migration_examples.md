@@ -90,7 +90,7 @@ New shape (current `main`, will be tagged in the next release):
 Before: clients could specify `top_k` per request, overriding the configured default.
 After: the route ignores `top_k`; the pipeline uses `config.top_k_return` from `archon-search.toml` (`[database].top_k_return`, default `5`).
 
-The Pydantic schema in `SearchRequest` still declares `top_k: int = Field(default=5, ge=1, le=100)`. Sending it is not an error — it is silently ignored. This residual mismatch is logged as **API-2** in [`Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md).
+The Pydantic schema in `SearchRequest` still declares `top_k: int = Field(default=5, ge=1)`, and the route rejects a value above `[search].top_k_max` with `422`. Sending it is not an error — it is silently ignored. This residual mismatch is logged as **API-2** in [`Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md).
 
 ### Operator step (config)
 
@@ -101,8 +101,6 @@ Set the desired result count once, server-side:
 [database]
 top_k_return = 10  # was previously implicit per-request from clients
 ```
-
-> **Note**: `BREAKING.md` currently states the key lives under `[search]`, but the config loader (`archon_search/config.py:158–167`) reads `top_k_return` from the `[database]` section. The `[database]` form shown above is what the code actually accepts; `BREAKING.md` is out of date on this point and should be corrected in a follow-up. #Unverified (whether `[search]` was ever a valid section in any historical release)
 
 Then restart the server. See [`04_config_migration.md`](./04_config_migration.md) and [`02_upgrade_procedure.md`](./02_upgrade_procedure.md).
 

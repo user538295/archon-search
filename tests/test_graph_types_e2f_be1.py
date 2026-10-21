@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 
 import pyarrow as pa
-import pytest
 
 from archon_search.graph_types import (
     EntityType,
@@ -112,7 +111,6 @@ def test_arrow_to_edges_handles_absent_extraction_method_column() -> None:
 
 def test_write_graph_includes_extraction_method_in_edges_data(tmp_path) -> None:
     """GraphEdge with extraction_method='embedding' survives a write → read round-trip."""
-    import lancedb
 
     from archon_search.graph_store import GraphStore
     from archon_search.graph_types import GraphNode

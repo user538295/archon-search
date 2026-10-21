@@ -125,7 +125,7 @@ curl -X POST http://127.0.0.1:8765/search \
   -d '{"collection": "docs", "query": "how does the router work?"}'
 ```
 
-Note: the `top_k` field on `SearchRequest` is ignored at the route level — the pipeline uses `config.top_k_return` from `[database]` in `~/.archon-search/archon-search.toml`. See `../BREAKING.md` for the rationale (note: BREAKING.md currently refers to this knob as `[search] top_k_return`; the actual config section is `[database]`). #Unverified
+Note: the `top_k` field on `SearchRequest` is ignored at the route level — the pipeline uses `config.top_k_return` from `[database]` in `~/.archon-search/archon-search.toml`. See `../BREAKING.md` for the rationale.
 
 ## 7. Run the Tests
 

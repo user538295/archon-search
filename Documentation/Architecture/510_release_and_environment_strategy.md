@@ -189,7 +189,7 @@ See `150_security_and_privacy_architecture.md` for the full auth model, includin
 
 `config.py` loads `<data-dir>/archon-search.toml` (default `~/.archon-search/archon-search.toml`; `ARCHON_SEARCH_CONFIG` overrides) and validates it against the `SearchConfig` schema. A starter file ships as `archon-search.toml.example` at the repository root. Selected fields:
 
-- `[search].top_k_retrieve`, `[search].top_k_return` — pipeline shortlist and final cut-off.
+- `[database].top_k_retrieve`, `[database].top_k_return` — pipeline shortlist and final cut-off.
 - `[server].host`, `[server].port` — defaults bind to `127.0.0.1`.
 - `[telemetry].enabled` — opt-in, default off. `[telemetry].export_enabled = true` is coerced to `false` at config load with a warning in v1 (reserved for a future release).
 - `[jobs].max_concurrent_bulk` (D1/D2) — maximum concurrent export/import jobs; default 1.
