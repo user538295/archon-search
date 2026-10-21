@@ -8,6 +8,24 @@
 
 ## Changelog
 
+### [next release] — CLI `--wait` exit codes: `import`, `export` and `backup --now` no longer exit `0` when a job ends `CANCELLED` (or, for `import`, `FAILED_EXPIRED`) (2026-10-17)
+
+**Surface**: `archon-search import --wait`, `archon-search export --wait`, `archon-search backup --now --wait` → process exit code and stderr.
+
+**What changed:** A terminal job status other than `DONE` or `FAILED` fell through to a success path (`archon_search/cli/export_cmd.py` `_poll_job` / `_poll_import_job`, `archon_search/cli/backup_cmd.py` `_wait_for_jobs`):
+
+- `import --wait`: a job ending `FAILED_EXPIRED` or `CANCELLED` printed `Job ended with status: <STATUS>` and exited `0`. It now exits `1`, printing `Import FAILED: <error>` (for `FAILED_EXPIRED`, as for `FAILED`) or `Import CANCELLED: the collection may be partially or fully imported; re-run the same import command with --force-overwrite to restore a complete copy.` to stderr. `DONE` still exits `0`; `import` still has no `--timeout`.
+- `export --wait`: a job ending `CANCELLED` printed `Job ended with status: CANCELLED` and exited `0`. It now exits `2` (as `FAILED` / `FAILED_EXPIRED` already did), printing `Export CANCELLED: no archive was produced.` to stderr. `DONE` and a `--timeout` still exit `0`; the timeout hint now reads `Timed out after <N>s waiting for export job to complete. Check status: 'archon-search jobs status <job_id>' with the same --api-url/--api-key.` instead of pointing at `GET /jobs/{job_id}`.
+- `backup --now --wait`: when any job ended `CANCELLED` (and none `FAILED`), it printed `Backup finished (N collection(s) cancelled).` and exited `0`. It now prints `Backup incomplete: N collection(s) cancelled.` to stderr instead and exits `2`; the per-collection `{collection}: CANCELLED` line moved from stdout to stderr, joining `{collection}: FAILED — <error>`. When a job was cancelled before the `--timeout` elapsed, it now prints `Some backup jobs were cancelled before timeout. Pending: <collections>. Check status: 'archon-search jobs status <job_id>' with the same --api-url/--api-key (job IDs are listed under 'Queued jobs:').` (`failed or were cancelled` when jobs did both) and exits `2` instead of the timeout hint and exit `0`; the failed-before-timeout line now lists the pending collections and the same hint too. The plain timeout hint (exit `0`) now reads `Timed out after <N>s waiting for backup jobs to complete. Pending: <collections>. Check status: 'archon-search jobs status <job_id>' with the same --api-url/--api-key (job IDs are listed under 'Queued jobs:').` — the old hints pointed at `archon-search backup status`, which shows no job status. All `DONE`, or a timeout with nothing failed or cancelled, still exits `0`.
+
+Exit `1` on connection, auth, or HTTP errors is unchanged for all three.
+
+**Migration**: scripts that treated exit `0` from these commands as "finished, whatever the outcome" must handle the new codes: `1` from `import --wait`, `2` from `export --wait` and `backup --now --wait`. A cancelled export produces no archive, a cancelled backup skips that collection, and a cancelled import may leave a partial collection. Exit `2` from `export`/`backup` also means `FAILED`/`FAILED_EXPIRED`, so a bare `|| [ $? -eq 2 ]` would swallow failures too: a script that tolerates cancellation must confirm the job ended `CANCELLED` before accepting the non-zero code — from the per-collection `{collection}: CANCELLED` / `{collection}: FAILED — <error>` lines `backup --now --wait` prints to stderr, or with `archon-search jobs status <job_id>` passing the same `--api-url`/`--api-key` (job IDs are printed when the jobs are queued).
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — MCP `search_with_context`: `context_window` must be in `[0, [search].context_window_max]` (default 10); `GET /status` `search` gains `context_window_max` (2026-10-17)
 
 **Surface**: the MCP tool `search_with_context` → its `context_window` argument; the new config key `[search].context_window_max`; `GET /status` → `search` (`SearchStatusDetail`).

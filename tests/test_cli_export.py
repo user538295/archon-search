@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from archon_search.cli.export_cmd import export_cmd, import_cmd
@@ -126,7 +127,7 @@ def test_export_cmd_wait_exits_2_on_failed_expired() -> None:
         )
 
     assert result.exit_code == 2, f"output={result.output!r}"
-    assert "FAILED" in result.output
+    assert "Export FAILED: job expired" in result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +282,10 @@ def test_export_wait_timeout_exits_0() -> None:
     # Recovery hint must be in output and contain the job ID
     assert job_id in result.output, f"expected job ID in output: {result.output!r}"
     assert "Timed out" in result.output, f"expected timeout message in output: {result.output!r}"
-    assert "check job status" in result.output, f"expected recovery hint in output: {result.output!r}"
+    assert (
+        "Timed out after 4s waiting for export job to complete. "
+        f"Check status: 'archon-search jobs status {job_id}' with the same --api-url/--api-key."
+    ) in result.stderr
 
 
 def test_export_wait_exits_2_on_failed() -> None:
@@ -301,7 +305,93 @@ def test_export_wait_exits_2_on_failed() -> None:
         )
 
     assert result.exit_code == 2, f"output={result.output!r}"
-    assert "FAILED" in result.output or "disk full" in result.output
+    assert "Export FAILED: disk full" in result.stderr
+
+
+def test_export_wait_exits_2_on_cancelled() -> None:
+    """--wait exits 2 when job ends CANCELLED: the archive was never produced."""
+    runner = CliRunner()
+    job_id = "job-cancel-export"
+    post_resp = _mock_post_response(202, _job_response(job_id, "QUEUED"))
+    cancelled_resp = _mock_get_response(200, _job_response(job_id, "CANCELLED"))
+
+    with (
+        patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.export_cmd.httpx.get", return_value=cancelled_resp),
+        patch("archon_search.cli.export_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            export_cmd, ["my-collection", "--wait", "--api-key", "deadbeef"]
+        )
+
+    assert result.exit_code == 2, f"output={result.output!r}"
+    assert "Export CANCELLED: no archive was produced." in result.stderr
+    assert "Job ended with status" not in result.output
+    assert "Done. Archive" not in result.output
+
+
+_IMPORT_CANCELLED_MSG = (
+    "Import CANCELLED: the collection may be partially or fully imported; "
+    "re-run the same import command with --force-overwrite to restore a complete copy."
+)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_stderr"),
+    [
+        ("FAILED", "Import FAILED: job ended"),
+        ("FAILED_EXPIRED", "Import FAILED: job ended"),
+        ("CANCELLED", _IMPORT_CANCELLED_MSG),
+    ],
+)
+def test_import_wait_exits_1_on_unsuccessful_terminal_status(
+    status: str, expected_stderr: str
+) -> None:
+    """--wait exits 1 when the import job ends FAILED, FAILED_EXPIRED or CANCELLED."""
+    runner = CliRunner()
+    job_id = f"job-import-{status.lower()}"
+    post_resp = _mock_post_response(202, _job_response(job_id, "QUEUED"))
+    terminal_resp = _mock_get_response(200, _job_response(job_id, status, error="job ended"))
+
+    with (
+        patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.export_cmd.httpx.get", return_value=terminal_resp),
+        patch("archon_search.cli.export_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            import_cmd,
+            ["my-collection", "/data/exports/archive.tar.gz", "--wait", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 1, f"output={result.output!r}"
+    assert expected_stderr in result.stderr
+    assert "Job ended with status" not in result.output
+    assert "Done. imported=" not in result.output
+
+
+def test_import_wait_keeps_polling_through_cancelling() -> None:
+    """CANCELLING is not terminal: --wait keeps polling until the job ends CANCELLED."""
+    runner = CliRunner()
+    job_id = "job-import-cancelling"
+    post_resp = _mock_post_response(202, _job_response(job_id, "QUEUED"))
+    get_responses = [
+        _mock_get_response(200, _job_response(job_id, status))
+        for status in ("RUNNING", "CANCELLING", "CANCELLED")
+    ]
+
+    with (
+        patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.export_cmd.httpx.get", side_effect=get_responses) as mock_get,
+        patch("archon_search.cli.export_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            import_cmd,
+            ["my-collection", "/data/exports/archive.tar.gz", "--wait", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 1, f"output={result.output!r}"
+    assert mock_get.call_count == len(get_responses)
+    assert _IMPORT_CANCELLED_MSG in result.stderr
 
 
 # ---------------------------------------------------------------------------

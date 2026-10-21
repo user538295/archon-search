@@ -103,6 +103,12 @@ For architectural context, see [`100_system_architecture_overview.md`](./100_sys
 | --- | --- | --- | --- | --- | --- |
 | CLI-1 | ~~**RESOLVED (feature 210):** `collection list` and `collection info` now open `SearchStore` directly via `_make_store()` instead of calling `create_pipeline()`, eliminating the GPT-2 tokenizer cost (~1 s). The remaining floor is the `lancedb` first-import (~900 ms). Lazy chunker init in `SearchPipeline` is still deferred (wider blast-radius) but no longer blocks these commands.~~ | Performance | Resolved | — | `archon_search/cli/collection.py` (`_make_store`, `list_cmd`, `info`); [2026-07-15-210-cli-store-commands-slow-brief.md](../../Documentation/Completed/2026-07-15-210-cli-store-commands-slow-brief.md) |
 
+### CLI job polling
+
+| ID | Item | Category | Severity | Trigger | Refs |
+| --- | --- | --- | --- | --- | --- |
+| CLI-2 | `import --wait` is out of step with `export --wait` and `backup --now --wait`: it has no `--timeout` (it polls until the job is terminal), its private poller `_poll_import_job` duplicates the shared `_helpers._poll_job` loop, and it exits `1` on `FAILED`/`FAILED_EXPIRED`/`CANCELLED` where export and backup exit `2`. Unifying them means one poller with a timeout and a single exit-code contract, which changes `import`'s exit code — a `BREAKING.md` entry. | Maintainability | Low | A script or operator report needing a bounded `import --wait`, or the next change to the CLI exit-code contract | `archon_search/cli/export_cmd.py` (`_poll_import_job`, `_EXIT_IMPORT_UNSUCCESSFUL`), `archon_search/cli/_helpers.py` (`_poll_job`), [`BREAKING.md`](../../BREAKING.md) (CLI `--wait` exit codes entry) |
+
 ### Query expansion provider matrix
 
 | ID | Item | Category | Severity | Trigger | Refs |
