@@ -3,20 +3,18 @@
 Tests that every tool closure that makes pipeline calls uses the namespace resolved
 by APIKeyMiddleware (via _get_request_namespace()) instead of hardcoding DEFAULT_NAMESPACE.
 
-Mechanism (per K-1 ADR):
+Mechanism (ADR 17, which partially supersedes ADR 09's K-1 sketch):
   fastmcp.server.dependencies.get_http_request() returns the current Starlette Request.
   APIKeyMiddleware writes request.state.namespace before call_next, so any tool that
   calls _get_request_namespace() → get_http_request().state.namespace sees the
-  authenticated namespace. The import is lazy (inside _get_request_namespace) to avoid
-  breaking test stubs that replace the fastmcp package with a plain module.
+  authenticated namespace. Outside an HTTP request get_http_request() raises
+  RuntimeError and _get_request_namespace() falls back to DEFAULT_NAMESPACE.
 
 Scenarios completed: S8 (namespace propagation correct for all tool closures), C4.
 """
 from __future__ import annotations
 
 import asyncio
-import sys
-import types
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,19 +25,9 @@ from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 pytestmark = pytest.mark.xdist_group("mcp")
 
 # ---------------------------------------------------------------------------
-# FastMCP stub (mirrors pattern in test_mcp_search.py)
+# Local FastMCP stand-in: patched over archon_search.server.mcp.FastMCP per test
+# so create_app() registers its tool closures in _FakeApp.tools.
 # ---------------------------------------------------------------------------
-
-if "fastmcp" not in sys.modules:
-    try:
-        import fastmcp as _real_fastmcp  # type: ignore[import-not-found]
-        sys.modules["fastmcp"] = _real_fastmcp  # type: ignore[assignment]
-    except ImportError:
-        _fastmcp = types.ModuleType("fastmcp")
-        _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-        _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-        sys.modules["fastmcp"] = _fastmcp
-
 
 class _FakeApp:
     """Minimal FastMCP-like registry used in unit tests to capture tool functions."""
@@ -65,8 +53,8 @@ class _FakeFastMCP:
 
 
 # ---------------------------------------------------------------------------
-# Helper: set _current_http_request ContextVar so _get_request_namespace()
-# returns the configured namespace for the duration of an async call.
+# Helpers: a fake Request for get_http_request(), and a patch of
+# _get_request_namespace() for tests that only check tool-closure wiring.
 # ---------------------------------------------------------------------------
 
 def _make_fake_request(namespace: str) -> MagicMock:
@@ -147,9 +135,8 @@ async def test_search_tool_uses_resolved_namespace() -> None:
 @pytest.mark.asyncio
 async def test_search_with_context_tool_uses_resolved_namespace() -> None:
     """search_with_context tool calls pipeline.search_with_context with resolved namespace."""
-    from archon_search.pipeline import SearchWithContextResult
-
     import archon_search.server.mcp as mcp_module
+    from archon_search.pipeline import SearchWithContextResult
 
     pipeline = MagicMock()
     pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
@@ -214,9 +201,8 @@ async def test_list_documents_uses_resolved_namespace() -> None:
 @pytest.mark.asyncio
 async def test_explain_uses_resolved_namespace() -> None:
     """explain tool calls pipeline.get_all_collections_meta / explain with resolved namespace."""
-    from archon_search.pipeline import ExplainPipelineResult
-
     import archon_search.server.mcp as mcp_module
+    from archon_search.pipeline import ExplainPipelineResult
 
     pipeline = MagicMock()
     # Provide get_all_collections_meta so routing code runs and explain is called
@@ -347,9 +333,8 @@ async def test_get_collection_meta_uses_resolved_namespace() -> None:
 @pytest.mark.asyncio
 async def test_ingest_file_uses_resolved_namespace(tmp_path) -> None:
     """ingest_file tool calls pipeline.ingest_file with resolved namespace."""
-    from archon_search.pipeline import IngestResult
-
     import archon_search.server.mcp as mcp_module
+    from archon_search.pipeline import IngestResult
 
     pipeline = MagicMock()
     pipeline.ingest_file = AsyncMock(return_value=IngestResult(doc_id="d" * 64, chunks_created=1, status="ok"))
@@ -382,8 +367,6 @@ async def test_ingest_file_uses_resolved_namespace(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_ingest_directory_uses_resolved_namespace(tmp_path) -> None:
     """ingest_directory tool calls pipeline.ingest_directory with resolved namespace."""
-    from archon_search.pipeline import IngestResult
-
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
@@ -415,9 +398,8 @@ async def test_ingest_directory_uses_resolved_namespace(tmp_path) -> None:
 async def test_export_collection_uses_resolved_namespace(tmp_path, monkeypatch) -> None:
     """export_collection passes the resolved namespace to store.get_collection_meta
     and to job_store.create_export."""
-    from archon_search.collection_meta import CollectionMeta
-
     import archon_search.server.mcp as mcp_module
+    from archon_search.collection_meta import CollectionMeta
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
 
@@ -478,9 +460,9 @@ async def test_import_collection_uses_resolved_namespace(tmp_path, monkeypatch) 
     The archive must be inside get_data_dir() for validate_export_path to allow it.
     We redirect ARCHON_SEARCH_DATA_DIR to tmp_path and place the archive there.
     """
-    import tarfile
-    import json
     import io
+    import json
+    import tarfile
 
     import archon_search.server.mcp as mcp_module
     from archon_search.config import SearchConfig
@@ -700,7 +682,7 @@ async def test_resolve_embedder_uses_resolved_namespace() -> None:
 
     # Call _resolve_embedder directly with a namespace argument.
     # This tests the helper signature change introduced by BE-5.
-    result = await mcp_module._resolve_embedder(
+    await mcp_module._resolve_embedder(
         pipeline, embedder_cache, "my-collection", cfg, namespace="ns-emb"
     )
 
@@ -774,22 +756,14 @@ async def test_resolve_embedder_skips_meta_fetch_when_meta_provided() -> None:
 def test_get_request_namespace_falls_back_to_default() -> None:
     """_get_request_namespace() returns DEFAULT_NAMESPACE when no request is active.
 
-    We test this by patching _get_request_namespace itself to call the original
-    implementation via a real import of fastmcp.server.http._current_http_request,
-    OR by verifying behaviour via the tool-level mock.
-
-    Because this test shares the xdist_group("mcp") worker with stub-fastmcp tests,
-    we cannot directly import fastmcp.server.http here — the stub may have replaced it.
-    Instead we verify the fallback indirectly: when _get_request_namespace is NOT
-    patched in a list_collections call, the tool receives DEFAULT_NAMESPACE (the
-    fallback). This is the same guarantee: if the import fails, DEFAULT_NAMESPACE
-    is returned.
+    Exercised end to end through a real tool closure: list_collections runs with
+    _get_request_namespace NOT patched and no HTTP request context, so the real
+    get_http_request() raises RuntimeError and the tool must receive DEFAULT_NAMESPACE.
     """
-    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
 
     import archon_search.server.mcp as mcp_module
     from archon_search.constants import DEFAULT_NAMESPACE
-    from unittest.mock import AsyncMock, MagicMock
 
     pipeline = MagicMock()
     pipeline.get_all_collections_meta = AsyncMock(return_value=[])
@@ -817,15 +791,13 @@ def test_get_request_namespace_falls_back_to_default() -> None:
 
 
 def test_get_request_namespace_returns_state_namespace() -> None:
-    """_get_request_namespace() reads .state.namespace when a request is set.
+    """_get_request_namespace() reads .state.namespace from the active HTTP request.
 
-    We verify this via _patch_namespace which simulates the mechanism at the
-    module-function level (same guarantee, xdist-stub-safe).
+    Exercised through a real tool closure with _get_request_namespace NOT patched:
+    only get_http_request() (as imported into archon_search.server.mcp) is replaced
+    by one returning a request whose .state.namespace is set, as APIKeyMiddleware does.
     """
-    import asyncio
-
     import archon_search.server.mcp as mcp_module
-    from unittest.mock import AsyncMock, MagicMock
 
     pipeline = MagicMock()
     pipeline.get_all_collections_meta = AsyncMock(return_value=[])
@@ -834,49 +806,96 @@ def test_get_request_namespace_returns_state_namespace() -> None:
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["list_collections"]
 
-    # Simulate a request context setting namespace via _patch_namespace
-    with _patch_namespace("ns-contextvar"):
+    with patch(
+        "archon_search.server.mcp.get_http_request",
+        return_value=_make_fake_request("ns-request"),
+    ):
         asyncio.run(fn())
 
     pipeline.get_all_collections_meta.assert_called_once()
     call_args = pipeline.get_all_collections_meta.call_args
-    ns_passed = call_args.args[0] if call_args.args else call_args.kwargs.get("namespace")
-    assert ns_passed == "ns-contextvar", (
-        f"_get_request_namespace() must return the patched namespace, got {ns_passed!r}"
+    ns_passed = (
+        call_args.args[0] if call_args.args else call_args.kwargs.get("namespace")
+    )
+    assert ns_passed == "ns-request", (
+        f"_get_request_namespace() must return request.state.namespace, got {ns_passed!r}"
     )
 
 
 # ---------------------------------------------------------------------------
-# test_fastmcp_current_http_request_import_is_valid
+# test_get_request_namespace_propagates_non_runtime_errors
 # ---------------------------------------------------------------------------
 
 
-def test_fastmcp_current_http_request_import_is_valid() -> None:
-    """fastmcp.server.http._current_http_request is importable as a ContextVar.
+def test_get_request_namespace_propagates_non_runtime_errors() -> None:
+    """Only RuntimeError ("no active HTTP request") falls back to DEFAULT_NAMESPACE.
 
-    This is a regression guard: if FastMCP renames or removes _current_http_request,
-    this test fails in CI before deployment (per ADR-09 Consequences section).
-
-    NOTE: This test is skipped when the fastmcp stub is active (i.e. when another
-    test in the same xdist worker has replaced sys.modules["fastmcp"] with a plain
-    module). The guard is still valid because the stub scenario is test-only and does
-    not represent production.
+    Any other failure inside get_http_request() is a real fault and must surface
+    instead of silently serving the request from the default namespace.
     """
-    import sys
-    from contextvars import ContextVar
+    import archon_search.server.mcp as mcp_module
 
-    fastmcp_mod = sys.modules.get("fastmcp")
-    if fastmcp_mod is not None and not hasattr(fastmcp_mod, "server"):
-        pytest.skip("fastmcp stub active in this worker — cannot test real import")
+    with (
+        patch(
+            "archon_search.server.mcp.get_http_request",
+            side_effect=LookupError("request context corrupted"),
+        ),
+        pytest.raises(LookupError, match="request context corrupted"),
+    ):
+        mcp_module._get_request_namespace()
 
-    from fastmcp.server.http import _current_http_request as _upstream
 
-    assert isinstance(_upstream, ContextVar), (
-        "fastmcp.server.http._current_http_request must be a ContextVar"
+# ---------------------------------------------------------------------------
+# test_get_request_namespace_defaults_when_state_lacks_namespace
+# ---------------------------------------------------------------------------
+
+
+def test_get_request_namespace_defaults_when_state_lacks_namespace() -> None:
+    """An active request whose state carries no namespace resolves to DEFAULT_NAMESPACE.
+
+    get_http_request() succeeds here, so the fallback comes from
+    getattr(req.state, "namespace", DEFAULT_NAMESPACE), not from the RuntimeError path.
+    """
+    import types
+
+    import archon_search.server.mcp as mcp_module
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    request_without_namespace = types.SimpleNamespace(state=types.SimpleNamespace())
+
+    with patch(
+        "archon_search.server.mcp.get_http_request",
+        return_value=request_without_namespace,
+    ) as fake_get_http_request:
+        resolved = mcp_module._get_request_namespace()
+
+    fake_get_http_request.assert_called_once_with()
+    assert resolved == DEFAULT_NAMESPACE
+
+
+# ---------------------------------------------------------------------------
+# test_fastmcp_get_http_request_raises_runtime_error_outside_request
+# ---------------------------------------------------------------------------
+
+
+def test_fastmcp_get_http_request_raises_runtime_error_outside_request() -> None:
+    """Upstream contract the DEFAULT_NAMESPACE fallback relies on.
+
+    _get_request_namespace() catches only RuntimeError from
+    fastmcp.server.dependencies.get_http_request(). This is the FastMCP-upgrade guard
+    ADR 17 names (it replaces ADR 09's private _current_http_request import test): it
+    fails in CI if archon_search.server.mcp stops using the public get_http_request, or
+    if FastMCP changes the exception raised outside an HTTP request.
+    """
+    from fastmcp.server.dependencies import get_http_request
+
+    import archon_search.server.mcp as mcp_module
+
+    assert mcp_module.get_http_request is get_http_request, (
+        "archon_search.server.mcp must use fastmcp.server.dependencies.get_http_request"
     )
-    assert hasattr(_upstream, "get"), (
-        "_current_http_request must have a .get() method (ContextVar API)"
-    )
+    with pytest.raises(RuntimeError):
+        get_http_request()
 
 
 # ---------------------------------------------------------------------------
@@ -888,9 +907,8 @@ def test_fastmcp_current_http_request_import_is_valid() -> None:
 async def test_search_tool_multi_collection_uses_resolved_namespace() -> None:
     """search tool calls pipeline.search_many with namespace from _get_request_namespace()
     when the collections parameter (multi-collection fan-out path) is provided."""
-    from archon_search.pipeline import SearchPipelineResult
-
     import archon_search.server.mcp as mcp_module
+    from archon_search.pipeline import SearchPipelineResult
 
     pipeline = MagicMock()
     pipeline.search_many = AsyncMock(
@@ -925,9 +943,8 @@ async def test_search_tool_multi_collection_uses_resolved_namespace() -> None:
 async def test_explain_multi_collection_uses_resolved_namespace() -> None:
     """explain tool calls pipeline.explain with namespace from _get_request_namespace()
     when the collections parameter (multi-collection fan-out path) is provided."""
-    from archon_search.pipeline import ExplainPipelineResult
-
     import archon_search.server.mcp as mcp_module
+    from archon_search.pipeline import ExplainPipelineResult
 
     pipeline = MagicMock()
     pipeline.explain = AsyncMock(

@@ -7,8 +7,6 @@ Implements Task 5.1 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
 from __future__ import annotations
 
 import inspect
-import sys
-import types
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,20 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 pytestmark = pytest.mark.xdist_group("mcp")
-
-# Resolve fastmcp: prefer the real ``fastmcp`` package (which exposes
-# ``FastMCP.http_app`` and ``Context``), fall back to a minimal stub. Avoid
-# clobbering an existing entry — test_mcp_auth.py also relies on the real
-# implementation being installed.
-if "fastmcp" not in sys.modules:
-    try:
-        import fastmcp as _real_fastmcp  # type: ignore[import-not-found]
-        sys.modules["fastmcp"] = _real_fastmcp  # type: ignore[assignment]
-    except ImportError:
-        _fastmcp = types.ModuleType("fastmcp")
-        _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-        _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-        sys.modules["fastmcp"] = _fastmcp
 
 from archon_search._types import ChunkRecord, SearchResult
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW_MAX

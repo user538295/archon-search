@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
 
 from fastmcp import Context, FastMCP
+from fastmcp.server.dependencies import get_http_request
 from pydantic import Field, ValidationError
 from starlette.applications import Starlette
 from starlette.datastructures import State
@@ -319,21 +320,18 @@ def _get_request_namespace() -> str:
     Falls back to DEFAULT_NAMESPACE when called outside an HTTP request context
     (e.g. direct invocation in tests or CLI mode).
 
-    Per K-1 ADR: _current_http_request is set fresh on every HTTP POST (not frozen
-    at session-initialize time), so this must be called on each tool invocation, not
-    cached at app-creation time.
+    Per ADR 09 (K-1 spike): the current HTTP request is set fresh on every HTTP POST
+    (not frozen at session-initialize time), so this must be called on each tool
+    invocation, not cached at app-creation time. ADR 17 records the switch to the
+    public get_http_request() below.
 
     Uses fastmcp.server.dependencies.get_http_request() (public API) which handles
     the MCP SDK request_ctx, FastMCP's HTTP context, and Docket worker snapshots.
-    The import is lazy to avoid breaking test stubs that replace the fastmcp package
-    with a plain module.
     """
-    # ponytail: lazy import with fallback — test stubs replace fastmcp with a plain
-    # module; ImportError or RuntimeError (no active request) → fall back to DEFAULT_NAMESPACE.
+    # get_http_request() raises RuntimeError when no HTTP request is active.
     try:
-        from fastmcp.server.dependencies import get_http_request  # noqa: PLC0415
         req = get_http_request()
-    except (ImportError, RuntimeError):
+    except RuntimeError:
         return DEFAULT_NAMESPACE
     return getattr(req.state, "namespace", DEFAULT_NAMESPACE)
 

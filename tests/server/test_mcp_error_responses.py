@@ -11,6 +11,7 @@ from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 
 pytestmark = pytest.mark.xdist_group("mcp")
 
+
 # ---------------------------------------------------------------------------
 # FastMCP stub
 # ---------------------------------------------------------------------------

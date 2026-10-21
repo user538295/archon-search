@@ -35,10 +35,9 @@ pytestmark = pytest.mark.xdist_group("mcp")
 # ---------------------------------------------------------------------------
 SENTINEL = "PRIVACY-LEAK-SENTINEL-7f3a-feat-039b"
 
-# fastmcp is a core dependency: no module stub here. A collection-time
-# sys.modules["fastmcp"] stub poisoned every later real-MCP test on the same
-# "mcp" xdist worker (FastMCP() takes no arguments); the tests patch
-# archon_search.server.mcp.FastMCP with _FakeFastMCP instead.
+# ---------------------------------------------------------------------------
+# FastMCP stub — same pattern as test_mcp_telemetry.py.
+# ---------------------------------------------------------------------------
 
 
 class _FakeApp:

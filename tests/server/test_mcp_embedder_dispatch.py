@@ -17,10 +17,10 @@ from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 
 pytestmark = pytest.mark.xdist_group("mcp")
 
-# fastmcp is a core dependency: no module stub here. A collection-time
-# sys.modules["fastmcp"] stub poisoned every later real-MCP test on the same
-# "mcp" xdist worker (FastMCP() takes no arguments); _make_mcp_app patches
-# archon_search.server.mcp.FastMCP instead.
+# ---------------------------------------------------------------------------
+# Local FastMCP stand-in: patched over archon_search.server.mcp.FastMCP in
+# _make_mcp_app so create_app() registers its tool closures in _FakeApp.tools.
+# ---------------------------------------------------------------------------
 
 
 class _FakeApp:

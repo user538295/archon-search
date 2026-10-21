@@ -26,6 +26,7 @@ pytestmark = pytest.mark.xdist_group("mcp")
 # FastMCP stub — _make_mcp_app patches archon_search.server.mcp.FastMCP with it
 # ---------------------------------------------------------------------------
 
+
 class _FakeApp:
     def __init__(self, name: str) -> None:
         self.tools: dict[str, Any] = {}

@@ -1,8 +1,6 @@
 """Tests for telemetry emission in the MCP search tools"""
 from __future__ import annotations
 
-import sys
-import types
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,22 +8,8 @@ import pytest
 
 pytestmark = pytest.mark.xdist_group("mcp")
 
-# Resolve fastmcp: prefer the real ``fastmcp`` package (which exposes
-# ``FastMCP.http_app`` and ``Context``), fall back to a minimal stub. Avoid
-# clobbering an existing entry — test_mcp_auth.py relies on the real
-# implementation being installed.
-if "fastmcp" not in sys.modules:
-    try:
-        import fastmcp as _real_fastmcp  # type: ignore[import-not-found]
-        sys.modules["fastmcp"] = _real_fastmcp  # type: ignore[assignment]
-    except ImportError:
-        _fastmcp = types.ModuleType("fastmcp")
-        _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-        _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-        sys.modules["fastmcp"] = _fastmcp
-
-from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search._types import SearchResult
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.pipeline import SearchPipelineResult
 from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter

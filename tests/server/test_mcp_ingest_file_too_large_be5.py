@@ -13,30 +13,12 @@ Scenario S4 (unit half): MCP ingest_file result carries code="file_too_large".
 """
 from __future__ import annotations
 
-import sys
-import types
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 pytestmark = pytest.mark.xdist_group("mcp")
-
-# Stub fastmcp only when the real package is unavailable.  When the real
-# fastmcp IS importable (CI and local dev), prefer it so the module-level
-# ``from fastmcp import FastMCP`` in mcp.py gets the real class and the
-# integration tests in the same xdist_group("mcp") worker are not poisoned
-# by a stub that does not accept constructor arguments.
-if "fastmcp" not in sys.modules:
-    try:
-        import fastmcp as _real_fastmcp  # type: ignore[import]
-        sys.modules["fastmcp"] = _real_fastmcp  # type: ignore[assignment]
-    except ImportError:
-        _stub_fastmcp = types.ModuleType("fastmcp")
-        _stub_fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-        _stub_fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-        sys.modules["fastmcp"] = _stub_fastmcp
-
 
 # ---------------------------------------------------------------------------
 # FastMCP stub (same pattern as test_mcp_ingest_503.py)

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import time
 from pathlib import Path
@@ -10,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.install import InstallLockError, _acquire_install_lock, _install_lock_path
+from archon_search.install import InstallLockError, _acquire_install_lock
 
 pytestmark = pytest.mark.xdist_group("install")
 
@@ -76,6 +75,22 @@ def test_lock_raises_if_live_pid_holds_lock(tmp_path: Path) -> None:
         with pytest.raises(InstallLockError):
             with _acquire_install_lock():
                 pass
+
+
+def test_live_pid_lock_error_names_the_data_dir_lock_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The "remove it if stale" hint names the real lock file, which follows DATA_DIR."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    lock_path = tmp_path / ".install.lock"
+    lock_path.write_text(f"{os.getpid()}:{int(time.time())}")
+
+    with pytest.raises(InstallLockError) as exc_info, _acquire_install_lock():
+        pass
+
+    message = str(exc_info.value)
+    assert f"remove {lock_path} if stale" in message
+    assert "~/.archon-search" not in message
 
 
 # ---------------------------------------------------------------------------

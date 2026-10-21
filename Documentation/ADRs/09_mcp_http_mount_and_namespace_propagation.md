@@ -4,6 +4,7 @@
 **Date**: 2026-06-24
 **Deciders**: archon-search maintainers
 **Spike task**: K-1 (D9 plan prerequisite)
+**Superseded in part by**: [ADR 17 — MCP Namespace Resolution Uses FastMCP's Public `get_http_request()`](17_mcp_namespace_via_public_get_http_request.md) — only the `_current_http_request` reads in §"Proof 3" and §"Namespace propagation mechanism", and the Negative / Trade-offs bullet "`_current_http_request` is a private FastMCP API" with its prescribed import regression test. `_get_request_namespace()` calls the public `get_http_request()` instead.
 
 ## Context
 
