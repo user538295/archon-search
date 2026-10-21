@@ -37,14 +37,14 @@ _TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED
 # Active statuses — DELETE sets CANCELLING
 _ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.PENDING}
 
-# Sanitized, wire-facing ``detail`` for DELETE /jobs/{id} on the SyncJob that
-# backs the startup sync (CLAUDE.md hard invariant: no str(exc)/internals in a
-# wire-facing detail field). The startup sync must be non-cancellable: nothing
-# actually cancels the lifespan task that runs it, so transitioning the row to
-# CANCELLING would be silently ignored by the sync itself AND would arm the
-# (sticky, since fix-brief-C item 1) crash-loop guard on the next boot —
-# CANCELLING is one of jobs/store.py's _CRASH_STATUSES.
-_STARTUP_SYNC_JOB_NOT_CANCELLABLE_DETAIL = "the startup sync cannot be cancelled"
+# Sanitized, wire-facing ``detail`` for DELETE /jobs/{id} on any non-terminal
+# SyncJob — the startup sync, a manual POST /sync, or a legacy QUEUED/PENDING
+# row (CLAUDE.md hard invariant: no str(exc)/internals in a wire-facing detail
+# field). A sync is non-cancellable: nothing interrupts the task that runs it,
+# so transitioning the row to CANCELLING would be silently ignored by the sync
+# itself AND would arm the (sticky, since fix-brief-C item 1) crash-loop guard
+# on the next boot — CANCELLING is one of jobs/store.py's _CRASH_STATUSES.
+_SYNC_JOB_NOT_CANCELLABLE_DETAIL = "a sync cannot be cancelled"
 
 #: Wire-facing job ``error`` (served by GET /jobs) for an unexpected ingest / reindex failure; the
 #: exception text can embed server paths and library internals, so it is logged only.
@@ -52,8 +52,9 @@ INGEST_FAILED_DETAIL = "ingest failed; see the server log for details"
 REINDEX_FAILED_DETAIL = "reindex failed; see the server log for details"
 #: Wire-facing body of a sanitized 500 whose cause is logged only.
 INTERNAL_ERROR_DETAIL = "internal error"
-#: Wire-facing job ``error`` for a legacy QUEUED/PENDING community-rebuild / metadata-reindex job (an older
-#: server created those QUEUED first; nothing schedules either kind) that a newer request of its route supersedes.
+#: Wire-facing job ``error`` for a legacy QUEUED/PENDING community-rebuild / metadata-reindex / sync job (an older
+#: server created those QUEUED first; nothing schedules any of these kinds) that a newer request of its route
+#: supersedes (POST /graph/{collection}/rebuild-communities, POST /collections/{name}/reindex-metadata, POST /sync).
 JOB_SUPERSEDED_DETAIL = "never started; superseded by a newer request"
 #: Log-line prefixes naming the writer of a best-effort job status write (see ``_persist_job_status``).
 _INGEST_LOG_CONTEXT = "background ingest"
@@ -803,7 +804,10 @@ async def resume_job(job_id: str, request: Request) -> JobResponse | JSONRespons
         202: {"model": JobResponse},
         401: {"model": ErrorDetail},
         404: {"model": ErrorDetail},
-        409: {"model": ErrorDetail},
+        409: {
+            "model": ErrorDetail,
+            "description": f'The job is a non-terminal sync, which cannot be cancelled (body {{"detail": "{_SYNC_JOB_NOT_CANCELLABLE_DETAIL}"}})',
+        },
         500: {
             "model": ErrorDetail,
             "description": (
@@ -822,12 +826,9 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status in _TERMINAL_STATUSES:
         return JobResponse(**job_to_dict(job))
+    if isinstance(job, SyncJob):
+        return JSONResponse({"detail": _SYNC_JOB_NOT_CANCELLABLE_DETAIL}, status_code=409)
     if job.status in _ACTIVE_STATUSES:
-        if job_id == getattr(request.app.state, "_startup_sync_job_id", None):
-            return JSONResponse(
-                {"detail": _STARTUP_SYNC_JOB_NOT_CANCELLABLE_DETAIL},
-                status_code=409,
-            )
         # Use transition() to avoid TOCTOU race: only updates if still active
         try:
             updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)

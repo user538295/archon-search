@@ -516,7 +516,7 @@ _RUNNING_CREATES = [
         lambda s: s.create_migration("c", MigrationKind.REWRITE, True, status=JobStatus.RUNNING), id="create_migration"
     ),
     pytest.param(lambda s: s.create_community_rebuild("c"), id="create_community_rebuild"),
-    pytest.param(lambda s: s.create_sync(status=JobStatus.RUNNING), id="create_sync"),
+    pytest.param(lambda s: s.create_sync(), id="create_sync"),
     pytest.param(lambda s: s.create_metadata_reindex("c"), id="create_metadata_reindex"),
 ]
 

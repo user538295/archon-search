@@ -230,7 +230,12 @@ export class ArchonClient {
   // active jobs (PENDING/RUNNING) or jobs already in CANCELLING, the
   // server returns 202 with a JobResponse whose status is `CANCELLING` —
   // cancellation has only been *requested*, not confirmed. Poll the job
-  // via getJob() (or waitForJob()) until it reaches CANCELLED.
+  // via getJob() (or waitForJob()) until it reaches CANCELLED. A
+  // non-terminal sync job (kind "sync") cannot be cancelled: the server
+  // answers 409 {"detail": "a sync cannot be cancelled"}, which request()
+  // throws as an ArchonError — wait for the sync with waitForJob() instead
+  // (a legacy QUEUED/PENDING sync row never runs: the next POST /sync
+  // marks it FAILED).
   cancelJob(jobId: string): Promise<JobResponse> {
     return this.request(`/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
   }

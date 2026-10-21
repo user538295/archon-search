@@ -41,6 +41,9 @@ from archon_search.paths import GRAPH_NER_MODEL_NAME, GRAPH_NER_MODEL_REVISION
 _GRAPH_MODEL_SEGMENT = f"{GRAPH_NER_MODEL_NAME.replace('/', '--')}-{GRAPH_NER_MODEL_REVISION}"
 _SHARED_GRAPH_MODEL_CACHE = Path.home() / ".archon-search" / "models" / "graph" / _GRAPH_MODEL_SEGMENT
 
+#: File name of the ``make_real_app`` job store, under the test's ``tmp_path``.
+JOBS_FILE_NAME = "jobs.json"
+
 
 def _reuse_shared_graph_model_cache(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Symlink the pre-downloaded GLiNER checkpoint into a graph-enabled test's
@@ -90,6 +93,7 @@ def make_real_app(
     toml_content: str | None = None,
     graph_enabled: bool = False,
     openai_shim_enabled: bool = False,
+    raise_server_exceptions: bool = True,
 ) -> Iterator[tuple[TestClient, Any, str]]:
     """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
 
@@ -114,6 +118,8 @@ def make_real_app(
     Pass ``graph_enabled=True`` to enable the graph feature (``config.graph.enabled=True``).
     Callers must patch gliner in sys.modules BEFORE entering the context manager (create_app
     calls _check_graph_deps which imports gliner synchronously).
+    Pass ``raise_server_exceptions=False`` to receive an unhandled route exception as a 500
+    response instead of having the TestClient re-raise it.
     The TestClient lifespan (startup + shutdown) is managed by the context block.
     """
     import secrets
@@ -182,7 +188,7 @@ def make_real_app(
     if openai_shim_enabled:
         cfg.openai_shim.enabled = True
 
-    job_store = JobStore(path=tmp_path / "jobs.json")
+    job_store = JobStore(path=tmp_path / JOBS_FILE_NAME)
     scheduler = JobScheduler(
         store=job_store,
         max_concurrent=cfg.jobs.max_concurrent_bulk,
@@ -190,7 +196,7 @@ def make_real_app(
     )
 
     app = create_app(cfg, job_store, scheduler=scheduler)
-    with TestClient(app) as client:
+    with TestClient(app, raise_server_exceptions=raise_server_exceptions) as client:
         _await_startup_sync(app)
         yield client, cfg, api_key
 

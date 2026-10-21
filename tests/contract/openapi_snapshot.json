@@ -6084,7 +6084,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "The job is a non-terminal sync, which cannot be cancelled (body {\"detail\": \"a sync cannot be cancelled\"})"
           },
           "422": {
             "content": {
@@ -6731,7 +6731,7 @@
     },
     "/sync": {
       "post": {
-        "description": "Enqueue an async full-collection sync \u2014 CSP120 BE-3.\n\nSyncs ALL server-configured collections (pinned_collections + collections)\nvia ``SearchCollectionSync.sync()``. No request body needed (C2).\n\nReturns:\n- 202: JobResponse-shaped body with status RUNNING.\n- 401: Missing or invalid Bearer token.\n- 409: A sync is already in progress.",
+        "description": "Start an async full-collection sync \u2014 CSP120 BE-3.\n\nSyncs ALL server-configured collections (pinned_collections + collections)\nvia ``SearchCollectionSync.sync()``. No request body needed (C2).\n\nReturns:\n- 202: JobResponse-shaped body with status RUNNING.\n- 401: Missing or invalid Bearer token.\n- 409: A sync is already in progress.\n- 500: The job could not be saved or its task could not be started\n  (sanitized ``{\"detail\": \"internal error\"}``); a retry is accepted (no 409).",
         "operationId": "trigger_sync_sync_post",
         "responses": {
           "202": {
@@ -6763,6 +6763,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Creating or starting the sync job failed (body {\"detail\": \"internal error\"})"
           }
         },
         "security": [

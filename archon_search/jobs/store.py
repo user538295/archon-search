@@ -305,17 +305,15 @@ class JobStore:
         )
         return self.create_job(job)
 
-    def create_sync(
-        self,
-        namespace: str = DEFAULT_NAMESPACE,
-        *,
-        status: JobStatus = JobStatus.QUEUED,
-    ) -> SyncJob:
-        """Create a SyncJob with *status* and persist it."""
+    def create_sync(self, namespace: str = DEFAULT_NAMESPACE) -> SyncJob:
+        """Create a SyncJob directly RUNNING (one write) and persist it.
+
+        Its caller runs the task itself and nothing schedules this kind, so a QUEUED one would never run.
+        """
         now = _now_iso()
         job = SyncJob(
             job_id=str(uuid.uuid4()),
-            status=status,
+            status=JobStatus.RUNNING,
             created_at=now,
             updated_at=now,
             namespace=namespace,

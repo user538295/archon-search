@@ -136,7 +136,7 @@ def _start_startup_sync_job(job_store: JobStore) -> str | None:
     false crash signal for the crash-loop guard although no sync was marked.
     """
     try:
-        job = job_store.create_sync(namespace=DEFAULT_NAMESPACE, status=JobStatus.RUNNING)
+        job = job_store.create_sync(namespace=DEFAULT_NAMESPACE)
     except Exception:
         logger.warning(
             "startup sync: could not record a job; running unmarked (a crash during "
@@ -187,7 +187,6 @@ async def _run_startup_sync(
     job_id: str | None = None
     try:
         job_id = _start_startup_sync_job(job_store)
-        app_state._startup_sync_job_id = job_id
         # A wedged/oversized sync must not leave /ready gated at 503 for the
         # process lifetime — see _STARTUP_SYNC_TIMEOUT_SECONDS.
         async with asyncio.timeout(_STARTUP_SYNC_TIMEOUT_SECONDS):
@@ -1013,15 +1012,6 @@ def create_app(
     # Set to a Task by the lifespan only when at least one collection is configured;
     # the None default keeps the attribute readable on every path.
     app.state._startup_sync_task = None
-    # job_id of the SyncJob that backs the startup sync (set inside
-    # _run_startup_sync, right after _start_startup_sync_job succeeds); used by
-    # DELETE /jobs/{id} to refuse to cancel it (routes_jobs.py) — cancelling
-    # would only move the row to CANCELLING, which is a crash status
-    # (jobs/store.py _CRASH_STATUSES), so an operator's cancel would silently
-    # arm the crash-loop guard on the next boot instead of actually stopping
-    # anything. None means either no startup sync ran or the job store write
-    # failed (running unmarked).
-    app.state._startup_sync_job_id = None
     # Set to True by _run_startup_sync when the sync crashed (except branch) or
     # completed with per-collection errors (result.errors non-empty); the False
     # default keeps the attribute readable on every path.
