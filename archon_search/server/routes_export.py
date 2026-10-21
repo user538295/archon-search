@@ -29,6 +29,7 @@ from pydantic import BaseModel, field_validator
 from archon_search._path_safety import PathUnsafeError, validate_archive_members, validate_export_path
 from archon_search._types import ChunkRecord
 from archon_search.config import SearchConfig
+from archon_search.constants import IMPORTED_CHUNK_METADATA_KEY, IMPORTED_CHUNK_METADATA_VALUE
 from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderCache, EmbedderNotReadyError
 from archon_search.jobs.export_archive import (
     EXPORT_SCHEMA_VERSION,
@@ -46,7 +47,7 @@ from archon_search.paths import get_data_dir
 from archon_search.pipeline import SearchPipeline
 from archon_search.server._job_warmup import await_models_warm
 from archon_search.server.schemas import ErrorDetail, JobResponse
-from archon_search.store import SearchStore, normalize_ingested_by, validate_chunk_record
+from archon_search.store import META_MAX_FIELDS, SearchStore, normalize_ingested_by, validate_chunk_record
 from archon_search.types import ExportJob, ImportJob, IngestJob, JobStatus
 
 logger = logging.getLogger(__name__)
@@ -350,11 +351,17 @@ def _decode_vector(doc: dict[str, Any], line_number: int, embedding_dim: int | N
 def _decode_chunk(doc: dict[str, Any], line_number: int, *, embedding_dim: int | None = None) -> ChunkRecord:
     """Decode one archived *doc* into a ``ChunkRecord`` that ``SearchStore.ingest_chunks`` accepts.
 
+    The single choke point of every imported chunk, so it stamps the imported marker
+    (``IMPORTED_CHUNK_METADATA_KEY``) onto the archived metadata: the archived ``source_path`` names a file on the
+    exporting host, which the maintenance orphan sweep must not take for a deleted local file.
+
     Raises:
         ArchiveRejectedError: naming *line_number* when the vector does not decode (see ``_decode_vector``), or
             when a required field is missing or wrongly typed — every value ``validate_chunk_record`` refuses,
             and every non-str or not UTF-8-encodable value in a string column (see ``_archived_optional_str``)
-            included; a decode error is chained as its cause.
+            included; a decode error is chained as its cause. Also, with its own message and no cause, when the
+            imported marker is what tips the archived metadata over ``META_MAX_FIELDS``: it lacks the marker and
+            already has exactly that many fields.
         _VectorDimensionError: when, given *embedding_dim*, the vector has another length.
     """
     floats = _decode_vector(doc, line_number, embedding_dim)
@@ -372,7 +379,8 @@ def _decode_chunk(doc: dict[str, Any], line_number: int, *, embedding_dim: int |
             indexed_at=_archived_required_str(doc, "indexed_at"),
             file_type=_archived_optional_str(doc, "file_type") or "",
             language=_archived_optional_str(doc, "language") or "",
-            metadata=raw_meta,
+            # Non-object metadata raises TypeError here (caught below).
+            metadata={**raw_meta, IMPORTED_CHUNK_METADATA_KEY: IMPORTED_CHUNK_METADATA_VALUE},
             acl=_archived_optional_str_list(doc, "acl"),
             custom_score=doc.get("custom_score"),
             # Older exports wrote "" for a null column; legacy / unknown values normalize as on every read.
@@ -385,9 +393,19 @@ def _decode_chunk(doc: dict[str, Any], line_number: int, *, embedding_dim: int |
             acl_sidecar_path=_archived_optional_str(doc, "acl_sidecar_path"),
             acl_warning=_archived_optional_str_list(doc, "acl_warning") or [],
         )
+        # The marker is a metadata field like any other, so an archived metadata at the cap without it leaves it no
+        # room. Metadata over the cap on its own falls through to validate_chunk_record's generic refusal.
+        if IMPORTED_CHUNK_METADATA_KEY not in raw_meta and len(raw_meta) == META_MAX_FIELDS:
+            raise ArchiveRejectedError(
+                f"malformed doc at line {line_number}: metadata has no room for the `{IMPORTED_CHUNK_METADATA_KEY}` "
+                f"marker (at most {META_MAX_FIELDS} fields)"
+            )
         # ingest_chunks' own per-chunk checks, made here so it never rejects a decoded doc's whole batch and
         # on_error="skip" can skip this one doc.
         validate_chunk_record(chunk)
+    # The refusal raised just above: an ArchiveRejectedError is a ValueError, which the clause below would rewrite.
+    except ArchiveRejectedError:
+        raise
     # KeyError: a required field is absent; TypeError: a wrongly typed field; ValueError: malformed metadata JSON, a
     # lone surrogate in a string (UnicodeEncodeError) or a value validate_chunk_record refuses; OverflowError: a
     # custom_score int too large for a float or an expires_at before year 1 in UTC; RecursionError: metadata JSON

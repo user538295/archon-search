@@ -24,14 +24,20 @@ import pytest
 from archon_search._types import ChunkRecord
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
-from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.constants import (
+    DEFAULT_NAMESPACE,
+    IMPORTED_CHUNK_METADATA_KEY,
+    IMPORTED_CHUNK_METADATA_VALUE,
+    INLINE_CHUNK_METADATA_KEY,
+    INLINE_CHUNK_METADATA_VALUE,
+)
 from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderNotReadyError
-from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION, quote_archive_value
+from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION, ArchiveRejectedError, quote_archive_value
 from archon_search.jobs.store import JobStore
 from archon_search.server import _job_warmup
-from archon_search.server.routes_export import IMPORT_FAILED_DETAIL, _export_task, _import_task
+from archon_search.server.routes_export import IMPORT_FAILED_DETAIL, _decode_chunk, _export_task, _import_task
 from archon_search.server.routes_jobs import _ACTIVE_STATUSES
-from archon_search.store import _META_MAX_VAL_LEN, SearchStore
+from archon_search.store import _META_MAX_VAL_LEN, META_MAX_FIELDS, SearchStore
 from archon_search.types import ImportJob, JobStatus
 from tests.test_store import _EXPIRES_AT_BEFORE_UTC_YEAR_1, _FLOAT_OVERFLOW_DIGITS
 
@@ -43,6 +49,9 @@ _DIM = 4
 _DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
 #: ``doc_overrides`` value that removes the field from the archived document.
 _DROP = object()
+#: The metadata ``_decode_chunk`` adds to every imported chunk: its source_path names a file on the exporting host.
+_IMPORTED_MARKER = {IMPORTED_CHUNK_METADATA_KEY: IMPORTED_CHUNK_METADATA_VALUE}
+_INLINE_MARKER = {INLINE_CHUNK_METADATA_KEY: INLINE_CHUNK_METADATA_VALUE}
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +77,25 @@ def _chunk(doc_id: str, idx: int, text: str = "hello world") -> ChunkRecord:
 def _encode_vector(floats: list[float]) -> str:
     packed = struct.pack(f"<{len(floats)}f", *floats)
     return base64.standard_b64encode(packed).decode("ascii")
+
+
+def _archived_doc(chunk: ChunkRecord) -> dict[str, Any]:
+    """*chunk* as one ``documents.jsonl`` document of an export archive."""
+    return {
+        "doc_id": chunk.doc_id,
+        "chunk_id": chunk.chunk_id,
+        "text": chunk.text,
+        "vector": _encode_vector(chunk.vector),
+        "source_path": chunk.source_path,
+        "indexed_at": chunk.indexed_at,
+        "file_type": chunk.file_type,
+        "language": chunk.language,
+        "metadata": chunk.metadata,
+        "acl": chunk.acl,
+        "custom_score": chunk.custom_score,
+        "ingested_by": chunk.ingested_by,
+        "updated_at": chunk.updated_at,
+    }
 
 
 def _make_archive(
@@ -100,21 +128,7 @@ def _make_archive(
             if _corrupt_at is not None and i == _corrupt_at:
                 f.write(b"NOT_JSON\n")
             else:
-                doc = {
-                    "doc_id": chunk.doc_id,
-                    "chunk_id": chunk.chunk_id,
-                    "text": chunk.text,
-                    "vector": _encode_vector(chunk.vector),
-                    "source_path": chunk.source_path,
-                    "indexed_at": chunk.indexed_at,
-                    "file_type": chunk.file_type,
-                    "language": chunk.language,
-                    "metadata": chunk.metadata,
-                    "acl": chunk.acl,
-                    "custom_score": chunk.custom_score,
-                    "ingested_by": chunk.ingested_by,
-                    "updated_at": chunk.updated_at,
-                }
+                doc = _archived_doc(chunk)
                 for field, value in (doc_overrides or {}).get(i, {}).items():
                     if value is _DROP:
                         doc.pop(field)
@@ -242,7 +256,7 @@ async def test_import_task_roundtrip(
     mock_pipeline: MagicMock,
     mock_embedder_cache: MagicMock,
 ) -> None:
-    """Export a seeded collection, import into a new collection: DONE, every row stored as it was exported.
+    """Export a seeded collection, import into a new collection: DONE, every row stored as exported, marked imported.
 
     The seeded rows carry metadata, expires_at and custom_score, which the archive encodes differently from the
     row (a JSON string, a timestamp string, a float32 widened to a float) and the import must store back as-is.
@@ -289,7 +303,47 @@ async def test_import_task_roundtrip(
     assert {row["metadata"] for row in exported_rows.values()} == {json.dumps(c.metadata) for c in seeded}, (
         "the source rows must carry the seeded metadata, or the comparison below proves nothing"
     )
-    assert await _rows_by_chunk(tmp_search_store, dst_col) == exported_rows
+    # Every row as exported, its metadata plus the marker of an imported chunk.
+    assert await _rows_by_chunk(tmp_search_store, dst_col) == {
+        chunk_id: {**row, "metadata": json.dumps({**json.loads(row["metadata"]), **_IMPORTED_MARKER})}
+        for chunk_id, row in exported_rows.items()
+    }
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_export_of_imported_collection_keeps_imported_marker(
+    tmp_path: Path,
+    tmp_job_store: JobStore,
+    tmp_search_store: SearchStore,
+    search_config: SearchConfig,
+    mock_pipeline: MagicMock,
+    mock_embedder_cache: MagicMock,
+) -> None:
+    """Exporting an imported collection archives every chunk's ``_imported`` marker beside its other metadata."""
+    src_col = "reexport-src"
+    dst_col = "reexport-dst"
+    search_config.embedding_model = ""
+    seeded = [dataclasses.replace(_chunk(_doc_id(), 0), metadata={"team": "a"})]
+    await search_store_seed_partial(tmp_search_store, src_col, seeded)
+
+    async def export(collection: str) -> Path:
+        archive_path = tmp_path / "exports" / f"{collection}.tar.gz"
+        tmp_file = tmp_path / "exports" / f".{collection}.jsonl.tmp"
+        job = tmp_job_store.create_export(collection=collection, output_path=str(archive_path), tmp_path=str(tmp_file))
+        await _export_task(job, tmp_job_store, tmp_search_store, search_config)
+        assert tmp_job_store.get(job.job_id).status == JobStatus.DONE
+        return archive_path
+
+    import_job = _make_import_job(dst_col, str(await export(src_col)), tmp_job_store)
+    await _import_task(import_job, tmp_job_store, tmp_search_store, mock_pipeline, mock_embedder_cache, search_config)
+    assert tmp_job_store.get(import_job.job_id).status == JobStatus.DONE
+
+    with tarfile.open(await export(dst_col), "r:gz") as tf:
+        member = tf.extractfile("documents.jsonl")
+        assert member is not None
+        archived = [json.loads(line)["metadata"] for line in member.read().decode().splitlines() if line]
+    assert [json.loads(m) if isinstance(m, str) else m for m in archived] == [{"team": "a", **_IMPORTED_MARKER}]
 
 
 #: A custom_score that float32 stores exactly, so the roundtrip compares it exactly.
@@ -490,15 +544,18 @@ _MALFORMED_FIELD_VALUES_FAIL_MODE = [
 ]
 #: Archived values ingest_chunks stores, so the import must too (field, archived value, stored column value).
 _ACCEPTED_FIELD_VALUES = [
-    pytest.param("metadata", {"team": "a"}, '{"team": "a"}', id="metadata-object"),
-    pytest.param("metadata", '{"team": "a"}', '{"team": "a"}', id="metadata-json-string"),
+    pytest.param("metadata", {"team": "a"}, '{"team": "a", "_imported": "true"}', id="metadata-object"),
+    pytest.param("metadata", '{"team": "a"}', '{"team": "a", "_imported": "true"}', id="metadata-json-string"),
     pytest.param("expires_at", "2030-01-02T03:04:05Z", "2030-01-02T03:04:05.000000Z", id="expires_at-iso"),
     pytest.param("custom_score", 0.25, 0.25, id="custom_score-float"),
     pytest.param("custom_score", "0.25", 0.25, id="custom_score-numeric-str"),
     # A null string field was stored as null before the importer checked types, and still is.
     pytest.param("text", None, None, id="text-null"),
     # json.dumps escapes a lone surrogate, so unlike a string column the metadata column stores it.
-    pytest.param("metadata", {"k": _LONE_SURROGATE}, '{"k": "a\\ud800b"}', id="metadata-lone-surrogate-value"),
+    pytest.param(
+        "metadata", {"k": _LONE_SURROGATE}, '{"k": "a\\ud800b", "_imported": "true"}',
+        id="metadata-lone-surrogate-value",
+    ),
 ]
 
 
@@ -624,11 +681,11 @@ async def test_import_normalizes_ingested_by(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_import_reads_empty_string_metadata_as_no_metadata(
+async def test_import_reads_empty_string_metadata_as_only_the_imported_marker(
     tmp_path: Path,
     import_runner: _ImportRunner,
 ) -> None:
-    """An archived metadata of "" (not JSON) imports as empty metadata instead of a malformed doc."""
+    """An archived metadata of "" (not JSON) imports as no metadata but the imported marker, not a malformed doc."""
     col = "import-empty-metadata"
     archive_path = tmp_path / "import-empty-metadata.tar.gz"
     _make_archive(archive_path, col, [_chunk(_doc_id(), 0)], doc_overrides={0: {"metadata": ""}})
@@ -637,7 +694,154 @@ async def test_import_reads_empty_string_metadata_as_no_metadata(
 
     assert finished.status == JobStatus.DONE, f"Expected DONE, got {finished.status}: {finished.error}"
     [row] = [r async for r in import_runner.search_store.list_chunks_raw(col, DEFAULT_NAMESPACE)]
-    assert row["metadata"] == "{}"
+    assert json.loads(row["metadata"]) == _IMPORTED_MARKER
+
+
+@pytest.mark.parametrize(
+    ("archived", "decoded"),
+    [
+        pytest.param({"team": "a"}, {"team": "a", **_IMPORTED_MARKER}, id="object"),
+        pytest.param('{"team": "a"}', {"team": "a", **_IMPORTED_MARKER}, id="json-string"),
+        pytest.param(_DROP, _IMPORTED_MARKER, id="absent"),
+        pytest.param("", _IMPORTED_MARKER, id="empty-string"),
+        pytest.param({}, _IMPORTED_MARKER, id="empty-object"),
+        pytest.param(_INLINE_MARKER, {**_INLINE_MARKER, **_IMPORTED_MARKER}, id="inline-ingested"),
+        # An export of a collection that was itself imported.
+        pytest.param(_IMPORTED_MARKER, _IMPORTED_MARKER, id="already-imported"),
+        pytest.param({IMPORTED_CHUNK_METADATA_KEY: "false"}, _IMPORTED_MARKER, id="other-marker-value"),
+    ],
+)
+def test_imported_chunk_keeps_archived_metadata_and_gains_imported_marker(
+    archived: object, decoded: dict[str, str]
+) -> None:
+    """Every decoded chunk carries the imported marker beside the archived metadata, which it keeps."""
+    doc = _archived_doc(_chunk(_doc_id(), 0))
+    if archived is _DROP:
+        doc.pop("metadata")
+    else:
+        doc["metadata"] = archived
+
+    assert _decode_chunk(doc, 1).metadata == decoded
+
+
+def _archived_metadata_fields(count: int) -> dict[str, str]:
+    """*count* distinct caller metadata fields, none of them a system marker."""
+    return {f"key{i}": "value" for i in range(count)}
+
+
+def _no_room_for_imported_marker(line_number: int) -> str:
+    """The refusal of an archived doc whose metadata leaves no field for the imported marker."""
+    return (
+        f"malformed doc at line {line_number}: metadata has no room for the `_imported` marker "
+        f"(at most {META_MAX_FIELDS} fields)"
+    )
+
+
+@pytest.mark.parametrize(
+    "archived",
+    [
+        pytest.param(_archived_metadata_fields(META_MAX_FIELDS - 1), id="one-field-below-the-limit"),
+        # Merging the marker replaces the archived value and adds no field.
+        pytest.param(
+            {**_archived_metadata_fields(META_MAX_FIELDS - 1), IMPORTED_CHUNK_METADATA_KEY: "false"},
+            id="at-the-limit-including-the-marker",
+        ),
+    ],
+)
+def test_import_accepts_archived_doc_with_room_for_the_imported_marker(archived: dict[str, str]) -> None:
+    """The marker fits within the field limit: it fills the last field, valued "true"."""
+    doc = _archived_doc(_chunk(_doc_id(), 0))
+    doc["metadata"] = archived
+
+    metadata = _decode_chunk(doc, 1).metadata
+
+    assert len(metadata) == META_MAX_FIELDS
+    assert metadata == {**archived, **_IMPORTED_MARKER}
+
+
+def test_import_refuses_archived_doc_whose_metadata_is_already_at_the_field_limit() -> None:
+    """The imported marker counts as a metadata field, so an archived doc already at the limit is refused.
+
+    No ingest path stores caller metadata, so only a hand-crafted archive reaches the limit. The refusal is
+    the archive's own diagnosis, chained to no library error.
+    """
+    doc = _archived_doc(_chunk(_doc_id(), 0))
+    doc["metadata"] = _archived_metadata_fields(META_MAX_FIELDS)
+
+    with pytest.raises(ArchiveRejectedError) as excinfo:
+        _decode_chunk(doc, 1)
+
+    assert str(excinfo.value) == _no_room_for_imported_marker(1)
+    assert excinfo.value.__cause__ is None
+
+
+@pytest.mark.parametrize(
+    "archived",
+    [
+        pytest.param(_archived_metadata_fields(META_MAX_FIELDS + 1), id="over-the-limit-without-the-marker"),
+        pytest.param(
+            {**_archived_metadata_fields(META_MAX_FIELDS), IMPORTED_CHUNK_METADATA_KEY: "false"},
+            id="over-the-limit-including-the-marker",
+        ),
+    ],
+)
+def test_import_refuses_archived_doc_over_the_field_limit_on_its_own_with_the_generic_message(
+    archived: dict[str, str],
+) -> None:
+    """Archived metadata already over the limit without the marker's help gets the generic refusal, not the marker's.
+
+    The marker-specific message is accurate only when the marker is the field that tips the metadata over the limit.
+    """
+    doc = _archived_doc(_chunk(_doc_id(), 0))
+    doc["metadata"] = archived
+
+    with pytest.raises(ArchiveRejectedError) as excinfo:
+        _decode_chunk(doc, 1)
+
+    assert str(excinfo.value) == "malformed doc at line 1: a required field is missing or has the wrong type"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_fail_mode_fails_job_on_archived_doc_without_room_for_imported_marker(
+    tmp_path: Path,
+    tmp_job_store: JobStore,
+    tmp_search_store: SearchStore,
+    search_config: SearchConfig,
+    mock_pipeline: MagicMock,
+    mock_embedder_cache: MagicMock,
+) -> None:
+    """With on_error='fail' a doc whose metadata is at the field limit fails the job, naming line and limit."""
+    finished = await _run_failing_import(
+        tmp_path, "full-metadata-fail", tmp_job_store, tmp_search_store, mock_pipeline, mock_embedder_cache,
+        search_config, doc_overrides={_BAD_FIELD_INDEX: {"metadata": _archived_metadata_fields(META_MAX_FIELDS)}},
+    )
+
+    assert finished.error == _no_room_for_imported_marker(_BAD_FIELD_INDEX + 1)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_skip_mode_skips_archived_doc_without_room_for_imported_marker(
+    tmp_path: Path,
+    import_runner: _ImportRunner,
+) -> None:
+    """With on_error='skip' only the doc whose metadata is at the field limit is skipped; the others import."""
+    col = "full-metadata-skip"
+    chunks = [_chunk(_doc_id(), i) for i in range(3)]
+    archive_path = tmp_path / f"{col}.tar.gz"
+    _make_archive(
+        archive_path, col, chunks,
+        doc_overrides={_BAD_FIELD_INDEX: {"metadata": _archived_metadata_fields(META_MAX_FIELDS)}},
+    )
+
+    finished = await import_runner.run(_make_import_job(col, str(archive_path), import_runner.job_store, on_error="skip"))
+
+    assert finished.status == JobStatus.DONE, f"Expected DONE, got {finished.status}: {finished.error}"
+    assert (finished.result["imported"], finished.result["skipped"]) == (2, 1)
+    assert await import_runner.all_stored_chunk_ids(col) == sorted(
+        c.chunk_id for i, c in enumerate(chunks) if i != _BAD_FIELD_INDEX
+    )
 
 
 @pytest.mark.integration

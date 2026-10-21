@@ -24,6 +24,7 @@ import sys
 import time
 import types
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -309,6 +310,57 @@ def wait_for_job_done(client: TestClient, job_id: str, *, what: str, timeout_s: 
             return job
         time.sleep(_JOB_POLL_INTERVAL_S)
     pytest.fail(f"{what} job {job_id} did not reach a terminal status in {timeout_s}s")
+
+
+_MAINTENANCE_POLL_INTERVAL_S = 0.1
+#: Generous: a triggered pass sweeps every collection, and a loaded parallel run slows each one.
+_MAINTENANCE_WAIT_TIMEOUT_S = 30.0
+
+
+def _maintenance_block(client: TestClient, headers: dict[str, str]) -> dict[str, Any]:
+    """The ``maintenance`` block of GET /status (empty when the loop is absent)."""
+    status = client.get("/status", headers=headers)
+    assert status.status_code == 200, f"GET /status failed: {status.status_code} {status.text}"
+    return status.json().get("maintenance") or {}
+
+
+def _is_newer_run(run_at: str | None, previous_run_at: str | None) -> bool:
+    """Whether the pass that wrote *run_at* started after the one that wrote *previous_run_at*."""
+    if run_at is None:
+        return False
+    if previous_run_at is None:
+        return True
+    return datetime.fromisoformat(run_at) > datetime.fromisoformat(previous_run_at)
+
+
+def trigger_maintenance_and_wait_for_orphans(
+    client: TestClient, col: str, *, api_key: str, timeout_s: float = _MAINTENANCE_WAIT_TIMEOUT_S
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """POST /maintenance/trigger, then poll GET /status for a pass newer than the pre-trigger one.
+
+    The loop exposes no completion signal for a triggered pass, so the status surface it writes is polled
+    until ``maintenance.last_run_at`` moves past its pre-trigger value and *col* reports
+    ``orphans_removed_last_run`` > 0 — an earlier pass's health entry never satisfies the wait.
+    Returns *col*'s ``collection_health`` entry and the whole ``maintenance`` block; fails on timeout.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"}
+    previous_run_at = _maintenance_block(client, headers).get("last_run_at")
+    trigger = client.post("/maintenance/trigger", headers=headers)
+    assert trigger.status_code == 202, f"trigger failed: {trigger.status_code} {trigger.text}"
+    assert trigger.json().get("status") == "triggered", trigger.json()
+
+    deadline = time.monotonic() + timeout_s
+    maintenance_block: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        maintenance_block = _maintenance_block(client, headers)
+        if not _is_newer_run(maintenance_block.get("last_run_at"), previous_run_at):
+            time.sleep(_MAINTENANCE_POLL_INTERVAL_S)
+            continue
+        for entry in maintenance_block.get("collection_health", []):
+            if entry.get("collection") == col and entry.get("orphans_removed_last_run", 0) > 0:
+                return entry, maintenance_block
+        time.sleep(_MAINTENANCE_POLL_INTERVAL_S)
+    pytest.fail(f"no orphan removed from {col!r} within {timeout_s}s; last maintenance block: {maintenance_block}")
 
 
 def search(

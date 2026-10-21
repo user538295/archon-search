@@ -1,8 +1,8 @@
 **Purpose**: Define what to back up for `archon-search`, how to restore it, and which disaster scenarios the current code does and does not support — covering both the raw file-system snapshot path and the scheduled `.tar.gz` backup loop.
 **Audience**: SREs and sysadmins responsible for data durability of `archon-search`.
 **Status**: Draft
-**Last reviewed**: 2026-07-29
-**Next review**: 2027-07-29
+**Last reviewed**: 2026-10-20
+**Next review**: 2027-10-20
 
 # Backup, Restore, and Disaster Recovery
 
@@ -168,6 +168,8 @@ archon-search import <collection> /mnt/nfs/archon-search/backups/default/<collec
 ```
 
 Import ingests with checkpointing (resumable via `POST /jobs/{id}/resume`). The full export/import workflow, archive layout, and manifest fields are documented in [Export & import](../UserManual/90_export_import.md).
+
+A collection restored by import is exempt from maintenance orphan cleanup: every imported chunk carries the `_imported` metadata marker, so deleting one of its source files later does not make the orphan sweep remove that document. The marker ends per path once that path is re-ingested from disk on this host, resolves to the archived `doc_id` (typically a same-host restore) and yields chunks. Collection sync re-ingests only new or changed files while its recorded sync state (file mtimes in `.indexing_state.json`) survives and the collection's embedding model and chunk size are unchanged — otherwise it re-ingests every file (`archon_search/sync.py`, `_check_collection_changes`). So when that state survived the restore, an unchanged file needs an explicit `POST /ingest` of the path, or `POST /collections/{name}/reindex` when the collection has a configured source directory. Rows whose paths do not exist here stay until you delete them. See [Imported chunks and maintenance](../UserManual/90_export_import.md#imported-chunks-and-maintenance).
 
 ## Disaster scenarios
 

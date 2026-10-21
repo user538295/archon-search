@@ -402,7 +402,7 @@ num_queries = 2
 # fts_optimize = true
 #
 # Enable removal of orphaned chunks (chunks whose source_path no longer exists on disk).
-# URL-sourced chunks are skipped.
+# URL-sourced, inline-ingested and imported chunks are skipped.
 # orphan_cleanup = true
 #
 # Enable automatic re-enqueue of failed IngestJobs within the retry age and attempt limits.

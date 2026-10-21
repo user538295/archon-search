@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
-import hashlib
 import inspect
 import logging
 import math
@@ -50,6 +49,7 @@ from archon_search.store import (
     STORE_SCHEMA_VERSION,
     SearchStore,
     StoreBusyError,
+    doc_id_for_source_path,
     elementwise_sum,
     row_to_scored_candidate,
 )
@@ -211,18 +211,6 @@ _BINARY_EXTENSIONS = frozenset(
 # with `---` by coincidence and must not be parsed for front matter.
 _FRONT_MATTER_EXTENSIONS = frozenset({".md", ".txt", ".rst", ".html"})
 _MAX_LOCAL_EXPLAIN_COMMUNITY_CANDIDATES = 200
-
-
-def _doc_id_for(source_path: Path | str) -> str:
-    """Derive a document's ``doc_id`` from its source path.
-
-    Single source for the derivation every writer and deleter shares — ``ingest_file``,
-    ``ingest_documents`` and ``delete_by_source_path`` (and sync/watcher/maintenance
-    through it). The path is resolved first, non-strictly: a path that does not exist
-    normalizes fine, and two spellings of the same document must not produce two
-    doc_ids, or the chunks one writes become chunks the other can never delete.
-    """
-    return hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
 
 
 def _fuse_rag_fusion_results(
@@ -526,7 +514,7 @@ class SearchPipeline:
         chunk_ttl_seconds: int | None = None,
         chunk_scopes: list[str] | None = None,
     ) -> IngestResult:
-        doc_id = _doc_id_for(path)
+        doc_id = doc_id_for_source_path(path)
 
         # Skip .acl sidecar files — they are metadata, not indexable content
         if path.suffix == ".acl" or path.name.endswith(".acl"):
@@ -1255,7 +1243,7 @@ class SearchPipeline:
                 text,
                 path,
                 collection,
-                _doc_id_for(path),
+                doc_id_for_source_path(path),
                 rebuild_fts=False,
                 disk_backed=False,
                 embedder=embedder,
@@ -3699,7 +3687,8 @@ class SearchPipeline:
         skip_fts_optimize: bool = False,
     ) -> int:
         """Delete a source file and its graph rows (sync/watcher path)."""
-        doc_id = _doc_id_for(source_path)
+        # Offloaded: resolve() walks the path with blocking readlink/stat syscalls.
+        doc_id = await asyncio.to_thread(doc_id_for_source_path, source_path)
         deleted = await self.store.delete_document(
             collection, doc_id, namespace=namespace, skip_fts_optimize=skip_fts_optimize
         )

@@ -32,19 +32,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from archon_search._durable_io import atomic_write_json
-from archon_search.constants import (
-    INGEST_LOCK_TIMEOUT_S,
-    INLINE_CHUNK_METADATA_KEY,
-    INLINE_CHUNK_METADATA_VALUE,
-)
-from archon_search.store import FTSIndexNotFoundError, parse_metadata
+from archon_search.constants import INGEST_LOCK_TIMEOUT_S, NOT_DISK_INGESTED_CHUNK_MARKERS
+from archon_search.store import FTSIndexNotFoundError, doc_id_for_source_path, parse_metadata
 from archon_search.types import (
     IngestJob,
     JobStatus,
 )
 
 if TYPE_CHECKING:
-    from archon_search.community_builder import CommunityBuilder
     from archon_search.config import GraphConfig, MaintenanceConfig
     from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
     from archon_search.graph_store import GraphStore
@@ -76,6 +71,46 @@ _EMPTY_STATE: dict[str, Any] = {
     "last_graph_gc_at": None,
     "stale_mention_count": 0,
 }
+
+
+def _is_not_disk_ingested(chunk: dict[str, Any]) -> bool:
+    """Whether raw *chunk* carries a marker saying it was not ingested from a file on this host.
+
+    Inline-ingested (S293) and imported chunks: see ``NOT_DISK_INGESTED_CHUNK_MARKERS``.
+    """
+    metadata = parse_metadata(chunk.get("metadata") or "")
+    return any(metadata.get(key) == value for key, value in NOT_DISK_INGESTED_CHUNK_MARKERS.items())
+
+
+@dataclass(slots=True)
+class _SourcePathDocIds:
+    """The doc_ids of one source_path's chunks, split by whether the chunk was ingested from a file on this host."""
+
+    disk_ingested: set[str] = field(default_factory=set)
+    not_disk_ingested: set[str] = field(default_factory=set)
+
+
+async def _should_delete_orphan(source_path: str, doc_ids: _SourcePathDocIds) -> bool:
+    """Whether the sweep deletes *source_path*, whose file is missing.
+
+    ``delete_by_source_path`` removes only the doc_id it derives from the path. A path without a
+    marked chunk is deleted as always, and one without a disk-ingested chunk never is. With both,
+    the delete must hit a disk-ingested document and no marked one: otherwise it destroys an inline
+    or imported document, or removes nothing yet counts an orphan and triggers ``optimize_fts``.
+    The rule is doc_id-precise rather than skipping every path with a marked chunk: disk-ingested
+    rows under the locally derived doc_id at a marked path (e.g. a re-ingest on a host whose
+    resolve() differs from the exporting host's) would otherwise never be swept.
+
+    Raises whatever the doc_id derivation raises (``resolve()``: RuntimeError on a symlink loop,
+    ValueError on a NUL byte, OSError); the caller logs it per path.
+    """
+    if not doc_ids.not_disk_ingested:
+        return True
+    if not doc_ids.disk_ingested:
+        return False
+    # Offloaded: resolve() walks the path with blocking readlink/stat syscalls.
+    local_doc_id = await asyncio.to_thread(doc_id_for_source_path, source_path)
+    return local_doc_id in doc_ids.disk_ingested and local_doc_id not in doc_ids.not_disk_ingested
 
 
 @dataclass
@@ -249,18 +284,55 @@ class MaintenanceLoop:
         if hasattr(self, "_current_health"):
             self._current_health["fts_optimized_at"] = datetime.now(timezone.utc).isoformat()
 
+    async def _scan_source_paths(self, collection: str, namespace: str) -> dict[str, _SourcePathDocIds]:
+        """Map every local file ``source_path`` of the collection to its chunks' doc_ids.
+
+        Empty paths and URLs (http:// or https://), which are not on the local filesystem, are skipped.
+        """
+        source_paths: dict[str, _SourcePathDocIds] = defaultdict(_SourcePathDocIds)
+        async for chunk in self._search_store.list_chunks_raw(collection, namespace):
+            source_path: str = chunk.get("source_path", "") or ""
+            if not source_path:
+                continue
+
+            # Skip URLs — these are not on the local filesystem.
+            if source_path.startswith("http://") or source_path.startswith("https://"):
+                logger.debug(
+                    "MaintenanceLoop: skipping URL source_path for %s/%s: %s",
+                    namespace,
+                    collection,
+                    source_path,
+                )
+                continue
+
+            doc_ids = source_paths[source_path]
+            if _is_not_disk_ingested(chunk):
+                doc_ids.not_disk_ingested.add(chunk.get("doc_id", ""))
+            else:
+                doc_ids.disk_ingested.add(chunk.get("doc_id", ""))
+        return source_paths
+
     async def _run_orphan_cleanup(self, collection: str, namespace: str) -> None:
         """Orphan chunk cleanup for a single collection (BE-6).
 
         Algorithm:
         1. Iterate all chunks via ``store.list_chunks_raw(collection, namespace)``.
-        2. Group by unique ``source_path``, skipping URLs (http:// or https://),
-           empty paths, and inline-ingested chunks — those carry no backing file, so
-           "path missing" is their normal state, not a deletion (S293). (Handles
-           multi-chunk and multi-doc-id files.)
+        2. Group by unique ``source_path``, skipping URLs (http:// or https://) and
+           empty paths, collecting each path's doc_ids split by whether the chunk
+           carries a ``NOT_DISK_INGESTED_CHUNK_MARKERS`` marker — inline-ingested (S293)
+           or imported from an export archive, whose source_path names a file on the
+           exporting host. (Handles multi-chunk and multi-doc-id files.)
         3. For each unique file path that no longer exists on disk, call
            ``store.delete_by_source_path(source_path, skip_fts_optimize=True)``.
-           Errors on individual paths are logged as WARNING; the loop continues.
+           That deletes only the doc_id derived from the path, so a path with a marked
+           chunk is deleted only when that doc_id has disk-ingested chunks and no marked
+           one (``_should_delete_orphan``): a missing file is the normal
+           state of a marked document, not a deletion. Re-ingesting an imported path
+           from disk replaces the imported rows only when the path derives the archived
+           doc_id (typically a same-host restore); until then a same-host restore keeps
+           its imported rows even after the file is deleted.
+           Errors on individual paths (the existence check and the orphan decision's doc_id derivation included)
+           are logged as WARNING; the loop continues.
         4. After all deletions, acquire the per-collection lock and call
            ``store.optimize_fts(collection)`` once.
            On lock timeout (``asyncio.TimeoutError``): WARNING + skip FTS optimize.
@@ -281,53 +353,27 @@ class MaintenanceLoop:
         _ELAPSED_LIMIT_S: float = 60.0
         start = time.monotonic()
 
-        # Phase 1: collect all unique source_paths with their chunks.
-        source_paths_seen: set[str] = set()
-
-        async for chunk in self._search_store.list_chunks_raw(collection, namespace):
-            source_path: str = chunk.get("source_path", "") or ""
-            if not source_path:
-                continue
-
-            # Skip URLs — these are not on the local filesystem.
-            if source_path.startswith("http://") or source_path.startswith("https://"):
-                logger.debug(
-                    "MaintenanceLoop: skipping URL source_path for %s/%s: %s",
-                    namespace,
-                    collection,
-                    source_path,
-                )
-                continue
-
-            # S293: a document ingested inline (POST /ingest with a `documents`
-            # payload) has no backing file — its source_path is a logical identity.
-            # A missing file there is not a deleted file, it is the normal state.
-            if (
-                parse_metadata(chunk.get("metadata") or "").get(INLINE_CHUNK_METADATA_KEY)
-                == INLINE_CHUNK_METADATA_VALUE
-            ):
-                continue
-
-            source_paths_seen.add(source_path)
+        # Phase 1: collect all unique source_paths with their chunks' doc_ids.
+        source_paths = await self._scan_source_paths(collection, namespace)
 
         # Phase 2: identify orphans (paths that no longer exist on disk).
         # Sorted for deterministic deletion order.
         orphan_count = 0
-        for sp in sorted(source_paths_seen):
-            if not Path(sp).exists():
-                try:
+        for sp in sorted(source_paths):
+            try:
+                if not Path(sp).exists() and await _should_delete_orphan(sp, source_paths[sp]):
                     await self._search_store.delete_by_source_path(
                         collection, sp, namespace=namespace, skip_fts_optimize=True
                     )
                     orphan_count += 1
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "MaintenanceLoop: delete_by_source_path failed for %s in %s/%s: %s",
-                        sp,
-                        namespace,
-                        collection,
-                        exc,
-                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "MaintenanceLoop: orphan check or delete_by_source_path failed for %s in %s/%s: %s",
+                    sp,
+                    namespace,
+                    collection,
+                    exc,
+                )
 
         # Phase 3: post-deletion FTS optimize (only when at least one orphan was removed).
         if orphan_count > 0:
@@ -478,7 +524,7 @@ class MaintenanceLoop:
         stale_count = await self._graph_store.count_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
 
         # Phase 3: Prune stale mentions
-        pruned_count = await self._graph_store.prune_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
+        await self._graph_store.prune_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
 
         # Phase 4: Delete orphan nodes and edges
         gc_result = await self._graph_store.delete_orphan_nodes_and_edges(collection, ns=namespace)

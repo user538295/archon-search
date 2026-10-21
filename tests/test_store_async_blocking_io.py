@@ -1,15 +1,16 @@
 """Regression guards: async ``SearchStore`` methods must not do blocking FS I/O on the loop.
 
-Invariant guarded here — three ``async def`` methods in ``archon_search/store.py``
-must offload their blocking syscall (``asyncio.to_thread``) instead of running it
-inline on the event loop thread:
+Invariant guarded here — three ``async def`` methods in ``archon_search/store.py``,
+and ``SearchPipeline.delete_by_source_path`` (the sync/watcher delete path), must
+offload their blocking syscall (``asyncio.to_thread``) instead of running it inline
+on the event loop thread:
 
 - ``connect``               -> ``self._db_path.mkdir(parents=True, exist_ok=True)``
 - ``reindex_metadata``      -> ``Path(source_path).stat()``, memoized to one call
   per unique ``source_path``
-- ``delete_by_source_path`` -> ``Path(source_path).resolve()``
+- ``delete_by_source_path`` -> ``Path(source_path).resolve()`` (store and pipeline)
 
-Technique (identical for all three): the blocking ``pathlib`` method is
+Technique (identical for all): the blocking ``pathlib`` method is
 monkeypatched with a wrapper that simulates a slow disk via ``time.sleep`` and,
 while sleeping, samples a heartbeat counter incremented by a concurrently
 scheduled task. If the syscall runs inline on the loop thread the heartbeat
@@ -27,10 +28,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from archon_search._types import ChunkRecord
+from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.pipeline import SearchPipeline
 from archon_search.store import SearchStore
 
 _DIM = 4
@@ -218,4 +222,34 @@ async def test_delete_by_source_path_resolve_does_not_block_the_event_loop(
 
     assert captured["collection"] == "docs"
     assert captured["doc_id"] == hashlib.sha256(str(real_resolve(source)).encode()).hexdigest()
+    _assert_loop_was_free(probe, "resolve")
+
+
+@pytest.mark.asyncio
+async def test_pipeline_delete_by_source_path_resolve_does_not_block_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sync/watcher delete path derives the doc_id off the loop, like ``SearchStore.delete_by_source_path``."""
+    source = tmp_path / "doc.md"
+    store = AsyncMock()
+    store.delete_document = AsyncMock(return_value=0)
+    pipeline = SearchPipeline.__new__(SearchPipeline)
+    pipeline.store = store
+    pipeline._graph_store = None
+
+    probe = _LoopProbe()
+    real_resolve = Path.resolve
+
+    def slow_resolve(self: Path, *args: Any, **kwargs: Any) -> Path:
+        if self == source and probe.calls == 0:
+            probe.sample_around_blocking_sleep()
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", slow_resolve)
+    await _run_with_heartbeat(probe, pipeline.delete_by_source_path("docs", str(source)))
+
+    expected_doc_id = hashlib.sha256(str(real_resolve(source)).encode()).hexdigest()
+    store.delete_document.assert_awaited_once_with(
+        "docs", expected_doc_id, namespace=DEFAULT_NAMESPACE, skip_fts_optimize=False
+    )
     _assert_loop_was_free(probe, "resolve")

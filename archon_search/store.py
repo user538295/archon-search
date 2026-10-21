@@ -126,7 +126,7 @@ _LANCEDB_TOKENIZER_MAP: dict[str, str] = {
 # Must stay in sync with: dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 _FIXED_WIDTH_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 
-_META_MAX_FIELDS = 50
+META_MAX_FIELDS = 50
 _META_MAX_KEY_LEN = 256
 _META_MAX_VAL_LEN = 4096
 
@@ -241,13 +241,27 @@ def is_valid_chunk_id(chunk_id: object) -> bool:
     return isinstance(chunk_id, str) and _CHUNK_ID_RE.fullmatch(chunk_id) is not None
 
 
+def doc_id_for_source_path(source_path: Path | str) -> str:
+    """Derive a document's ``doc_id`` from its source path.
+
+    Contract: every code path that writes or deletes chunks by source path must derive the
+    doc_id here, never on its own. The path is resolved first, non-strictly: a path that does
+    not exist normalizes fine, and two spellings of the same document must not produce two
+    doc_ids, or the chunks one writes become chunks the other can never delete. Resolution
+    follows this host's symlinks, so the same string can map to different doc_ids on two hosts.
+    ``resolve()`` makes blocking readlink/stat syscalls: async callers should offload this call
+    (e.g. ``asyncio.to_thread``).
+    """
+    return hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
+
+
 def validate_metadata(metadata: dict[str, str]) -> None:
     """Validate metadata dict against size constraints.
 
     Raises ValueError if any constraint is violated.
     """
-    if len(metadata) > _META_MAX_FIELDS:
-        raise ValueError(f"metadata exceeds max {_META_MAX_FIELDS} fields (got {len(metadata)})")
+    if len(metadata) > META_MAX_FIELDS:
+        raise ValueError(f"metadata exceeds max {META_MAX_FIELDS} fields (got {len(metadata)})")
     for key, value in metadata.items():
         if not isinstance(key, str):
             raise ValueError(f"metadata key must be a string (got {type(key).__name__})")
@@ -2549,18 +2563,16 @@ class SearchStore:
     ) -> int:
         """Delete all chunks for a source file by computing its doc_id.
 
-        ``source_path`` must be an absolute, resolved path — the same form
-        produced by ``str(path.resolve())`` at ingest time.  Relative paths
-        will resolve against the current working directory at call time and
-        may not match the stored doc_id.
+        ``source_path`` is resolved by ``doc_id_for_source_path``, the same
+        derivation ingest uses; a relative path resolves against the current
+        working directory at call time.
 
         ``skip_fts_optimize`` is forwarded to ``delete_document``; pass
         ``True`` from batch callers (e.g. sync.py delete loop) to suppress
         per-file FTS maintenance in favour of a single batch-end call.
         """
         # Offloaded: resolve() walks the path with blocking readlink/stat syscalls.
-        resolved = await asyncio.to_thread(Path(source_path).resolve)
-        doc_id = hashlib.sha256(str(resolved).encode()).hexdigest()
+        doc_id = await asyncio.to_thread(doc_id_for_source_path, source_path)
         return await self.delete_document(
             collection, doc_id, namespace=namespace, skip_fts_optimize=skip_fts_optimize
         )

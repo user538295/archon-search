@@ -269,7 +269,8 @@ Add to `~/.archon-search/archon-search.toml`:
 [maintenance]
 interval_hours = 24        # run once per day
 fts_optimize = true        # optimize FTS indexes
-orphan_cleanup = true      # remove chunks whose source file is gone
+orphan_cleanup = true      # remove chunks whose source file is gone; URL, inline and imported chunks are exempt
+                           # (rules: OperatorGuide/50_maintenance_and_jobs.md#orphan-cleanup-rules)
 failed_ingest_retry = true # re-enqueue failed ingest jobs
 retry_max_attempts = 3
 retry_max_age_hours = 72
