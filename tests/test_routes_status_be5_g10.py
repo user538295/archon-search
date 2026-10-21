@@ -139,9 +139,7 @@ def test_status_openai_key_available_checks_openai_api_key(
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    stub_embedder = MagicMock()
     generator = HyDEGenerator(
-        embedder=stub_embedder,
         config=HyDEConfig(provider="openai"),
         provider=MagicMock(),  # stub provider so no ImportError
     )

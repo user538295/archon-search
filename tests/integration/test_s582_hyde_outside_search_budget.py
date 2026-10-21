@@ -1,9 +1,10 @@
 """S582 regression — HyDE generation is not bounded by the per-request search budget.
 
-``routes_search.search`` resolves HyDE (``resolve_hyde_vector``, routes_search.py:262)
-*before* it enters ``run_within_budget(..., timeout=_SEARCH_TIMEOUT_SECONDS)``
-(routes_search.py:283/298). ``hyde_may_embed`` only guards a cold *embedder*; nothing
-bounds the provider's HTTP call to the LLM. With ``[hyde] provider = "llama_cpp"``
+``routes_search.search`` resolves HyDE (``server/_hyde.RequestHyDE.resolve``) *before*
+it enters ``run_within_budget(..., timeout=_SEARCH_TIMEOUT_SECONDS)`` around the
+pipeline call. The ``embedder_warm`` gate only skips HyDE on a cold *embedder*; without
+``_hyde.resolve_hyde_within_budget`` nothing would bound the provider's HTTP call to
+the LLM. With ``[hyde] provider = "llama_cpp"``
 pointed at a llama-server that accepts the connection but never answers — a server
 still loading its model, the exact case ``llama_cpp_provider._post_chat_completion``
 documents — the request parks for the whole ``[hyde].timeout_seconds`` (unclamped by

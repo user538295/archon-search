@@ -30,7 +30,7 @@
     "synonym_bridge_recall_at_5": 0.5
   },
   "runtime_config_hash": "71d933f9eeed1406f18cb6026d4c0d72e7a4287654100dd20a9d4385a1226589",
-  "thresholds_hash": "5357853a997059a45b5cfc87c6cad5ea75bc378ead103aa94b6d8c74a4b11fc3",
+  "thresholds_hash": "a90f8d82230a20d99c1fd01b18bf46132101fec8654c26579ba6b4c25109fc41",
   "waiver_ids": {
     "code_defref_recall_at_5": "BE-10-code-defref-gate-above-baseline: floor=1.0 is intentionally above baseline=0.6667. The baseline measures the no-feature calibration run (regenerate.py, no lancedb_root \u2014 code-defref ingested through the plain stub pipeline, no DefRefExtractor). The gated test (test_eval_gate_code_defref_recall_at_5) passes lancedb_root, routing code-defref through a real GraphStore + DefRefExtractor + RealGraphExpander wired via _build_code_lane_ingest_pipeline, lifting recall from 0.6667 to 1.0. A regression that disables DefRefExtractor wiring reproduces 0.6667, failing the gate.",
     "graph_global_recall_at_5": "E2e-global-floor-below-stub-baseline: baseline=1.0 was measured via CommunityStoreStub hybrid fallback, not real Leiden community retrieval; real Leiden floor is 0.2 on the 5-query 2WikiMultiHopQA eval set",

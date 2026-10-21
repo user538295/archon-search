@@ -16,8 +16,6 @@ import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
     from archon_search.embedder import Embedder
     from archon_search.query_expansion_protocol import QueryExpansionProvider
 
@@ -28,26 +26,40 @@ from archon_search.uv_tool import extra_install_hint
 
 _logger = logging.getLogger(__name__)
 
+# Wire-safe pair for HyDEDependencyError. The exception message also carries the
+# install command for this interpreter (``extra_install_hint``), which describes the
+# server's own install — it is logged, never sent to the client.
+HYDE_DEPENDENCY_DETAIL = "Install archon-search[hyde] to use HyDE"
+HYDE_DEPENDENCY_CODE = "validation_error"
+
+
+class HyDEDependencyError(RuntimeError):
+    """Raised when HyDE is requested but its default provider package is not installed.
+
+    Install with: ``pip install 'archon-search[hyde]'``. Transports answer it with
+    :data:`HYDE_DEPENDENCY_DETAIL` / :data:`HYDE_DEPENDENCY_CODE`, never ``str(exc)``.
+    """
+
 
 class HyDEGenerator:
     """Generates hypothetical document embeddings for HyDE query expansion.
 
     Accepts any ``QueryExpansionProvider`` for text generation; the embedding
-    step stays inside this generator.  The default provider is
+    step stays inside this generator, on the embedder the caller passes to
+    ``generate()`` — the one serving the searched collection, so the hypothesis
+    lands in that collection's vector space.  The default provider is
     ``AnthropicQueryExpansionProvider`` (lazy-imported from
     ``archon_search.providers.anthropic_provider``).
 
     Callers that invoke ``generate()`` with a missing provider package receive
-    a ``RuntimeError``.
+    a ``HyDEDependencyError``.
     """
 
     def __init__(
         self,
-        embedder: "Embedder",
         config: HyDEConfig,
         provider: "QueryExpansionProvider | None" = None,
     ) -> None:
-        self._hyde_embedder = embedder
         self._config = config
 
         if provider is not None:
@@ -80,17 +92,21 @@ class HyDEGenerator:
         """Return ``True`` when the provider's required API key is set at call time (G10 BE-5 Root-2)."""
         return provider_key_available(self._config.provider)
 
-    async def generate(self, query: str) -> list[float] | None:
+    async def generate(self, query: str, *, embedder: "Embedder") -> list[float] | None:
         """Generate a hypothetical document embedding for the given query.
+
+        The hypothesis is embedded with *embedder*, which must be the embedder
+        serving the searched collection — any other model yields a vector in the
+        wrong space (or the wrong dimension).
 
         Returns a vector (list of floats) on success, or ``None`` on any failure
         (timeout, API error, rate limit, missing key, empty response).
 
         Raises:
-            RuntimeError: if the ``anthropic`` package is not installed.
+            HyDEDependencyError: if the ``anthropic`` package is not installed.
         """
         if not self._provider_available:
-            raise RuntimeError(f"Install archon-search[hyde] to use HyDE ({extra_install_hint('hyde')})")
+            raise HyDEDependencyError(f"{HYDE_DEPENDENCY_DETAIL} ({extra_install_hint('hyde')})")
 
         # Token bucket pre-flight (under lock).
         # Ollama, claude_cli, and llama_cpp are local/free paths with no API cap —
@@ -129,48 +145,4 @@ class HyDEGenerator:
 
         # Embed hypothesis and return vector
         # Hypothesis text is untrusted — never logged verbatim
-        return await self._hyde_embedder.embed_one(hypothesis_text)
-
-
-async def resolve_hyde_vector(
-    query: str,
-    hyde: bool,
-    generator: "HyDEGenerator | None",
-    config: HyDEConfig,
-    *,
-    may_embed: "Callable[[], Awaitable[bool]] | None" = None,
-) -> tuple[list[float] | None, bool]:
-    """Resolve a HyDE query vector.
-
-    Returns ``(hyde_vector, hyde_applied)``.
-
-    ``hyde_vector`` is ``None`` when:
-    - ``hyde`` is ``False``
-    - ``generator`` is ``None``
-    - ``config.enabled`` is ``False`` (operator kill switch)
-    - ``may_embed`` is supplied and reports ``False``
-    - generation fails for any reason
-
-    ``hyde_applied`` is ``True`` only when a non-None vector is returned.
-
-    *may_embed* is the caller's injection point for "can an embedding be
-    afforded right now?".  It is awaited only once the cheap guards above have
-    passed, so the default ``hyde=False`` request never pays for it.
-    """
-    if not hyde or generator is None or not config.enabled:
-        return (None, False)
-
-    # ``generator.generate`` ends in ``embed_one`` on the caller's embedder, and
-    # the search call sites resolve HyDE *before* the bounded warm-up that would
-    # build it — so with that embedder still building its ONNX model, generating
-    # here would burn the caller's whole budget on the build (S290, bounded by
-    # ``_search_budget.resolve_hyde_within_budget`` since S582).  Skipping reports
-    # ``hyde_applied=False``, which the caller already surfaces as the standard
-    # HyDE-failure warning.
-    if may_embed is not None and not await may_embed():
-        return (None, False)
-
-    vector = await generator.generate(query)
-    if vector is not None:
-        return (vector, True)
-    return (None, False)
+        return await embedder.embed_one(hypothesis_text)

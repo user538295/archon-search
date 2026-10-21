@@ -47,6 +47,23 @@ class StageRecorder:
 
     def __init__(self) -> None:
         self._timings: dict[str, list[float]] = {}
+        # (start, end) perf_counter() spans of paused_stage_recorder() blocks.
+        self._pauses: list[tuple[float, float]] = []
+
+    def record_pause(self, started_at: float, ended_at: float) -> None:
+        """Record a :func:`paused_stage_recorder` block's span (``perf_counter()`` values)."""
+        self._pauses.append((started_at, ended_at))
+
+    def record_total(self, started_at: float) -> None:
+        """Record ``total`` as the wall time since *started_at* (a ``perf_counter()`` value).
+
+        The part of every paused span that falls after *started_at* is subtracted, so a
+        paused block counts as if it had run outside the timed window; a pause that
+        ended before *started_at* takes nothing off.
+        """
+        now = time.perf_counter()
+        paused = sum(max(0.0, end - max(start, started_at)) for start, end in self._pauses)
+        self.record("total", (now - started_at - paused) * 1000.0)
 
     def record(self, name: str, elapsed_ms: float) -> None:
         if name not in self._timings:
@@ -80,6 +97,27 @@ def record_stage(name: str) -> Generator[None, None, None]:
         yield
     finally:
         recorder.record(name, (time.perf_counter() - t0) * 1000.0)
+
+
+@contextmanager
+def paused_stage_recorder() -> Generator[None, None, None]:
+    """Run a block that is not a retrieval stage off the bound recorder.
+
+    Nothing inside the block is recorded (HyDE's hypothesis ``embed`` included), and
+    its wall time is excluded from :meth:`StageRecorder.record_total`. A no-op when
+    no recorder is bound.
+    """
+    recorder = _stage_recorder.get()
+    if recorder is None:
+        yield
+        return
+    token = _stage_recorder.set(None)
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        _stage_recorder.reset(token)
+        recorder.record_pause(t0, time.perf_counter())
 
 
 @contextmanager

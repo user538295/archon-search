@@ -419,6 +419,11 @@ class SearchPipeline:
         """Inclusive upper bound on ``search_with_context``'s ``context_window``."""
         return self._context_window_max
 
+    @property
+    def global_embedder(self) -> Embedder:
+        """The pipeline's global embedder — the one the fan-outs embed the query with."""
+        return self._global_embedder
+
     async def warmup_models(
         self,
         embedder: Embedder | None = None,

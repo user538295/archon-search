@@ -35,6 +35,7 @@ from archon_search._types import ChunkRecord, SearchResult
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.pipeline import SearchPipeline, SearchPipelineResult, SearchWithContextResult
 from tests._mcp_tools import registered_tools
+from tests._hyde_stubs import hyde_enabled_config, stub_hyde_generator
 
 
 class _FakeApp:
@@ -266,10 +267,18 @@ async def test_search_with_context_returns_hyde_applied_false_by_default() -> No
 
 @pytest.mark.asyncio
 async def test_mcp_search_with_context_expansion_warning_on_hyde_failure() -> None:
-    """search_with_context returns expansion_warning='HyDE expansion failed' when resolve_hyde_vector returns (None, False) with hyde=True."""
-    with patch("archon_search.server.mcp.resolve_hyde_vector", new=AsyncMock(return_value=(None, False))):
-        result = await _call_tool(_make_pipeline(), collection="col", hyde=True)
+    """search_with_context returns expansion_warning='HyDE expansion failed' when HyDE generates no vector with hyde=True."""
+    generator = stub_hyde_generator(return_value=None)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
 
+        fake_app = mcp_module.create_app(
+            _make_pipeline(), "default", writer=None, config=hyde_enabled_config(),
+            hyde_generator=generator,
+        )
+        result = await fake_app.tools["search_with_context"](query="hello", collection="col", hyde=True)
+
+    generator.generate.assert_awaited_once()
     assert isinstance(result, dict)
     assert result.get("expansion_used") is False
     assert result.get("expansion_warning") == "HyDE expansion failed"
@@ -290,8 +299,14 @@ async def test_mcp_search_with_context_expansion_used_true_on_hyde_success() -> 
     import numpy as np
 
     fake_vector = np.ones(384, dtype=np.float32)
-    with patch("archon_search.server.mcp.resolve_hyde_vector", new=AsyncMock(return_value=(fake_vector, True))):
-        result = await _call_tool(_make_pipeline(), collection="col", hyde=True)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        fake_app = mcp_module.create_app(
+            _make_pipeline(), "default", writer=None, config=hyde_enabled_config(),
+            hyde_generator=stub_hyde_generator(return_value=fake_vector),
+        )
+        result = await fake_app.tools["search_with_context"](query="hello", collection="col", hyde=True)
 
     assert isinstance(result, dict)
     assert result.get("expansion_used") is True
@@ -346,16 +361,24 @@ def _passed_context_window(pipeline: MagicMock) -> int:
 )
 async def test_search_with_context_rejects_out_of_range_context_window(context_window: int) -> None:
     pipeline = _make_pipeline()
-    hyde_mock = AsyncMock(return_value=(None, False))
+    generator = stub_hyde_generator(return_value=None)
 
-    with patch("archon_search.server.mcp.resolve_hyde_vector", new=hyde_mock):
-        payload = await _call_tool(pipeline, context_window=context_window, hyde=True)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        fake_app = mcp_module.create_app(
+            pipeline, "default", writer=None, config=hyde_enabled_config(),
+            hyde_generator=generator,
+        )
+        payload = await fake_app.tools["search_with_context"](
+            query="hello", context_window=context_window, hyde=True
+        )
 
     assert payload == {
         "error": f"context_window must be in [0, {DEFAULT_CONTEXT_WINDOW_MAX}]; got {context_window}",
         "code": "validation_error",
     }
-    hyde_mock.assert_not_awaited()
+    generator.generate.assert_not_awaited()
     pipeline.get_collection_meta.assert_not_called()
     pipeline.search_with_context.assert_not_called()
 

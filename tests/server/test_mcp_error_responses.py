@@ -1,28 +1,15 @@
 """Tests for structured MCP error responses"""
 from __future__ import annotations
 
-import sys
-import types
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("mcp")
-
-# Stub fastmcp so mcp.py can be imported without the real package.
-if "fastmcp" not in sys.modules:
-    _fastmcp = types.ModuleType("fastmcp")
-    _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-    _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules["fastmcp"] = _fastmcp
-
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
-from archon_search._types import SearchResult
-from archon_search.pipeline import SearchPipelineResult
 
+pytestmark = pytest.mark.xdist_group("mcp")
 
 # ---------------------------------------------------------------------------
 # FastMCP stub
@@ -78,7 +65,8 @@ async def test_search_error_returns_structured_error() -> None:
     assert isinstance(result, dict)
     assert set(result.keys()) == {"error", "code"}
     assert result["code"] == "internal_error"
-    assert "boom" in result["error"]
+    # Sanitized: the exception text is logged, never echoed on the wire.
+    assert result["error"] == "search failed"
 
 
 @pytest.mark.asyncio

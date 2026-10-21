@@ -51,7 +51,7 @@ Status codes:
 - `422` — invalid selection (both/neither of `collection`/`collections`), fan-out over `max_fanout`, `top_k` over `top_k_max`, or an invalid model/parameter. A missing HyDE/RAG-Fusion provider package prevents startup entirely (see `160_troubleshooting.md`).
 - `503` — internal metadata lookup failed.
 - `500` — pipeline stage exception (embedder, store, or reranker raised).
-- `504` — pipeline call timed out (~30 s). The timer starts after a bounded model warm-up wait (`0.5 s` per model), and a model still cold after it degrades the request instead (no reranking, or FTS only — see Principle 1), so a cold model no longer causes this on the first search after a restart.
+- `504` — pipeline call timed out (~30 s; up to ~60 s with `hyde=true`, whose ~30 s HyDE cap runs before the search budget). The timer starts after a bounded model warm-up wait (`0.5 s` per model), and a model still cold after it degrades the request instead (no reranking, or FTS only — see Principle 1), so a cold model no longer causes this on the first search after a restart.
 
 ### `curl` example
 
@@ -112,7 +112,7 @@ Per-result `reranker_score`, on each `search` result and on the `result` object 
 - On the `search` tool, no reranker runs while the cross-encoder is still cold after the bounded 0.5 s warm-up wait.
 - On both tools, no reranker runs when `[database].reranker_model` is empty.
 - `search_with_context` has no warm-up bound — it waits for a cold cross-encoder instead.
-- The cold case normally ends once the background model build finishes. A reranker model that cannot load at all (a bad model name, a full disk) is retried on every request, so every `search` result keeps `reranker_score: null` until the cause is fixed, while any `search_with_context` call that has candidates to rerank returns `{"error": ..., "code": "internal_error"}` instead of results.
+- The cold case normally ends once the background model build finishes. A reranker model that cannot load at all (a bad model name, a full disk) is retried on every request, so every `search` result keeps `reranker_score: null` until the cause is fixed, while any `search_with_context` call that has candidates to rerank returns `{"error": "search failed", "code": "internal_error"}` instead of results (the cause is in the server log).
 - Operator runbook: [cold-start symptoms](../OperatorGuide/90_incident_runbook.md#search-returns-http-500--503--504) and [a model that fails to load](../OperatorGuide/90_incident_runbook.md#provider--model-validation-failing-ready-status).
 - The `search` tool takes no `rerank` input — reranking runs whenever a warm cross-encoder is available. To compare the ranking with and without it, call the `explain` tool with `rerank=false` on a single collection (it rejects `rerank=false` across several `collections`); see [`80_explain_and_debugging.md`](./80_explain_and_debugging.md).
 
@@ -186,7 +186,7 @@ curl -s -X POST http://127.0.0.1:8765/search \
 
 ## HyDE query expansion (C4)
 
-HyDE (Hypothetical Document Embeddings) improves recall for vocabulary-mismatch queries. When enabled, the server asks an LLM to write a short hypothetical answer passage, embeds that passage, and uses the resulting vector for ANN lookup instead of the raw query embedding.
+HyDE (Hypothetical Document Embeddings) improves recall for vocabulary-mismatch queries. When enabled, the server asks an LLM to write a short hypothetical answer passage, embeds that passage with the embedding model of the collection being searched (so HyDE also works on a collection pinned to its own model), and uses the resulting vector for ANN lookup instead of the raw query embedding.
 
 > **Privacy notice**: `hyde=true` sends the raw query to the configured LLM provider. With `provider = "anthropic"` (default), `"openai"`, or `"claude_cli"`, the query leaves the host (`claude_cli` goes to Anthropic via Claude Code's login) — do not enable in air-gapped deployments. With `provider = "ollama"` or `"llama_cpp"`, the query stays on-premise (zero-transmission). See `Documentation/ADRs/C4-hyde-external-llm-dependency.md`.
 
@@ -248,7 +248,7 @@ The response sets `hyde_applied: true` when HyDE was used, or `false` on fallbac
 
 ### Fallback behaviour
 
-HyDE never degrades availability. It falls back silently (`hyde_applied: false`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors; or the per-process rate limit is exhausted. On `/search` (REST and the MCP `search` tool) the whole expansion is additionally bounded by the server's ~30 s search budget (S582), so a provider that accepts the connection but never answers can no longer hold the request open for the full `timeout_seconds` — it falls back the same way. The one non-silent case is `[hyde] enabled = true` with the provider package uninstalled — the server refuses to start with a `ConfigError` naming the missing package (see `160_troubleshooting.md`). The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
+HyDE never degrades availability. It falls back silently (`hyde_applied: false`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors; or the per-process rate limit is exhausted. On every HyDE surface (REST `/search` and `/explain`, the MCP `search`, `search_with_context` and `explain` tools) the whole expansion is additionally capped at ~30 s (S582) — its own window, before the search budget starts, so a `/search` with `hyde=true` can take ~60 s before a `504` — and on `POST /search` and the MCP `search` tool it is skipped while the searched collection's embedding model is still loading, so a provider that accepts the connection but never answers can no longer hold the request open for the full `timeout_seconds` — it falls back the same way. Any `graph_mode` suppresses HyDE (no LLM call, `hyde_applied: false`, no warning): graph mode wins over HyDE, since most graph paths drop the hypothesis vector. The one non-silent case is `[hyde] enabled = true` with the provider package uninstalled — the server refuses to start with a `ConfigError` naming the missing package (see `160_troubleshooting.md`). The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
 
 ## RAG Fusion multi-query recall (C5)
 

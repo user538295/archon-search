@@ -7,8 +7,7 @@ the resolved embedder into the pipeline method.
 """
 from __future__ import annotations
 
-import sys
-import types
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,14 +17,10 @@ from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 
 pytestmark = pytest.mark.xdist_group("mcp")
 
-# ---------------------------------------------------------------------------
-# FastMCP stub
-# ---------------------------------------------------------------------------
-if "fastmcp" not in sys.modules:
-    _fastmcp = types.ModuleType("fastmcp")
-    _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-    _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules["fastmcp"] = _fastmcp
+# fastmcp is a core dependency: no module stub here. A collection-time
+# sys.modules["fastmcp"] stub poisoned every later real-MCP test on the same
+# "mcp" xdist worker (FastMCP() takes no arguments); _make_mcp_app patches
+# archon_search.server.mcp.FastMCP instead.
 
 
 class _FakeApp:
@@ -256,6 +251,8 @@ async def test_mcp_explain_routing_uses_chosen_collection_model() -> None:
     pipeline.get_all_collections_meta = AsyncMock(return_value=[chosen_meta])
     pipeline._global_embedder = MagicMock()
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[1.0, 0.0])
+    # One object on a real pipeline: routing embeds through the public property.
+    pipeline.global_embedder = pipeline._global_embedder
     pipeline.explain = AsyncMock(
         return_value=ExplainPipelineResult(top_results=[], near_misses=[], acl_filtered=False)
     )
@@ -276,10 +273,9 @@ async def test_mcp_explain_routing_uses_chosen_collection_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_ingest_file_calls_embedder_cache_get_or_load(tmp_path: "Path") -> None:
+async def test_mcp_ingest_file_calls_embedder_cache_get_or_load(tmp_path: Path) -> None:
     """ingest_file must resolve and pass the collection's embedder via embedder_cache."""
     from dataclasses import dataclass
-    from pathlib import Path
 
     @dataclass
     class _IngestResult:
@@ -312,7 +308,7 @@ async def test_mcp_ingest_file_calls_embedder_cache_get_or_load(tmp_path: "Path"
 
 
 @pytest.mark.asyncio
-async def test_mcp_ingest_directory_calls_embedder_cache_get_or_load(tmp_path: "Path") -> None:
+async def test_mcp_ingest_directory_calls_embedder_cache_get_or_load(tmp_path: Path) -> None:
     """ingest_directory must resolve and pass the collection's embedder via embedder_cache."""
     pipeline = MagicMock()
     meta = _make_collection_meta("model-X")

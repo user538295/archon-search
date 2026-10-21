@@ -46,7 +46,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.key_manager import KeyRecord, KeyStore, load_or_generate_key
 from archon_search.paths import get_data_dir, get_fasttext_models_dir
 from archon_search.logging_setup import build_uvicorn_log_config, configure_logging
-from archon_search.model_validation import ModelValidationResult, validate_models_async
+from archon_search.model_validation import validate_models_async
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingStateStore
@@ -357,7 +357,7 @@ def _check_provider_deps(config: SearchConfig) -> None:
     ):
         if provider == "ollama":
             try:
-                import ollama  # type: ignore[import-untyped]  # noqa: PLC0415
+                import ollama  # type: ignore[import-untyped]  # noqa: F401, PLC0415
             except ImportError:
                 raise ConfigError(
                     f"[{label}] provider='ollama' but the 'ollama' package is not installed; "
@@ -372,7 +372,7 @@ def _check_provider_deps(config: SearchConfig) -> None:
                 )
         elif provider == "openai":
             try:
-                import openai  # type: ignore[import-untyped]  # noqa: PLC0415
+                import openai  # type: ignore[import-untyped]  # noqa: F401, PLC0415
             except ImportError:
                 raise ConfigError(
                     f"[{label}] provider='openai' but the 'openai' package is not installed; "
@@ -1145,7 +1145,7 @@ def create_app(
     _hyde_provider = _build_query_expansion_provider(
         config.hyde.provider, config.hyde.model, config.hyde.ollama_base_url, config.hyde.llama_cpp_base_url
     )
-    app.state.hyde_generator = HyDEGenerator(embedder=app.state.embedder, config=config.hyde, provider=_hyde_provider)
+    app.state.hyde_generator = HyDEGenerator(config=config.hyde, provider=_hyde_provider)
     if config.hyde.enabled:
         logger.info(
             "HyDE is enabled — search query text will be sent to %s (model: %s)",
@@ -1222,7 +1222,6 @@ def create_app(
     if config.openai_shim.enabled:
         from fastapi.exceptions import RequestValidationError  # noqa: PLC0415
         from fastapi.exception_handlers import request_validation_exception_handler  # noqa: PLC0415
-        from fastapi.requests import Request  # noqa: PLC0415
         from archon_search.server.routes_openai_shim import _openai_error, router as openai_shim_router  # noqa: PLC0415
 
         @app.exception_handler(RequestValidationError)

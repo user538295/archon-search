@@ -92,7 +92,7 @@ async def route(body: RouteRequest, request: Request) -> Any:
 
         def _emit_timings() -> None:
             if recorder is not None:
-                recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                recorder.record_total(t0)
                 logger.info(
                     "stage timings",
                     extra={

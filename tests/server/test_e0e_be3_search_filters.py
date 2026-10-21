@@ -278,7 +278,7 @@ def test_post_search_applied_filters_datetime_serialization(tmp_path: Path) -> N
 def test_post_search_multi_collection_rag_fusion_and_filters_both_passed(tmp_path: Path) -> None:
     """rag_fusion=True and filters are not mutually exclusive at the handler level.
 
-    The rag_fusion=True branch short-circuits before resolve_hyde_vector is called,
+    The rag_fusion=True branch suppresses HyDE before any generation is attempted,
     so no HyDE patch is needed here.
     """
     app, client = _make_app(tmp_path)

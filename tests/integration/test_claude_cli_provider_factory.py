@@ -83,11 +83,11 @@ def test_claude_cli_rate_limit_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_provider.generate_hypothetical_doc = AsyncMock(return_value="A hypothetical document.")
 
     config = HyDEConfig(provider="claude_cli", model="haiku")
-    generator = HyDEGenerator(embedder=mock_embedder, config=config, provider=mock_provider)
+    generator = HyDEGenerator(config=config, provider=mock_provider)
 
     generator._rpm_tokens = 0  # exhaust the bucket
 
-    result = asyncio.run(generator.generate("test query"))
+    result = asyncio.run(generator.generate("test query", embedder=mock_embedder))
 
     assert result is not None, "claude_cli HyDE should bypass the token bucket"
     mock_provider.generate_hypothetical_doc.assert_called_once()

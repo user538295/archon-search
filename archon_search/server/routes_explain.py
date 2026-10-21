@@ -7,9 +7,6 @@ All schemas use ``extra="forbid"``: ``/explain`` is a new endpoint with no
 legacy clients, so rejecting unknown fields makes contract violations loud
 rather than silent — desirable for a debug endpoint. This intentionally
 diverges from ``schemas.py`` / ``routes_search.py``, which omit it.
-
-The route handler is added in Task 3.1; for now ``router`` is an empty
-``APIRouter`` so importing the schemas does not register a half-built route.
 """
 from __future__ import annotations
 
@@ -25,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from archon_search._types import IngestedBy
 from archon_search.config import resolve_active_model
-from archon_search.hyde import resolve_hyde_vector
+from archon_search.hyde import HyDEDependencyError
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.pipeline import (
     CollectionNotFoundError,
@@ -35,6 +32,9 @@ from archon_search.pipeline import (
     MetadataLookupError,
 )
 from archon_search.router import MultiCollectionRouter
+from archon_search.server._hyde import RequestHyDE
+from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS
+from archon_search.server.routes_search import dependency_error_response
 from archon_search.server.schemas import AclGateSchema, ErrorDetail, ExcludedCollectionSchema
 from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.telemetry.entry import TelemetryEntry
@@ -488,27 +488,16 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
 
     routing: RoutingExplain | None = None
     rag_fusion_gen = getattr(request.app.state, "rag_fusion_generator", None)
-
-    # Mutual exclusion: rag_fusion=True suppresses HyDE entirely — but only when RAG
-    # Fusion can actually run (config kill-switch) — S272.
-    if body.rag_fusion and config.rag_fusion.enabled:
-        hyde_vector, hyde_applied = None, False
-    else:
-        generator = getattr(request.app.state, "hyde_generator", None)
-        try:
-            hyde_vector, hyde_applied = await resolve_hyde_vector(
-                body.query, body.hyde, generator, config.hyde
-            )
-        except RuntimeError as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=422)
-
-    # graph_mode and HyDE are mutually exclusive — graph_mode wins.
-    # Null the vector so HyDE does not drive retrieval even in the stub path.
-    # Computed once here so both the single-collection and multi-collection
-    # response paths inherit the correct value without repeating the check.
-    if body.graph_mode is not None:
-        hyde_applied = False
-        hyde_vector = None
+    request_hyde = RequestHyDE.for_request(
+        body.query,
+        requested=body.hyde,
+        rag_fusion=body.rag_fusion,
+        rag_fusion_enabled=config.rag_fusion.enabled,
+        graph_mode=body.graph_mode,
+        generator=getattr(request.app.state, "hyde_generator", None),
+        config=config.hyde,
+        timeout=_SEARCH_TIMEOUT_SECONDS,
+    )
 
     with ExitStack() as stack:
         recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
@@ -517,22 +506,28 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
         if body.collections is not None:
             # Multi-collection fan-out path (B3). Routing is bypassed; the pipeline
             # resolves scope/exclusions and merges legs into a single reranked pool.
+            # It embeds with the global embedder and excludes every collection pinned
+            # to another model (embedding_model_mismatch), so HyDE embeds with it too.
             try:
+                # pipeline.explain has no FTS-only degrade: its retrieval embeds on the
+                # serving model however cold, so HyDE embeds too (embedder_warm=True) and
+                # the build is waited on once, by whichever embeds first (C2-I-1).
+                hyde_outcome = await request_hyde.resolve(pipeline.global_embedder, embedder_warm=True)
                 result = await pipeline.explain(
                     body.query,
                     collections=body.collections,
                     top_k=body.top_k,
                     rerank=body.rerank,
                     namespace=ns,
-                    query_vector=hyde_vector,
+                    query_vector=hyde_outcome.vector,
                     embedder=None,
                     rag_fusion=body.rag_fusion,
                     rag_fusion_generator=rag_fusion_gen,
                     rag_fusion_config=config.rag_fusion,
                     scope_filter=body.scope_filter,
                 )
-            except RAGFusionDependencyError as exc:
-                return JSONResponse({"detail": str(exc)}, status_code=422)
+            except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+                return dependency_error_response("explain", exc, log=logger)
             except GraphCommunitiesNotBuiltError as exc:
                 # Defensive: the S14 guard above prevents graph_mode+collections from
                 # reaching this path, and the multi-collection call does not currently
@@ -565,7 +560,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 return JSONResponse({"detail": "explain failed"}, status_code=500)
 
             if recorder is not None:
-                recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                recorder.record_total(t0)
                 logger.info(
                     "stage timings",
                     extra={
@@ -581,7 +576,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             response = ExplainResponse.from_pipeline_result(
                 rerank=body.rerank, collection="", routing=None, result=result,
                 embedding_model=config.embedding_model,
-                hyde_applied=hyde_applied,
+                hyde_applied=hyde_outcome.applied,
                 stage_timings_ms=stage_timings,
                 rag_fusion_applied=result.rag_fusion_applied,
                 rag_fusion_queries_used=result.rag_fusion_queries_used,
@@ -633,10 +628,10 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             # boundary in this codebase: a caller only ever sees collections in its own
             # namespace, so disallowed collections can never leak into routing.candidates.
             try:
-                routing_vector = await pipeline._global_embedder.embed_one(body.query)
+                routing_vector = await pipeline.global_embedder.embed_one(body.query)
                 col_router = MultiCollectionRouter(
                     search_url=f"http://{config.host}:{config.port}",
-                    embedder=pipeline._global_embedder,
+                    embedder=pipeline.global_embedder,
                     shortlist_size=config.routing_shortlist_size,
                     confidence_threshold=config.routing_confidence_threshold,
                     embedding_model=config.embedding_model,
@@ -667,16 +662,20 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             _embedder = await embedder_cache.get_or_load(active_model)
         else:
             logger.warning("explain: embedder_cache absent from app.state — falling back to global embedder")
-            _embedder = pipeline._global_embedder
+            _embedder = pipeline.global_embedder
 
         try:
+            # Resolved only now that the explained collection's embedder is known, so
+            # the hypothesis lands in that collection's vector space. embedder_warm=True:
+            # no FTS-only degrade here either (see the fan-out branch above).
+            hyde_outcome = await request_hyde.resolve(_embedder, embedder_warm=True)
             result = await pipeline.explain(
                 body.query,
                 chosen,
                 top_k=body.top_k,
                 rerank=body.rerank,
                 namespace=ns,
-                query_vector=hyde_vector,
+                query_vector=hyde_outcome.vector,
                 embedder=_embedder,
                 rag_fusion=body.rag_fusion,
                 rag_fusion_generator=rag_fusion_gen,
@@ -684,8 +683,8 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 graph_mode=body.graph_mode,
                 scope_filter=body.scope_filter,
             )
-        except RAGFusionDependencyError as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=422)
+        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+            return dependency_error_response("explain", exc, log=logger)
         except GraphCommunitiesNotBuiltError as exc:
             return JSONResponse(
                 {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
@@ -705,7 +704,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             return JSONResponse({"detail": "explain failed"}, status_code=500)
 
         if recorder is not None:
-            recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+            recorder.record_total(t0)
             logger.info(
                 "stage timings",
                 extra={
@@ -721,7 +720,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
     response = ExplainResponse.from_pipeline_result(
         rerank=body.rerank, collection=chosen, routing=routing, result=result,
         embedding_model=active_model,
-        hyde_applied=hyde_applied,
+        hyde_applied=hyde_outcome.applied,
         stage_timings_ms=stage_timings,
         rag_fusion_applied=result.rag_fusion_applied,
         rag_fusion_queries_used=result.rag_fusion_queries_used,

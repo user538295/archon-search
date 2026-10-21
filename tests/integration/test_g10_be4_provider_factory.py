@@ -18,7 +18,7 @@ import asyncio
 import sys
 import types
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -332,13 +332,13 @@ def test_ollama_rate_limit_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     config = HyDEConfig(provider="ollama", model="llama3.2")
-    generator = HyDEGenerator(embedder=mock_embedder, config=config, provider=mock_provider)
+    generator = HyDEGenerator(config=config, provider=mock_provider)
 
     # Exhaust the token bucket
     generator._rpm_tokens = 0
 
     # generate() must succeed: Ollama skips the rate-limit check
-    result = asyncio.run(generator.generate("test query"))
+    result = asyncio.run(generator.generate("test query", embedder=mock_embedder))
 
     assert result is not None, (
         "Ollama HyDE should bypass the token bucket and return an embedding vector"
@@ -377,13 +377,13 @@ def test_non_ollama_provider_respects_rate_limit(monkeypatch: pytest.MonkeyPatch
     )
 
     config = HyDEConfig(provider="anthropic", model="claude-haiku-4-5")
-    generator = HyDEGenerator(embedder=mock_embedder, config=config, provider=mock_provider)
+    generator = HyDEGenerator(config=config, provider=mock_provider)
 
     # Exhaust the token bucket
     generator._rpm_tokens = 0
 
     # generate() must return None: rate limit fires before calling the provider
-    result = asyncio.run(generator.generate("test query"))
+    result = asyncio.run(generator.generate("test query", embedder=mock_embedder))
 
     assert result is None, (
         f"Non-Ollama HyDE must return None when _rpm_tokens=0 (rate limited), got: {result}"

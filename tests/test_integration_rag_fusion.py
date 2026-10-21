@@ -6,8 +6,8 @@ Uses the real ``create_app()`` + ``TestClient`` pattern (matching
 avoiding real Anthropic API calls.
 
 MCP tool tests build a FastMCP app backed by the real pipeline extracted from
-``app.state``, using the same ``_StubFastMCP``+``importlib.reload`` pattern as
-``tests/test_mcp.py``, then invoke tool functions directly.
+``app.state``, with ``_StubFastMCP`` patched over the real ``mcp`` module's ``FastMCP``,
+then invoke tool functions directly.
 
 Run with:
     uv run pytest tests/test_integration_rag_fusion.py -m integration --no-cov -q
@@ -15,7 +15,6 @@ Run with:
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
 import sys
 import types
@@ -32,6 +31,7 @@ from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.store import SearchStore
+from tests._hyde_stubs import rest_hyde_generating
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
 
@@ -122,37 +122,21 @@ class _StubFastMCP:
 
 
 def _get_mcp_tool_fn(tool_name: str, pipeline, config, rf_generator=None, writer=None):
-    """Build a stub-backed MCP app with the real pipeline and return the named tool."""
-    _fastmcp_module = "fastmcp"
-    # Save current state
-    _prev = sys.modules.get(_fastmcp_module)
-    _prev_class = getattr(_prev, "FastMCP", None) if _prev else None
+    """Build a stub-backed MCP app with the real pipeline and return the named tool.
 
-    # Install stub
-    if _fastmcp_module not in sys.modules:
-        _mod = types.ModuleType(_fastmcp_module)
-        _mod.FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-        _mod.Context = type("Context", (), {})  # type: ignore[attr-defined]
-        sys.modules[_fastmcp_module] = _mod
-    else:
-        sys.modules[_fastmcp_module].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
+    Only the real ``mcp`` module's ``FastMCP`` binding is patched, for the ``create_app``
+    call — ``sys.modules`` (the real ``fastmcp`` package included) is never touched.
+    """
+    import archon_search.server.mcp as mcp_mod
 
-    _mcp_module = "archon_search.server.mcp"
-    sys.modules.pop(_mcp_module, None)
-    mcp_mod = importlib.import_module(_mcp_module)
-
-    app = mcp_mod.create_app(
-        pipeline,
-        _COLLECTION,
-        config=config,
-        rag_fusion_generator=rf_generator,
-        writer=writer,
-    )
-
-    # Restore real FastMCP
-    if _prev_class is not None:
-        sys.modules[_fastmcp_module].FastMCP = _prev_class  # type: ignore[attr-defined]
-    sys.modules.pop(_mcp_module, None)
+    with patch.object(mcp_mod, "FastMCP", _StubFastMCP):
+        app = mcp_mod.create_app(
+            pipeline,
+            _COLLECTION,
+            config=config,
+            rag_fusion_generator=rf_generator,
+            writer=writer,
+        )
 
     return app._tools[tool_name]
 
@@ -215,7 +199,8 @@ async def test_search_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path)
         "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
         new=mock_generate_variants,
     ):
-        with patch("archon_search.server.routes_search.resolve_hyde_vector") as mock_resolve_hyde:
+        # HyDE enabled with a generator, so only the rag_fusion suppression keeps it off.
+        with rest_hyde_generating(app, return_value=[0.5, 0.5]) as hyde_generate:
             with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
                 response = client.post(
                     "/search",
@@ -232,7 +217,7 @@ async def test_search_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path)
     assert data["rag_fusion_applied"] is True
     assert data["rag_fusion_attempted"] is True  # S272: must be true when rag_fusion wins
     assert data["hyde_applied"] is False
-    mock_resolve_hyde.assert_not_called()
+    hyde_generate.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -370,7 +355,8 @@ async def test_explain_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path
         "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
         new=AsyncMock(return_value=_FIXED_VARIANTS),
     ):
-        with patch("archon_search.server.routes_explain.resolve_hyde_vector") as mock_resolve_hyde:
+        # HyDE enabled with a generator, so only the rag_fusion suppression keeps it off.
+        with rest_hyde_generating(app, return_value=[0.5, 0.5]) as hyde_generate:
             with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
                 response = client.post(
                     "/explain",
@@ -386,7 +372,7 @@ async def test_explain_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path
     data = response.json()
     assert data["rag_fusion_applied"] is True
     assert data["hyde_applied"] is False
-    mock_resolve_hyde.assert_not_called()
+    hyde_generate.assert_not_awaited()
 
 
 @pytest.mark.asyncio

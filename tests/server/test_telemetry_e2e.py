@@ -9,8 +9,6 @@ import asyncio
 import json
 import logging
 import os
-import sys
-import types
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -37,15 +35,10 @@ pytestmark = pytest.mark.xdist_group("mcp")
 # ---------------------------------------------------------------------------
 SENTINEL = "PRIVACY-LEAK-SENTINEL-7f3a-feat-039b"
 
-# ---------------------------------------------------------------------------
-# FastMCP stub — same pattern as test_mcp_telemetry.py so mcp.py can be
-# imported without installing the real fastmcp package.
-# ---------------------------------------------------------------------------
-if "fastmcp" not in sys.modules:
-    _fastmcp_stub = types.ModuleType("fastmcp")
-    _fastmcp_stub.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-    _fastmcp_stub.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules["fastmcp"] = _fastmcp_stub
+# fastmcp is a core dependency: no module stub here. A collection-time
+# sys.modules["fastmcp"] stub poisoned every later real-MCP test on the same
+# "mcp" xdist worker (FastMCP() takes no arguments); the tests patch
+# archon_search.server.mcp.FastMCP with _FakeFastMCP instead.
 
 
 class _FakeApp:

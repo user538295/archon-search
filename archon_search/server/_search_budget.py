@@ -10,15 +10,12 @@ it at the edge.
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
 
 if TYPE_CHECKING:
     from archon_search.embedder import Embedder
     from archon_search.pipeline import SearchPipeline
-
-_logger = logging.getLogger(__name__)
 
 # TODO: make configurable via config.py (see /route for parity)
 SEARCH_TIMEOUT_SECONDS = 30.0
@@ -98,21 +95,6 @@ async def warmup_for_search(
     return SearchWarmup(rerank=rerank, fts_only=not warm)
 
 
-async def hyde_may_embed(pipeline: "SearchPipeline") -> bool:
-    """Warm the models, bounded, and report whether HyDE can afford to embed.
-
-    ``HyDEGenerator.generate`` ends in ``embed_one`` on ``pipeline``'s *global*
-    embedder — the one this reads — and the search call sites resolve HyDE before
-    they enter any request budget.  A cold embedder there would therefore park the
-    connection for the whole ONNX build, which is S290 itself rather than a path
-    around it.  Pass this as ``resolve_hyde_vector(..., may_embed=...)``: a
-    ``False`` return skips HyDE (reported as ``hyde_applied=False``, the caller's
-    existing HyDE-failure warning) and the search then degrades to ``fts_only``
-    the same way an unexpanded one does.
-    """
-    return not (await warmup_for_search(pipeline)).fts_only
-
-
 async def run_within_budget(
     coro: Coroutine[Any, Any, _T], *, timeout: float = SEARCH_TIMEOUT_SECONDS
 ) -> _T:
@@ -135,33 +117,3 @@ async def run_within_budget(
         if task.cancelled():
             raise SearchBudgetExceeded from None
         raise
-
-
-async def resolve_hyde_within_budget(
-    coro: Coroutine[Any, Any, tuple[list[float] | None, bool]],
-    *,
-    timeout: float = SEARCH_TIMEOUT_SECONDS,
-) -> tuple[list[float] | None, bool]:
-    """Await a ``resolve_hyde_vector`` call under the search budget (S582).
-
-    ``hyde_may_embed`` bounds only the *embedder* leg of HyDE.  The generation leg
-    is an LLM call whose ceiling is ``[hyde].timeout_seconds``, which config
-    validation accepts unclamped and unrelated to this budget — so a llama-server
-    that accepts the connection but never answers parks the request for that whole
-    duration, past the client's read timeout (``status=0``/``body=None``), exactly
-    the S278/S288/S290 out-of-budget-wait family.  Bounding it here caps the wait at
-    the server's own budget instead.
-
-    On overrun the call is cancelled and ``(None, False)`` is returned: the caller
-    already surfaces that as its standard HyDE-failure warning and the search runs
-    on the plain query.  Everything the coroutine itself raises — notably the
-    ``RuntimeError`` for a missing provider package — propagates unchanged.
-    """
-    try:
-        return await run_within_budget(coro, timeout=timeout)
-    except SearchBudgetExceeded:
-        _logger.warning(
-            "HyDE generation exceeded the %.1fs search budget; searching without it",
-            timeout,
-        )
-        return (None, False)

@@ -43,7 +43,7 @@ def test_hyde_kill_switch_returns_hyde_applied_false(
     """config.hyde.enabled=False (kill-switch) suppresses HyDE even when requested.
 
     POST /search with hyde=True while config.hyde.enabled=False.
-    resolve_hyde_vector returns (None, False) because config.enabled is False.
+    RequestHyDE.resolve applies nothing because config.enabled is False.
     The response must carry hyde_applied=False and a non-empty results list.
     """
     doc = tmp_path / "hyde_test.md"
@@ -158,7 +158,7 @@ def test_hyde_dependency_absent_returns_clear_error(
     references the missing dependency. The route handler converts the RuntimeError
     from HyDEGenerator.generate() into a 422 JSONResponse.
 
-    Note: config.hyde.enabled must be True so resolve_hyde_vector actually
+    Note: config.hyde.enabled must be True so RequestHyDE.resolve actually
     calls generator.generate(). The generator's _anthropic_available flag
     is patched via monkeypatch.setattr on the app.state instance after startup.
     """
@@ -166,7 +166,7 @@ def test_hyde_dependency_absent_returns_clear_error(
     doc.write_text("# Dependency Test\n\nTest content for HyDE dependency error.\n" * 4)
 
     with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
-        # Enable HyDE so resolve_hyde_vector proceeds to call generator.generate().
+        # Enable HyDE so RequestHyDE.resolve proceeds to call generator.generate().
         cfg.hyde.enabled = True
 
         col = "hyde-dep-absent"
@@ -315,7 +315,7 @@ def test_hyde_anthropic_behaviour_unchanged_after_refactor(
     AnthropicQueryExpansionProvider.  This test verifies that:
     1. The provider's generate_hypothetical_doc is called and returns text.
     2. HyDEGenerator embeds the text and returns a vector.
-    3. resolve_hyde_vector returns hyde_applied=True.
+    3. RequestHyDE.resolve reports hyde_applied=True.
     4. The HTTP response carries hyde_applied=True.
 
     The provider's _client is replaced with a mock AFTER app startup (inside the

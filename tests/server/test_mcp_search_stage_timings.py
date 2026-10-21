@@ -2,27 +2,17 @@
 from __future__ import annotations
 
 import logging
-import sys
-import types
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("mcp")
-
-# Stub fastmcp so mcp.py can be imported without the real package.
-if "fastmcp" not in sys.modules:
-    _fastmcp = types.ModuleType("fastmcp")
-    _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-    _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules["fastmcp"] = _fastmcp
-
-from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
-from archon_search._types import SearchResult
 from archon_search.config import SearchConfig
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.observability import correlation_id as _correlation_id, record_stage
 from archon_search.pipeline import SearchPipelineResult
+
+pytestmark = pytest.mark.xdist_group("mcp")
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +165,7 @@ async def test_mcp_search_with_context_emits_stage_timings_with_context_key(
     with caplog.at_level(logging.INFO, logger="archon_search"):
         result = await app.tools["search_with_context"](query="hello", collection=None)
 
+    assert "error" not in result, result
     records = _get_stage_timing_records(caplog)
     assert len(records) == 1, f"Expected 1 stage_timings record, got {len(records)}"
     rec = records[0]

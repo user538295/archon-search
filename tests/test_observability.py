@@ -1,6 +1,8 @@
 """Tests for archon_search.observability — Task 1.1 (B1)."""
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from archon_search.observability import (
@@ -9,6 +11,7 @@ from archon_search.observability import (
     bind_stage_recorder,
     correlation_id,
     new_correlation_id,
+    paused_stage_recorder,
     record_stage,
     sanitize_request_id,
 )
@@ -100,6 +103,75 @@ def test_bind_stage_recorder_token_reset_nested() -> None:
         # inner exited — outer should be restored
         assert _stage_recorder.get() is outer
     # both exited — should be None
+    assert _stage_recorder.get() is None
+
+
+# ---------------------------------------------------------------------------
+# paused_stage_recorder / record_total
+# ---------------------------------------------------------------------------
+
+_PAUSED_SLEEP_SECONDS = 0.05
+_PAUSED_SLEEP_MS = _PAUSED_SLEEP_SECONDS * 1000.0
+
+
+def test_paused_stage_recorder_records_no_stage_inside_the_block() -> None:
+    """A paused block (HyDE's LLM call) adds no stage — not even its embed — to the recorder."""
+    with bind_stage_recorder() as recorder:
+        with paused_stage_recorder():
+            assert _stage_recorder.get() is None
+            with record_stage("embed"):
+                pass
+        assert _stage_recorder.get() is recorder
+    assert "embed" not in recorder.stage_timings_ms
+
+
+def test_record_total_excludes_paused_wall_time() -> None:
+    """``total`` covers the stage window minus the paused block, as if it ran outside it."""
+    import time
+
+    with bind_stage_recorder() as recorder:
+        t0 = time.perf_counter()
+        with paused_stage_recorder():
+            time.sleep(_PAUSED_SLEEP_SECONDS)
+        recorder.record_total(t0)
+    assert 0 <= recorder.stage_timings_ms["total"] < _PAUSED_SLEEP_MS
+
+
+def test_record_total_without_a_pause_is_the_whole_window() -> None:
+    import time
+
+    with bind_stage_recorder() as recorder:
+        t0 = time.perf_counter()
+        time.sleep(_PAUSED_SLEEP_SECONDS)
+        recorder.record_total(t0)
+    assert recorder.stage_timings_ms["total"] >= _PAUSED_SLEEP_MS
+
+
+def test_record_total_ignores_a_pause_that_ended_before_its_window() -> None:
+    """C2-I-6: only the paused time inside [started_at, now] comes off ``total``."""
+    import time
+
+    with bind_stage_recorder() as recorder:
+        with paused_stage_recorder():
+            time.sleep(_PAUSED_SLEEP_SECONDS)
+        t0 = time.perf_counter()
+        time.sleep(_PAUSED_SLEEP_SECONDS)
+        recorder.record_total(t0)
+    assert recorder.stage_timings_ms["total"] >= _PAUSED_SLEEP_MS
+
+
+def test_record_total_subtracts_only_the_part_of_a_pause_inside_its_window() -> None:
+    """A pause straddling ``started_at`` is subtracted from that instant on, never below zero."""
+    with bind_stage_recorder() as recorder:
+        recorder.record_pause(started_at=10.0, ended_at=12.0)
+        with patch("archon_search.observability.time.perf_counter", return_value=15.0):
+            recorder.record_total(11.0)
+    assert recorder.stage_timings_ms["total"] == pytest.approx(3000.0)
+
+
+def test_paused_stage_recorder_noop_when_unbound() -> None:
+    with paused_stage_recorder():
+        assert _stage_recorder.get() is None
     assert _stage_recorder.get() is None
 
 

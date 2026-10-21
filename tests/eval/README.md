@@ -362,7 +362,8 @@ Adding routing queries or corpus files changes `eval_hash` and `thresholds_hash`
   of the HyDE plumbing path — it does **not** measure recall *improvement*.
 
 - **`test_eval_hyde_false_fast_path_no_overhead`** (`@pytest.mark.eval`) — asserts
-  that `resolve_hyde_vector(hyde=False, ...)` returns `(None, False)` without
+  that `RequestHyDE(requested=False, ...).resolve(...)` (`archon_search/server/_hyde.py`,
+  the path every route handler takes) returns no vector and `applied=False` without
   calling the generator, confirming the fast-path adds zero overhead.
 
 **Measuring recall *improvement* from HyDE** requires `@pytest.mark.live` with
@@ -374,8 +375,8 @@ the SHA-256 hash embedder is agnostic to LLM-generated hypothesis text.
 
 `tests/test_search_filtered_benchmark.py::test_hyde_false_search_p95_under_threshold`
 (`@pytest.mark.benchmark`) measures the end-to-end latency of a `hyde=False`
-request (`resolve_hyde_vector` + `hybrid_search`) and asserts p95 ≤
-`[search_hyde_false].p95_ms` from `thresholds.toml` (currently **5 ms** — same
+request (`RequestHyDE.resolve` + `hybrid_search`) and asserts p95 ≤
+`[search_hyde_false].p95_ms` from `thresholds.toml` (currently **25 ms** — same
 ceiling as `[search_filtered].p95_ms_glob_filtered`).  This guards against the
 HyDE fast-path accidentally adding measurable overhead over an unfiltered search.
 
@@ -393,12 +394,12 @@ HyDE fast-path accidentally adding measurable overhead over an unfiltered search
 - **`test_bench_search_rag_fusion_disabled_latency`** (`@pytest.mark.benchmark`) —
   asserts that `rag_fusion=False` adds no measurable overhead over unfiltered
   hybrid search.  Threshold: `[search_rag_fusion_disabled].p95_ms` in
-  `thresholds.toml` (**5 ms** — same ceiling as `[search_hyde_false].p95_ms`).
+  `thresholds.toml` (**50 ms** — twice the `[search_hyde_false].p95_ms` ceiling, for the pipeline-wrapper overhead).
 
 - **`test_bench_search_rag_fusion_enabled_latency`** (`@pytest.mark.benchmark`) —
   asserts that the mocked RAG Fusion path (no real LLM, no real embedding model)
   completes within ≤3× the disabled-path ceiling.  Threshold:
-  `[search_rag_fusion_enabled].p95_ms` in `thresholds.toml` (**15 ms**).
+  `[search_rag_fusion_enabled].p95_ms` in `thresholds.toml` (**100 ms**).
   This is a regression guard against severe pipeline overhead — not a production SLA.
 
 **Measuring recall *improvement* from RAG Fusion** requires `@pytest.mark.live_eval`

@@ -203,7 +203,7 @@ p95_regression_pct_prefix_vs_unfiltered = 75
 
 # ---------------------------------------------------------------------------
 # [search_hyde_false] — latency regression guard for HyDE fast-path (hyde=False)
-# Purpose: confirm that resolve_hyde_vector(hyde=False) adds no measurable overhead
+# Purpose: confirm that RequestHyDE.resolve with hyde=False adds no measurable overhead
 # to unfiltered hybrid search. The ceiling is set equal to [search_filtered].p95_ms_glob_filtered
 # because if HyDE is disabled the hot path is identical to an unfiltered search.
 # ---------------------------------------------------------------------------
