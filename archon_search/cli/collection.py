@@ -6,7 +6,7 @@ import logging
 import click
 import httpx
 
-from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _server_connect_fail_msg
+from archon_search.cli._helpers import _CONNECT_FAIL, _LOCK_WAITING_REQUEST_TIMEOUT_S, _poll_job, _server_connect_fail_msg
 from archon_search.key_manager import load_key
 from archon_search.paths import get_data_dir
 
@@ -110,7 +110,7 @@ def add(path: str, wait_flag: bool, api_url: str, api_key: str | None) -> None:
     post_url = f"{base_url}/collections/"
 
     try:
-        resp = httpx.post(post_url, json={"path": path}, headers=headers)
+        resp = httpx.post(post_url, json={"path": path}, headers=headers, timeout=_LOCK_WAITING_REQUEST_TIMEOUT_S)
     except _CONNECT_FAIL:
         click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
@@ -163,7 +163,7 @@ def remove(name: str, api_url: str, api_key: str | None) -> None:
     delete_url = f"{base_url}/collections/{name}"
 
     try:
-        resp = httpx.delete(delete_url, headers=headers)
+        resp = httpx.delete(delete_url, headers=headers, timeout=_LOCK_WAITING_REQUEST_TIMEOUT_S)
     except _CONNECT_FAIL:
         click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
@@ -290,7 +290,7 @@ def reindex_metadata_cmd(
     body = {"dry_run": dry_run, "normalize_timestamps": normalize_timestamps}
 
     try:
-        resp = httpx.post(post_url, json=body, headers=headers)
+        resp = httpx.post(post_url, json=body, headers=headers, timeout=_LOCK_WAITING_REQUEST_TIMEOUT_S)
     except _CONNECT_FAIL:
         click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
@@ -393,7 +393,7 @@ def migrate_cmd(
         post_url = f"{base_url}/collections/{collection_name}/migrate"
         body: dict = {"dry_run": False, "backup_confirmed": backup_first}
         try:
-            resp = httpx.post(post_url, json=body, headers=headers)
+            resp = httpx.post(post_url, json=body, headers=headers, timeout=_LOCK_WAITING_REQUEST_TIMEOUT_S)
         except _CONNECT_FAIL:
             click.echo(_server_connect_fail_msg(base_url), err=True)
             raise SystemExit(1)
@@ -490,7 +490,7 @@ def reindex(collection_name: str, wait_flag: bool, api_url: str, api_key: str | 
     post_url = f"{base_url}/collections/{collection_name}/reindex"
 
     try:
-        resp = httpx.post(post_url, headers=headers)
+        resp = httpx.post(post_url, headers=headers, timeout=_LOCK_WAITING_REQUEST_TIMEOUT_S)
     except _CONNECT_FAIL:
         click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)

@@ -21,13 +21,18 @@ from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
-from archon_search.server._ingest_lock import acquire_collection_lock_or_503, store_busy_503
+from archon_search.server._collection_job import (
+    SERVICE_NOT_READY_DETAIL,
+    create_collection_job,
+    refuse_active_job_or_fail_legacy,
+)
+from archon_search.server._ingest_lock import STORE_BUSY_503_DESCRIPTION, acquire_collection_lock_or_503, store_busy_503
 from archon_search.server._ingested_by import parse_ingested_by_header
-from archon_search.server.routes_jobs import _REINDEX_COLLECTION_LOG_CONTEXT, INTERNAL_ERROR_DETAIL, JOB_SUPERSEDED_DETAIL, REINDEX_FAILED_DETAIL, IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _persist_job_status, _reindex_task
+from archon_search.server.routes_jobs import _REINDEX_COLLECTION_LOG_CONTEXT, INTERNAL_ERROR_DETAIL, REINDEX_FAILED_DETAIL, IngestRequest, _ingest_task, _persist_job_status, _reindex_task, _track_background_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, ExpiringChunkItem, ExpiringChunksResponse, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
-from archon_search.store import STORE_SCHEMA_VERSION, SearchStore, StoreBusyError
+from archon_search.store import STORE_SCHEMA_VERSION, ReindexResult, SearchStore, StoreBusyError
 from archon_search.sync import path_to_collection_name
-from archon_search.types import IngestJob, JobStatus, MetadataReindexJob, MigrationJob, MigrationKind, MigrationSpec
+from archon_search.types import IngestJob, JobStatus, MetadataReindexJob, MigrationJob, MigrationKind, MigrationSpec, ReindexJob
 
 logger = logging.getLogger(__name__)
 
@@ -187,62 +192,48 @@ def _collection_drop_failed_response() -> JSONResponse:
     return JSONResponse({"detail": COLLECTION_DROP_FAILED_DETAIL, "code": COLLECTION_DROP_FAILED_CODE}, status_code=500)
 
 
-#: Base-IngestJob statuses that mean the ingest may still be writing to its collection.
-#: RUNNING: the ingest task has started; on its dispatch path it releases the collection lock right
-#: after marking the job RUNNING and keeps writing without it (on the non-dispatch branch it holds
-#: the lock until the job is terminal). CANCELLING: DELETE /jobs/{id} sets it but does NOT cancel the
-#: task, so the ingest keeps writing until it completes.
-_ACTIVE_INGEST_STATUSES = frozenset({JobStatus.RUNNING, JobStatus.CANCELLING})
-#: Wire-facing 503 detail when the active ingest belongs to another namespace: its job id is not disclosed.
-INGEST_IN_PROGRESS_DETAIL = "an ingest job is in progress on this collection; retry after it completes"
-#: Wire-facing 503 detail when the active ingest belongs to the caller's namespace (``str.format`` with ``job_id``).
-INGEST_JOB_IN_PROGRESS_DETAIL_TEMPLATE = "ingest job {job_id} is in progress; retry after it completes"
+async def _visible_meta_or_404(
+    search_store: SearchStore, name: str, ns: str, path_to_name: dict[str, str]
+) -> CollectionMeta | None:
+    """*name*'s meta row in namespace *ns*, or ``None`` for a config-only collection; 404 when *ns* cannot see *name*.
 
-
-def _find_active_ingest(job_store: JobStore | None, name: str, ns: str) -> IngestJob | None:
-    """Return a base IngestJob that is RUNNING/CANCELLING on collection *name* in ANY namespace, else ``None``.
-
-    A match in the caller's namespace *ns* is preferred, so the caller sees its own job id when it has one.
-
-    Any namespace: the store keeps one LanceDB table per collection name (``drop_collection`` drops the
-    table by name alone) and ``lock_for`` keys the collection lock by name only, so an ingest submitted
-    from any namespace writes into the very table DELETE drops.
-
-    PENDING is excluded: on the REST POST /ingest path the caller holds the collection lock while the
-    job is PENDING, so the lock covers it; the maintenance-retry path creates PENDING jobs with no lock
-    and no dispatcher, so including PENDING would give permanent false positives.
-
-    ``type(j) is IngestJob`` is an exact-type check (not isinstance): subclass jobs (ReindexJob, SyncJob,
-    MetadataReindexJob, ...) do not block DELETE, and DELETE has no other guard for them. The check is
-    kept narrow to base ingest; a DELETE racing a running ReindexJob is a known separate gap, pinned by
-    ``test_delete_collection_200_when_reindex_running``. The idiom mirrors maintenance_loop.py
-    ("Only process exact base IngestJob instances (no subclasses).").
+    Mirrors list_collections: a config-only path is visible only in the default namespace AND only when it has no
+    meta row in ANY namespace.
     """
-    if job_store is None:
-        return None
-    active = [
-        j for j in job_store.list()
-        if type(j) is IngestJob and j.collection == name and j.status in _ACTIVE_INGEST_STATUSES
-    ]
-    return next((j for j in active if j.namespace == ns), next(iter(active), None))
+    meta = await search_store.get_collection_meta(name, namespace=ns)
+    if meta is None:
+        config_only_visible = False
+        if ns == DEFAULT_NAMESPACE and name in path_to_name:
+            all_meta = await search_store.get_all_collections_meta()
+            config_only_visible = not any(m.name == name for m in all_meta)
+        if not config_only_visible:
+            raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+    return meta
 
 
-def _ingest_in_progress_503(job: IngestJob, name: str, ns: str) -> JSONResponse:
-    """Log and build the 503 ``store_busy`` refusing DELETE of *name* while *job* writes to it.
+#: Wire-facing 503 detail when the active job belongs to another namespace: its job id is not disclosed.
+COLLECTION_JOB_IN_PROGRESS_DETAIL = "a job is in progress on this collection; retry after it completes"
+#: Wire-facing 503 detail when the active job belongs to the caller's namespace (``str.format`` with ``job_id``).
+COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE = "job {job_id} is in progress; retry after it completes"
+
+
+def _collection_job_in_progress_503(job: IngestJob, name: str, ns: str) -> JSONResponse:
+    """Log and build the 503 ``store_busy`` refusing DELETE of *name* while *job* may write to it.
 
     The job id appears in the detail only when *job* belongs to the caller's namespace *ns*.
     """
     logger.warning(
-        "DELETE /collections/%s refused: ingest job %s is %s (job namespace=%s, caller namespace=%s)",
+        "DELETE /collections/%s refused: %s %s is %s (job namespace=%s, caller namespace=%s)",
         name,
+        type(job).__name__,
         job.job_id,
         job.status.value,
         job.namespace,
         ns,
     )
     if job.namespace == ns:
-        return store_busy_503(INGEST_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id=job.job_id))
-    return store_busy_503(INGEST_IN_PROGRESS_DETAIL)
+        return store_busy_503(COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id=job.job_id))
+    return store_busy_503(COLLECTION_JOB_IN_PROGRESS_DETAIL)
 
 
 # ---------------------------------------------------------------------------
@@ -457,27 +448,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     ingest_body = IngestRequest(
         collection=collection_name, path=body.path, ingested_by=ingested_by
     ).with_resolved_path(resolved)
-
-    pipeline = getattr(request.app.state, "pipeline", None)
-    embedder_cache = getattr(request.app.state, "embedder_cache", None)
-    config_state = getattr(request.app.state, "config", None)
-
-    if lock_result is not None:
-        task = asyncio.create_task(
-            _default_ingest_task_with_lock(
-                job.job_id, store, ingest_body, namespace=ns, held_lock=lock_result,
-                search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config_state,
-            )
-        )
-    else:
-        task = asyncio.create_task(
-            _default_ingest_task(
-                job.job_id, store, ingest_body, namespace=ns,
-                search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config_state,
-            )
-        )
-    request.app.state._background_tasks.add(task)
-    task.add_done_callback(request.app.state._background_tasks.discard)
+    _track_background_task(request.app.state, _ingest_task(request.app.state, job.job_id, ingest_body, ns, lock_result))
 
     return JobResponse(**job_to_dict(job))
 
@@ -492,15 +463,22 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         503: {
             "model": ErrorDetail,
             "description": (
-                "Store busy (code store_busy): the collection lock was not acquired in time, "
-                "or a base ingest job is still writing to the collection"
+                f"{STORE_BUSY_503_DESCRIPTION}, "
+                "or a job may still be writing to the collection (an ingest, reindex, import, migration, "
+                "metadata reindex or community rebuild)"
             ),
         },
         **_ERROR_500_REMOVE_COLLECTION,
     },
 )
 async def remove_collection(name: str, request: Request) -> DeleteResponse | JSONResponse:
-    """Remove a collection: delete config entry and drop LanceDB data."""
+    """Remove a collection: delete config entry and drop LanceDB data.
+
+    Once the table is dropped — or, for a config-only collection (no meta row), the config entry removed — the
+    collection's base ingest jobs that are `FAILED` or `PENDING` — in every namespace, as the table is shared by
+    name — become `CANCELLED`, so no maintenance retry (re-)creates the collection (best-effort: a failed write is
+    logged and the delete still succeeds).
+    """
     config: SearchConfig = request.app.state.config
     search_store = getattr(request.app.state, "search_store", None)
     ns: str = request.state.namespace
@@ -512,16 +490,7 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
     # a config path. When the store is absent, fall back to config membership.
     meta = None
     if search_store is not None:
-        meta = await search_store.get_collection_meta(name, namespace=ns)
-        if meta is None:
-            # Mirror list_collections: a config-only path is visible only in the
-            # default namespace AND only when it has no meta row in ANY namespace.
-            config_only_visible = False
-            if ns == DEFAULT_NAMESPACE and name in path_to_name:
-                all_meta = await search_store.get_all_collections_meta()
-                config_only_visible = not any(m.name == name for m in all_meta)
-            if not config_only_visible:
-                raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+        meta = await _visible_meta_or_404(search_store, name, ns, path_to_name)
     elif name not in path_to_name:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
@@ -544,34 +513,37 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
             ),
         )
 
-    # Config-only collection (no meta row): nothing exists in the store to drop.
-    # Pop the config registration and return without acquiring the lock or
-    # touching store data (drop_collection/delete_collection_meta would fail).
-    if meta is None:
-        restore_config_lists = _drop_path_from_config(config, resolved)
-        persist_error = _persist_config_or_500(config, request, restore_config_lists)
-        if persist_error is not None:
-            return persist_error
-        return DeleteResponse(name=name, deleted=True)
-
-    # Acquire the per-collection lock before mutating — 503 if a write is in progress.
+    # Acquire the per-collection lock before mutating — 503 if a write is in progress (None without a search store:
+    # nothing to lock).
     lock_result = await acquire_collection_lock_or_503(search_store, name)
     if isinstance(lock_result, JSONResponse):
         return lock_result
 
-    table_gone = False
+    collection_gone = False
     try:
-        # Refuse if a base IngestJob is actively writing to this collection. Holding the lock alone
-        # is not enough: _default_ingest_task_with_lock releases it early (before its writes, to avoid
-        # an asyncio.Lock re-entrancy deadlock with store.ingest_chunks), so the job store is the
-        # authoritative signal. The check must run under the lock, not before it: an ingest that held
-        # the lock while this DELETE waited turns RUNNING and releases it, and only a check made after
-        # acquiring sees that (TOCTOU). No new RUNNING base IngestJob can appear meanwhile: POST /ingest
-        # and POST /collections/ pre-acquire this lock before creating theirs, and a PENDING job the
-        # maintenance retry creates without the lock is not dispatched (see _find_active_ingest).
-        active_ingest = _find_active_ingest(getattr(request.app.state, "job_store", None), name, ns)
-        if active_ingest is not None:
-            return _ingest_in_progress_503(active_ingest, name, ns)
+        if meta is None and search_store is not None:
+            # Read the row again under the lock: a first ingest that held the lock while this DELETE waited may have
+            # created the collection's table and meta row (dropped below like any collection's), or another
+            # namespace's meta row may now hide the config-only collection from this one (404).
+            meta = await _visible_meta_or_404(search_store, name, ns, path_to_name)
+
+        # Refuse if a job may still write this collection (JobStore.find_active_collection_job) — also for a
+        # config-only collection, whose first ingest creates the table and meta row. Holding the lock alone is not
+        # enough: no such job holds it for its whole run (_default_ingest_task_with_lock, for one, releases it early
+        # to avoid an asyncio.Lock re-entrancy deadlock with store.ingest_chunks), so the job store is the
+        # authoritative signal. The check must run under the lock, not before it: an ingest that held the lock while
+        # this DELETE waited turns RUNNING and releases it, and only a check made after acquiring sees that (TOCTOU).
+        # No job created through these routes can re-create the collection after the check: POST /ingest and
+        # POST /collections/ pre-acquire this lock before creating their ingest job, a maintenance retry waits for it
+        # before its claim, POST /collections/{name}/reindex, /reindex-metadata and /graph/{name}/rebuild-communities
+        # create their job and meta pointer under it from a meta row re-read under it (create_collection_job), and a
+        # rewrite migration created meanwhile opens the dropped table under this lock and fails cleanly. Known,
+        # pre-existing gaps outside this check (sync, import force_overwrite, jobless writers, unlocked meta
+        # read-modify-writes): Documentation/Architecture/530_technical_debt_refactoring_roadmap.md, CON-7..CON-12.
+        job_store = getattr(request.app.state, "job_store", None)
+        active_job = job_store.find_active_collection_job(name, ns) if job_store is not None else None
+        if active_job is not None:
+            return _collection_job_in_progress_503(active_job, name, ns)
 
         # Mutate the config only now, under the lock. The returned rollback re-inserts just
         # the entries it removed, so it never discards config changes made by others meanwhile.
@@ -579,6 +551,16 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
         persist_error = _persist_config_or_500(config, request, restore_config_lists)
         if persist_error is not None:
             return persist_error
+
+        # Config-only collection (no meta row): nothing exists in the store to drop
+        # (drop_collection/delete_collection_meta would fail).
+        if meta is None:
+            collection_gone = True
+            if job_store is not None:
+                # Auxiliary (best-effort, never fails the DELETE): a retry of a failed first ingest would create the
+                # collection's table and meta row.
+                job_store.cancel_ingest_retries(name)
+            return DeleteResponse(name=name, deleted=True)
 
         if search_store is not None:
             try:
@@ -593,7 +575,10 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
                 restore_config_lists()
                 _save_config_after_rollback(config, request, "collection drop failure")
                 return _collection_drop_failed_response()
-            table_gone = True
+            collection_gone = True
+            if job_store is not None:
+                # Auxiliary (best-effort, never fails the DELETE): no maintenance retry may re-create the table.
+                job_store.cancel_ingest_retries(name)
             try:
                 await search_store.delete_collection_meta(name, ns)
             except Exception:  # noqa: BLE001 — the table is already gone, so the config removal stays
@@ -602,8 +587,9 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
     finally:
         if isinstance(lock_result, asyncio.Lock) and lock_result.locked():
             lock_result.release()
-        if table_gone and search_store is not None:
-            # Only after the release: discard_lock keeps an entry a queued waiter still needs.
+        if collection_gone and search_store is not None:
+            # Only after the release: discard_lock keeps an entry a queued waiter still needs. Also for a config-only
+            # collection: this DELETE created its entry (lock_for), which would otherwise outlive the collection.
             search_store.discard_lock(name)
 
     return DeleteResponse(name=name, deleted=True)
@@ -625,16 +611,7 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
     search_store = getattr(request.app.state, "search_store", None)
     meta = None
     if search_store is not None:
-        meta = await search_store.get_collection_meta(name, namespace=ns)
-        if meta is None:
-            # Mirror list_collections: a config-only path is visible only in the
-            # default namespace AND only when it has no meta row in ANY namespace.
-            config_only_visible = False
-            if ns == DEFAULT_NAMESPACE and name in path_to_name:
-                all_meta = await search_store.get_all_collections_meta()
-                config_only_visible = not any(m.name == name for m in all_meta)
-            if not config_only_visible:
-                raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+        meta = await _visible_meta_or_404(search_store, name, ns, path_to_name)
     elif name not in path_to_name:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
@@ -934,8 +911,33 @@ _ERROR_REINDEX = {
             f'(body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})'
         ),
     },
-    503: {"model": ErrorDetail, "description": "Service not ready — the embedder cache or pipeline is not initialised"},
+    503: {
+        "model": ErrorDetail,
+        "description": (
+            "Service not ready — the embedder cache, pipeline or search store is not initialised "
+            f'(body {{"detail": "{SERVICE_NOT_READY_DETAIL}"}}). {STORE_BUSY_503_DESCRIPTION}'
+        ),
+    },
 }
+
+
+def _reindex_in_progress_409(job_store: JobStore, meta: CollectionMeta) -> JSONResponse | None:
+    """The 409 refusing a reindex while ``meta.reindex_job_id`` names a PENDING/RUNNING job, else ``None`` (a stale
+    pointer — job missing or terminal — is overwritten by the new job's id)."""
+    if meta.reindex_job_id is None:
+        return None
+    existing_job = job_store.get(meta.reindex_job_id)
+    if existing_job is not None and existing_job.status in {JobStatus.RUNNING, JobStatus.PENDING}:
+        return JSONResponse({"detail": "reindex already in progress"}, status_code=409)
+    return None
+
+
+def _reindex_not_recorded_500(job_store: JobStore, job: ReindexJob, name: str, error: Exception) -> JSONResponse:
+    """After the ``reindex_job_id`` write failed with *error*: log it, end *job* FAILED (best-effort, it never runs)
+    and build the sanitized 500."""
+    logger.error("Failed to record the reindex job %s on collection %s", job.job_id, name, exc_info=error)
+    _persist_job_status(job_store, job.job_id, JobStatus.FAILED, context=_REINDEX_COLLECTION_LOG_CONTEXT, error=REINDEX_FAILED_DETAIL)
+    return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
 
 @router.post("/{name}/reindex", status_code=202, response_model=JobResponse, responses=_ERROR_REINDEX)
@@ -946,48 +948,34 @@ async def reindex_collection(name: str, request: Request) -> JobResponse | JSONR
     search_store = request.app.state.search_store
     ns: str = request.state.namespace
 
-    path_to_name = _all_collection_paths(config)
-
-    # A collection is visible (and reindexable) if it has a meta row in this
-    # namespace — which a single-file `POST /ingest` writes even without adding
-    # a config path. When the store is absent, fall back to config membership.
-    if search_store is not None:
-        meta = await search_store.get_collection_meta(name, namespace=ns)
-        if meta is None:
-            raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
-    elif name not in path_to_name:
-        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
-
-    resolved = path_to_name.get(name, "")
-
-    # 409 guard: reject if an active reindex is already in progress
-    if meta.reindex_job_id is not None:
-        existing_job = store.get(meta.reindex_job_id)
-        if existing_job is not None and existing_job.status in {JobStatus.RUNNING, JobStatus.PENDING}:
-            return JSONResponse({"detail": "reindex already in progress"}, status_code=409)
-        # Stale: job missing or terminal — clear and proceed
-        meta.reindex_job_id = None
-
-    # Readiness is checked before anything is written: no job, no meta pointer on a 503.
+    # Readiness is checked first, before anything is read or written: no job, no meta pointer on a 503, and no 404
+    # or 409 for a request that cannot run until the service is ready.
     embedder_cache = getattr(request.app.state, "embedder_cache", None)
     pipeline_obj = getattr(request.app.state, "pipeline", None)
-    if embedder_cache is None or pipeline_obj is None:
-        return JSONResponse({"detail": "service not ready"}, status_code=503)
+    service_ready = embedder_cache is not None and pipeline_obj is not None and search_store is not None
+    if not service_ready:
+        return JSONResponse({"detail": SERVICE_NOT_READY_DETAIL}, status_code=503)
 
-    try:
-        job = store.create_reindex(namespace=ns, target_embedding_model=meta.pending_embedding_model)
-    except Exception:  # noqa: BLE001 — any failure maps to one sanitized 500
-        logger.exception("Failed to create the reindex job for collection %s", name)
-        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
+    # A collection is visible (and reindexable) if it has a meta row in this namespace — which a single-file
+    # POST /ingest writes even without adding a config path (create_collection_job answers 404 without one).
+    job = await create_collection_job(
+        search_store,
+        name,
+        ns,
+        job_store=store,
+        log_context=_REINDEX_COLLECTION_LOG_CONTEXT,
+        not_found_detail=f"Collection {name!r} not found",
+        refuse_duplicate=lambda meta: _reindex_in_progress_409(store, meta),
+        create_job=lambda meta: store.create_reindex(
+            name, namespace=ns, target_embedding_model=meta.pending_embedding_model
+        ),
+        pointer_field="reindex_job_id",
+        on_pointer_write_failure=lambda job, error: _reindex_not_recorded_500(store, job, name, error),
+    )
+    if isinstance(job, JSONResponse):
+        return job
 
-    meta.reindex_job_id = job.job_id
-    try:
-        await search_store.update_collection_meta(meta)
-    except Exception:  # noqa: BLE001 — any store failure maps to one sanitized 500
-        logger.exception("Failed to record the reindex job %s on collection %s", job.job_id, name)
-        _persist_job_status(store, job.job_id, JobStatus.FAILED, context=_REINDEX_COLLECTION_LOG_CONTEXT, error=REINDEX_FAILED_DETAIL)
-        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
-
+    resolved = _all_collection_paths(config).get(name, "")
     task = asyncio.create_task(
         _reindex_task(
             job_id=job.job_id,
@@ -1297,13 +1285,20 @@ async def migrate_collection(
 # server) never runs — it is stale: lazily cleared and marked FAILED, not a 409.
 _REINDEX_METADATA_ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.CANCELLING}
 
-_ERROR_401_404_409_500 = {
+_ERROR_REINDEX_METADATA = {
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
     409: {"model": ErrorDetail},
     500: {
         "model": ErrorDetail,
         "description": f'Creating the metadata reindex job failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})',
+    },
+    503: {
+        "model": ErrorDetail,
+        "description": (
+            f'Service not ready — the search store is not initialised (body {{"detail": "{SERVICE_NOT_READY_DETAIL}"}}). '
+            f"{STORE_BUSY_503_DESCRIPTION}"
+        ),
     },
 }
 
@@ -1323,37 +1318,28 @@ async def _reindex_metadata_task(
 
     Lifecycle (caller sets RUNNING -> this task drives to terminal):
       1. Call ``search_store.reindex_metadata(collection, dry_run=..., normalize_timestamps=...)``.
-      2. Transition to DONE with all 5 ReindexResult fields on success.
-      3. Transition to FAILED with ``METADATA_REINDEX_FAILED_DETAIL`` on any exception.
-      4. In finally: clear ``CollectionMeta.metadata_reindex_job_id``.
+      2. In finally (also on cancellation): clear ``CollectionMeta.metadata_reindex_job_id``.
+      3. Transition to DONE with all 5 ReindexResult fields on success.
+      4. Transition to FAILED with ``METADATA_REINDEX_FAILED_DETAIL`` on any exception (the DONE write's included).
+
+    The clear runs BEFORE the terminal write: DELETE /collections/{name} refuses only while this job is
+    RUNNING/CANCELLING, and the clear (a meta read outside the collection lock, then an upsert) would re-create
+    the meta row of a collection dropped after the terminal write.
 
     Note: does NOT pre-acquire the per-collection lock — ``reindex_metadata``
     already acquires ``lock_for(collection)`` internally (non-reentrant).
     """
     job_id = job.job_id
 
+    result: ReindexResult | None = None  # set only when the reindex succeeded
     try:
         result = await search_store.reindex_metadata(  # type: ignore[attr-defined]
             job.collection,
             dry_run=dry_run,
             normalize_timestamps=normalize_timestamps,
         )
-        job_store.update(
-            job_id,
-            status=JobStatus.DONE,
-            result={
-                "processed": result.processed,
-                "updated": result.updated,
-                "skipped": result.skipped,
-                "ts_normalized": result.ts_normalized,
-                "warnings": result.warnings,
-            },
-        )
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — any reindex failure ends the job FAILED below, never escaping the task
         logger.exception("_reindex_metadata_task: job %s failed", job_id)
-        _persist_job_status(
-            job_store, job_id, JobStatus.FAILED, context="_reindex_metadata_task", error=METADATA_REINDEX_FAILED_DETAIL
-        )
     finally:
         try:
             meta = await search_store.get_collection_meta(  # type: ignore[attr-defined]
@@ -1368,13 +1354,39 @@ async def _reindex_metadata_task(
                 job_id,
             )
 
+    if result is not None and _record_metadata_reindex_done(job_store, job_id, result):
+        return
+    _persist_job_status(
+        job_store, job_id, JobStatus.FAILED, context="_reindex_metadata_task", error=METADATA_REINDEX_FAILED_DETAIL
+    )
+
+
+def _record_metadata_reindex_done(job_store: JobStore, job_id: str, result: ReindexResult) -> bool:
+    """Mark metadata reindex job *job_id* DONE with all 5 *result* fields; False (logged) when that write fails."""
+    try:
+        job_store.update(
+            job_id,
+            status=JobStatus.DONE,
+            result={
+                "processed": result.processed,
+                "updated": result.updated,
+                "skipped": result.skipped,
+                "ts_normalized": result.ts_normalized,
+                "warnings": result.warnings,
+            },
+        )
+    except Exception:  # noqa: BLE001 — a failed DONE write must not leave the job RUNNING: the caller marks it FAILED
+        logger.exception("_reindex_metadata_task: could not record DONE for job %s", job_id)
+        return False
+    return True
+
 
 @router.post(
     "/{name}/reindex-metadata",
     name="reindex_metadata",
     status_code=202,
     response_model=JobResponse,
-    responses=_ERROR_401_404_409_500,
+    responses=_ERROR_REINDEX_METADATA,
 )
 async def reindex_metadata(
     name: str, body: ReindexMetadataRequest, request: Request
@@ -1387,9 +1399,11 @@ async def reindex_metadata(
 
     Returns:
     - 202: JobResponse-shaped body, status RUNNING.
-    - 404: Collection not found in config or meta record absent.
+    - 404: Collection not found in config or meta record absent (also when a DELETE dropped it meanwhile).
     - 409: A metadata reindex is already in progress for this collection.
     - 500: The job could not be saved (sanitized ``{"detail": "internal error"}``).
+    - 503: ``service not ready`` — no search store (checked after the config 404); or ``store_busy`` — the
+      collection lock was not acquired within ``INGEST_LOCK_TIMEOUT_S``.
     """
     config: SearchConfig = request.app.state.config
     search_store = request.app.state.search_store
@@ -1401,56 +1415,45 @@ async def reindex_metadata(
     if name not in path_to_name:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
-    # Guard 2: namespace-scoped meta record must exist.
-    meta = await search_store.get_collection_meta(name, namespace=ns)
-    if meta is None:
-        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+    # Readiness, before the first store access: without a search store no meta row, lock or job can be used. After
+    # Guard 1, whose 404 holds whatever the readiness (a name absent from the config never becomes reindexable).
+    if search_store is None:
+        return JSONResponse({"detail": SERVICE_NOT_READY_DETAIL}, status_code=503)
 
-    # Guard 3: reject duplicate if an active reindex is already in progress.
-    # Lazy-stale-clear: if the referenced job is missing, terminal, or a legacy QUEUED/PENDING row (an
-    # older server created these jobs QUEUED first; nothing schedules them, so one never runs), clear and
-    # proceed. A legacy row is also marked FAILED (best-effort) so it does not stay non-terminal — never
-    # evicted, DELETE answering 500 — forever.
-    if meta.metadata_reindex_job_id is not None:
-        existing_job = job_store.get(meta.metadata_reindex_job_id)
-        if existing_job is not None and existing_job.status in _REINDEX_METADATA_ACTIVE_STATUSES:
-            return JSONResponse(
-                {"detail": "metadata reindex already in progress for this collection"},
-                status_code=409,
-            )
-        if existing_job is not None and existing_job.status in (JobStatus.QUEUED, JobStatus.PENDING):
-            _persist_job_status(
-                job_store, existing_job.job_id, JobStatus.FAILED, context="reindex_metadata", error=JOB_SUPERSEDED_DETAIL
-            )
-        meta.metadata_reindex_job_id = None
-
-    try:
-        # Created RUNNING in one write: the route runs the task itself, so the response never
-        # reports QUEUED (mirrors rebuild_communities).
-        running_job = job_store.create_metadata_reindex(collection=name, namespace=ns)
-    except Exception:  # noqa: BLE001 — no job exists; any persist failure maps to one sanitized 500
-        logger.exception("reindex_metadata: failed to persist a metadata reindex job for %r", name)
-        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
-
-    # Set metadata_reindex_job_id AFTER creating the RUNNING job so the
-    # guard above can detect and reject a duplicate submission while this one is active.
+    # Guard 2 (404: no namespace-scoped meta record) and Guard 3 (409: metadata_reindex_job_id names an active job)
+    # run on the meta row read before the collection lock, then again under it; the job and its meta pointer are
+    # created under the same lock (create_collection_job). A pointer naming a missing, terminal or legacy
+    # QUEUED/PENDING job is stale and is overwritten by the new job's id (a dry-run leaves it).
     # A dry-run is a read-only preview and must write NOTHING to the meta table:
     # the non-atomic delete-then-add in update_collection_meta would otherwise open a
     # window during which a lock-free get_collection_meta sees no rows and the
     # collection becomes transiently unresolvable (S52).
-    # Consequence: a dry-run never registers metadata_reindex_job_id, so it is
-    # intentionally exempt from the Guard 3 (409) in-progress check above; concurrent
-    # dry-runs are harmless because they are read-only and still serialise on
-    # lock_for(collection) inside SearchStore.reindex_metadata.
-    if not body.dry_run:
-        meta.metadata_reindex_job_id = running_job.job_id
-        try:
-            await search_store.update_collection_meta(meta)
-        except Exception:
-            logger.warning(
-                "reindex_metadata: failed to persist metadata_reindex_job_id for job %s",
-                running_job.job_id,
-            )
+    # Consequence: a dry-run never registers metadata_reindex_job_id, so it never makes another
+    # submission's Guard 3 answer 409. A dry-run is still refused by Guard 3 (an instant 409) while a non-dry-run
+    # metadata reindex is active. Concurrent dry-runs are harmless (read-only) but serialise: each waits for the
+    # collection lock here (create_collection_job) — held for the whole run of an earlier dry-run's
+    # SearchStore.reindex_metadata — and answers 503 store_busy if that wait times out.
+    running_job = await create_collection_job(
+        search_store,
+        name,
+        ns,
+        job_store=job_store,
+        log_context="reindex_metadata",
+        not_found_detail=f"Collection {name!r} not found",
+        refuse_duplicate=lambda meta: refuse_active_job_or_fail_legacy(
+            job_store,
+            meta.metadata_reindex_job_id,
+            active_statuses=_REINDEX_METADATA_ACTIVE_STATUSES,
+            conflict_detail="metadata reindex already in progress for this collection",
+            log_context="reindex_metadata",
+        ),
+        # Created RUNNING in one write: the route runs the task itself, so the response never
+        # reports QUEUED (mirrors rebuild_communities).
+        create_job=lambda _meta: job_store.create_metadata_reindex(collection=name, namespace=ns),
+        pointer_field=None if body.dry_run else "metadata_reindex_job_id",
+    )
+    if isinstance(running_job, JSONResponse):
+        return running_job
 
     task = asyncio.create_task(
         _reindex_metadata_task(

@@ -157,7 +157,7 @@ def test_status_failed_expired_count_excludes_export_jobs(tmp_path: Path) -> Non
 
     Seeds 1 IngestJob with FAILED_EXPIRED and 1 ExportJob with FAILED_EXPIRED in the
     same namespace.  Only the IngestJob must be reflected in the count — ExportJob
-    is a subclass of IngestJob and must be excluded by the ``type(j) is IngestJob`` guard.
+    is a subclass of IngestJob and must be excluded by the ``is_base_ingest`` guard.
     """
     tmp_db = tmp_path / "db"
     tmp_db.mkdir()

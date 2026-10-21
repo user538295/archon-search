@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import math
 import os
+from collections.abc import Callable, Iterable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,10 +23,11 @@ from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
 from archon_search.server._ingest_lock import STORE_BUSY_CODE
 from archon_search.server.app import create_app
-from archon_search.server.routes_collections import INGEST_IN_PROGRESS_DETAIL, INGEST_JOB_IN_PROGRESS_DETAIL_TEMPLATE
-from archon_search.store import StoreBusyError
+from archon_search.server.routes_collections import COLLECTION_JOB_IN_PROGRESS_DETAIL, COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE
+from archon_search.store import CollectionLockNotHeldError, StoreBusyError
 from archon_search.sync import path_to_collection_name
-from archon_search.types import IngestJob, ReindexJob
+from archon_search.types import CommunityRebuildJob, DeleteJob, ExportJob, ImportJob, IngestJob, IngestOptions, MetadataReindexJob, MigrationJob, MigrationKind, ReindexJob, SyncJob
+from tests._parked_lock import parked_waiters, reaping, until_parked
 
 
 @pytest.fixture
@@ -537,6 +540,7 @@ def test_reindex_returns_ingest_job(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
     app.state.search_store = mock_store
     app.state.embedder_cache = MagicMock()
     app.state.pipeline = MagicMock()
@@ -552,10 +556,16 @@ def test_reindex_returns_ingest_job(
     data = response.json()
     assert "job_id" in data
     assert data["status"] == JobStatus.PENDING.value
+    # The job names its collection, so DELETE /collections/{name} finds it in the job store.
+    assert data["collection"] == name
+    assert tmp_store.get(data["job_id"]).collection == name
 
 
 def test_reindex_unknown_collection_returns_404(client: TestClient) -> None:
-    """POST /collections/{name}/reindex for unknown collection returns 404."""
+    """POST /collections/{name}/reindex for unknown collection returns 404 (once the service is ready: readiness is
+    checked first)."""
+    client.app.state.embedder_cache = MagicMock()
+    client.app.state.pipeline = MagicMock()
     response = client.post("/collections/nonexistent-collection/reindex")
     assert response.status_code == 404
 
@@ -1487,6 +1497,8 @@ def _make_mock_search_store_for_delete(collection_name: str, ns: str = "default"
 
 
 _INGEST_JOB_TIMESTAMP = "2026-10-21T00:00:00Z"
+#: Bound on each awaited step of the concurrent-request tests below: a hang fails the test instead of the run.
+_ASYNC_STEP_TIMEOUT_S = 5.0
 _TENANT_X_KEY = "x" * 64
 
 
@@ -1541,7 +1553,7 @@ def test_delete_collection_503_when_ingest_active(
         f"got {response.status_code}; body={response.json()}"
     )
     assert response.json() == {
-        "detail": "ingest job s399-active-job-id is in progress; retry after it completes",
+        "detail": "job s399-active-job-id is in progress; retry after it completes",
         "code": STORE_BUSY_CODE,
     }
     assert response.headers.get("Retry-After") == str(math.ceil(INGEST_LOCK_TIMEOUT_S))
@@ -1553,48 +1565,200 @@ def test_delete_collection_503_when_ingest_active(
     assert app.state.config.collections == [str(src)]
 
 
-def test_delete_collection_200_when_reindex_running(
-    tmp_path: Path, tmp_store: JobStore
+def _job_on(job_type: type[IngestJob], job_id: str, status: JobStatus, **fields: Any) -> Callable[[str], IngestJob]:
+    """A *job_type* job with fixed timestamps; the param factories below bind its collection to the test's."""
+    return lambda name: job_type(
+        job_id=job_id, status=status, created_at=_INGEST_JOB_TIMESTAMP, updated_at=_INGEST_JOB_TIMESTAMP,
+        collection=name, **fields,
+    )
+
+
+#: (job kind, extra fields) of each kind whose job blocks DELETE only while it may still write the collection.
+_COLLECTION_WRITING_KINDS = [
+    pytest.param(ReindexJob, {}, id="reindex"),
+    pytest.param(ImportJob, {}, id="import"),
+    pytest.param(MigrationJob, {"kind": MigrationKind.REWRITE}, id="migration"),
+    pytest.param(MetadataReindexJob, {}, id="metadata-reindex"),
+    pytest.param(CommunityRebuildJob, {}, id="community-rebuild"),
+]
+
+
+@pytest.mark.parametrize(
+    "make_job",
+    [
+        # Read-only: the export task only reads the collection's rows and meta row.
+        pytest.param(_job_on(ExportJob, "running-export", JobStatus.RUNNING), id="export-running"),
+        # The kinds in NEVER_BLOCKING_JOB_KINDS never block, even when bound to the collection: a real SyncJob is
+        # global (its collection is always ""), the legacy DeleteJob has no task, and an export only reads.
+        pytest.param(_job_on(SyncJob, "running-sync", JobStatus.RUNNING), id="sync-running"),
+        pytest.param(_job_on(DeleteJob, "running-delete", JobStatus.RUNNING), id="legacy-delete-running"),
+        # A reindex job saved by an older server names no collection (""), so it is never matched to this one.
+        pytest.param(lambda name: ReindexJob(
+            job_id="legacy-reindex", status=JobStatus.RUNNING, created_at=_INGEST_JOB_TIMESTAMP,
+            updated_at=_INGEST_JOB_TIMESTAMP,
+        ), id="legacy-reindex-without-collection"),
+        # QUEUED bulk jobs have no task yet. The scheduler's later run of a migration opens the dropped table under
+        # the collection lock and fails cleanly; an import creates its target collection by design.
+        pytest.param(
+            _job_on(MigrationJob, "queued-migration", JobStatus.QUEUED, kind=MigrationKind.REWRITE),
+            id="migration-queued",
+        ),
+        pytest.param(_job_on(ImportJob, "queued-import", JobStatus.QUEUED), id="import-queued"),
+    ],
+)
+def test_delete_collection_200_when_job_on_collection_cannot_write_it(
+    tmp_path: Path, tmp_store: JobStore, make_job: Callable[[str], IngestJob]
 ) -> None:
-    """DELETE is not blocked by a RUNNING ReindexJob — subclasses are intentionally excluded.
+    """DELETE is not blocked by a job that cannot write the collection's table or meta row (yet): a never-blocking
+    kind (export, sync, legacy delete), a legacy reindex naming no collection, or a QUEUED bulk job."""
+    app, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    tmp_store.create_job(make_job(name))
 
-    This pins the ``type(j) is IngestJob`` exact-type check as deliberate: changing it to
-    isinstance would block DELETE while a ReindexJob (or another IngestJob subclass) runs.
-    """
-    src = tmp_path / "reindex_running_col"
-    src.mkdir()
-    cfg = SearchConfig()
-    cfg.db_path = str(tmp_path / "search")
-    cfg.collections = [str(src)]
+    response = client.delete(f"/collections/{name}")
 
-    name = path_to_collection_name(str(src))
-    ns = "default"
-
-    now = "2026-08-07T00:00:00Z"
-    reindex_job = ReindexJob(
-        job_id="s399-reindex-job-id",
-        status=JobStatus.RUNNING,
-        created_at=now,
-        updated_at=now,
-        namespace=ns,
-        collection=name,
-    )
-    tmp_store.create_job(reindex_job)
-
-    mock_search_store = _make_mock_search_store_for_delete(name, ns)
-    app = create_app(cfg, tmp_store)
-    app.state.search_store = mock_search_store
-
-    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
-    response = c.delete(f"/collections/{name}")
-
-    # ReindexJob is excluded from the active-ingest guard, so DELETE drops the collection.
-    assert response.status_code == 200, (
-        f"Expected 200 (ReindexJob excluded from guard), got {response.status_code}; "
-        f"body={response.json()}"
-    )
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}; body={response.text}"
+    assert response.json() == {"name": name, "deleted": True}
     mock_search_store.drop_collection.assert_awaited_once()
+    assert app.state.config.collections == []
+
+
+@pytest.mark.parametrize("terminal_status", [JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED])
+@pytest.mark.parametrize(("job_type", "fields"), _COLLECTION_WRITING_KINDS)
+def test_delete_collection_200_when_collection_writing_job_is_terminal(
+    tmp_path: Path, tmp_store: JobStore, job_type: type[IngestJob], fields: dict[str, Any], terminal_status: JobStatus
+) -> None:
+    """A terminal job of a kind that blocks DELETE while active writes nothing more, so DELETE drops the collection."""
+    app, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    tmp_store.create_job(_job_on(job_type, "terminal-job", terminal_status, **fields)(name))
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}; body={response.text}"
+    assert response.json() == {"name": name, "deleted": True}
+    mock_search_store.drop_collection.assert_awaited_once()
+    assert app.state.config.collections == []
+
+
+def _reindex_job_as_route_creates(store: JobStore, name: str, ns: str) -> IngestJob:
+    """A ReindexJob as POST /collections/{name}/reindex creates it: PENDING, on *name*."""
+    return store.create_reindex(name, namespace=ns)
+
+
+def _metadata_reindex_job_as_route_creates(store: JobStore, name: str, ns: str) -> IngestJob:
+    """A MetadataReindexJob as POST /collections/{name}/reindex-metadata creates it (RUNNING)."""
+    return store.create_metadata_reindex(collection=name, namespace=ns)
+
+
+def _migration_job_as_route_creates(store: JobStore, name: str, ns: str) -> IngestJob:
+    """A REWRITE MigrationJob as POST /collections/{name}/migrate creates it (RUNNING)."""
+    return store.create_migration(
+        collection=name, kind=MigrationKind.REWRITE, backup_confirmed=True, namespace=ns, status=JobStatus.RUNNING,
+    )
+
+
+def _import_job_as_route_creates(store: JobStore, name: str, ns: str) -> IngestJob:
+    """An ImportJob as POST /collections/{name}/import creates it (QUEUED, until the scheduler claims it RUNNING)."""
+    return store.create_import(
+        collection=name, archive_path="/archives/col.tar.gz", force_overwrite=False, ignore_schema_version=False,
+        on_error="fail", namespace=ns,
+    )
+
+
+def _community_rebuild_job_as_route_creates(store: JobStore, name: str, ns: str) -> IngestJob:
+    """A CommunityRebuildJob as POST /graph/{collection}/rebuild-communities creates it (RUNNING)."""
+    return store.create_community_rebuild(collection=name, namespace=ns)
+
+
+@pytest.mark.parametrize(
+    ("make_job", "active_status"),
+    [
+        # PENDING: _reindex_task loads the embedder before its RUNNING claim, holding no collection lock.
+        pytest.param(_reindex_job_as_route_creates, JobStatus.PENDING, id="reindex-pending"),
+        pytest.param(_reindex_job_as_route_creates, JobStatus.RUNNING, id="reindex-running"),
+        # CANCELLING: DELETE /jobs/{id} does not stop the task; ingest_directory keeps writing.
+        pytest.param(_reindex_job_as_route_creates, JobStatus.CANCELLING, id="reindex-cancelling"),
+        pytest.param(_metadata_reindex_job_as_route_creates, JobStatus.RUNNING, id="metadata-reindex-running"),
+        pytest.param(_metadata_reindex_job_as_route_creates, JobStatus.CANCELLING, id="metadata-reindex-cancelling"),
+        pytest.param(_migration_job_as_route_creates, JobStatus.RUNNING, id="migration-running"),
+        pytest.param(_migration_job_as_route_creates, JobStatus.CANCELLING, id="migration-cancelling"),
+        # The import task writes through ensure_collection / ingest_chunks, taking the lock per write only.
+        pytest.param(_import_job_as_route_creates, JobStatus.RUNNING, id="import-running"),
+        # CANCELLING: the import task checks for it between batches only, and keeps writing until then.
+        pytest.param(_import_job_as_route_creates, JobStatus.CANCELLING, id="import-cancelling"),
+        # The rebuild writes the collection's graph tables, then clears meta.community_rebuild_job_id by an unlocked
+        # meta read + upsert, which re-creates the meta row of a collection dropped in between.
+        pytest.param(_community_rebuild_job_as_route_creates, JobStatus.RUNNING, id="community-rebuild-running"),
+        pytest.param(_community_rebuild_job_as_route_creates, JobStatus.CANCELLING, id="community-rebuild-cancelling"),
+    ],
+)
+def test_delete_collection_503_when_collection_mutating_job_active(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    caplog: pytest.LogCaptureFixture,
+    make_job: Callable[[JobStore, str, str], IngestJob],
+    active_status: JobStatus,
+) -> None:
+    """DELETE refuses with the store-busy 503 while a job that writes the collection is active, and logs a WARNING
+    naming the job's kind and id.
+
+    None of these tasks holds ``lock_for(name)`` for the job's whole life: ``_reindex_task`` writes through
+    ``pipeline.ingest_directory`` (lock per ``ingest_chunks`` call, ``ensure_collection`` lock-free — a dropped
+    table and meta row are re-created), the import task likewise locks per write, and the metadata-reindex /
+    migration / community-rebuild tasks take the lock only inside their store call (or not at all) and then
+    upsert the meta row unlocked, so a free lock does not mean the collection is safe to drop. The job store is
+    the signal.
+    """
+    app, client, mock_search_store, name, src = _ingest_guard_app(tmp_path, tmp_store)
+    job = make_job(tmp_store, name, "default")
+    tmp_store.update(job.job_id, status=active_status)
+
+    with caplog.at_level("WARNING", logger="archon_search.server.routes_collections"):
+        response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 503, (
+        f"Expected 503 while a {type(job).__name__} is {active_status.value}, "
+        f"got {response.status_code}; body={response.json()}"
+    )
+    body = response.json()
+    assert set(body) == {"detail", "code"}
+    assert body["code"] == STORE_BUSY_CODE
+    assert job.job_id in body["detail"], "the caller's own job id is shown, as for an active ingest"
+    assert response.headers.get("Retry-After") == str(math.ceil(INGEST_LOCK_TIMEOUT_S))
+    [record] = [r for r in caplog.records if r.getMessage().startswith(f"DELETE /collections/{name} refused")]
+    assert record.levelname == "WARNING"
+    assert f": {type(job).__name__} {job.job_id} is {active_status.value} " in record.getMessage()
+    mock_search_store.drop_collection.assert_not_called()
+    mock_search_store.delete_collection_meta.assert_not_called()
+    mock_search_store.discard_lock.assert_not_called()
+    assert not mock_search_store.lock_for.return_value.locked()
+    assert app.state.config.collections == [str(src)]
+
+
+@dataclasses.dataclass
+class _UnclassifiedJob(IngestJob):
+    """A job kind in neither COLLECTION_WRITING_JOB_STATUSES nor NEVER_BLOCKING_JOB_KINDS."""
+
+
+def test_delete_collection_503_while_an_unclassified_job_kind_is_not_terminal(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A job of a kind nobody classified fails DELETE closed with the documented store-busy 503 — not a bare 500 —
+    and the gap is logged at ERROR."""
+    app, client, mock_search_store, name, src = _ingest_guard_app(tmp_path, tmp_store)
+    job = tmp_store.create_job(_job_on(_UnclassifiedJob, "unclassified-job", JobStatus.QUEUED)(name))
+
+    with caplog.at_level("ERROR", logger="archon_search.jobs.store"):
+        response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {
+        "detail": COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id=job.job_id), "code": STORE_BUSY_CODE,
+    }
+    assert any(
+        r.levelname == "ERROR" and "unclassified kind _UnclassifiedJob" in r.getMessage() for r in caplog.records
+    ), [r.getMessage() for r in caplog.records]
+    mock_search_store.drop_collection.assert_not_called()
+    assert app.state.config.collections == [str(src)]
 
 
 @pytest.mark.parametrize(
@@ -1622,7 +1786,7 @@ def test_delete_collection_503_shows_ingest_job_id_only_to_its_namespace(
 
     assert response.status_code == 503, f"DELETE dropped a collection an ingest writes to: {response.text}"
     expected_detail = (
-        INGEST_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id=job_id) if job_id_shown else INGEST_IN_PROGRESS_DETAIL
+        COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id=job_id) if job_id_shown else COLLECTION_JOB_IN_PROGRESS_DETAIL
     )
     assert response.json() == {"detail": expected_detail, "code": STORE_BUSY_CODE}
     assert (job_id in response.text) is job_id_shown
@@ -1636,6 +1800,174 @@ def test_delete_collection_503_shows_ingest_job_id_only_to_its_namespace(
     mock_search_store.discard_lock.assert_not_called()
     assert not mock_search_store.lock_for.return_value.locked()
     assert app.state.config.collections == [str(src)]
+
+
+def test_delete_collection_503_hides_a_foreign_non_ingest_job_id(tmp_path: Path, tmp_store: JobStore) -> None:
+    """Another namespace's reindex on the collection blocks DELETE like its ingest does, with the generic detail:
+    the foreign job id never reaches the caller."""
+    _, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    job = tmp_store.create_reindex(name, namespace="other-team")
+    tmp_store.update(job.job_id, status=JobStatus.RUNNING)
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {"detail": COLLECTION_JOB_IN_PROGRESS_DETAIL, "code": STORE_BUSY_CODE}
+    assert job.job_id not in response.text
+    mock_search_store.drop_collection.assert_not_called()
+
+
+@pytest.mark.parametrize("with_store", [True, False], ids=["store", "no-store"])
+def test_delete_config_only_collection_503_while_a_job_writes_it(
+    tmp_path: Path, tmp_store: JobStore, with_store: bool
+) -> None:
+    """A configured collection with no meta row yet (its first ingest is RUNNING) is refused like any other: that
+    ingest creates the table and meta row, which would outlive the DELETE. The config entry stays, the collection's
+    failed ingest stays a retry candidate (only a DELETE that succeeds cancels it), and the lock is released and
+    kept."""
+    app, client, mock_search_store, name, src = _ingest_guard_app(tmp_path, tmp_store)
+    mock_search_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_search_store.get_all_collections_meta = AsyncMock(return_value=[])
+    if not with_store:
+        app.state.search_store = None
+    tmp_store.create_job(_ingest_job("first-ingest", JobStatus.RUNNING, name))
+    tmp_store.create_job(_ingest_job("failed-ingest", JobStatus.FAILED, name))
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {
+        "detail": COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id="first-ingest"), "code": STORE_BUSY_CODE,
+    }
+    assert app.state.config.collections == [str(src)]
+    assert _statuses(tmp_store, ["failed-ingest"]) == {"failed-ingest": JobStatus.FAILED}
+    if with_store:
+        mock_search_store.lock_for.assert_called_once_with(name)
+        assert not mock_search_store.lock_for.return_value.locked()
+        mock_search_store.discard_lock.assert_not_called()
+
+
+def test_delete_config_only_collection_200_without_an_active_job(tmp_path: Path, tmp_store: JobStore) -> None:
+    """With no job writing it, a config-only collection is removed from the config without touching its data, and
+    the lock entry DELETE created for it is discarded — only after the release, as for a dropped collection — so
+    no entry is left behind per deleted config-only name."""
+    app, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    mock_search_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_search_store.get_all_collections_meta = AsyncMock(return_value=[])
+    lock = mock_search_store.lock_for.return_value
+    held_at_discard: list[bool] = []
+    mock_search_store.discard_lock.side_effect = lambda collection: held_at_discard.append(lock.locked())
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"name": name, "deleted": True}
+    assert app.state.config.collections == []
+    mock_search_store.drop_collection.assert_not_called()
+    mock_search_store.delete_collection_meta.assert_not_called()
+    mock_search_store.discard_lock.assert_called_once_with(name)
+    assert held_at_discard == [False]
+    assert not lock.locked()
+
+
+async def test_delete_config_only_collection_503_while_another_write_holds_the_lock(
+    tmp_path: Path, tmp_store: JobStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DELETE of a config-only collection waits for the collection lock like any DELETE: while another write holds
+    it past the wait bound, the answer is the lock helper's 503 ``store_busy`` and the config entry stays."""
+    lock_timeout_s = 0.05
+    monkeypatch.setattr("archon_search.constants.INGEST_LOCK_TIMEOUT_S", lock_timeout_s)
+    app, _, mock_search_store, name, src = _ingest_guard_app(tmp_path, tmp_store)
+    mock_search_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_search_store.get_all_collections_meta = AsyncMock(return_value=[])
+    lock = mock_search_store.lock_for.return_value
+
+    await lock.acquire()
+    try:
+        async with _asgi_client(app) as client:
+            response = await asyncio.wait_for(client.delete(f"/collections/{name}"), timeout=_ASYNC_STEP_TIMEOUT_S)
+    finally:
+        lock.release()
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {"detail": "reindex in progress; retry after Retry-After seconds", "code": STORE_BUSY_CODE}
+    assert response.headers.get("Retry-After") == str(math.ceil(lock_timeout_s))
+    assert app.state.config.collections == [str(src)]
+    mock_search_store.drop_collection.assert_not_called()
+
+
+def test_delete_config_only_collection_drops_a_meta_row_created_while_it_waited_for_the_lock(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """The meta row is read again under the collection lock: a first ingest that held the lock while this DELETE
+    waited created the table and meta row, so DELETE drops them like any collection's — a config-only 200 would leave
+    them behind."""
+    app, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    created_meanwhile = CollectionMeta(name=name, namespace="default")
+    lock = mock_search_store.lock_for.return_value
+    held_at_read: list[bool] = []
+
+    async def get_collection_meta(*_args: Any, **_kwargs: Any) -> CollectionMeta | None:
+        held_at_read.append(lock.locked())
+        return None if len(held_at_read) == 1 else created_meanwhile
+
+    mock_search_store.get_collection_meta = AsyncMock(side_effect=get_collection_meta)
+    mock_search_store.get_all_collections_meta = AsyncMock(return_value=[])
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"name": name, "deleted": True}
+    assert held_at_read == [False, True], "the second meta read must run under the collection lock"
+    mock_search_store.drop_collection.assert_awaited_once_with(name, _locked_by_caller=True)
+    mock_search_store.delete_collection_meta.assert_awaited_once_with(name, "default")
+    mock_search_store.discard_lock.assert_called_once_with(name)
+    assert app.state.config.collections == []
+
+
+def test_delete_config_only_collection_404_once_another_namespace_created_it(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """A config-only collection is visible only while no namespace has a meta row for it: when another namespace's
+    first ingest created one while this DELETE waited for the lock, the re-check under the lock answers 404 — the
+    config entry and the other namespace's table are left alone, and the lock is released."""
+    app, client, mock_search_store, name, src = _ingest_guard_app(tmp_path, tmp_store)
+    mock_search_store.get_collection_meta = AsyncMock(return_value=None)
+    lock = mock_search_store.lock_for.return_value
+    held_at_read: list[bool] = []
+
+    async def get_all_collections_meta() -> list[CollectionMeta]:
+        held_at_read.append(lock.locked())
+        return [] if len(held_at_read) == 1 else [CollectionMeta(name=name, namespace="other-team")]
+
+    mock_search_store.get_all_collections_meta = AsyncMock(side_effect=get_all_collections_meta)
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 404, response.text
+    assert held_at_read == [False, True], "the visibility re-check must run under the collection lock"
+    assert response.json() == {"detail": f"Collection {name!r} not found"}
+    assert app.state.config.collections == [str(src)]
+    mock_search_store.drop_collection.assert_not_called()
+    mock_search_store.delete_collection_meta.assert_not_called()
+    assert not mock_search_store.lock_for.return_value.locked()
+
+
+def test_delete_config_only_collection_cancels_its_ingest_retries(tmp_path: Path, tmp_store: JobStore) -> None:
+    """A config-only collection's FAILED path ingest is a MaintenanceLoop retry candidate, whose retry would create
+    the table and meta row of the deleted collection: DELETE cancels it, as it does for a collection it drops."""
+    app, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    mock_search_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_search_store.get_all_collections_meta = AsyncMock(return_value=[])
+    tmp_store.create_job(_ingest_job("failed-first-ingest", JobStatus.FAILED, name))
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 200, response.text
+    assert app.state.config.collections == []
+    cancelled = tmp_store.get("failed-first-ingest")
+    assert cancelled is not None and cancelled.status == JobStatus.CANCELLED
+    mock_search_store.drop_collection.assert_not_called()
 
 
 @pytest.mark.parametrize("foreign_first", [True, False], ids=["foreign-job-first", "own-job-first"])
@@ -1652,7 +1984,7 @@ def test_delete_collection_503_prefers_callers_own_active_ingest_job_id(
     response = client.delete(f"/collections/{name}")
 
     assert response.status_code == 503
-    assert response.json()["detail"] == INGEST_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id="own-ingest-job-id")
+    assert response.json()["detail"] == COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id="own-ingest-job-id")
     assert "foreign-ingest-job-id" not in response.text
 
 
@@ -1674,9 +2006,9 @@ def test_delete_collection_200_when_no_active_ingest_on_collection(
 ) -> None:
     """DELETE drops the collection when no base IngestJob is RUNNING/CANCELLING on it.
 
-    PENDING is excluded (a REST ingest holds the lock while PENDING; a maintenance-retry PENDING job
-    has no dispatcher), terminal and queued jobs write nothing, and a RUNNING ingest on another
-    collection is irrelevant.
+    PENDING is excluded (a REST ingest and a maintenance retry both hold or wait for the lock while
+    PENDING), terminal and queued jobs write nothing, and a RUNNING ingest on another collection is
+    irrelevant.
     """
     app, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
     job_collection = name if same_collection else f"{name}-other"
@@ -1689,6 +2021,667 @@ def test_delete_collection_200_when_no_active_ingest_on_collection(
     mock_search_store.drop_collection.assert_awaited_once()
     mock_search_store.delete_collection_meta.assert_awaited_once_with(name, "default")
     assert app.state.config.collections == []
+
+
+def _seed_retry_candidates(tmp_store: JobStore, name: str) -> dict[str, IngestJob]:
+    """Base ingest jobs a DELETE of *name* (namespace ``default``) may or may not end, keyed by job id."""
+    jobs = {
+        "failed": _ingest_job("failed", JobStatus.FAILED, name),
+        "pending": _ingest_job("pending", JobStatus.PENDING, name),
+        "done": _ingest_job("done", JobStatus.DONE, name),
+        "other-collection": _ingest_job("other-collection", JobStatus.FAILED, f"{name}-other"),
+        "other-namespace": _ingest_job("other-namespace", JobStatus.FAILED, name, namespace="other-team"),
+        "reindex": ReindexJob(
+            job_id="reindex", status=JobStatus.FAILED, created_at=_INGEST_JOB_TIMESTAMP,
+            updated_at=_INGEST_JOB_TIMESTAMP, collection=name,
+        ),
+        "export": ExportJob(
+            job_id="export", status=JobStatus.PENDING, created_at=_INGEST_JOB_TIMESTAMP,
+            updated_at=_INGEST_JOB_TIMESTAMP, collection=name,
+        ),
+    }
+    for job in jobs.values():
+        tmp_store.create_job(job)
+    return jobs
+
+
+def _statuses(tmp_store: JobStore, job_ids: Iterable[str]) -> dict[str, JobStatus]:
+    statuses: dict[str, JobStatus] = {}
+    for job_id in job_ids:
+        job = tmp_store.get(job_id)
+        assert job is not None
+        statuses[job_id] = job.status
+    return statuses
+
+
+def test_delete_collection_ends_its_maintenance_retries(tmp_path: Path, tmp_store: JobStore) -> None:
+    """A DELETE that drops the collection stops every maintenance retry from re-creating it: its FAILED base ingest
+    jobs (never retried) and PENDING ones (a retry waiting for the collection lock DELETE holds, whose claim is then
+    refused) end CANCELLED — in every namespace, as the dropped table is shared by name — not FAILED_EXPIRED, which
+    would count as a failed ingest to re-submit. Other statuses, collections and subclass jobs are left as they are."""
+    _, client, _, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    jobs = _seed_retry_candidates(tmp_store, name)
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 200, response.text
+    assert _statuses(tmp_store, jobs) == {
+        "failed": JobStatus.CANCELLED,
+        "pending": JobStatus.CANCELLED,
+        "done": JobStatus.DONE,
+        "other-collection": JobStatus.FAILED,
+        "other-namespace": JobStatus.CANCELLED,
+        "reindex": JobStatus.FAILED,
+        "export": JobStatus.PENDING,
+    }
+
+
+def test_delete_collection_keeps_retries_when_the_drop_fails(tmp_path: Path, tmp_store: JobStore) -> None:
+    """A failed table drop leaves the collection in place, so its retries are left as they are."""
+    _, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    mock_search_store.drop_collection = AsyncMock(side_effect=RuntimeError("drop failed"))
+    jobs = _seed_retry_candidates(tmp_store, name)
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 500
+    assert _statuses(tmp_store, jobs) == {job_id: job.status for job_id, job in jobs.items()}
+
+
+def test_delete_collection_succeeds_when_ending_retries_fails(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Ending the retries is auxiliary: a failed job-store write is logged at WARNING, the jobs keep their statuses
+    and the DELETE still succeeds."""
+    from tests._job_store_faults import failing_job_writes
+
+    _, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    jobs = _seed_retry_candidates(tmp_store, name)
+
+    with failing_job_writes(), caplog.at_level("WARNING", logger="archon_search.jobs.store"):
+        response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 200, response.text
+    mock_search_store.delete_collection_meta.assert_awaited_once_with(name, "default")
+    assert _statuses(tmp_store, jobs) == {job_id: job.status for job_id, job in jobs.items()}
+    assert any(
+        f"could not cancel the ingest jobs of dropped collection {name}" in r.getMessage() for r in caplog.records
+    )
+
+
+async def test_delete_collection_cancels_a_retry_parked_on_its_lock(tmp_path: Path, tmp_store: JobStore) -> None:
+    """A real DELETE racing a maintenance retry over ONE shared collection lock: the DELETE holds the lock while it
+    drops the table, the retry dispatched meanwhile parks on that lock still PENDING, the DELETE cancels it, and once
+    the lock frees the retry's claim is refused — it ends CANCELLED and never ingests into the dropped collection."""
+    import httpx
+
+    from archon_search.server.routes_jobs import make_retry_dispatcher
+
+    app, _, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    lock = asyncio.Lock()
+    mock_search_store.lock_for = MagicMock(return_value=lock)
+    dropping, finish_drop = asyncio.Event(), asyncio.Event()
+
+    async def drop_collection(*_args: Any, **_kwargs: Any) -> None:
+        dropping.set()
+        await finish_drop.wait()
+
+    mock_search_store.drop_collection = AsyncMock(side_effect=drop_collection)
+    pipeline_fn = AsyncMock()
+    app.state.ingest_pipeline = pipeline_fn
+    app.state._background_tasks = set()
+    retry = tmp_store.create(
+        source="maintenance", path="/data/doc.md", collection=name,
+        ingest_options=IngestOptions(submitted_path="/data/doc.md", ingested_by="http"),
+    )
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Authorization": f"Bearer {key}"}
+    ) as client:
+        delete_task = asyncio.create_task(client.delete(f"/collections/{name}"))
+        async with reaping({delete_task}), reaping(app.state._background_tasks):
+            await asyncio.wait_for(dropping.wait(), timeout=_ASYNC_STEP_TIMEOUT_S)
+            assert lock.locked(), "precondition: DELETE holds the collection lock while it drops the table"
+            make_retry_dispatcher(app.state)(retry)
+            (retry_task,) = app.state._background_tasks
+            await until_parked(lock)  # the retry parks on the lock DELETE holds
+            finish_drop.set()
+            response = await asyncio.wait_for(delete_task, timeout=_ASYNC_STEP_TIMEOUT_S)
+            await asyncio.wait_for(retry_task, timeout=_ASYNC_STEP_TIMEOUT_S)
+
+    assert response.status_code == 200, response.text
+    final = tmp_store.get(retry.job_id)
+    assert final is not None
+    assert final.status == JobStatus.CANCELLED
+    pipeline_fn.assert_not_awaited()
+    assert not lock.locked()
+    assert parked_waiters(lock) == 0
+
+
+class _LockedJobRoute(NamedTuple):
+    """A route that creates a job writing its collection, and records it on the meta row, under the collection lock
+    (``create_collection_job``)."""
+
+    path: str  # template with {name}
+    body: dict[str, Any] | None
+    not_found_detail: str  # template with {name}
+    conflict_detail: str
+    pointer_field: str
+    create_method: str  # the JobStore method creating the route's job
+    log_context: str
+    job_kind: type[IngestJob]  # the kind of the route's job
+
+
+_LOCKED_JOB_ROUTES = [
+    pytest.param(
+        _LockedJobRoute(
+            "/collections/{name}/reindex", None, "Collection {name!r} not found", "reindex already in progress",
+            "reindex_job_id", "create_reindex", "reindex_collection", ReindexJob,
+        ),
+        id="reindex",
+    ),
+    pytest.param(
+        _LockedJobRoute(
+            "/collections/{name}/reindex-metadata", {}, "Collection {name!r} not found",
+            "metadata reindex already in progress for this collection", "metadata_reindex_job_id",
+            "create_metadata_reindex", "reindex_metadata", MetadataReindexJob,
+        ),
+        id="reindex-metadata",
+    ),
+    pytest.param(
+        _LockedJobRoute(
+            "/graph/{name}/rebuild-communities", None, "collection not found",
+            "community rebuild already in progress for this collection", "community_rebuild_job_id",
+            "create_community_rebuild", "rebuild_communities", CommunityRebuildJob,
+        ),
+        id="rebuild-communities",
+    ),
+]
+
+
+def _locked_job_routes_app(
+    tmp_path: Path, tmp_store: JobStore
+) -> tuple[Any, MagicMock, dict[str, CollectionMeta], asyncio.Lock, str]:
+    """App wired for every ``_LOCKED_JOB_ROUTES`` route on one collection: its meta row lives in a dict and each read
+    returns a copy (only a real meta write changes what a later read sees), and its collection lock is a real one,
+    which a meta write takes unless its caller holds it (as ``SearchStore.update_collection_meta`` does).
+
+    Returns (app, search store, meta rows by name, collection lock, collection name).
+    """
+    app, _, _, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    mock_store, meta_rows = _stateful_meta_store([CollectionMeta(name=name, namespace="default")])
+    lock = asyncio.Lock()
+    mock_store.lock_for = MagicMock(return_value=lock)
+    read_row = mock_store.get_collection_meta.side_effect
+    write_row = mock_store.update_collection_meta.side_effect
+
+    async def read_copy(collection: str, namespace: str = "default") -> CollectionMeta | None:
+        meta = await read_row(collection, namespace)
+        return None if meta is None else dataclasses.replace(meta)
+
+    async def locked_write(meta: CollectionMeta, *, _locked_by_caller: bool = False) -> None:
+        if _locked_by_caller:
+            if not lock.locked():  # as SearchStore.update_collection_meta refuses it
+                raise CollectionLockNotHeldError(f"lock_for({meta.name!r}) is not held")
+            await write_row(meta)
+            return
+        async with lock:
+            await write_row(meta)
+
+    mock_store.get_collection_meta = AsyncMock(side_effect=read_copy)
+    mock_store.update_collection_meta = AsyncMock(side_effect=locked_write)
+    mock_store.reindex_metadata = AsyncMock()
+    app.state.search_store = mock_store
+    app.state.embedder_cache = MagicMock()
+    app.state.pipeline = MagicMock()
+    app.state.config.graph.enabled = True
+    app.state.graph_store = MagicMock()
+    app.state.enrichment_client = None
+    app.state._background_tasks = set()
+    return app, mock_store, meta_rows, lock, name
+
+
+def _asgi_client(app: Any) -> Any:
+    """An authed httpx client calling *app* in this event loop, so a test can interleave concurrent requests."""
+    import httpx
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Authorization": f"Bearer {key}"}
+    )
+
+
+async def _never_finishing_job_task(*_args: Any, **_kwargs: Any) -> None:
+    """Stands in for a job route's background task: it never ends the job, so the job stays active until reaped."""
+    await asyncio.Event().wait()
+
+
+def _park_job_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the background task of every ``_LOCKED_JOB_ROUTES`` route by ``_never_finishing_job_task``."""
+    from archon_search.server import routes_collections, routes_graph
+
+    monkeypatch.setattr(routes_collections, "_reindex_task", _never_finishing_job_task)
+    monkeypatch.setattr(routes_collections, "_reindex_metadata_task", _never_finishing_job_task)
+    monkeypatch.setattr(routes_graph, "_community_rebuild_task", _never_finishing_job_task)
+
+
+@pytest.mark.parametrize("route", _LOCKED_JOB_ROUTES)
+async def test_job_route_racing_delete_creates_no_job_and_no_meta_row(
+    tmp_path: Path, tmp_store: JobStore, route: _LockedJobRoute
+) -> None:
+    """A job route whose collection a DELETE is dropping must not create its job or re-insert the meta row.
+
+    The route passes its guards (config entry, meta row) before DELETE starts, and goes on while DELETE, holding the
+    collection lock, drops the table. Unless the route creates its job under that lock after re-reading the row, it
+    creates a job DELETE never saw and upserts its meta pointer, re-inserting the row of the dropped collection.
+    The route releases the lock on its 404 too, and then discards the lock entry: DELETE's own discard kept it, as
+    the route was waiting on it (``SearchStore.discard_lock``), so without the route's the entry would leak.
+    """
+    app, mock_store, meta_rows, lock, name = _locked_job_routes_app(tmp_path, tmp_store)
+    dropping, finish_drop = asyncio.Event(), asyncio.Event()
+    route_read, resume_route_read = asyncio.Event(), asyncio.Event()
+    read_meta = mock_store.get_collection_meta.side_effect
+
+    async def get_collection_meta(collection: str, namespace: str = "default") -> CollectionMeta | None:
+        meta = await read_meta(collection, namespace)
+        if not route_read.is_set():  # the route's guard read (the first read): it then waits for DELETE to start
+            route_read.set()
+            await resume_route_read.wait()
+        return meta
+
+    async def drop_collection(*_args: Any, **_kwargs: Any) -> None:
+        dropping.set()
+        await finish_drop.wait()
+
+    mock_store.get_collection_meta = AsyncMock(side_effect=get_collection_meta)
+    mock_store.drop_collection = AsyncMock(side_effect=drop_collection)
+    discards: list[tuple[str, bool]] = []  # (collection, lock still held) per discard_lock call
+    mock_store.discard_lock = MagicMock(side_effect=lambda collection: discards.append((collection, lock.locked())))
+
+    async with _asgi_client(app) as client:
+        route_task = asyncio.create_task(client.post(route.path.format(name=name), json=route.body))
+        tasks = {route_task}
+        async with reaping(tasks), reaping(app.state._background_tasks):
+            await asyncio.wait_for(route_read.wait(), timeout=_ASYNC_STEP_TIMEOUT_S)
+            delete_task = asyncio.create_task(client.delete(f"/collections/{name}"))
+            tasks.add(delete_task)
+            await asyncio.wait_for(dropping.wait(), timeout=_ASYNC_STEP_TIMEOUT_S)
+            resume_route_read.set()
+            # The route got the still-present row, and must now park on the lock DELETE holds.
+            await until_parked(lock)
+            assert not route_task.done(), "the route answered while DELETE held the collection lock"
+            finish_drop.set()
+            delete_response = await asyncio.wait_for(delete_task, timeout=_ASYNC_STEP_TIMEOUT_S)
+            response = await asyncio.wait_for(route_task, timeout=_ASYNC_STEP_TIMEOUT_S)
+
+    assert delete_response.status_code == 200, delete_response.text
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": route.not_found_detail.format(name=name)}
+    assert tmp_store.list() == [], "the route created a job on the dropped collection"
+    assert name not in meta_rows, "the dropped collection's meta row was re-inserted"
+    mock_store.update_collection_meta.assert_not_awaited()
+    assert not lock.locked(), "the route kept the collection lock after its 404"
+    assert discards == [(name, False), (name, False)], "DELETE's then the route's discard, each after its release"
+
+
+@pytest.mark.parametrize("route", _LOCKED_JOB_ROUTES)
+async def test_job_route_concurrent_duplicates_create_one_job(
+    tmp_path: Path, tmp_store: JobStore, monkeypatch: pytest.MonkeyPatch, route: _LockedJobRoute
+) -> None:
+    """Of two concurrent requests whose unlocked reads both saw no active job, exactly one creates its job.
+
+    Both queue on the collection lock past their unlocked guards. The duplicate guard runs again under the lock, on
+    a meta row re-read there — and the first request records its job's pointer before it releases the lock — so the
+    second request answers 409 instead of creating a second job.
+    """
+    app, _, meta_rows, lock, name = _locked_job_routes_app(tmp_path, tmp_store)
+    _park_job_tasks(monkeypatch)
+    path = route.path.format(name=name)
+
+    async with _asgi_client(app) as client, reaping(app.state._background_tasks):
+        await lock.acquire()  # held by "another write" until both requests wait for it
+        requests = [asyncio.create_task(client.post(path, json=route.body)) for _ in range(2)]
+        async with reaping(set(requests)):
+            await until_parked(lock, waiters=len(requests))
+            lock.release()
+            responses = await asyncio.wait_for(asyncio.gather(*requests), timeout=_ASYNC_STEP_TIMEOUT_S)
+
+    assert sorted(r.status_code for r in responses) == [202, 409], [r.text for r in responses]
+    [conflict] = [r for r in responses if r.status_code == 409]
+    assert conflict.json() == {"detail": route.conflict_detail}
+    [job] = tmp_store.list()
+    assert getattr(meta_rows[name], route.pointer_field) == job.job_id
+    assert not lock.locked()
+
+
+@pytest.mark.parametrize("route", _LOCKED_JOB_ROUTES)
+async def test_job_route_lock_timeout_answers_store_busy_and_creates_nothing(
+    tmp_path: Path, tmp_store: JobStore, monkeypatch: pytest.MonkeyPatch, route: _LockedJobRoute
+) -> None:
+    """While another write holds the collection lock past the wait bound, the route answers the lock helper's 503
+    ``store_busy`` with ``Retry-After``, and neither creates a job nor writes a meta pointer."""
+    lock_timeout_s = 0.05
+    monkeypatch.setattr("archon_search.constants.INGEST_LOCK_TIMEOUT_S", lock_timeout_s)
+    app, mock_store, meta_rows, lock, name = _locked_job_routes_app(tmp_path, tmp_store)
+
+    await lock.acquire()
+    try:
+        async with _asgi_client(app) as client:
+            response = await asyncio.wait_for(
+                client.post(route.path.format(name=name), json=route.body), timeout=_ASYNC_STEP_TIMEOUT_S
+            )
+    finally:
+        lock.release()
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {"detail": "reindex in progress; retry after Retry-After seconds", "code": STORE_BUSY_CODE}
+    assert response.headers.get("Retry-After") == str(math.ceil(lock_timeout_s))
+    assert tmp_store.list() == []
+    mock_store.update_collection_meta.assert_not_awaited()
+    assert getattr(meta_rows[name], route.pointer_field) is None
+
+
+@pytest.mark.parametrize("error_type", [OSError, TypeError], ids=["oserror", "non-oserror"])
+@pytest.mark.parametrize("route", _LOCKED_JOB_ROUTES)
+async def test_job_route_create_failure_answers_sanitized_500_and_releases_the_lock(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    caplog: pytest.LogCaptureFixture,
+    route: _LockedJobRoute,
+    error_type: type[Exception],
+) -> None:
+    """Job creation raising anything is logged, answered with the sanitized 500 (no exception text), leaves no job
+    and no meta pointer, and releases the collection lock."""
+    app, mock_store, meta_rows, lock, name = _locked_job_routes_app(tmp_path, tmp_store)
+    create_error = error_type(_SECRET_EXC_TEXT)
+
+    with (
+        patch.object(tmp_store, route.create_method, side_effect=create_error),
+        caplog.at_level("ERROR", logger="archon_search.server._collection_job"),
+    ):
+        async with _asgi_client(app) as client:
+            response = await asyncio.wait_for(
+                client.post(route.path.format(name=name), json=route.body), timeout=_ASYNC_STEP_TIMEOUT_S
+            )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+    assert _SECRET_EXC_TEXT not in response.text
+    [record] = [
+        r for r in caplog.records
+        if r.getMessage() == f"{route.log_context}: failed to create the job for collection {name!r}"
+    ]
+    assert record.exc_info is not None and record.exc_info[1] is create_error
+    assert tmp_store.list() == []
+    mock_store.update_collection_meta.assert_not_awaited()
+    assert getattr(meta_rows[name], route.pointer_field) is None
+    assert not lock.locked()
+
+
+@pytest.mark.parametrize("route", _LOCKED_JOB_ROUTES)
+async def test_job_route_duplicate_answers_409_at_once_while_another_write_holds_the_lock(
+    tmp_path: Path, tmp_store: JobStore, route: _LockedJobRoute
+) -> None:
+    """A duplicate of an active job is refused on the route's first, unlocked meta read: an instant 409, even while
+    another write holds the collection lock (``SearchStore.reindex_metadata`` holds it for its whole run) — the
+    request never queues on the lock, to time out with 503 ``store_busy`` instead."""
+    app, mock_store, meta_rows, lock, name = _locked_job_routes_app(tmp_path, tmp_store)
+    active = tmp_store.create_job(_job_on(route.job_kind, "active-job", JobStatus.RUNNING)(name))
+    meta_rows[name] = dataclasses.replace(meta_rows[name], **{route.pointer_field: active.job_id})
+
+    await lock.acquire()  # held by another write past this test's step bound (INGEST_LOCK_TIMEOUT_S is 30 s)
+    try:
+        async with _asgi_client(app) as client:
+            response = await asyncio.wait_for(
+                client.post(route.path.format(name=name), json=route.body), timeout=_ASYNC_STEP_TIMEOUT_S
+            )
+        assert parked_waiters(lock) == 0, "the duplicate queued on the collection lock"
+    finally:
+        lock.release()
+
+    assert response.status_code == 409, response.text
+    assert response.json() == {"detail": route.conflict_detail}
+    assert tmp_store.list() == [active]
+    mock_store.update_collection_meta.assert_not_awaited()
+
+
+@pytest.mark.parametrize("route", [route for route in _LOCKED_JOB_ROUTES if route.id != "reindex"])
+async def test_job_route_pointer_write_failure_is_best_effort(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    route: _LockedJobRoute,
+) -> None:
+    """POST /collections/{name}/reindex-metadata and /graph/{name}/rebuild-communities record their job's meta
+    pointer best-effort: a failed write is logged at WARNING with its traceback (never on the wire), the job is run
+    anyway — the route answers 202 with it RUNNING — and the collection lock is released."""
+    app, mock_store, meta_rows, lock, name = _locked_job_routes_app(tmp_path, tmp_store)
+    _park_job_tasks(monkeypatch)
+    write_error = OSError(_SECRET_EXC_TEXT)
+    mock_store.update_collection_meta = AsyncMock(side_effect=write_error)
+
+    with caplog.at_level("WARNING", logger="archon_search.server._collection_job"):
+        async with _asgi_client(app) as client, reaping(app.state._background_tasks):
+            response = await asyncio.wait_for(
+                client.post(route.path.format(name=name), json=route.body), timeout=_ASYNC_STEP_TIMEOUT_S
+            )
+
+    assert response.status_code == 202, response.text
+    assert _SECRET_EXC_TEXT not in response.text
+    [job] = tmp_store.list()
+    assert (response.json()["job_id"], job.status) == (job.job_id, JobStatus.RUNNING)
+    assert getattr(meta_rows[name], route.pointer_field) is None
+    [record] = [
+        r for r in caplog.records
+        if r.getMessage() == f"{route.log_context}: failed to persist {route.pointer_field} for job {job.job_id}"
+    ]
+    assert record.levelname == "WARNING"
+    assert record.exc_info is not None and record.exc_info[1] is write_error
+    assert not lock.locked()
+
+
+@pytest.mark.parametrize("route", _LOCKED_JOB_ROUTES)
+async def test_job_route_pointer_write_without_the_lock_raises_instead_of_answering(
+    tmp_path: Path, tmp_store: JobStore, monkeypatch: pytest.MonkeyPatch, route: _LockedJobRoute
+) -> None:
+    """``CollectionLockNotHeldError`` from the pointer write is a programming error (the route claims a lock it does
+    not hold): it escapes the route instead of being logged as a failed write (and answered 202 or 500), the job it
+    created — which no task will run — ends FAILED with the sanitized ``internal error`` (else it would block
+    DELETE /collections/{name} until a restart), and the collection lock is still released."""
+    app, mock_store, _, lock, name = _locked_job_routes_app(tmp_path, tmp_store)
+    _park_job_tasks(monkeypatch)
+    lock_error = CollectionLockNotHeldError(f"lock_for({name!r}) is not held")
+    mock_store.update_collection_meta = AsyncMock(side_effect=lock_error)
+
+    async with _asgi_client(app) as client, reaping(app.state._background_tasks):
+        with pytest.raises(CollectionLockNotHeldError) as raised:
+            await asyncio.wait_for(client.post(route.path.format(name=name), json=route.body), timeout=_ASYNC_STEP_TIMEOUT_S)
+
+    assert raised.value is lock_error
+    [job] = tmp_store.list()
+    assert (job.status, job.error) == (JobStatus.FAILED, "internal error")
+    assert tmp_store.find_active_collection_job(name, "default") is None
+    assert not lock.locked()
+
+
+@pytest.mark.parametrize("route", _LOCKED_JOB_ROUTES)
+async def test_job_route_without_a_search_store_answers_503_service_not_ready(
+    tmp_path: Path, tmp_store: JobStore, route: _LockedJobRoute
+) -> None:
+    """Without a search store the route cannot read the meta row, take the collection lock or run its job: it
+    answers the readiness 503 (never an unhandled 500) and creates no job."""
+    app, _, _, _, name = _locked_job_routes_app(tmp_path, tmp_store)
+    app.state.search_store = None
+
+    async with _asgi_client(app) as client:
+        response = await asyncio.wait_for(
+            client.post(route.path.format(name=name), json=route.body), timeout=_ASYNC_STEP_TIMEOUT_S
+        )
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {"detail": "service not ready"}
+    assert tmp_store.list() == []
+
+
+def test_reindex_metadata_without_a_search_store_still_404s_a_name_absent_from_the_config(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """The config check runs before the readiness check: a name absent from the config can never be
+    metadata-reindexed, so it answers 404 — not a 503 inviting a retry that would 404 once the server is ready."""
+    c, name, _, _ = _make_reindex_metadata_app(tmp_path, tmp_store, in_config=False)
+    c.app.state.search_store = None
+
+    response = c.post(f"/collections/{name}/reindex-metadata", json={})
+
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": f"Collection {name!r} not found"}
+    assert tmp_store.list() == []
+
+
+_GRAPH_DISABLED_DETAIL = "graph inspection requires [graph] enabled=true in server config"
+
+
+@pytest.mark.parametrize(
+    ("break_request", "query", "expected_detail"),
+    [
+        pytest.param(
+            lambda app: setattr(app.state.config.graph, "enabled", False), "", _GRAPH_DISABLED_DETAIL,
+            id="graph-disabled",
+        ),
+        pytest.param(lambda app: setattr(app.state, "graph_store", None), "", _GRAPH_DISABLED_DETAIL, id="no-graph-store"),
+        pytest.param(
+            lambda _app: None, "?namespace=other",
+            "namespace mismatch: token authorises 'default', but ?namespace='other' was requested",
+            id="namespace-mismatch",
+        ),
+    ],
+)
+async def test_rebuild_communities_without_a_search_store_still_answers_its_422(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    break_request: Callable[[Any], None],
+    query: str,
+    expected_detail: str,
+) -> None:
+    """The 422 guards (``?namespace=`` mismatch, graph disabled or not connected) run before the readiness check: a
+    request refused for them is answered 422 — not a 503 inviting a retry that would get the same 422 once the
+    server is ready."""
+    app, _, _, _, name = _locked_job_routes_app(tmp_path, tmp_store)
+    app.state.search_store = None
+    break_request(app)
+
+    async with _asgi_client(app) as client:
+        response = await asyncio.wait_for(
+            client.post(f"/graph/{name}/rebuild-communities{query}"), timeout=_ASYNC_STEP_TIMEOUT_S
+        )
+
+    assert response.status_code == 422, response.text
+    assert response.json() == {"detail": expected_detail}
+    assert tmp_store.list() == []
+
+
+class _RestartEffect(NamedTuple):
+    """What a request proceeding past a stranded reindex leaves behind (see the restart test below)."""
+
+    job_store: JobStore
+    meta_rows: dict[str, CollectionMeta]
+    search_store: MagicMock
+    response: Any
+    name: str
+    stranded_job_id: str
+
+
+def _new_reindex_overwrites_the_stranded_pointer(effect: _RestartEffect) -> None:
+    new_job = effect.job_store.get(effect.response.json()["job_id"])
+    assert isinstance(new_job, ReindexJob) and new_job.status == JobStatus.PENDING
+    assert effect.meta_rows[effect.name].reindex_job_id == new_job.job_id != effect.stranded_job_id
+
+
+def _model_change_clears_the_stranded_pointer(effect: _RestartEffect) -> None:
+    meta = effect.meta_rows[effect.name]
+    assert (meta.pending_embedding_model, meta.needs_reindex, meta.reindex_job_id) == ("model-B", True, None)
+
+
+def _rewrite_migration_job_is_created(effect: _RestartEffect) -> None:
+    [migration] = [job for job in effect.job_store.list() if isinstance(job, MigrationJob)]
+    assert (migration.collection, migration.status) == (effect.name, JobStatus.RUNNING)
+
+
+def _delete_drops_the_collection(effect: _RestartEffect) -> None:
+    effect.search_store.drop_collection.assert_awaited_once_with(effect.name, _locked_by_caller=True)
+    assert effect.name not in effect.meta_rows
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "expected_status", "assert_effect"),
+    [
+        pytest.param(
+            "POST", "/collections/{name}/reindex", None, 202, _new_reindex_overwrites_the_stranded_pointer, id="reindex"
+        ),
+        pytest.param(
+            "PATCH", "/collections/{name}", {"embedding_model": "model-B"}, 200, _model_change_clears_the_stranded_pointer,
+            id="patch-embedding-model",
+        ),
+        pytest.param(
+            "POST", "/collections/{name}/migrate", {"backup_confirmed": True}, 202, _rewrite_migration_job_is_created,
+            id="rewrite-migration",
+        ),
+        pytest.param("DELETE", "/collections/{name}", None, 200, _delete_drops_the_collection, id="delete"),
+    ],
+)
+def test_reindex_left_pending_by_a_restart_blocks_nothing(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    method: str,
+    path: str,
+    body: dict[str, Any] | None,
+    expected_status: int,
+    assert_effect: Callable[[_RestartEffect], None],
+) -> None:
+    """A reindex job whose server died before its task ran it is still PENDING in the jobs file, and the meta row
+    still points at it. The next server fails it at load (never started), so neither its meta pointer nor the job
+    itself refuses anything: a new reindex (its id overwrites the stale pointer), an embedding-model change, a rewrite
+    migration and DELETE (the collection is dropped) all proceed and take effect."""
+    from archon_search.jobs.store import NOT_STARTED_BEFORE_RESTART_DETAIL
+    from archon_search.types import MigrationSpec
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    name = path_to_collection_name(str(src))
+    stranded = tmp_store.create_reindex(name)  # the previous process: its task never ran the job
+    job_store = JobStore(path=tmp_path / "jobs.json")  # this process loads the jobs file
+
+    reloaded = job_store.get(stranded.job_id)
+    assert reloaded is not None
+    assert (reloaded.status, reloaded.error) == (JobStatus.FAILED, NOT_STARTED_BEFORE_RESTART_DETAIL)
+    mock_store, meta_rows = _stateful_meta_store(
+        [CollectionMeta(name=name, namespace="default", active_embedding_model="model-A", reindex_job_id=stranded.job_id)]
+    )
+    mock_store.count_chunks = AsyncMock(return_value=3)
+    mock_store.count_documents = AsyncMock(return_value=1)
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
+    mock_store.pending_migrations = AsyncMock(
+        return_value=[MigrationSpec(name="rewrite_chunks", kind=MigrationKind.REWRITE, description="d", introduced_at=1)]
+    )
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, job_store)
+    app.state.search_store = mock_store
+    app.state.embedder_cache = MagicMock()
+    app.state.pipeline = MagicMock()
+
+    with (
+        patch("archon_search.server.routes_collections.validate_embedding_model", new=AsyncMock()),
+        patch("archon_search.server.routes_collections.asyncio.create_task",
+              side_effect=lambda coro: (coro.close(), MagicMock())[1]),
+    ):
+        response = _authed_client(app).request(method, path.format(name=name), json=body)
+
+    assert response.status_code == expected_status, response.text
+    assert_effect(_RestartEffect(job_store, meta_rows, mock_store, response, name, stranded.job_id))
 
 
 def test_delete_collection_200_without_job_store(tmp_path: Path, tmp_store: JobStore) -> None:
@@ -1761,7 +2754,7 @@ async def test_delete_collection_503_when_ingest_turns_running_while_delete_wait
         delete_task = asyncio.create_task(client.delete(f"/collections/{name}"))
         waiting_task = asyncio.create_task(lock.waiting.wait())
         try:
-            await asyncio.wait({delete_task, waiting_task}, timeout=5.0, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait({delete_task, waiting_task}, timeout=_ASYNC_STEP_TIMEOUT_S, return_when=asyncio.FIRST_COMPLETED)
             if delete_task.done():
                 early = delete_task.result()
                 pytest.fail(f"DELETE finished before the ingest released the lock: {early.status_code} {early.text}")
@@ -1773,7 +2766,7 @@ async def test_delete_collection_503_when_ingest_turns_running_while_delete_wait
             test_holds_lock = False
             lock.release()
 
-            response = await asyncio.wait_for(delete_task, timeout=5.0)
+            response = await asyncio.wait_for(delete_task, timeout=_ASYNC_STEP_TIMEOUT_S)
         finally:
             # On failure: stop both tasks before freeing the lock, so a still-waiting DELETE cannot run on.
             delete_task.cancel()
@@ -1784,7 +2777,7 @@ async def test_delete_collection_503_when_ingest_turns_running_while_delete_wait
 
     assert response.status_code == 503, f"DELETE dropped a collection mid-ingest: {response.status_code} {response.text}"
     assert response.json() == {
-        "detail": INGEST_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id=job_id),
+        "detail": COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id=job_id),
         "code": STORE_BUSY_CODE,
     }
     assert response.headers.get("Retry-After") == str(math.ceil(INGEST_LOCK_TIMEOUT_S))
@@ -1938,6 +2931,8 @@ def test_reindex_cross_namespace_404(
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
+    app.state.embedder_cache = MagicMock()  # a ready service: readiness is checked before the 404
+    app.state.pipeline = MagicMock()
 
     c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
     name = path_to_collection_name(str(src))
@@ -1972,6 +2967,7 @@ def test_reindex_same_namespace_succeeds(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -2015,6 +3011,7 @@ def test_reindex_job_namespace(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -2178,6 +3175,7 @@ def test_remove_collection_persist_failure_rolls_back_with_sanitized_500(
     app, mock_store, name, collections_before, pinned_before = _remove_app(
         tmp_path, tmp_store, with_meta=with_meta
     )
+    tmp_store.create_job(_ingest_job("failed-ingest", JobStatus.FAILED, name))
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"}, raise_server_exceptions=False)
 
@@ -2196,7 +3194,10 @@ def test_remove_collection_persist_failure_rolls_back_with_sanitized_500(
     assert app.state.config.pinned_collections == pinned_before
     mock_store.drop_collection.assert_not_awaited()
     mock_store.delete_collection_meta.assert_not_awaited()
+    mock_store.discard_lock.assert_not_called()
     assert not mock_store.lock_for.return_value.locked()
+    # The collection stays, so its failed ingest stays a retry candidate (a DELETE cancels it only once it succeeds).
+    assert _statuses(tmp_store, ["failed-ingest"]) == {"failed-ingest": JobStatus.FAILED}
 
 
 def test_remove_collection_rollback_keeps_config_change_made_while_waiting_for_lock(
@@ -2308,7 +3309,11 @@ def _stateful_meta_store(initial: list[CollectionMeta]) -> tuple[MagicMock, dict
     """Mock search_store whose meta rows live in a dict, so a stub left behind stays observable."""
     rows = {m.name: m for m in initial}
 
-    async def _update(meta: CollectionMeta) -> None:
+    async def _update(meta: CollectionMeta, *, _locked_by_caller: bool = False) -> None:
+        # As SearchStore.update_collection_meta, a caller claiming the lock must hold it (read at call time: a test
+        # may replace lock_for; return_value records no lock_for call).
+        if _locked_by_caller and not mock_store.lock_for.return_value.locked():
+            raise CollectionLockNotHeldError(f"lock_for({meta.name!r}) is not held")
         rows[meta.name] = meta
 
     async def _delete(name: str, namespace: str) -> None:
@@ -2759,6 +3764,7 @@ def _reindex_app(tmp_path: Path, tmp_store: JobStore) -> tuple[object, MagicMock
     search_store.migrate_acl = AsyncMock()
     search_store.connect = AsyncMock()
     search_store.disconnect = AsyncMock()
+    search_store.lock_for = MagicMock(return_value=asyncio.Lock())
 
     with mock.patch("archon_search.server.app.DocumentChunker"):
         app = create_app(cfg, tmp_store)
@@ -2789,6 +3795,9 @@ def test_reindex_meta_write_failure_marks_job_failed(
     assert job.error == REINDEX_FAILED_DETAIL
     [record] = [r for r in caplog.records if r.getMessage().startswith("Failed to record the reindex job")]
     assert record.exc_info is not None and record.exc_info[1] is meta_error
+    # The pointer is written under the collection lock (not reentrant: the caller says it holds it), then released.
+    assert search_store.update_collection_meta.await_args.kwargs == {"_locked_by_caller": True}
+    assert not search_store.lock_for.return_value.locked()
 
 
 @pytest.mark.parametrize("update_error", [OSError(28, "No space left on device", _SECRET_EXC_TEXT), KeyError("job")])
@@ -2811,30 +3820,10 @@ def test_reindex_meta_write_failure_keeps_500_when_marking_job_failed_raises(
     assert record.exc_info is not None and record.exc_info[1] is update_error
 
 
-@pytest.mark.parametrize("create_error", [OSError("disk full"), TypeError(_SECRET_EXC_TEXT)], ids=["oserror", "non-oserror"])
-def test_reindex_job_create_failure_returns_sanitized_500(
-    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture, create_error: Exception
-) -> None:
-    """create_reindex raising anything → logged, sanitized 500, meta row untouched."""
-    app, search_store, name = _reindex_app(tmp_path, tmp_store)
-
-    with (
-        patch.object(tmp_store, "create_reindex", side_effect=create_error),
-        caplog.at_level("ERROR", logger="archon_search.server.routes_collections"),
-    ):
-        response = _authed_client(app).post(f"/collections/{name}/reindex")
-
-    assert response.status_code == 500
-    assert response.json() == {"detail": "internal error"}
-    [record] = [r for r in caplog.records if r.getMessage().startswith("Failed to create the reindex job")]
-    assert record.exc_info is not None and record.exc_info[1] is create_error
-    search_store.update_collection_meta.assert_not_awaited()
-
-
-@pytest.mark.parametrize("missing_dependency", ["embedder_cache", "pipeline"])
+@pytest.mark.parametrize("missing_dependency", ["embedder_cache", "pipeline", "search_store"])
 def test_reindex_service_not_ready_creates_no_job(tmp_path: Path, tmp_store: JobStore, missing_dependency: str) -> None:
-    """No embedder cache or pipeline yet → 503 before anything is written: no reindex job (not even a
-    FAILED one) and no meta write pointing reindex_job_id at it."""
+    """No embedder cache, pipeline or search store yet → 503 before anything is written: no reindex job (not even
+    a FAILED one) and no meta write pointing reindex_job_id at it."""
     app, search_store, name = _reindex_app(tmp_path, tmp_store)
     setattr(app.state, missing_dependency, None)
 
@@ -2844,6 +3833,40 @@ def test_reindex_service_not_ready_creates_no_job(tmp_path: Path, tmp_store: Job
     assert response.json() == {"detail": "service not ready"}
     assert tmp_store.list() == []
     search_store.update_collection_meta.assert_not_awaited()
+
+
+def test_reindex_without_a_search_store_answers_503_whatever_the_name(tmp_path: Path, tmp_store: JobStore) -> None:
+    """Readiness is checked first: without a search store no reindex can run, so even a name absent from the config
+    answers 503 — not a 404 that a configured name would never get either."""
+    app, _, _ = _reindex_app(tmp_path, tmp_store)
+    app.state.search_store = None
+
+    response = _authed_client(app).post("/collections/not-configured/reindex")
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {"detail": "service not ready"}
+    assert tmp_store.list() == []
+
+
+# No "search_store" case: without a store no meta row (so no 409) can be read at all.
+@pytest.mark.parametrize("missing_dependency", ["embedder_cache", "pipeline"])
+def test_reindex_service_not_ready_answers_503_before_the_in_progress_409(
+    tmp_path: Path, tmp_store: JobStore, missing_dependency: str
+) -> None:
+    """With a reindex already active AND the service not ready, the answer is the readiness 503: a 409 would tell
+    the caller to wait for a job, while a retry after readiness is what can succeed."""
+    app, search_store, name = _reindex_app(tmp_path, tmp_store)
+    active = tmp_store.create_reindex(name)  # PENDING: an active reindex
+    search_store.get_collection_meta = AsyncMock(
+        return_value=CollectionMeta(name=name, namespace="default", reindex_job_id=active.job_id)
+    )
+    setattr(app.state, missing_dependency, None)
+
+    response = _authed_client(app).post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {"detail": "service not ready"}
+    assert tmp_store.list() == [active]
 
 
 # ---------------------------------------------------------------------------
@@ -2910,11 +3933,11 @@ def test_add_collection_uses_validator_returned_path(
         captured.append(body.path)
 
     monkeypatch.setattr(
-        "archon_search.server.routes_collections._default_ingest_task",
+        "archon_search.server.routes_jobs._default_ingest_task",
         _capturing_ingest_task,
     )
     monkeypatch.setattr(
-        "archon_search.server.routes_collections._default_ingest_task_with_lock",
+        "archon_search.server.routes_jobs._default_ingest_task_with_lock",
         _capturing_ingest_task,
     )
 
@@ -2974,10 +3997,8 @@ def test_add_collection_ingest_body_keeps_the_submitted_path(
     async def _capturing_ingest_task(job_id, store, body, **kwargs):  # type: ignore[no-untyped-def]
         captured.append(body)
 
-    monkeypatch.setattr("archon_search.server.routes_collections._default_ingest_task", _capturing_ingest_task)
-    monkeypatch.setattr(
-        "archon_search.server.routes_collections._default_ingest_task_with_lock", _capturing_ingest_task
-    )
+    monkeypatch.setattr("archon_search.server.routes_jobs._default_ingest_task", _capturing_ingest_task)
+    monkeypatch.setattr("archon_search.server.routes_jobs._default_ingest_task_with_lock", _capturing_ingest_task)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
@@ -4419,6 +5440,7 @@ def _make_reindex_app(tmp_path: Path, tmp_store: JobStore, meta_kwargs: dict | N
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -5569,6 +6591,37 @@ async def test_migration_task_marks_failed_on_apply_rewrite_exception(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_migration_task_writes_the_meta_row_before_done(tmp_path: Path) -> None:
+    """The rewrite's meta write (``apply_rewrite_migration`` re-reads and rewrites the row's schema_version) happens
+    while the job is still RUNNING, and DONE is written after it returns: DELETE /collections/{name} refuses only
+    while a migration is RUNNING/CANCELLING, so a meta write after DONE could re-create a collection dropped in
+    between."""
+    from archon_search.server.routes_collections import _migration_task
+    from archon_search.types import MigrationSpec
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    running_job = job_store.create_migration(
+        collection="my-col", kind=MigrationKind.REWRITE, backup_confirmed=True, status=JobStatus.RUNNING
+    )
+    spec = MigrationSpec(name="rebuild", kind=MigrationKind.REWRITE, description="test", introduced_at=1)
+    status_at_meta_write: list[JobStatus] = []
+
+    async def apply_rewrite_migration(*_args: Any, **_kwargs: Any) -> int:
+        status_at_meta_write.append(job_store.get(running_job.job_id).status)  # type: ignore[union-attr]
+        return 7
+
+    search_store = MagicMock()
+    search_store.apply_rewrite_migration = AsyncMock(side_effect=apply_rewrite_migration)
+
+    await _migration_task(job=running_job, job_store=job_store, search_store=search_store, spec=spec)
+
+    assert status_at_meta_write == [JobStatus.RUNNING]
+    final = job_store.get(running_job.job_id)
+    assert final is not None
+    assert (final.status, final.result) == (JobStatus.DONE, {"migrated_chunks": 7})
+
+
+@pytest.mark.asyncio
 async def test_migration_task_spec_none_fetches_pending_and_uses_first_rewrite(tmp_path: Path) -> None:
     """_migration_task with spec=None fetches pending migrations and uses the first REWRITE spec.
 
@@ -5822,6 +6875,7 @@ def _make_reindex_metadata_app(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -6009,6 +7063,109 @@ def test_reindex_metadata_task_failed_path(
     assert response2.status_code == 202, (
         f"Expected 202 on re-submit after FAILED, got {response2.status_code}: {response2.text}"
     )
+
+
+@pytest.mark.parametrize(
+    ("reindex_outcome", "terminal_status"),
+    [
+        pytest.param({"return_value": MagicMock(processed=0, updated=0, skipped=0, ts_normalized=0, warnings=[])},
+                     JobStatus.DONE, id="done"),
+        pytest.param({"side_effect": OSError("store failure")}, JobStatus.FAILED, id="failed"),
+    ],
+)
+def test_reindex_metadata_task_clears_job_id_before_terminal_status(
+    tmp_store: JobStore, reindex_outcome: dict[str, Any], terminal_status: JobStatus
+) -> None:
+    """The meta-pointer clear (an unlocked meta read + upsert) runs while the job is still RUNNING.
+
+    DELETE /collections/{name} refuses only while the job is RUNNING/CANCELLING: a clear after the terminal
+    write could upsert the meta row of a collection DELETE dropped in between, re-creating it.
+    """
+    from archon_search.server.routes_collections import _reindex_metadata_task
+
+    job = tmp_store.create_metadata_reindex(collection="col")
+    meta = CollectionMeta(name="col", namespace="default", metadata_reindex_job_id=job.job_id)
+    status_at_clear: list[JobStatus] = []
+    search_store = MagicMock()
+    search_store.reindex_metadata = AsyncMock(**reindex_outcome)
+    search_store.get_collection_meta = AsyncMock(return_value=meta)
+    search_store.update_collection_meta = AsyncMock(
+        side_effect=lambda _meta: status_at_clear.append(tmp_store.get(job.job_id).status)
+    )
+
+    asyncio.run(_reindex_metadata_task(job, tmp_store, search_store, dry_run=False, normalize_timestamps=False))
+
+    assert status_at_clear == [JobStatus.RUNNING]
+    assert meta.metadata_reindex_job_id is None
+    assert tmp_store.get(job.job_id).status == terminal_status
+
+
+def test_reindex_metadata_task_done_write_failure_ends_failed_after_clearing_the_pointer(
+    tmp_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failing DONE write leaves the job FAILED with the sanitized detail (not RUNNING forever), after the meta
+    pointer was cleared; the log tells the failed DONE write apart from a failed reindex."""
+    from archon_search.server.routes_collections import METADATA_REINDEX_FAILED_DETAIL, _reindex_metadata_task
+
+    job = tmp_store.create_metadata_reindex(collection="col")
+    meta = CollectionMeta(name="col", namespace="default", metadata_reindex_job_id=job.job_id)
+    search_store = MagicMock()
+    search_store.reindex_metadata = AsyncMock(
+        return_value=MagicMock(processed=1, updated=1, skipped=0, ts_normalized=0, warnings=[])
+    )
+    search_store.get_collection_meta = AsyncMock(return_value=meta)
+    search_store.update_collection_meta = AsyncMock()
+    real_update = tmp_store.update
+
+    def update(job_id: str, **fields: Any) -> None:
+        if fields.get("status") == JobStatus.DONE:
+            raise OSError("simulated DONE write failure")
+        real_update(job_id, **fields)
+
+    with patch.object(tmp_store, "update", side_effect=update), caplog.at_level("ERROR"):
+        asyncio.run(_reindex_metadata_task(job, tmp_store, search_store, dry_run=False, normalize_timestamps=False))
+
+    final = tmp_store.get(job.job_id)
+    assert final is not None
+    assert (final.status, final.error) == (JobStatus.FAILED, METADATA_REINDEX_FAILED_DETAIL)
+    assert meta.metadata_reindex_job_id is None
+    search_store.update_collection_meta.assert_awaited_once()
+    messages = [r.getMessage() for r in caplog.records]
+    assert f"_reindex_metadata_task: could not record DONE for job {job.job_id}" in messages, messages
+    assert f"_reindex_metadata_task: job {job.job_id} failed" not in messages, messages
+
+
+async def test_reindex_metadata_task_cancelled_clears_the_pointer_and_leaves_the_job_running(
+    tmp_store: JobStore,
+) -> None:
+    """A task cancelled mid-reindex (server shutdown) still clears its meta pointer, then re-raises the cancellation
+    without writing a terminal status: the job stays RUNNING for the next start to fail as ``process_restart``."""
+    from archon_search.server.routes_collections import _reindex_metadata_task
+
+    job = tmp_store.create_metadata_reindex(collection="col")
+    meta = CollectionMeta(name="col", namespace="default", metadata_reindex_job_id=job.job_id)
+    reindexing = asyncio.Event()
+
+    async def reindex_until_cancelled(*_args: Any, **_kwargs: Any) -> None:
+        reindexing.set()
+        await asyncio.Event().wait()
+
+    search_store = MagicMock()
+    search_store.reindex_metadata = AsyncMock(side_effect=reindex_until_cancelled)
+    search_store.get_collection_meta = AsyncMock(return_value=meta)
+    search_store.update_collection_meta = AsyncMock()
+    task = asyncio.create_task(
+        _reindex_metadata_task(job, tmp_store, search_store, dry_run=False, normalize_timestamps=False)
+    )
+    await asyncio.wait_for(reindexing.wait(), timeout=_ASYNC_STEP_TIMEOUT_S)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=_ASYNC_STEP_TIMEOUT_S)
+
+    assert meta.metadata_reindex_job_id is None
+    search_store.update_collection_meta.assert_awaited_once_with(meta)
+    assert tmp_store.get(job.job_id).status == JobStatus.RUNNING
 
 
 @pytest.mark.parametrize("stale_status", [JobStatus.DONE, JobStatus.QUEUED, JobStatus.PENDING])
@@ -6265,6 +7422,7 @@ def test_s630_config_only_collection_listed_but_info_and_remove_404(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
     app.state.search_store = mock_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")

@@ -35,7 +35,13 @@ from archon_search.graph_inspector import (
 )
 from archon_search.graph_types import DEFAULT_IMPACT_DEPTH, ImpactDirection, ImpactResult
 from archon_search.jobs.model import job_to_dict
-from archon_search.server.routes_jobs import INTERNAL_ERROR_DETAIL, JOB_SUPERSEDED_DETAIL, _persist_job_status
+from archon_search.server._collection_job import (
+    SERVICE_NOT_READY_DETAIL,
+    create_collection_job,
+    refuse_active_job_or_fail_legacy,
+)
+from archon_search.server._ingest_lock import STORE_BUSY_503_DESCRIPTION
+from archon_search.server.routes_jobs import INTERNAL_ERROR_DETAIL, _persist_job_status
 from archon_search.server.schemas import (
     CrossCollectionGraphInspectionResponse,
     ErrorDetail,
@@ -64,7 +70,8 @@ router = APIRouter()
 COMMUNITY_REBUILD_FAILED_DETAIL = "community rebuild failed; see the server log for details"
 
 # Error map for rebuild_communities: 401 (auth), 404 (collection not found),
-# 409 (rebuild already in progress), 422 (graph disabled), 500 (job could not be saved).
+# 409 (rebuild already in progress), 422 (graph disabled or ?namespace= mismatch), 500 (job could not be saved),
+# 503 (SERVICE_NOT_READY_DETAIL: no search store; or store_busy: collection lock not acquired in time).
 _REBUILD_ERROR_RESPONSES = {
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
@@ -73,6 +80,13 @@ _REBUILD_ERROR_RESPONSES = {
     500: {
         "model": ErrorDetail,
         "description": f'Creating the community rebuild job failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})',
+    },
+    503: {
+        "model": ErrorDetail,
+        "description": (
+            f'Service not ready — the search store is not initialised (body {{"detail": "{SERVICE_NOT_READY_DETAIL}"}}). '
+            f"{STORE_BUSY_503_DESCRIPTION}"
+        ),
     },
 }
 
@@ -201,16 +215,17 @@ async def rebuild_communities(
 
     Returns:
     - 202: JobResponse-shaped body, status RUNNING.
-    - 404: Collection not found in the caller's namespace.
+    - 404: Collection not found in the caller's namespace (also when a DELETE dropped it meanwhile).
     - 409: A rebuild is already in progress for this collection (BE-5).
     - 422: graph.enabled=false, or ?namespace= does not match token namespace.
     - 500: The job could not be saved (sanitized ``{"detail": "internal error"}``).
+    - 503: ``service not ready`` — no search store (checked after the 422 guards); or ``store_busy`` — the
+      collection lock was not acquired within ``INGEST_LOCK_TIMEOUT_S``.
     """
-    pipeline = request.app.state.pipeline
     config = request.app.state.config
     graph_store = request.app.state.graph_store
     job_store: "JobStore" = request.app.state.job_store
-    search_store: "SearchStore" = request.app.state.search_store
+    search_store: "SearchStore | None" = request.app.state.search_store
     ns: str = request.state.namespace
 
     # Guard 0: if the caller explicitly declared a ?namespace=, it must match
@@ -241,52 +256,38 @@ async def rebuild_communities(
             detail="graph inspection requires [graph] enabled=true in server config",
         )
 
-    # Guard 2: collection exists in the caller's namespace.
-    collection_meta = await pipeline.get_collection_meta(collection, namespace=ns)
-    if collection_meta is None:
-        raise HTTPException(status_code=404, detail="collection not found")
+    # Readiness, before the first store access: without a search store no meta row, lock or job can be used. After
+    # the 422 guards, which a retry once the server is ready would answer all the same.
+    if search_store is None:
+        return JSONResponse({"detail": SERVICE_NOT_READY_DETAIL}, status_code=503)
 
-    # Guard 3 (BE-5, C2/CM-1): reject a duplicate rebuild already in progress,
-    # mirroring the reindex/migrate reindex_job_id conflict checks
-    # (routes_collections.py). If the referenced job is missing, terminal, or a
-    # legacy QUEUED/PENDING row (an older server created rebuild jobs QUEUED
-    # first; nothing schedules them, so one never runs), the id is stale --
-    # clear it and proceed (lazy clear; this is what unwedges a collection
-    # after a server crash mid-rebuild, S16, since JobStore._load's
-    # crash-status flip never touches CollectionMeta). A legacy row is also
-    # marked FAILED (best-effort) so it does not stay non-terminal — never
-    # evicted, DELETE answering 500 — forever.
-    if collection_meta.community_rebuild_job_id is not None:
-        existing_job = job_store.get(collection_meta.community_rebuild_job_id)
-        if existing_job is not None and existing_job.status in _REBUILD_ACTIVE_STATUSES:
-            return JSONResponse(
-                {"detail": "community rebuild already in progress for this collection"},
-                status_code=409,
-            )
-        if existing_job is not None and existing_job.status in (JobStatus.QUEUED, JobStatus.PENDING):
-            _persist_job_status(
-                job_store, existing_job.job_id, JobStatus.FAILED, context="rebuild_communities", error=JOB_SUPERSEDED_DETAIL
-            )
-        collection_meta.community_rebuild_job_id = None
-
-    try:
+    # Guard 2 (404: collection not in the caller's namespace) and Guard 3 (BE-5, C2/CM-1: 409 while
+    # community_rebuild_job_id names an active rebuild, mirroring the reindex/migrate reindex_job_id checks) run on the
+    # meta row read before the collection lock, then again under it; the job and its meta pointer (set on enqueue, so
+    # Guard 3 rejects a duplicate rebuild while this one is active) are created under the same lock
+    # (create_collection_job). A pointer naming a missing, terminal or legacy QUEUED/PENDING job is stale and is
+    # overwritten — the lazy clear that unwedges a collection after a server crash mid-rebuild (S16).
+    running_job = await create_collection_job(
+        search_store,
+        collection,
+        ns,
+        job_store=job_store,
+        log_context="rebuild_communities",
+        not_found_detail="collection not found",
+        refuse_duplicate=lambda meta: refuse_active_job_or_fail_legacy(
+            job_store,
+            meta.community_rebuild_job_id,
+            active_statuses=_REBUILD_ACTIVE_STATUSES,
+            conflict_detail="community rebuild already in progress for this collection",
+            log_context="rebuild_communities",
+        ),
         # Created RUNNING in one write: the route runs the task itself, so the response
         # never reports QUEUED (mirrors migrate_collection, S1).
-        running_job = job_store.create_community_rebuild(collection=collection, namespace=ns)
-    except Exception:  # noqa: BLE001 — no job exists; any persist failure maps to one sanitized 500
-        logger.exception("rebuild_communities: failed to persist a community rebuild job for %r", collection)
-        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
-
-    # Set on enqueue (BE-5, C2) so the guard above can detect and reject a
-    # duplicate rebuild request while this one is active.
-    collection_meta.community_rebuild_job_id = running_job.job_id
-    try:
-        await search_store.update_collection_meta(collection_meta)
-    except Exception:
-        logger.warning(
-            "rebuild_communities: failed to persist community_rebuild_job_id for job %s",
-            running_job.job_id,
-        )
+        create_job=lambda _meta: job_store.create_community_rebuild(collection=collection, namespace=ns),
+        pointer_field="community_rebuild_job_id",
+    )
+    if isinstance(running_job, JSONResponse):
+        return running_job
 
     task = asyncio.create_task(
         _community_rebuild_task(

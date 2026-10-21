@@ -215,6 +215,48 @@ async def test_rebuild_task_unexpected_error_sets_failed_with_sanitized_detail_a
     search_store.update_collection_meta.assert_awaited_once_with(meta)
 
 
+@pytest.mark.parametrize(
+    ("build_outcome", "terminal_status"),
+    [
+        pytest.param({"return_value": []}, JobStatus.DONE, id="done"),
+        pytest.param({"side_effect": RuntimeError("build failed")}, JobStatus.FAILED, id="failed"),
+    ],
+)
+async def test_rebuild_task_clears_the_meta_pointer_before_the_terminal_status(
+    tmp_path: Path, build_outcome: dict, terminal_status: JobStatus
+) -> None:
+    """The community_rebuild_job_id clear (an unlocked meta read, then an upsert) runs while the job is still
+    RUNNING: DELETE /collections/{name} refuses only while a rebuild is RUNNING/CANCELLING, so a clear after the
+    terminal write could re-create the meta row of a collection DELETE dropped in between."""
+    from types import SimpleNamespace
+
+    from archon_search.server.routes_graph import _community_rebuild_task
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
+    meta = SimpleNamespace(community_rebuild_job_id=job.job_id)
+    status_at_clear: list[JobStatus] = []
+    search_store = SimpleNamespace(
+        get_collection_meta=AsyncMock(return_value=meta),
+        update_collection_meta=AsyncMock(side_effect=lambda _meta: status_at_clear.append(job_store.get(job.job_id).status)),
+    )
+
+    with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls:
+        mock_builder_cls.return_value.build = AsyncMock(**build_outcome)
+        await _community_rebuild_task(
+            job=job_store.get(job.job_id),
+            job_store=job_store,
+            graph_store=object(),
+            graph_config=object(),
+            search_store=search_store,
+        )
+
+    assert status_at_clear == [JobStatus.RUNNING]
+    assert meta.community_rebuild_job_id is None
+    final = job_store.get(job.job_id)
+    assert final is not None and final.status == terminal_status
+
+
 async def test_rebuild_task_done_write_failure_does_not_escape(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """A failed persist of the terminal DONE status (any exception, here a serialization TypeError) is logged with
     its traceback and suppressed: it must not escape the fire-and-forget task as an unretrieved exception."""

@@ -72,6 +72,14 @@ class FTSIndexNotFoundError(RuntimeError):
     the initial index before incremental optimize operations can be used.
     """
 
+
+class CollectionLockNotHeldError(RuntimeError):
+    """Raised by ``update_collection_meta(meta, _locked_by_caller=True)`` while ``lock_for(meta.name)`` is not held.
+
+    A programming error, not a store failure: callers that map store failures to a response let it propagate.
+    """
+
+
 if TYPE_CHECKING:
     import lancedb
     import pyarrow as pa
@@ -1467,14 +1475,23 @@ class SearchStore:
 
         return processed
 
-    async def update_collection_meta(self, meta: "CollectionMeta") -> None:
+    async def update_collection_meta(self, meta: "CollectionMeta", *, _locked_by_caller: bool = False) -> None:
         """Upsert *meta* into the shared metadata table, by ``meta.name``.
 
         Creates the metadata table on first use. A collection name already
         registered under a different namespace is refused rather than
         silently reassigned.
 
+        Parameters
+        ----------
+        _locked_by_caller:
+            When True, assumes ``lock_for(meta.name)`` is already held by the
+            caller and neither acquires nor releases it (the lock is not
+            reentrant).
+
         Raises:
+            CollectionLockNotHeldError: if ``_locked_by_caller`` is True while
+                ``lock_for(meta.name)`` is not held.
             RuntimeError: if the store is not connected.
             ValueError: if *meta.name*/``namespace`` is invalid, or *meta.name*
                 is already registered under a different namespace.
@@ -1483,11 +1500,16 @@ class SearchStore:
         """
         _validate_namespace(meta.namespace)
         self._validate_collection(meta.name)
-        lock = self.lock_for(meta.name)
-        try:
-            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
-        except asyncio.TimeoutError as e:
-            raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
+        if _locked_by_caller and not self.lock_for(meta.name).locked():
+            raise CollectionLockNotHeldError(
+                f"update_collection_meta(_locked_by_caller=True): lock_for({meta.name!r}) is not held"
+            )
+        lock = None if _locked_by_caller else self.lock_for(meta.name)
+        if lock is not None:
+            try:
+                await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+            except asyncio.TimeoutError as e:
+                raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
         try:
             db = self._require_connected()
             all_names: list[str] = (await db.list_tables()).tables
@@ -1557,7 +1579,8 @@ class SearchStore:
             if meta.namespace == DEFAULT_NAMESPACE:
                 await table.delete(_where_eq("name", meta.name) + " AND namespace IS NULL")
         finally:
-            lock.release()
+            if lock is not None:
+                lock.release()
 
     async def update_description(
         self,

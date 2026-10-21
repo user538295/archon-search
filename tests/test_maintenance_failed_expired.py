@@ -21,8 +21,10 @@ import pytest
 from archon_search.config import MaintenanceConfig
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.store import JobStore
-from archon_search.types import IngestJob, JobStatus
+from archon_search.types import IngestJob, IngestOptions, JobStatus
 
+#: The POST /ingest request a retryable job carries (a job without one is never retried).
+_OPTIONS = IngestOptions(submitted_path="/data/file.txt", ingested_by="http")
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -53,7 +55,7 @@ def _make_loop(
     )
     js = job_store if job_store is not None else MagicMock()
     ss = search_store if search_store is not None else MagicMock()
-    return MaintenanceLoop(job_store=js, search_store=ss, config=cfg, data_dir=tmp_path)
+    return MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=js, search_store=ss, config=cfg, data_dir=tmp_path)
 
 
 def _make_failed_ingest_job(
@@ -64,7 +66,7 @@ def _make_failed_ingest_job(
     age_hours: float = 1.0,
     retry_count: int = 0,
 ) -> IngestJob:
-    """Create a FAILED IngestJob with the given age and retry_count."""
+    """Create a FAILED IngestJob with the given age and retry_count — a maintenance retry when retry_count > 0."""
     created_at = (datetime.now(timezone.utc) - timedelta(hours=age_hours)).isoformat()
     return IngestJob(
         job_id=f"job-{source_path[-8:]}",
@@ -75,6 +77,8 @@ def _make_failed_ingest_job(
         source_path=source_path,
         collection=collection,
         retry_count=retry_count,
+        source="maintenance" if retry_count else "user",
+        ingest_options=_OPTIONS,
     )
 
 
@@ -118,16 +122,13 @@ async def test_maintenance_loop_skips_failed_job_within_age_limit(tmp_path: Path
     loop = _make_loop(tmp_path, job_store=js, retry_max_attempts=3, retry_max_age_hours=72)
 
     health: dict = {}
-    retry_counts: dict = {}
-    await loop._run_failed_ingest_retry(health, retry_counts)
+    await loop._run_failed_ingest_retry(health)
 
     # Should re-enqueue (not transition to FAILED_EXPIRED)
     js.create.assert_called_once()
     js.transition.assert_not_called()
 
-    # retry count incremented
-    key = "default/docs//data/file.txt"
-    assert retry_counts.get(key) == 1
+    assert js.create.call_args.kwargs["retry_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -149,10 +150,9 @@ async def test_maintenance_loop_within_age_but_retries_exhausted_transitions_to_
     loop = _make_loop(tmp_path, job_store=js, retry_max_attempts=3, retry_max_age_hours=72)
 
     health: dict = {}
-    retry_counts: dict = {"default/docs//data/file.txt": 3}
 
     with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
-        await loop._run_failed_ingest_retry(health, retry_counts)
+        await loop._run_failed_ingest_retry(health)
 
     # Should NOT re-enqueue
     js.create.assert_not_called()
@@ -181,10 +181,9 @@ async def test_maintenance_loop_transitions_failed_job_to_failed_expired(
     loop = _make_loop(tmp_path, job_store=js, retry_max_attempts=3, retry_max_age_hours=72)
 
     health: dict = {}
-    retry_counts: dict = {"default/docs//data/old.txt": 3}
 
     with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
-        await loop._run_failed_ingest_retry(health, retry_counts)
+        await loop._run_failed_ingest_retry(health)
 
     js.create.assert_not_called()
     js.transition.assert_called_once_with(job.job_id, from_statuses={JobStatus.FAILED}, to_status=JobStatus.FAILED_EXPIRED)
@@ -210,10 +209,9 @@ async def test_maintenance_loop_aged_job_under_max_attempts_transitions_to_faile
     loop = _make_loop(tmp_path, job_store=js, retry_max_attempts=3, retry_max_age_hours=72)
 
     health: dict = {}
-    retry_counts: dict = {"default/docs//data/aged.txt": 1}
 
     with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
-        await loop._run_failed_ingest_retry(health, retry_counts)
+        await loop._run_failed_ingest_retry(health)
 
     # Even though retry_count < max_attempts, job is too old — FAILED_EXPIRED
     js.create.assert_not_called()
@@ -231,8 +229,7 @@ async def test_maintenance_loop_does_not_reenqueue_failed_expired(tmp_path: Path
     loop = _make_loop(tmp_path, job_store=js, retry_max_attempts=3, retry_max_age_hours=72)
 
     health: dict = {}
-    retry_counts: dict = {}
-    await loop._run_failed_ingest_retry(health, retry_counts)
+    await loop._run_failed_ingest_retry(health)
 
     js.create.assert_not_called()
     js.transition.assert_not_called()
@@ -244,35 +241,20 @@ async def test_maintenance_loop_does_not_reenqueue_failed_expired(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_maintenance_loop_exhausted_check_uses_retry_counts_dict_not_job_field(tmp_path: Path) -> None:
-    """Retry-exhausted check uses retry_counts dict, not job.retry_count field.
-
-    job.retry_count=0 but retry_counts["key"]=3 → FAILED_EXPIRED (dict is authoritative).
-    """
-    job = _make_failed_ingest_job("/data/file.txt", age_hours=1.0, retry_count=0)  # job field says 0
+@pytest.mark.parametrize(("retry_count", "exhausted"), [(2, False), (3, True)])
+async def test_maintenance_loop_exhausted_check_reads_the_submissions_retry_count(
+    tmp_path: Path, retry_count: int, exhausted: bool
+) -> None:
+    """The highest ``retry_count`` among the submission's retries (which attempt it was) is the attempt count: below
+    ``retry_max_attempts`` the path is retried, at it the chain ends FAILED_EXPIRED."""
+    job = _make_failed_ingest_job("/data/file.txt", age_hours=1.0, retry_count=retry_count)
     js = MagicMock()
     js.list.return_value = [job]
     js.transition.return_value = MagicMock()  # non-None = success
     loop = _make_loop(tmp_path, job_store=js, retry_max_attempts=3, retry_max_age_hours=72)
-    # Dict says 3 (authoritative)
-    retry_counts = {"default/docs//data/file.txt": 3}
-    await loop._run_failed_ingest_retry({}, retry_counts)
-    js.create.assert_not_called()
-    js.transition.assert_called_once_with(job.job_id, from_statuses={JobStatus.FAILED}, to_status=JobStatus.FAILED_EXPIRED)
-
-
-@pytest.mark.asyncio
-async def test_maintenance_loop_no_age_limit_expired_via_retry_exhaustion(tmp_path: Path) -> None:
-    """retry_max_age_hours=0 disables age filter; FAILED_EXPIRED still fires via retry exhaustion."""
-    job = _make_failed_ingest_job("/data/file.txt", age_hours=200.0, retry_count=0)
-    js = MagicMock()
-    js.list.return_value = [job]
-    js.transition.return_value = MagicMock()
-    loop = _make_loop(tmp_path, job_store=js, retry_max_attempts=3, retry_max_age_hours=0)
-    retry_counts = {"default/docs//data/file.txt": 3}
-    await loop._run_failed_ingest_retry({}, retry_counts)
-    js.create.assert_not_called()
-    js.transition.assert_called_once_with(job.job_id, from_statuses={JobStatus.FAILED}, to_status=JobStatus.FAILED_EXPIRED)
+    await loop._run_failed_ingest_retry({})
+    assert js.create.called is not exhausted
+    assert js.transition.called is exhausted
 
 
 @pytest.mark.asyncio
@@ -283,25 +265,27 @@ async def test_maintenance_loop_age_zero_expires_regardless_of_retry_budget(tmp_
     js.list.return_value = [job]
     js.transition.return_value = MagicMock()
     loop = _make_loop(tmp_path, job_store=js, retry_max_attempts=3, retry_max_age_hours=0)
-    retry_counts: dict = {}
-    await loop._run_failed_ingest_retry({}, retry_counts)
+    await loop._run_failed_ingest_retry({})
     js.create.assert_not_called()
     js.transition.assert_called_once_with(job.job_id, from_statuses={JobStatus.FAILED}, to_status=JobStatus.FAILED_EXPIRED)
 
 
 @pytest.mark.asyncio
 async def test_maintenance_loop_failed_expired_dedup_same_key(tmp_path: Path) -> None:
-    """Two aged FAILED jobs with same retry_key: only first is transitioned to FAILED_EXPIRED per pass."""
+    """Two aged FAILED jobs with same retry_key: the key is decided once, via the newest job, and ending its chain
+    expires both in that pass — one transition each, nothing re-enqueued."""
     job1 = _make_failed_ingest_job("/data/file.txt", age_hours=100.0, retry_count=0)
-    job2 = _make_failed_ingest_job("/data/file.txt", age_hours=50.0, retry_count=0)
+    job2 = _make_failed_ingest_job("/data/file.txt", age_hours=80.0, retry_count=0)
     job2.job_id = "job-file-2"
     js = MagicMock()
     js.list.return_value = [job1, job2]
     js.transition.return_value = MagicMock()
     loop = _make_loop(tmp_path, job_store=js, retry_max_attempts=3, retry_max_age_hours=72)
-    await loop._run_failed_ingest_retry({}, {})
-    # Only one transition call (dedup prevents second)
-    assert js.transition.call_count == 1
+    await loop._run_failed_ingest_retry({})
+    expired = {"from_statuses": {JobStatus.FAILED}, "to_status": JobStatus.FAILED_EXPIRED}
+    assert sorted((c.args[0], c.kwargs == expired) for c in js.transition.call_args_list) == [
+        ("job-file-2", True), ("job-file.txt", True),
+    ]
     js.create.assert_not_called()
 
 
@@ -317,15 +301,19 @@ async def test_maintenance_loop_invalid_created_at_skips_with_warning(tmp_path: 
         namespace="default",
         source_path="/data/corrupt.txt",
         collection="docs",
+        ingest_options=_OPTIONS,
     )
     js = MagicMock()
     js.list.return_value = [job]
     loop = _make_loop(tmp_path, job_store=js, retry_max_attempts=3, retry_max_age_hours=72)
     with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
-        await loop._run_failed_ingest_retry({}, {})
+        await loop._run_failed_ingest_retry({})
     js.create.assert_not_called()
     js.transition.assert_not_called()
-    assert any(r.levelno >= logging.WARNING for r in caplog.records)
+    assert any(
+        r.levelno == logging.WARNING and "job-corrupt" in r.getMessage() and "unparseable created_at" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +342,7 @@ async def test_maintenance_loop_failed_expired_via_real_job_store(
         source_path=str(tmp_path / "aged_file.txt"),
         collection="docs",
         retry_count=3,
+        ingest_options=_OPTIONS,
     )
     job_store.create_job(job)
 
@@ -367,10 +356,8 @@ async def test_maintenance_loop_failed_expired_via_real_job_store(
         retry_max_age_hours=72,
     )
 
-    # Pre-seed retry_counts to match job's retry_count
-    retry_counts: dict = {f"default/docs/{tmp_path / 'aged_file.txt'}": 3}
     health: dict = {}
-    await loop._run_failed_ingest_retry(health, retry_counts)
+    await loop._run_failed_ingest_retry(health)
 
     # The job must be transitioned to FAILED_EXPIRED
     stored_job = job_store.get("test-aged-job")
@@ -397,6 +384,7 @@ async def test_maintenance_loop_recent_failed_job_stays_failed(
         source="user",
         path=file_path,
         collection="docs",
+        ingest_options=IngestOptions(submitted_path=file_path, ingested_by="http"),
     )
     job_store.update(failed_job.job_id, status=JobStatus.FAILED, error="ingest error")
 
@@ -411,8 +399,7 @@ async def test_maintenance_loop_recent_failed_job_stays_failed(
     )
 
     health: dict = {}
-    retry_counts: dict = {}
-    await loop._run_failed_ingest_retry(health, retry_counts)
+    await loop._run_failed_ingest_retry(health)
 
     # Original job should still be FAILED (not transitioned to FAILED_EXPIRED)
     original = job_store.get(failed_job.job_id)
@@ -431,11 +418,12 @@ async def test_maintenance_loop_recent_failed_job_stays_failed(
 
 @pytest.mark.asyncio
 async def test_failed_expired_transition_write_failure_keeps_job_failed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Real JobStore: when the FAILED->FAILED_EXPIRED persist fails, the job must stay FAILED in memory and on
-    disk (consistent), so the next pass retries the expiry instead of skipping a job memory calls expired."""
-    from tests._job_store_faults import SIMULATED_WRITE_FAILURE, failing_job_writes, persisted_statuses
+    """Real JobStore: when the FAILED->FAILED_EXPIRED persist fails, the pass logs it (WARNING) and goes on, and the
+    job stays FAILED in memory and on disk (consistent), so the next pass retries the expiry instead of skipping a job
+    memory calls expired."""
+    from tests._job_store_faults import failing_job_writes, persisted_statuses
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     jobs_path = tmp_path / "jobs.json"
@@ -443,9 +431,13 @@ async def test_failed_expired_transition_write_failure_keeps_job_failed(
     aged = job_store.create_job(_make_failed_ingest_job(str(tmp_path / "old_file.txt"), age_hours=100.0))
     loop = _make_loop(tmp_path, job_store=job_store, search_store=MagicMock(), retry_max_age_hours=72)
 
-    # The transition's error propagates out of the retry pass (``_run_one_pass`` catches and logs it).
-    with failing_job_writes() as writes, pytest.raises(OSError, match=SIMULATED_WRITE_FAILURE):
-        await loop._run_failed_ingest_retry({}, {})
+    with (
+        failing_job_writes() as writes,
+        caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"),
+    ):
+        await loop._run_failed_ingest_retry({})  # must not raise
+
+    assert any(f"could not expire job {aged.job_id}" in r.getMessage() for r in caplog.records)
 
     assert writes.statuses_of(aged.job_id)[0] == JobStatus.FAILED_EXPIRED.value  # the expiry was attempted
     failed = job_store.get(aged.job_id)
@@ -453,7 +445,7 @@ async def test_failed_expired_transition_write_failure_keeps_job_failed(
     assert failed.status == JobStatus.FAILED
     assert persisted_statuses(jobs_path)[aged.job_id] == JobStatus.FAILED.value
 
-    await loop._run_failed_ingest_retry({}, {})  # next pass, writes succeed
+    await loop._run_failed_ingest_retry({})  # next pass, writes succeed
 
     expired = job_store.get(aged.job_id)
     assert expired is not None

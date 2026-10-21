@@ -16,7 +16,9 @@ import pytest
 
 from archon_search import defref_extractor, model_validation, pipeline
 from archon_search import parser as archon_parser
-from archon_search.server import routes_explain
+from archon_search.jobs import maintenance_loop
+from archon_search.jobs import store as job_store
+from archon_search.server import routes_collections, routes_explain
 from archon_search.sync import collection_sync_failed_detail
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +34,8 @@ _MCP_INTEGRATION = "Documentation/DeveloperGuide/05_mcp_integration.md"
 _DEV_ERROR_HANDLING = "Documentation/DeveloperGuide/06_error_handling.md"
 _BREAKING_INDEX = "Documentation/MigrationGuide/03_breaking_changes_index.md"
 _MONITORING = "Documentation/OperatorGuide/20_monitoring_and_alerts.md"
+_JOBS_MANUAL = "Documentation/UserManual/100_jobs_and_async_operations.md"
+_MAINTENANCE_GUIDE = "Documentation/OperatorGuide/50_maintenance_and_jobs.md"
 
 # ``in_breaking``: whether ``BREAKING.md`` quotes the literal back-quoted — True for every text a
 # change introduced or reworded. Asserted both ways, so the flag cannot drift from the file.
@@ -203,6 +207,34 @@ _CASES = [
         (_API_REFERENCE, _ERROR_STRATEGY),
         False,
         id="routing-unavailable",
+    ),
+    pytest.param(
+        lambda: maintenance_loop.RETRY_DISPATCH_FAILED_DETAIL,
+        "maintenance retry could not be started; see the server log for details",
+        (_ERROR_STRATEGY, _DEV_ERROR_HANDLING, _JOBS_MANUAL, _MAINTENANCE_GUIDE, _BREAKING_INDEX),
+        True,
+        id="maintenance-retry-dispatch",
+    ),
+    pytest.param(
+        lambda: job_store.NOT_STARTED_BEFORE_RESTART_DETAIL,
+        "never started; the server restarted before it ran",
+        (_ERROR_STRATEGY, _DEV_ERROR_HANDLING, _JOBS_MANUAL, _INCIDENT_RUNBOOK, _BREAKING_INDEX),
+        True,
+        id="ingest-not-started-before-restart",
+    ),
+    pytest.param(
+        lambda: routes_collections.COLLECTION_JOB_IN_PROGRESS_DETAIL,
+        "a job is in progress on this collection; retry after it completes",
+        (_API_REFERENCE, _COMPONENT_CATALOG, _ERROR_STRATEGY, _DEV_ERROR_HANDLING, _INCIDENT_RUNBOOK, _BREAKING_INDEX),
+        True,
+        id="delete-collection-job-in-progress",
+    ),
+    pytest.param(
+        lambda: routes_collections.COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id="<id>"),
+        "job <id> is in progress; retry after it completes",
+        (_API_REFERENCE, _COMPONENT_CATALOG, _ERROR_STRATEGY, _DEV_ERROR_HANDLING, _INCIDENT_RUNBOOK, _BREAKING_INDEX),
+        True,
+        id="delete-collection-own-job-in-progress",
     ),
     # Quoted by no doc verbatim (they paraphrase it); pinned so the OpenAPI wording is deliberate.
     pytest.param(

@@ -87,6 +87,7 @@ def _make_maintenance_loop(tmp_path, graph_store=None, graph_config=None):
     config.failed_ingest_retry = False
 
     loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=job_store,
         search_store=search_store,
         config=config,

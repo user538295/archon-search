@@ -509,6 +509,7 @@ def _make_pagerank_maintenance_loop(tmp_path, graph_store=None):
     config.failed_ingest_retry = False
 
     return MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=job_store,
         search_store=search_store,
         config=config,

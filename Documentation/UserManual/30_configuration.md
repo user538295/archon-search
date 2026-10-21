@@ -184,9 +184,9 @@ In-process maintenance passes (FTS optimize, orphan cleanup, failed-ingest retry
 | `interval_hours` | `0` | Hours between scheduled passes; `0` = no scheduled pass (≥0). |
 | `fts_optimize` | `true` | Optimize the FTS index each pass. |
 | `orphan_cleanup` | `true` | Remove chunks whose `source_path` no longer exists (URL-sourced, inline-ingested and imported chunks skipped). |
-| `failed_ingest_retry` | `true` | Re-enqueue failed `IngestJob`s within the retry limits. |
-| `retry_max_attempts` | `3` | Max retry attempts per file per collection (≥1). |
-| `retry_max_age_hours` | `72` | Only retry failures newer than this (≥0; `0` warns — immediate churn). |
+| `failed_ingest_retry` | `true` | Re-enqueue and run failed `IngestJob`s within the retry limits (newest failed job per file only, `exclude`d collections skipped; a retry keeps the original request's TTL, scopes and `X-Ingested-By`, and a failed ingest without a stored request — saved by an older server — is expired, never retried). |
+| `retry_max_attempts` | `3` | Max retry attempts per submission of a file, per collection — every retry started uses one, even one a server shutdown interrupted; a re-submission (`POST /ingest`) gets the full number again (≥1). |
+| `retry_max_age_hours` | `72` | Only retry failures whose original request is newer than this — the window does not restart with each retry (≥0; `0` disables retry and logs a warning: each pass moves every `FAILED` ingest job of a file whose newest job failed to `FAILED_EXPIRED` — jobs on an `exclude`d collection, and failures a newer pending, running, successful or client-cancelled job of the same file supersedes, stay `FAILED`). |
 | `prune_expired_chunks` | `true` | Prune chunks whose `expires_at < now`. |
 | `graph_gc` | `true` | Graph GC: prune stale mentions, orphaned nodes and unsupported mention-derived edges. `false` skips it on every pass, including manual triggers. |
 | `exclude` | `[]` | Collections to skip (bare name = all namespaces; `{ns}/{col}` = one namespace). |

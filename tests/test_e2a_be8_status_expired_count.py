@@ -217,7 +217,6 @@ def test_status_maintenance_last_expired_pruned_at_from_state_file(
             "next_run_at": None,
             "last_expired_pruned_at": expected_ts,
             "collection_health": {},
-            "retry_counts": {},
         })
         response = client.get("/status")
     assert response.status_code == 200
@@ -455,7 +454,6 @@ def test_get_status_maintenance_fields_after_prune(
             "next_run_at": None,
             "last_expired_pruned_at": pruned_at,
             "collection_health": {},
-            "retry_counts": {},
         })
 
         # First GET: 0 expired chunks (just pruned), last_expired_pruned_at is set

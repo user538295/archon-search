@@ -1187,8 +1187,10 @@ def _post_process_maintenance(config: SearchConfig) -> None:
     """Validate and warn on maintenance config after TOML + env overrides are applied."""
     if config.maintenance.retry_max_age_hours == 0:
         _logger.warning(
-            "[maintenance].retry_max_age_hours = 0: retry is disabled — "
-            "all failed ingest jobs will be immediately marked FAILED_EXPIRED"
+            "[maintenance].retry_max_age_hours = 0: retry is disabled — each maintenance pass marks the failed "
+            "ingest jobs of every file whose newest job failed FAILED_EXPIRED (those on excluded collections, "
+            "and failures superseded by a newer pending, running, successful or client-cancelled job of the same "
+            "file, stay FAILED)"
         )
 
 

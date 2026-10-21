@@ -37,7 +37,7 @@ Each section heading is the release name. Each entry has the shape:
 **Announced in**: the release where the deprecation was first published (often the same release that ships the change — there is no formal deprecation period yet).
 ```
 
-Two illustrative entries — **not** the full list. `BREAKING.md` carries 97 `### ` headings, all of them `[next release]`; the two below are the ones `MigrationGuide/03_breaking_changes_index.md` indexes as NR-1 and NR-2 (that index's NR rows cover only some of the headings). Never treat this section, or that index, as an inventory: read `BREAKING.md` itself before an upgrade.
+Two illustrative entries — **not** the full list. `BREAKING.md` carries 99 `### ` headings, all of them `[next release]`; the two below are the ones `MigrationGuide/03_breaking_changes_index.md` indexes as NR-1 and NR-2 (that index's NR rows cover only some of the headings). Never treat this section, or that index, as an inventory: read `BREAKING.md` itself before an upgrade.
 
 - **MCP `search` response shape.** Now `{"results": [...], "acl_filtered": bool}`; previously a bare list. Update consumers to read `response["results"]`.
 - **REST `/search` `top_k` ignored.** Request schema still accepts the field (Pydantic validates `top_k ≥ 1`; the route rejects a value above `[search].top_k_max` with `422`), but the route does not pass it to the pipeline. Configure `[database] top_k_return` in `archon-search.toml` instead.

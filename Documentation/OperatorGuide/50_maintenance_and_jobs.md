@@ -20,7 +20,7 @@ Each pass runs the enabled policies below. Four run **per non-excluded collectio
 | Orphan chunk cleanup | `orphan_cleanup` | Scans chunks, groups them by `source_path`, and deletes documents whose `source_path` no longer exists on disk. URL-sourced chunks and chunks not ingested from a file on this host (inline-ingested or imported) are never deleted — see [Orphan cleanup rules](#orphan-cleanup-rules). Runs an FTS optimize after any deletion. |
 | Expired-chunk pruning | `prune_expired_chunks` | Removes chunks whose `expires_at` is in the past (TTL). Requires the E2a schema migration (`POST /collections/{name}/migrate`) before TTL chunks are stored. See [TTL and scoping](../UserManual/130_ttl_and_scoping.md). |
 | Graph GC + async community rebuild | `graph_gc` | Prunes stale mention rows, removes orphaned graph nodes (and their edges) and sweeps mention-derived edges whose entities no longer co-occur in any chunk, then (when `[graph].gc_rebuild_communities = true`) enqueues an async per-collection community rebuild. Skipped entirely when `graph_gc = false` or `[graph].enabled = false`. See [Graph operations](60_graph_operations.md). |
-| Failed-ingest retry | `failed_ingest_retry` | Re-enqueues eligible FAILED ingest jobs as fresh jobs with `source="maintenance"`; ages out or exhausts the rest to terminal `FAILED_EXPIRED` (see below). |
+| Failed-ingest retry | `failed_ingest_retry` | Re-enqueues eligible FAILED ingest jobs as fresh jobs with `source="maintenance"` and runs them through the same ingest task as `POST /ingest`, with the original request's options; ages out or exhausts the rest to terminal `FAILED_EXPIRED` (see below). |
 
 Maintenance is lower priority than all user work: it takes the same per-collection lock ingest uses, and skips (until the next interval) any collection currently locked by a live ingest. Auxiliary graph writes never fail a pass — they log a WARNING and continue.
 
@@ -51,8 +51,8 @@ orphan_cleanup = true
 failed_ingest_retry = true
 prune_expired_chunks = true
 graph_gc = true
-retry_max_attempts = 3      # per source file, per collection, across restarts
-retry_max_age_hours = 72    # only retry FAILED jobs created within this window
+retry_max_attempts = 3      # retries per submission of a source file, per collection, across restarts
+retry_max_age_hours = 72    # retry only while the request the retries descend from is this recent
 exclude = []                # e.g. ["scratch", "tenants/staging"]
 ```
 
@@ -65,13 +65,23 @@ Notes:
 
 ## Failed-ingest retry and `FAILED_EXPIRED`
 
-Retry is bounded so a permanently broken file cannot be retried forever. Counts are keyed by `{namespace}/{collection}/{source_path}` in `.maintenance-state.json`, so the bound survives server restarts and job eviction. A source path whose latest job reaches `DONE` has its counter reset, restoring retry eligibility after a fix.
+Retry is bounded so a permanently broken file cannot be retried forever. Each retry job carries its attempt number (`retry_count`: `1`, `2`, …; `0` on a client's own submission), and every retry created for a submission uses one attempt however it ended — `FAILED`, `CANCELLED` by a server shutdown, or never started before a restart. A path's attempt count is the highest `retry_count` among the retries of its current submission, so `retry_max_attempts` is a hard bound, it lives in the job store and survives server restarts, and a client re-submitting the path (`POST /ingest`) starts a new chain with the full `retry_max_attempts`.
 
-Each pass, for every FAILED ingest job:
+Each pass, for every FAILED ingest job (jobs on an `exclude`d collection are skipped — neither retried nor expired):
 
-1. **Aged out** — created before `now - retry_max_age_hours` → transition to terminal `FAILED_EXPIRED` (never retried again).
-2. **Retry exhausted** — retry count `>= retry_max_attempts` (still within the age window) → transition to `FAILED_EXPIRED`.
-3. **Eligible** — young enough and under the attempt cap → re-enqueued as a new job with `source="maintenance"`, and the per-file counter is incremented.
+1. **Superseded** — a newer job exists for the same `{namespace}/{collection}/{source_path}` that is an outstanding retry (`PENDING`/`RUNNING`), a settled outcome (`DONE`/`FAILED`), or a job a client cancelled (`DELETE /jobs/{id}`: `CANCELLING`/`CANCELLED`) → left `FAILED`, not retried; the job store evicts it 7 days after its last update, unless the path's retries end first (below). A newer `FAILED_EXPIRED` job, or one `CANCELLED` because the server shut down while it ran, does not supersede. Only the newest `FAILED` job for a path is considered further, in the same pass.
+2. **Never retried** — the job has no stored request options (an ingest saved by a server older than this behaviour: its original request, and so its `chunk_scopes`, is unknown), a client asked to cancel it before it failed, or it failed `process_restart` (it was running when the server died, so re-running it could re-enter the workload that killed the process) → `FAILED_EXPIRED`.
+3. **Aged out** — the request the path's retries descend from (its newest job not created by maintenance among its `PENDING`/`RUNNING`/`DONE`/`FAILED` jobs and those a client cancelled — a request `CANCELLED` by a server shutdown does not count, and a client-cancelled one supersedes the older failures (step 1), so no retry follows it; when that request was evicted, the oldest of the path's retries) is older than `now - retry_max_age_hours` → `FAILED_EXPIRED`. The window counts from that request, not from each retry, so it does not restart when a retry fails.
+4. **Retry exhausted** — the submission's attempt count (above) `>= retry_max_attempts` (still within the age window) → `FAILED_EXPIRED`.
+5. **Eligible** — the newest job for its path, within the age window and under the attempt cap → re-enqueued as a new job with `source="maintenance"` and `retry_count` one above the attempt count, which starts running at once. A re-enqueue that cannot be created (job store write failure) uses no attempt: the next pass tries again.
+
+Steps 2–4 end the path's retries: every `FAILED` ingest job of the path moves to terminal `FAILED_EXPIRED` (never retried again) in that pass, superseded ones included, and the pass logs one WARNING line naming the job and the reason.
+
+A retry job is an ordinary ingest job: it takes the collection's ingest lock, then goes `PENDING` → `RUNNING` → `DONE`/`FAILED`/`CANCELLED`, and a `FAILED` retry is retried again on a later pass within the same limits. Unlike `POST /ingest`, it waits for a busy collection without a time limit — contention never fails it or uses up an attempt. A server shutdown never ends a path's retries: a retry waiting for the collection stays `PENDING` (the next start marks it `FAILED` `never started; the server restarted before it ran`, and the next pass retries it), and one interrupted while `RUNNING` ends `CANCELLED` like any ingest, which supersedes nothing, so the path is retried again. Either way the interrupted retry has used its attempt. It re-ingests `source_path` into the original collection and namespace with the original request's options, which `POST /ingest` stores on the job (`ingest_options`, not served by `GET /jobs`): `chunk_ttl_seconds`, `chunk_scopes`, the `X-Ingested-By` value, and the `path` as submitted (echoed if the file is still missing). Inline (`documents`) ingests have no `source_path` and are never retried. If the retry job cannot be started, it is marked `FAILED` with `error` `maintenance retry could not be started; see the server log for details` and the cause is logged; if even that write fails, the collection's `last_error` (`GET /status`) shows the same text.
+
+`DELETE /jobs/{id}` on an active (`PENDING`/`RUNNING`) retry job ends its path's retries: no pass starts another one, while the cancel settles (`CANCELLING`) or after (`CANCELLED`); re-submit the path to try again. Only an active job can be cancelled: `DELETE /jobs/{id}` on a `FAILED` job changes nothing, and its path's retries go on. A retry cancelled while it waits for a busy collection stays `CANCELLING` until the collection frees; if the server dies meanwhile, the restart marks it `FAILED` `process_restart`, as for any job cancelled while running, and that crash marker suppresses the startup sync on every boot until a clean `POST /sync` / `archon-search sync` (see [90 — Stuck job](90_incident_runbook.md#stuck-job-ingest-reindex-or-sync)).
+
+`DELETE /collections/{name}` ends the collection's retries: once the table is dropped (for a collection registered in the config with no meta row yet, once its config entry is removed), its `FAILED` and `PENDING` base ingest jobs (a `PENDING` one is a retry waiting for the collection lock) become `CANCELLED` in every namespace — the table is shared by name — so no retry re-creates the deleted collection and none counts as an expired failure.
 
 `FAILED_EXPIRED` is a terminal status: such jobs are never re-enqueued and surface in `GET /jobs?status=FAILED_EXPIRED`. Setting `retry_max_age_hours = 0` effectively disables retry (no job is ever young enough).
 
@@ -116,7 +126,7 @@ archon-search maintenance status --json
 
 ## State file
 
-Loop state persists in `.maintenance-state.json` under the data dir (`~/.archon-search/`, or `$ARCHON_SEARCH_DATA_DIR`). It holds `last_run_at`, `next_run_at`, `collection_health`, per-file `retry_counts`, and expiry/graph-GC timestamps, and is written atomically (temp file + `os.replace`) after each pass. It is safe to delete — the loop rebuilds it and loses only history, not data.
+Loop state persists in `.maintenance-state.json` under the data dir (`~/.archon-search/`, or `$ARCHON_SEARCH_DATA_DIR`). It holds `last_run_at`, `next_run_at`, `collection_health`, and expiry/graph-GC timestamps, and is written atomically (temp file + `os.replace`) after each pass. It is safe to delete — the loop rebuilds it and loses only history, not data.
 
 ## Related documents
 

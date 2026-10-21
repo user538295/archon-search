@@ -1122,3 +1122,51 @@ def test_info_last_indexed_null_shows_never() -> None:
     assert "default_ttl_seconds: 7200" in result.output
     # empty string is omitted
     assert "description" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# HTTP timeout of the calls to routes that may wait for a collection lock
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("command_path", "patched_call", "args"),
+    [
+        pytest.param("archon_search.cli.collection.collection", "collection.httpx.post", ["add", "/data/docs"], id="add"),
+        pytest.param("archon_search.cli.collection.collection", "collection.httpx.delete", ["remove", "docs"], id="remove"),
+        pytest.param("archon_search.cli.collection.collection", "collection.httpx.post", ["reindex", "docs"], id="reindex"),
+        pytest.param(
+            "archon_search.cli.collection.collection", "collection.httpx.post", ["reindex-metadata", "docs"],
+            id="reindex-metadata",
+        ),
+        pytest.param(
+            "archon_search.cli.collection.collection", "collection.httpx.post", ["migrate", "docs", "--apply"],
+            id="migrate-apply",
+        ),
+        pytest.param("archon_search.cli.ingest.ingest", "ingest.httpx.post", ["--path", "/data/docs"], id="ingest"),
+        pytest.param(
+            "archon_search.cli.graph_cmd.graph_cmd", "graph_cmd.httpx.post", ["build-communities", "docs"],
+            id="graph-build-communities",
+        ),
+    ],
+)
+def test_cli_call_to_a_lock_waiting_route_outlasts_the_servers_lock_wait(
+    command_path: str, patched_call: str, args: list[str]
+) -> None:
+    """These routes may wait up to INGEST_LOCK_TIMEOUT_S for the collection lock before they answer: the CLI waits
+    longer than that, instead of httpx's 5 s default reporting "Error contacting server" while the server goes on to
+    act on the request."""
+    import importlib
+
+    from archon_search.cli._helpers import _LOCK_WAITING_REQUEST_TIMEOUT_S
+    from archon_search.constants import INGEST_LOCK_TIMEOUT_S
+
+    module_path, command_name = command_path.rsplit(".", 1)
+    command = getattr(importlib.import_module(module_path), command_name)
+
+    with patch(f"archon_search.cli.{patched_call}", return_value=_mock_response(500, text="boom")) as call:
+        CliRunner().invoke(command, [*args, "--api-key", "test-key"])
+
+    call.assert_called_once()
+    assert call.call_args.kwargs["timeout"] == _LOCK_WAITING_REQUEST_TIMEOUT_S
+    assert _LOCK_WAITING_REQUEST_TIMEOUT_S > INGEST_LOCK_TIMEOUT_S

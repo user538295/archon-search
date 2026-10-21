@@ -423,6 +423,7 @@ def test_synonym_enrichment_uses_alias_loader_skip_pairs(tmp_path: Path) -> None
 
     graph_cfg = GraphConfig()
     loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=MagicMock(),
         search_store=MagicMock(),
         config=MaintenanceConfig(),
@@ -494,6 +495,7 @@ def test_synonym_enrichment_retries_alias_on_unresolved_names(tmp_path: Path) ->
     graph_cfg = GraphConfig(alias_file=str(alias_file))
 
     loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=MagicMock(),
         search_store=MagicMock(),
         config=MaintenanceConfig(),
@@ -559,6 +561,7 @@ def test_synonym_enrichment_alias_load_failure_falls_back_to_ann(tmp_path: Path)
 
     graph_cfg = GraphConfig()
     loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=MagicMock(),
         search_store=MagicMock(),
         config=MaintenanceConfig(),

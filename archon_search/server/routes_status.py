@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request
 
 from archon_search import code_enricher
 from archon_search.config import SearchConfig
-from archon_search.jobs.model import IngestJob, JobStatus
+from archon_search.jobs.model import JobStatus
 from archon_search.progress import compute_eta_seconds
 from archon_search.server.readiness import collect_readiness
 from archon_search.server.routes_collections import _all_collection_paths
@@ -34,6 +34,7 @@ from archon_search.server.schemas import (
     TelemetryStatusDetail,
 )
 from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+from archon_search.types import is_base_ingest
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -217,7 +218,7 @@ async def status(request: Request) -> StatusResponse:
 def _count_failed_expired_ingest_jobs(request: Request, ns: str) -> int:
     """Count exact base-class IngestJob instances with status FAILED_EXPIRED in the caller's namespace.
 
-    Only counts exact ``IngestJob`` instances (``type(j) is IngestJob``) — the same
+    Only counts exact ``IngestJob`` instances (``is_base_ingest``) — the same
     predicate used by ``MaintenanceLoop`` when it transitions FAILED jobs to
     FAILED_EXPIRED.  Subclasses (``ExportJob``, ``ImportJob``, etc.) are excluded.
 
@@ -231,7 +232,7 @@ def _count_failed_expired_ingest_jobs(request: Request, ns: str) -> int:
     return sum(
         1
         for j in job_store.list()
-        if type(j) is IngestJob
+        if is_base_ingest(j)
         and j.status == JobStatus.FAILED_EXPIRED
         and j.namespace == ns
     )

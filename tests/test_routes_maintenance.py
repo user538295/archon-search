@@ -138,7 +138,6 @@ def test_status_maintenance_namespace_scoped(tmp_path: Path, auth_headers: dict[
                     "meta_chunk_count": 3,
                 },
             },
-            "retry_counts": {},
         })
         response = client.get("/status")
     assert response.status_code == 200
@@ -173,7 +172,6 @@ def test_status_maintenance_last_run_at_populated(tmp_path: Path, auth_headers: 
             "last_run_at": expected_ts,
             "next_run_at": None,
             "collection_health": {},
-            "retry_counts": {},
         })
         response = client.get("/status")
     assert response.status_code == 200

@@ -778,6 +778,7 @@ def test_rebuild_route_job_write_failure_returns_sanitized_500_and_never_runs(
     import logging
     from unittest.mock import patch
 
+    import archon_search.server._collection_job as collection_job_mod
     import archon_search.server.routes_graph as routes_graph_mod
     from archon_search.types import CommunityRebuildJob
     from tests._job_store_faults import assert_error_logged_with_traceback, failing_job_writes
@@ -786,7 +787,7 @@ def test_rebuild_route_job_write_failure_returns_sanitized_500_and_never_runs(
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
         job_store = client.app.state.job_store
-        caplog.set_level(logging.ERROR, logger=routes_graph_mod.__name__)
+        caplog.set_level(logging.ERROR, logger=collection_job_mod.__name__)
 
         with patch.object(routes_graph_mod, "_community_rebuild_task") as rebuild_spy, \
              failing_job_writes(exc=write_error):
@@ -794,7 +795,7 @@ def test_rebuild_route_job_write_failure_returns_sanitized_500_and_never_runs(
 
         assert resp.status_code == 500
         assert resp.json() == {"detail": "internal error"}
-        assert_error_logged_with_traceback(caplog, routes_graph_mod.__name__)
+        assert_error_logged_with_traceback(caplog, collection_job_mod.__name__)
         assert [j for j in job_store.list() if isinstance(j, CommunityRebuildJob)] == []
         rebuild_spy.assert_not_called()
         meta = asyncio.run(client.app.state.search_store.get_collection_meta("testcol", namespace="default"))

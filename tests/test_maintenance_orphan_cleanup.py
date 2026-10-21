@@ -81,7 +81,7 @@ def _make_loop(
     )
     js = MagicMock()
     ss = search_store if search_store is not None else MagicMock()
-    loop = MaintenanceLoop(job_store=js, search_store=ss, config=cfg, data_dir=tmp_path)
+    loop = MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=js, search_store=ss, config=cfg, data_dir=tmp_path)
     # Set an empty _current_health dict so policies can update it.
     loop._current_health = {  # type: ignore[attr-defined]
         "fts_optimized_at": None,
@@ -528,6 +528,7 @@ async def test_orphan_cleanup_real_store(
         from archon_search.jobs.maintenance_loop import MaintenanceLoop
 
         loop = MaintenanceLoop(
+            dispatch_retry=lambda _job: None,
             job_store=MagicMock(),
             search_store=store,
             config=cfg,

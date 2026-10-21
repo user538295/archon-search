@@ -21,6 +21,21 @@ class JobStatus(str, Enum):
     CANCELLING = "CANCELLING"
 
 
+@dataclass(frozen=True)
+class IngestOptions:
+    """The POST /ingest request a path ingest job was made from, which a ``MaintenanceLoop`` retry re-applies.
+
+    ``submitted_path`` is the caller's raw ``path`` (the job's ``source_path`` holds its resolution), so a retry's
+    not-found error echoes what the caller sent; the rest are the request's ``ingested_by`` (``X-Ingested-By``),
+    ``chunk_ttl_seconds`` and ``chunk_scopes``.
+    """
+
+    submitted_path: str
+    ingested_by: str
+    chunk_ttl_seconds: int | None = None
+    chunk_scopes: tuple[str, ...] | None = None
+
+
 @dataclass
 class IngestJob:
     job_id: str
@@ -32,15 +47,28 @@ class IngestJob:
     namespace: str = DEFAULT_NAMESPACE
     progress: dict | None = None  # {"processed": int, "total": int, "phase": str}
     source: Literal["user", "backup", "maintenance"] = "user"
-    source_path: str = ""   # absolute path of the ingested file; set by ingest worker
-    collection: str = ""    # target collection name; set by ingest worker
-    retry_count: int = 0    # incremented by MaintenanceLoop on each retry attempt
+    source_path: str = ""   # resolved POST /ingest path, set at create; "" for an inline or POST /collections/ ingest
+    collection: str = ""    # target collection name, set when the job is created
+    retry_count: int = 0    # the retry attempt a MaintenanceLoop retry job is (1, 2, ...); 0: not a retry
+    # Set only on a path ingest made by POST /ingest (and copied to its maintenance retries); persisted in the jobs
+    # file only (job_to_dict does not expose it). None: the original request is unknown (a job saved before the
+    # options were stored, an inline or POST /collections/ ingest, or any subclass), so it is never retried.
+    ingest_options: IngestOptions | None = None
+    # True once a DELETE /jobs/{id} asked to cancel the job — a client's cancel, unlike a CANCELLED written when the
+    # server shut down; a MaintenanceLoop retry chain ends there. Persisted in the jobs file only (off the wire).
+    cancel_requested: bool = False
 
     def __post_init__(self) -> None:
         if self.source not in _VALID_INGEST_SOURCES:
             raise ValueError(
                 f"Invalid source {self.source!r}; must be one of {sorted(_VALID_INGEST_SOURCES)}"
             )
+
+
+def is_base_ingest(job: IngestJob) -> bool:
+    """Whether *job* is a plain ingest job — exactly ``IngestJob`` (POST /ingest, POST /collections/ and the
+    ``MaintenanceLoop`` retries), none of its subclasses (reindex, export, sync, ...), which run other work."""
+    return type(job) is IngestJob
 
 
 @dataclass
