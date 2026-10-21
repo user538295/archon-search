@@ -35,6 +35,7 @@ _CRASH_STATUSES = {JobStatus.RUNNING, JobStatus.CANCELLING}
 # QUEUED is intentionally excluded from crash statuses: QUEUED bulk jobs survive
 # a server restart and will be re-dispatched by the scheduler on next tick.
 _INGEST_JOB_TYPE = "ingest"
+_REINDEX_JOB_TYPE = "reindex"
 # Job types whose crash marker means the corpus-scan-and-ingest workload the
 # startup sync itself performs is what killed the process: a plain ingest (the
 # original incident's shape — a client POST /ingest that OOM'd) or a sync (the
@@ -55,10 +56,13 @@ _INGEST_FAMILY_JOB_TYPES = {_INGEST_JOB_TYPE, JobKind.sync.value}
 #: while it ran. For an ingest-family job it arms the crash-loop guard, and ``MaintenanceLoop`` never retries such an
 #: ingest — re-running it could re-enter the workload that killed the process.
 PROCESS_RESTART_ERROR = "process_restart"
-#: Wire-facing ``error`` (served by GET /jobs) of a base ingest job loaded still ``PENDING``: it never started, and
-#: its task died with the previous process, so nothing would ever run it. Nothing ran, so unlike ``process_restart``
-#: it does not arm the crash-loop guard; as a ``FAILED`` path ingest, ``MaintenanceLoop`` may retry it.
+#: Wire-facing ``error`` (served by GET /jobs) of a base ingest or reindex job loaded still ``PENDING``: it never
+#: started, and its task died with the previous process, so nothing would ever run it (a PENDING reindex would also
+#: block DELETE /collections/{name} forever). Nothing ran, so unlike ``process_restart`` it does not arm the crash-loop
+#: guard; as a ``FAILED`` path ingest, ``MaintenanceLoop`` may retry an ingest job (never a reindex job).
 NOT_STARTED_BEFORE_RESTART_DETAIL = "never started; the server restarted before it ran"
+#: ``job_type`` values whose job loaded ``PENDING`` is rewritten FAILED with ``NOT_STARTED_BEFORE_RESTART_DETAIL``.
+_NOT_STARTED_ON_LOAD_JOB_TYPES = frozenset({_INGEST_JOB_TYPE, _REINDEX_JOB_TYPE})
 #: Statuses of a base ingest job a ``MaintenanceLoop`` retry may still act on: FAILED (a retry candidate) and
 #: PENDING (a retry not yet claimed RUNNING). ``cancel_ingest_retries`` ends them.
 _RETRY_CANDIDATE_STATUSES = frozenset({JobStatus.FAILED, JobStatus.PENDING})
@@ -66,6 +70,70 @@ _EVICTION_DAYS = 7
 # Only terminal jobs are eligible for eviction; non-terminal jobs (PENDING, QUEUED,
 # RUNNING, CANCELLING) are retained regardless of age.
 _TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED, JobStatus.CANCELLED}
+
+#: Statuses in which a job's task may still write its collection's table or meta row. RUNNING: the task has
+#: started. CANCELLING: DELETE /jobs/{id} sets it but does NOT cancel the task, which keeps writing until it ends
+#: (or, for an import, until its next batch boundary).
+_RUNNING_OR_CANCELLING = frozenset({JobStatus.RUNNING, JobStatus.CANCELLING})
+#: Job kind (exact type) -> the statuses in which DELETE /collections/{name} refuses to drop the job's collection,
+#: because the job may still write the table or meta row without holding the collection lock. Each of these tasks
+#: writes outside ``lock_for(name)`` at some point of its run (a metadata reindex holds the lock for its whole store
+#: call, but clears its meta pointer after releasing it), and a meta-row write from a read made before a drop
+#: (``update_collection_meta`` locks, but upserts by ``merge_insert``) re-inserts the dropped collection's row:
+#: - ``IngestJob`` (base ingest only): its dispatch path releases the lock right after marking the job RUNNING and
+#:   keeps writing. PENDING is excluded — the lock covers it (see ``JobStore.find_active_collection_job``).
+#: - ``ReindexJob``: ``_reindex_task`` writes through ``pipeline.ingest_directory`` (lock per ``ingest_chunks``
+#:   call; ``ensure_collection`` re-creates a dropped table and meta row). PENDING too: the task holds no lock
+#:   while it loads the embedder before its PENDING -> RUNNING claim. POST /collections/{name}/reindex creates it
+#:   PENDING under the lock; one left PENDING by a restart is failed at load (``JobStore._load``).
+#: - ``ImportJob``: its task locks per write (``ensure_collection``, ``ingest_chunks``). QUEUED is excluded: no
+#:   task runs yet, and an import creates its target collection by design.
+#: - ``MigrationJob``: ``apply_rewrite_migration`` locks only during the rewrite, then re-reads and rewrites the meta
+#:   row (``schema_version``). QUEUED is excluded, and POST /collections/{name}/migrate needs no lock to create its
+#:   RUNNING job: the rewrite opens the table under the lock first, so a dropped collection fails it cleanly before
+#:   any meta write.
+#: - ``MetadataReindexJob``: created RUNNING (under the lock, by its route) before ``reindex_metadata`` takes the
+#:   lock (and holds it for its whole run); once that call returns, the task clears its meta pointer from a read made
+#:   outside the lock.
+#: - ``CommunityRebuildJob``: created RUNNING (under the lock, by its route); writes the collection's graph tables,
+#:   then clears its meta pointer from a read made outside the lock.
+COLLECTION_WRITING_JOB_STATUSES: dict[type[IngestJob], frozenset[JobStatus]] = {
+    IngestJob: _RUNNING_OR_CANCELLING,
+    ReindexJob: _RUNNING_OR_CANCELLING | {JobStatus.PENDING},
+    ImportJob: _RUNNING_OR_CANCELLING,
+    MigrationJob: _RUNNING_OR_CANCELLING,
+    MetadataReindexJob: _RUNNING_OR_CANCELLING,
+    CommunityRebuildJob: _RUNNING_OR_CANCELLING,
+}
+#: Job kinds that never block DELETE /collections/{name}; every kind is in exactly one of this set and
+#: ``COLLECTION_WRITING_JOB_STATUSES`` (an unclassified kind fails closed — see ``may_write_collection``):
+#: - ``ExportJob``: reads the collection only.
+#: - ``DeleteJob``: legacy; nothing creates or runs one any more.
+#: - ``SyncJob``: names no collection (``collection`` is always ""), though a RUNNING sync writes (and may drop)
+#:   collections — a known, pre-existing gap: ``530_technical_debt_refactoring_roadmap.md`` CON-7.
+NEVER_BLOCKING_JOB_KINDS: frozenset[type[IngestJob]] = frozenset({ExportJob, DeleteJob, SyncJob})
+
+
+def may_write_collection(job: IngestJob) -> bool:
+    """Whether *job*'s kind and status mean it may still write its collection (``COLLECTION_WRITING_JOB_STATUSES``).
+
+    The kind is matched by exact type (as ``is_base_ingest`` does). A kind in neither that table nor
+    ``NEVER_BLOCKING_JOB_KINDS`` fails closed: it may write while not terminal, and each such check is logged at
+    ERROR so the kind gets classified — DELETE refuses rather than drop a collection it may write.
+    """
+    kind = type(job)
+    if kind in NEVER_BLOCKING_JOB_KINDS:
+        return False
+    statuses = COLLECTION_WRITING_JOB_STATUSES.get(kind)
+    if statuses is not None:
+        return job.status in statuses
+    may_write = job.status not in _TERMINAL_STATUSES
+    if may_write:
+        logger.error(
+            "JobStore: job %s has the unclassified kind %s; treating it as writing collection %r until it is terminal",
+            job.job_id, kind.__name__, job.collection,
+        )
+    return may_write
 
 
 def _now_iso() -> str:
@@ -163,7 +231,10 @@ class JobStore:
         )
         return self.create_job(job)
 
-    def create_reindex(self, namespace: str = DEFAULT_NAMESPACE, target_embedding_model: str | None = None) -> ReindexJob:
+    def create_reindex(
+        self, collection: str, namespace: str = DEFAULT_NAMESPACE, target_embedding_model: str | None = None
+    ) -> ReindexJob:
+        """Create a PENDING ReindexJob of *collection*; DELETE /collections/{name} refuses while it is active."""
         now = _now_iso()
         job = ReindexJob(
             job_id=str(uuid.uuid4()),
@@ -171,6 +242,7 @@ class JobStore:
             created_at=now,
             updated_at=now,
             namespace=namespace,
+            collection=collection,
             target_embedding_model=target_embedding_model,
         )
         return self.create_job(job)
@@ -273,7 +345,8 @@ class JobStore:
     def cancel_ingest_retries(self, collection: str) -> None:
         """Cancel every base ingest job on *collection* a ``MaintenanceLoop`` retry could still run or re-create.
 
-        For DELETE /collections/{name}, under the collection lock, once the table is dropped: each FAILED or PENDING
+        For DELETE /collections/{name}, under the collection lock, once the table is dropped (or, for a config-only
+        collection, its config entry removed — a retry would create the table): each FAILED or PENDING
         base ``IngestJob`` on it becomes CANCELLED, in every namespace — the table and lock are keyed by name alone,
         so any namespace's retry would re-create the dropped table. Under the lock a PENDING one is a retry waiting
         for it, whose PENDING -> RUNNING claim is then refused. Subclass jobs are untouched. All the cancels are
@@ -299,6 +372,23 @@ class JobStore:
                 "JobStore: could not cancel the ingest jobs of dropped collection %s (%s)",
                 collection, ", ".join(old_jobs), exc_info=True,
             )
+
+    def find_active_collection_job(self, collection: str, namespace: str) -> IngestJob | None:
+        """Return a job that may still write *collection* (``may_write_collection``), in ANY namespace, else ``None``.
+
+        A match in the caller's *namespace* is preferred, so the caller sees its own job id when it has one.
+
+        Any namespace: the search store keeps one LanceDB table per collection name (``drop_collection`` drops the
+        table by name alone) and ``lock_for`` keys the collection lock by name only, so a job submitted from any
+        namespace writes into the very table DELETE /collections/{name} drops.
+
+        A base ingest job's PENDING is excluded: the lock covers it. POST /ingest and POST /collections/ hold the
+        collection lock while their job is PENDING, and a maintenance retry waits for the lock before its
+        PENDING -> RUNNING claim (``routes_jobs._run_maintenance_retry``) — a DELETE that holds the lock cancels
+        such a retry instead (``cancel_ingest_retries``).
+        """
+        active = [job for job in self._jobs.values() if job.collection == collection and may_write_collection(job)]
+        return next((job for job in active if job.namespace == namespace), next(iter(active), None))
 
     def create_export(
         self,
@@ -497,7 +587,7 @@ class JobStore:
                     job: IngestJob = ExportJob(**item)
                 elif job_type == "import":
                     job = ImportJob(**item)
-                elif job_type == "reindex":
+                elif job_type == _REINDEX_JOB_TYPE:
                     job = ReindexJob(**item)
                 elif job_type == "delete":
                     job = DeleteJob(**item)
@@ -524,9 +614,10 @@ class JobStore:
                     modified = True
                     if job_type in _INGEST_FAMILY_JOB_TYPES:
                         self._crashed_ingest_on_load = True
-                elif job.status == JobStatus.PENDING and job_type == _INGEST_JOB_TYPE:
-                    # Every base ingest job's task is spawned when the job is created, so one still PENDING
-                    # lost its task with the previous process; other kinds keep their PENDING semantics.
+                elif job.status == JobStatus.PENDING and job_type in _NOT_STARTED_ON_LOAD_JOB_TYPES:
+                    # Every base ingest and reindex job's task is spawned when the job is created (a shutdown cancels
+                    # a reindex task while it loads its embedder, still PENDING), so one still PENDING lost its task
+                    # with the previous process; other kinds keep their PENDING semantics.
                     job = dataclasses.replace(
                         job,
                         status=JobStatus.FAILED,
@@ -572,7 +663,7 @@ class JobStore:
                 elif isinstance(job, ImportJob):
                     item["job_type"] = "import"
                 elif isinstance(job, ReindexJob):
-                    item["job_type"] = "reindex"
+                    item["job_type"] = _REINDEX_JOB_TYPE
                 elif isinstance(job, DeleteJob):
                     item["job_type"] = "delete"
                 elif isinstance(job, CommunityRebuildJob):

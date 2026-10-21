@@ -18,13 +18,14 @@ def parked_waiters(lock: asyncio.Lock) -> int:
     return len(lock._waiters or ())
 
 
-async def until_parked(lock: asyncio.Lock) -> None:
-    """Yield to the loop until a task waits on *lock*; fail if none does within a bounded number of iterations."""
+async def until_parked(lock: asyncio.Lock, waiters: int = 1) -> None:
+    """Yield to the loop until *waiters* tasks wait on *lock*; fail if they do not within a bounded number of
+    iterations."""
     for _ in range(_PARK_ITERATIONS):
-        if parked_waiters(lock):
+        if parked_waiters(lock) >= waiters:
             return
         await asyncio.sleep(0)
-    pytest.fail("the retry task never waited on the collection lock")
+    pytest.fail(f"{parked_waiters(lock)} of {waiters} expected task(s) waited on the collection lock")
 
 
 @contextlib.asynccontextmanager

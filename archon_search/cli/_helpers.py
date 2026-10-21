@@ -11,6 +11,7 @@ import click
 import httpx
 
 from archon_search.config import ConfigError
+from archon_search.constants import INGEST_LOCK_TIMEOUT_S
 from archon_search.platform.service import SearchServiceLifecycle
 from archon_search.types import JobStatus
 
@@ -40,6 +41,13 @@ _CONTAINER_MSG = (
 )
 # Must match the click default in every CLI command (collection.py:_DEFAULT_API_URL, etc.).
 _LOCAL_DEFAULT_URL = "http://localhost:8765"
+# Slack, beyond the server's collection-lock wait, for the server to act on the request once it holds the lock.
+_LOCK_WAIT_RESPONSE_MARGIN_S = 10.0
+# httpx timeout of a call to a route that may wait up to INGEST_LOCK_TIMEOUT_S for a collection lock before it
+# answers (POST /collections/, DELETE /collections/{name}, POST /ingest, the reindex / reindex-metadata / migrate /
+# rebuild-communities routes): httpx's 5 s default would report "Error contacting server" while the server goes on
+# to act on the request.
+_LOCK_WAITING_REQUEST_TIMEOUT_S = INGEST_LOCK_TIMEOUT_S + _LOCK_WAIT_RESPONSE_MARGIN_S
 
 
 @contextmanager

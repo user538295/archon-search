@@ -42,7 +42,7 @@ The one genuine gap: `CollectionMeta` construction (ddd-09) and the God-class sp
 
 ### Slice 3 — `ingest_chunks` / `delete_document` / `delete_by_source_path` command-query + boolean-param split
 **Resolves**: clarity-14 (1129, 1481, 1727, 1796, 2233, 2536), smells-03 (1727, 2233, 2301)
-**What**: `ingest_chunks`'s `_locked_by_caller`/`_is_continuation` flags and `delete_document`/`delete_by_source_path`'s `skip_fts_optimize` flag each become two explicit call paths. `apply_rewrite_migration`, `_do_update_meta_on_add`, `_do_ingest`, `prune_expired_chunks` get their command/query halves separated per clarity-14.
+**What**: `ingest_chunks`'s `_locked_by_caller`/`_is_continuation` flags and `delete_document`/`delete_by_source_path`'s `skip_fts_optimize` flag each become two explicit call paths. A `_locked_by_caller` flag now exists on three methods — `ingest_chunks`, `drop_collection` and, a third, `update_collection_meta` (used by `server/_collection_job.py` to write a new job's meta pointer under the collection lock it already holds; it raises `CollectionLockNotHeldError`, a `RuntimeError`, when that lock is not held) — so split all three the same way. `apply_rewrite_migration`, `_do_update_meta_on_add`, `_do_ingest`, `prune_expired_chunks` get their command/query halves separated per clarity-14.
 **Effort**: L · **Risk**: Med-High — `ingest_chunks`'s locked/continuation flags are load-bearing for the batch-ingest retry path (`pipeline.py`); grep every caller before splitting, this is the kind of change that silently breaks a retry loop if a caller still expects the old flag semantics under the new name.
 
 ### Slice 4 — `CollectionMeta` factory + duplication cleanup

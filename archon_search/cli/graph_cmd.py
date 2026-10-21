@@ -13,7 +13,7 @@ from __future__ import annotations
 import click
 import httpx
 
-from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _server_connect_fail_msg
+from archon_search.cli._helpers import _CONNECT_FAIL, _LOCK_WAITING_REQUEST_TIMEOUT_S, _poll_job, _server_connect_fail_msg
 from archon_search.cli.collection import (
     _DEFAULT_API_URL,
     _resolve_api_key,
@@ -73,6 +73,7 @@ def build_communities_cmd(
             f"{base_url}/graph/{collection}/rebuild-communities",
             headers=headers,
             params={"namespace": namespace},
+            timeout=_LOCK_WAITING_REQUEST_TIMEOUT_S,
         )
     except _CONNECT_FAIL:
         click.echo(_server_connect_fail_msg(base_url), err=True)

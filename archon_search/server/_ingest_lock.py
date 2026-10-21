@@ -1,12 +1,15 @@
 """Pre-acquire per-collection ingest lock for REST handlers.
 
-Shared lock-acquisition logic of POST /ingest, POST /collections/ and DELETE /collections/{name}.
+Shared lock-acquisition logic of POST /ingest, POST /collections/, DELETE /collections/{name},
+POST /collections/{name}/reindex, POST /collections/{name}/reindex-metadata and
+POST /graph/{collection}/rebuild-communities (the last three through ``_collection_job.create_collection_job``,
+which creates their job and its meta pointer under the lock).
 On timeout it builds a 503 with a ``Retry-After`` header and the body
 ``{"detail": "reindex in progress; retry after Retry-After seconds", "code": "store_busy"}``:
-POST /ingest and DELETE /collections/{name} return that response unchanged, while
+every caller but POST /collections/ returns that response unchanged, while
 POST /collections/ rolls back its config entry and stub meta row and answers with its own
 body ``{"detail": "store busy; retry in N seconds"}`` (N = the same ``Retry-After`` value).
-:func:`store_busy_503` also builds DELETE /collections/{name}'s 503 refusal while a base ingest job is still writing to the collection.
+:func:`store_busy_503` also builds DELETE /collections/{name}'s 503 refusal while a job may still be writing to the collection.
 """
 from __future__ import annotations
 
@@ -17,9 +20,12 @@ from fastapi.responses import JSONResponse
 
 import archon_search.constants as _constants
 
-#: Wire ``code`` of the 503s built by :func:`store_busy_503`: POST /ingest's and DELETE /collections/{name}'s
-#: busy-collection refusals. POST /collections/ answers its own busy 503 body without a ``code``.
+#: Wire ``code`` of the 503s built by :func:`store_busy_503`: the lock-timeout refusal of every
+#: :func:`acquire_collection_lock_or_503` caller, and DELETE /collections/{name}'s job-in-progress refusal.
+#: POST /collections/ answers its own busy 503 body without a ``code``.
 STORE_BUSY_CODE = "store_busy"
+#: OpenAPI description of the 503 :func:`acquire_collection_lock_or_503` answers when the lock wait times out.
+STORE_BUSY_503_DESCRIPTION = "Store busy (code store_busy): the collection lock was not acquired in time"
 
 
 def store_busy_503(detail: str) -> JSONResponse:

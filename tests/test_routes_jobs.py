@@ -1944,7 +1944,7 @@ def _failing_writes_job_store(
 ) -> tuple[JobStore, ReindexJob, list[JobStatus]]:
     """A real JobStore whose ``update`` to ``fail_on`` raises (``times`` times, or always)."""
     job_store = JobStore(path=tmp_path / "jobs.json")
-    job = job_store.create_reindex(namespace=DEFAULT_NAMESPACE, target_embedding_model="model-B")
+    job = job_store.create_reindex("col", namespace=DEFAULT_NAMESPACE, target_embedding_model="model-B")
     real_update = job_store.update
     attempted: list[JobStatus] = []
     remaining = [times]
@@ -2276,7 +2276,7 @@ def _cancel_during_embedder_load(
 def _reindex_cancel_fixture(tmp_path: Path, target_model: str | None) -> tuple:
     """A real JobStore holding a PENDING ReindexJob plus a stateful collection meta pointing at it."""
     job_store = JobStore(path=tmp_path / "jobs.json")
-    job = job_store.create_reindex(target_embedding_model=target_model)
+    job = job_store.create_reindex("col", target_embedding_model=target_model)
     meta = _make_collection_meta(
         active_embedding_model="model-A",
         pending_embedding_model=target_model,
@@ -2556,6 +2556,29 @@ async def test_reindex_task_clears_pointer_before_terminal_status(
     assert status_at_clear[0] not in (JobStatus.CANCELLED, JobStatus.FAILED)
     assert run.meta.reindex_job_id is None
     assert run.meta.active_embedding_model == "model-A"
+
+
+@pytest.mark.anyio
+async def test_reindex_task_success_writes_the_meta_row_before_done(tmp_path: Path) -> None:
+    """On success the promotion's meta write (which also clears reindex_job_id) runs while the job is still RUNNING,
+    and DONE is written after it: DELETE /collections/{name} refuses only while the job is PENDING/RUNNING/CANCELLING,
+    so a meta write after DONE (an unlocked read, then an upsert) could re-create a collection dropped in between."""
+    job_store, job, meta, search_store, pipeline = _reindex_cancel_fixture(tmp_path, "model-B")
+    embedder_cache = MagicMock()
+    embedder_cache.get_or_load = AsyncMock(return_value=MagicMock())
+    status_at_write: list[JobStatus] = []
+
+    async def _record_write(_meta: CollectionMeta) -> None:
+        status_at_write.append(job_store.get(job.job_id).status)  # type: ignore[union-attr]
+
+    search_store.update_collection_meta = AsyncMock(side_effect=_record_write)
+
+    await _run_reindex(job_store, job.job_id, search_store, embedder_cache, pipeline, tmp_path)
+
+    assert status_at_write == [JobStatus.RUNNING]
+    final = job_store.get(job.job_id)
+    assert final is not None and final.status == JobStatus.DONE
+    assert (meta.reindex_job_id, meta.active_embedding_model) == (None, "model-B")
 
 
 @pytest.mark.anyio

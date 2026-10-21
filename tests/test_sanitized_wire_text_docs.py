@@ -18,7 +18,7 @@ from archon_search import defref_extractor, model_validation, pipeline
 from archon_search import parser as archon_parser
 from archon_search.jobs import maintenance_loop
 from archon_search.jobs import store as job_store
-from archon_search.server import routes_explain
+from archon_search.server import routes_collections, routes_explain
 from archon_search.sync import collection_sync_failed_detail
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -221,6 +221,20 @@ _CASES = [
         (_ERROR_STRATEGY, _DEV_ERROR_HANDLING, _JOBS_MANUAL, _INCIDENT_RUNBOOK, _BREAKING_INDEX),
         True,
         id="ingest-not-started-before-restart",
+    ),
+    pytest.param(
+        lambda: routes_collections.COLLECTION_JOB_IN_PROGRESS_DETAIL,
+        "a job is in progress on this collection; retry after it completes",
+        (_API_REFERENCE, _COMPONENT_CATALOG, _ERROR_STRATEGY, _DEV_ERROR_HANDLING, _INCIDENT_RUNBOOK, _BREAKING_INDEX),
+        True,
+        id="delete-collection-job-in-progress",
+    ),
+    pytest.param(
+        lambda: routes_collections.COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id="<id>"),
+        "job <id> is in progress; retry after it completes",
+        (_API_REFERENCE, _COMPONENT_CATALOG, _ERROR_STRATEGY, _DEV_ERROR_HANDLING, _INCIDENT_RUNBOOK, _BREAKING_INDEX),
+        True,
+        id="delete-collection-own-job-in-progress",
     ),
     # Quoted by no doc verbatim (they paraphrase it); pinned so the OpenAPI wording is deliberate.
     pytest.param(

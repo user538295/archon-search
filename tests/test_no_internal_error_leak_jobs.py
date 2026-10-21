@@ -279,7 +279,7 @@ async def test_reindex_task_meta_lookup_failure_still_marks_job_failed(
 ) -> None:
     """The meta lookup inside embedder resolution fails: the handler's own meta cleanup fails the same way."""
     job_store = _job_store(tmp_path)
-    job = job_store.create_reindex(namespace=_NAMESPACE, target_embedding_model=None)
+    job = job_store.create_reindex(_COLLECTION, namespace=_NAMESPACE, target_embedding_model=None)
     store = _search_store()
     store.get_collection_meta = AsyncMock(side_effect=RuntimeError(LANCE_MSG))
 
@@ -297,7 +297,7 @@ async def test_reindex_task_embedder_not_ready_meta_cleanup_failure_still_marks_
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     job_store = _job_store(tmp_path)
-    job = job_store.create_reindex(namespace=_NAMESPACE, target_embedding_model=_TARGET_MODEL)
+    job = job_store.create_reindex(_COLLECTION, namespace=_NAMESPACE, target_embedding_model=_TARGET_MODEL)
     store = _search_store()
     store.get_collection_meta = AsyncMock(side_effect=RuntimeError(LANCE_MSG))
 
@@ -316,7 +316,7 @@ async def test_reindex_task_embedder_failure_does_not_echo_embedder_error(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     job_store = _job_store(tmp_path)
-    job = job_store.create_reindex(namespace=_NAMESPACE, target_embedding_model=_TARGET_MODEL)
+    job = job_store.create_reindex(_COLLECTION, namespace=_NAMESPACE, target_embedding_model=_TARGET_MODEL)
     cache = _embedder_cache(RuntimeError(ONNX_MSG))
 
     with caplog.at_level(logging.ERROR):
@@ -335,7 +335,7 @@ async def test_reindex_task_ingest_failure_does_not_echo_pipeline_error(
 ) -> None:
     """routes_jobs.py ``error=str(ingest_error)`` — the same leak, not listed in the audit's group F."""
     job_store = _job_store(tmp_path)
-    job = job_store.create_reindex(namespace=_NAMESPACE, target_embedding_model=_TARGET_MODEL)
+    job = job_store.create_reindex(_COLLECTION, namespace=_NAMESPACE, target_embedding_model=_TARGET_MODEL)
     pipeline = MagicMock()
     pipeline.ingest_directory = AsyncMock(side_effect=RuntimeError(LANCE_MSG))
 

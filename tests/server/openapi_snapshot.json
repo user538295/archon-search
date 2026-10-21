@@ -4348,7 +4348,7 @@
     },
     "/collections/{name}": {
       "delete": {
-        "description": "Remove a collection: delete config entry and drop LanceDB data.\n\nOnce the table is dropped, the collection's base ingest jobs that are `FAILED` or `PENDING` \u2014 in every\nnamespace, as the table is shared by name \u2014 become `CANCELLED`, so no maintenance retry re-creates the\ncollection (best-effort: a failed write is logged and the delete still succeeds).",
+        "description": "Remove a collection: delete config entry and drop LanceDB data.\n\nOnce the table is dropped \u2014 or, for a config-only collection (no meta row), the config entry removed \u2014 the\ncollection's base ingest jobs that are `FAILED` or `PENDING` \u2014 in every namespace, as the table is shared by\nname \u2014 become `CANCELLED`, so no maintenance retry (re-)creates the collection (best-effort: a failed write is\nlogged and the delete still succeeds).",
         "operationId": "remove_collection_collections__name__delete",
         "parameters": [
           {
@@ -4430,7 +4430,7 @@
                 }
               }
             },
-            "description": "Store busy (code store_busy): the collection lock was not acquired in time, or a base ingest job is still writing to the collection"
+            "description": "Store busy (code store_busy): the collection lock was not acquired in time, or a job may still be writing to the collection (an ingest, reindex, import, migration, metadata reindex or community rebuild)"
           }
         },
         "security": [
@@ -5219,7 +5219,7 @@
                 }
               }
             },
-            "description": "Service not ready \u2014 the embedder cache or pipeline is not initialised"
+            "description": "Service not ready \u2014 the embedder cache, pipeline or search store is not initialised (body {\"detail\": \"service not ready\"}). Store busy (code store_busy): the collection lock was not acquired in time"
           }
         },
         "security": [
@@ -5232,7 +5232,7 @@
     },
     "/collections/{name}/reindex-metadata": {
       "post": {
-        "description": "Enqueue an async metadata reindex job for a collection \u2014 CSP120 BE-4.\n\nFollows the rebuild_communities pattern (``routes_graph.py``):\nvalidate -> create the job RUNNING in one write -> spawn task\n-> return 202 with the full JobResponse body, so the response reports RUNNING.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in config or meta record absent.\n- 409: A metadata reindex is already in progress for this collection.\n- 500: The job could not be saved (sanitized ``{\"detail\": \"internal error\"}``).",
+        "description": "Enqueue an async metadata reindex job for a collection \u2014 CSP120 BE-4.\n\nFollows the rebuild_communities pattern (``routes_graph.py``):\nvalidate -> create the job RUNNING in one write -> spawn task\n-> return 202 with the full JobResponse body, so the response reports RUNNING.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in config or meta record absent (also when a DELETE dropped it meanwhile).\n- 409: A metadata reindex is already in progress for this collection.\n- 500: The job could not be saved (sanitized ``{\"detail\": \"internal error\"}``).\n- 503: ``service not ready`` \u2014 no search store (checked after the config 404); or ``store_busy`` \u2014 the\n  collection lock was not acquired within ``INGEST_LOCK_TIMEOUT_S``.",
         "operationId": "reindex_metadata_collections__name__reindex_metadata_post",
         "parameters": [
           {
@@ -5315,6 +5315,16 @@
               }
             },
             "description": "Creating the metadata reindex job failed (body {\"detail\": \"internal error\"})"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service not ready \u2014 the search store is not initialised (body {\"detail\": \"service not ready\"}). Store busy (code store_busy): the collection lock was not acquired in time"
           }
         },
         "security": [
@@ -5699,7 +5709,7 @@
     },
     "/graph/{collection}/rebuild-communities": {
       "post": {
-        "description": "Enqueue an async Leiden community rebuild for a collection \u2014 BE-2.\n\nFollows the migrate route's pattern (``routes_collections.py``,\n``migrate_collection``): validate -> create the job RUNNING in one write\n-> spawn task -> return 202 with the full JobResponse body\n(``job_to_dict(running_job)``), so the response reports RUNNING, not\nPENDING (S1).\n\nAuth is handled solely by ``APIKeyMiddleware`` \u2014 this route does not\nimplement its own ``?token=`` fallback (unlike ``get_graph_view``, whose\nbranch exists only for HTML-iframe embedding). A token resolving to\n``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware\nreturns a bare 500 first (S14).\n\nThe optional ``?namespace=`` query param lets the CLI explicitly confirm\nwhich namespace it intends to target. If provided, it must match the\nnamespace resolved from the Bearer token; a mismatch returns 422 so the\ncaller knows to use the correct API key for the intended namespace.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in the caller's namespace.\n- 409: A rebuild is already in progress for this collection (BE-5).\n- 422: graph.enabled=false, or ?namespace= does not match token namespace.\n- 500: The job could not be saved (sanitized ``{\"detail\": \"internal error\"}``).",
+        "description": "Enqueue an async Leiden community rebuild for a collection \u2014 BE-2.\n\nFollows the migrate route's pattern (``routes_collections.py``,\n``migrate_collection``): validate -> create the job RUNNING in one write\n-> spawn task -> return 202 with the full JobResponse body\n(``job_to_dict(running_job)``), so the response reports RUNNING, not\nPENDING (S1).\n\nAuth is handled solely by ``APIKeyMiddleware`` \u2014 this route does not\nimplement its own ``?token=`` fallback (unlike ``get_graph_view``, whose\nbranch exists only for HTML-iframe embedding). A token resolving to\n``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware\nreturns a bare 500 first (S14).\n\nThe optional ``?namespace=`` query param lets the CLI explicitly confirm\nwhich namespace it intends to target. If provided, it must match the\nnamespace resolved from the Bearer token; a mismatch returns 422 so the\ncaller knows to use the correct API key for the intended namespace.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in the caller's namespace (also when a DELETE dropped it meanwhile).\n- 409: A rebuild is already in progress for this collection (BE-5).\n- 422: graph.enabled=false, or ?namespace= does not match token namespace.\n- 500: The job could not be saved (sanitized ``{\"detail\": \"internal error\"}``).\n- 503: ``service not ready`` \u2014 no search store (checked after the 422 guards); or ``store_busy`` \u2014 the\n  collection lock was not acquired within ``INGEST_LOCK_TIMEOUT_S``.",
         "operationId": "rebuild_communities_graph__collection__rebuild_communities_post",
         "parameters": [
           {
@@ -5782,6 +5792,16 @@
               }
             },
             "description": "Creating the community rebuild job failed (body {\"detail\": \"internal error\"})"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service not ready \u2014 the search store is not initialised (body {\"detail\": \"service not ready\"}). Store busy (code store_busy): the collection lock was not acquired in time"
           }
         },
         "security": [

@@ -13,7 +13,18 @@ import pytest
 
 from archon_search.jobs.model import IngestJob, JobStatus, get_jobs_file
 from archon_search.jobs.store import JobStore
-from archon_search.types import ExportJob, IngestOptions, MigrationKind, ReindexJob, SyncJob
+from archon_search.types import (
+    CommunityRebuildJob,
+    DeleteJob,
+    ExportJob,
+    ImportJob,
+    IngestOptions,
+    MetadataReindexJob,
+    MigrationJob,
+    MigrationKind,
+    ReindexJob,
+    SyncJob,
+)
 from tests._job_store_faults import SIMULATED_WRITE_FAILURE, failing_job_writes, persisted_statuses, recording_job_writes
 
 
@@ -63,23 +74,21 @@ def _seed_job_file(
     created_at: str,
     updated_at: str,
     job_id: str | None = None,
+    job_type: str | None = None,
 ) -> str:
-    """Write a one-job jobs file and return that job's id."""
+    """Write a one-job jobs file and return that job's id (no ``job_type`` key unless *job_type* is given)."""
     job_id = job_id or str(uuid.uuid4())
-    jobs_path.write_text(
-        json.dumps(
-            [
-                {
-                    "job_id": job_id,
-                    "status": status,
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                    "result": None,
-                    "error": None,
-                }
-            ]
-        )
-    )
+    row = {
+        "job_id": job_id,
+        "status": status,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "result": None,
+        "error": None,
+    }
+    if job_type is not None:
+        row["job_type"] = job_type
+    jobs_path.write_text(json.dumps([row]))
     return job_id
 
 
@@ -330,7 +339,7 @@ def test_write_atomic_failure_reraises(tmp_path: Path) -> None:
     "create_call",
     [
         pytest.param(lambda s: s.create(), id="create"),
-        pytest.param(lambda s: s.create_reindex(), id="create_reindex"),
+        pytest.param(lambda s: s.create_reindex("c"), id="create_reindex"),
         pytest.param(lambda s: s.create_job(IngestJob(
             job_id=str(uuid.uuid4()), status=JobStatus.PENDING, created_at="", updated_at="",
         )), id="create_job"),
@@ -348,7 +357,7 @@ def test_create_write_failure_leaves_no_ghost_job(tmp_path: Path, create_call) -
     from unittest.mock import patch
 
     s = JobStore(path=tmp_path / "jobs.json")
-    saved = s.create_reindex()  # PENDING kept on reload (a base ingest job loaded PENDING is recovered FAILED)
+    saved = s.create_export("c", "/out", "/tmp-out")  # QUEUED is kept on reload (a PENDING ingest/reindex is not)
 
     with patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")):
         with pytest.raises(OSError, match="simulated write failure"):
@@ -377,7 +386,7 @@ def test_update_write_failure_keeps_update_and_next_write_persists_it(
     from unittest.mock import patch
 
     s = JobStore(path=tmp_path / "jobs.json")
-    job = s.create_reindex()  # PENDING kept on reload (a base ingest job loaded PENDING is recovered FAILED)
+    job = s.create_export("c", "/out", "/tmp-out")  # QUEUED is kept on reload (a PENDING ingest/reindex is not)
 
     with patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")):
         with pytest.raises(OSError, match="simulated write failure"):
@@ -808,7 +817,7 @@ def test_jobs_without_ingest_options_are_written_without_the_key(tmp_path: Path)
     unchanged."""
     jobs_path = tmp_path / "jobs.json"
     store = JobStore(path=jobs_path)
-    store.create_reindex()
+    store.create_reindex("c")
     store.create(collection="docs")
 
     rows = json.loads(jobs_path.read_text())
@@ -817,14 +826,17 @@ def test_jobs_without_ingest_options_are_written_without_the_key(tmp_path: Path)
     assert all("ingest_options" not in row for row in rows)
 
 
-def test_load_recovers_pending_ingest_job_as_failed_not_started(tmp_path: Path) -> None:
-    """A base ingest job still PENDING at load never started, and no task of this process runs it: it is
-    rewritten FAILED with the sanitized not-started text — without arming the crash-loop guard (nothing ran)."""
+@pytest.mark.parametrize("job_type", [None, "reindex"], ids=["ingest", "reindex"])
+def test_load_recovers_pending_job_as_failed_not_started(tmp_path: Path, job_type: str | None) -> None:
+    """A base ingest or reindex job still PENDING at load never started, and no task of this process runs it (only
+    its route spawns one; a shutdown cancels a reindex task while it loads its embedder, leaving the job PENDING):
+    it is rewritten FAILED with the sanitized not-started text — without arming the crash-loop guard (nothing ran).
+    A reindex left PENDING would otherwise block DELETE /collections/{name} forever."""
     from archon_search.jobs.store import NOT_STARTED_BEFORE_RESTART_DETAIL
 
     jobs_path = tmp_path / "jobs.json"
     stale = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
-    job_id = _seed_job_file(jobs_path, status="PENDING", created_at=stale, updated_at=stale)
+    job_id = _seed_job_file(jobs_path, status="PENDING", created_at=stale, updated_at=stale, job_type=job_type)
 
     load_start_time = datetime.now(timezone.utc)
     store = JobStore(path=jobs_path)
@@ -837,9 +849,10 @@ def test_load_recovers_pending_ingest_job_as_failed_not_started(tmp_path: Path) 
     assert persisted_statuses(jobs_path)[job_id] == JobStatus.FAILED.value
 
 
-@pytest.mark.parametrize("job_type", ["reindex", "delete"])
-def test_load_keeps_pending_job_of_other_kinds(tmp_path: Path, job_type: str) -> None:
-    """Only base ingest jobs are recovered: other kinds keep their saved PENDING status."""
+def test_load_keeps_pending_job_of_other_kinds(tmp_path: Path) -> None:
+    """Only base ingest and reindex jobs are recovered: other kinds (the legacy delete job) keep their saved
+    PENDING status."""
+    job_type = "delete"
     jobs_path = tmp_path / "jobs.json"
     now = datetime.now(timezone.utc).isoformat()
     jobs_path.write_text(json.dumps([{
@@ -851,6 +864,17 @@ def test_load_keeps_pending_job_of_other_kinds(tmp_path: Path, job_type: str) ->
 
     assert job is not None
     assert job.status == JobStatus.PENDING
+
+
+def test_reindex_job_collection_survives_reload(tmp_path: Path) -> None:
+    """A reindex job's ``collection`` is persisted and reloaded: DELETE /collections/{name} finds the job by it."""
+    jobs_path = tmp_path / "jobs.json"
+    job = JobStore(path=jobs_path).create_reindex("docs", namespace="team-a", target_embedding_model="m")
+
+    reloaded = JobStore(path=jobs_path).get(job.job_id)
+
+    assert isinstance(reloaded, ReindexJob)
+    assert (reloaded.collection, reloaded.namespace, reloaded.target_embedding_model) == ("docs", "team-a", "m")
 
 
 # ===========================================================================
@@ -940,6 +964,124 @@ def test_cancel_ingest_retries_failed_write_is_logged_and_leaves_every_job_as_it
         r.levelno == logging.WARNING and "could not cancel the ingest jobs of dropped collection docs" in r.getMessage()
         for r in caplog.records
     )
+
+
+# ===========================================================================
+# find_active_collection_job / may_write_collection — DELETE /collections/{name} refuses while a job may write it
+# ===========================================================================
+
+
+@dataclasses.dataclass
+class _UnclassifiedJob(IngestJob):
+    """A job kind in neither COLLECTION_WRITING_JOB_STATUSES nor NEVER_BLOCKING_JOB_KINDS."""
+
+
+def _archon_job_kinds() -> set[type[IngestJob]]:
+    """``IngestJob`` and every subclass of it, at any depth, defined in an ``archon_search`` module (kinds defined by
+    tests, such as ``_UnclassifiedJob``, are left out)."""
+    kinds: set[type[IngestJob]] = set()
+    pending = [IngestJob]
+    while pending:
+        kind = pending.pop()
+        if kind.__module__.startswith("archon_search.") and kind not in kinds:
+            kinds.add(kind)
+            pending.extend(kind.__subclasses__())
+    return kinds
+
+
+#: Job kind -> the statuses in which it blocks DELETE /collections/{name}, spelled out independently of the table
+#: under test. An empty set: the kind never blocks.
+_EXPECTED_BLOCKING_STATUSES: dict[type[IngestJob], frozenset[JobStatus]] = {
+    IngestJob: frozenset({JobStatus.RUNNING, JobStatus.CANCELLING}),
+    ReindexJob: frozenset({JobStatus.PENDING, JobStatus.RUNNING, JobStatus.CANCELLING}),
+    ImportJob: frozenset({JobStatus.RUNNING, JobStatus.CANCELLING}),
+    MigrationJob: frozenset({JobStatus.RUNNING, JobStatus.CANCELLING}),
+    MetadataReindexJob: frozenset({JobStatus.RUNNING, JobStatus.CANCELLING}),
+    CommunityRebuildJob: frozenset({JobStatus.RUNNING, JobStatus.CANCELLING}),
+    ExportJob: frozenset(),
+    DeleteJob: frozenset(),
+    SyncJob: frozenset(),
+}
+
+
+def test_every_job_kind_is_classified_for_the_delete_guard() -> None:
+    """Every job kind is listed either in COLLECTION_WRITING_JOB_STATUSES or in NEVER_BLOCKING_JOB_KINDS, never
+    both: a new kind must be classified before DELETE /collections/{name} can tell whether it writes the collection."""
+    from archon_search.jobs.store import COLLECTION_WRITING_JOB_STATUSES, NEVER_BLOCKING_JOB_KINDS
+
+    kinds = _archon_job_kinds()
+    assert {IngestJob, ReindexJob, ExportJob, SyncJob}.issubset(kinds), "precondition: kinds collected"
+    assert _UnclassifiedJob not in kinds, "precondition: test-defined kinds are left out"
+
+    blocking = set(COLLECTION_WRITING_JOB_STATUSES)
+    assert blocking.isdisjoint(NEVER_BLOCKING_JOB_KINDS)
+    assert blocking | NEVER_BLOCKING_JOB_KINDS == kinds
+
+
+@pytest.mark.parametrize("status", list(JobStatus), ids=lambda status: status.value)
+@pytest.mark.parametrize("kind", sorted(_EXPECTED_BLOCKING_STATUSES, key=lambda kind: kind.__name__),
+                         ids=lambda kind: kind.__name__)
+def test_may_write_collection_matches_the_expected_blocking_table(kind: type[IngestJob], status: JobStatus) -> None:
+    """Every job kind x every status: the job may still write its collection (and blocks DELETE) exactly in the
+    statuses the expected table names — e.g. a PENDING reindex blocks, a PENDING ingest (the lock covers it) and a
+    QUEUED import / migration / legacy metadata-reindex or rebuild row (no task runs it) do not."""
+    from archon_search.jobs.store import may_write_collection
+
+    assert set(_EXPECTED_BLOCKING_STATUSES) == _archon_job_kinds(), "precondition: the expected table lists every kind"
+
+    assert may_write_collection(_job_on("job", status, job_class=kind)) is (status in _EXPECTED_BLOCKING_STATUSES[kind])
+
+
+@pytest.mark.parametrize(
+    ("status", "may_write"),
+    [
+        (JobStatus.QUEUED, True),
+        (JobStatus.PENDING, True),
+        (JobStatus.RUNNING, True),
+        (JobStatus.CANCELLING, True),
+        (JobStatus.DONE, False),
+        (JobStatus.FAILED, False),
+        (JobStatus.FAILED_EXPIRED, False),
+        (JobStatus.CANCELLED, False),
+    ],
+)
+def test_may_write_collection_treats_an_unclassified_kind_as_writing_until_terminal(
+    caplog: pytest.LogCaptureFixture, status: JobStatus, may_write: bool
+) -> None:
+    """An unclassified kind fails closed: while not terminal it may write its collection, and the gap is logged at
+    ERROR (naming the kind) so it gets classified; a terminal one writes nothing more."""
+    from archon_search.jobs.store import may_write_collection
+
+    job = _job_on("unclassified", status, job_class=_UnclassifiedJob)
+
+    with caplog.at_level(logging.ERROR, logger="archon_search.jobs.store"):
+        assert may_write_collection(job) is may_write
+
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert errors == (["JobStore: job unclassified has the unclassified kind _UnclassifiedJob; treating it as "
+                       "writing collection 'docs' until it is terminal"] if may_write else [])
+
+
+def test_find_active_collection_job_prefers_the_callers_namespace(tmp_path: Path) -> None:
+    """Any namespace's job on the collection counts (the table is shared by name); the caller's own is preferred,
+    whichever was created first."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    foreign = store.create_job(_job_on("foreign", JobStatus.RUNNING, namespace="other-team", job_class=ReindexJob))
+    own = store.create_job(_job_on("own", JobStatus.RUNNING))
+
+    assert store.find_active_collection_job("docs", "default") == own
+    assert store.find_active_collection_job("docs", "third-team") == foreign
+
+
+def test_find_active_collection_job_ignores_other_collections_and_jobs_that_cannot_write(tmp_path: Path) -> None:
+    """Only a job on *collection* whose kind and status may still write it is returned."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    store.create_job(_job_on("other-collection", JobStatus.RUNNING, collection="other"))
+    store.create_job(_job_on("pending-ingest", JobStatus.PENDING))  # the collection lock covers it
+    store.create_job(_job_on("done-reindex", JobStatus.DONE, job_class=ReindexJob))
+    store.create_job(_job_on("running-export", JobStatus.RUNNING, job_class=ExportJob))
+
+    assert store.find_active_collection_job("docs", "default") is None
 
 
 # ===========================================================================

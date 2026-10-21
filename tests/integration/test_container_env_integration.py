@@ -189,8 +189,8 @@ def test_job_store_survives_json_roundtrip(tmp_path: Path) -> None:
 
     # Enqueue a job using the first JobStore instance
     store_a = JobStore(path=jobs_file)
-    # A reindex job keeps PENDING across a reload (a base ingest job loaded PENDING is recovered FAILED).
-    job = store_a.create_reindex(namespace="default")
+    # A QUEUED export keeps its status across a reload (an ingest or reindex job loaded PENDING is recovered FAILED).
+    job = store_a.create_export("docs", "/out/docs.tar.gz", "/out/docs.tmp", namespace="default")
     job_id = job.job_id
 
     assert jobs_file.exists(), "JobStore did not write jobs file on create()"
@@ -211,6 +211,7 @@ def test_job_store_survives_json_roundtrip(tmp_path: Path) -> None:
     assert recovered.status == job.status, (
         f"Status mismatch: expected {job.status!r}, got {recovered.status!r}"
     )
+    assert recovered.collection == "docs", f"Collection not persisted: got {recovered.collection!r}"
 
 
 # ---------------------------------------------------------------------------

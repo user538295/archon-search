@@ -929,6 +929,45 @@ async def test_update_collection_meta_round_trip_namespace_preserved(connected_s
 
 
 @pytest.mark.asyncio
+async def test_update_collection_meta_locked_by_caller_writes_under_the_held_lock(connected_store: SearchStore) -> None:
+    """With ``_locked_by_caller=True`` the write runs under the lock its caller holds (not reentrant: waiting for it
+    would never end) and leaves that lock held."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="locked-by-caller-col", reindex_job_id="job-1")
+    lock = connected_store.lock_for(meta.name)
+    await lock.acquire()
+    try:
+        await asyncio.wait_for(connected_store.update_collection_meta(meta, _locked_by_caller=True), timeout=5.0)
+        assert lock.locked(), "the caller's lock was released by the write"
+    finally:
+        lock.release()
+
+    stored = await connected_store.get_collection_meta(meta.name)
+    assert stored is not None
+    assert stored.reindex_job_id == "job-1"
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_locked_by_caller_refuses_when_the_lock_is_not_held(
+    connected_store: SearchStore,
+) -> None:
+    """``_locked_by_caller=True`` without the caller holding ``lock_for(name)`` is a caller bug: the write fails loudly
+    with ``CollectionLockNotHeldError`` (a RuntimeError, distinct from a store failure) instead of running unlocked,
+    and writes nothing."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import CollectionLockNotHeldError
+
+    meta = CollectionMeta(name="unlocked-caller-col", reindex_job_id="job-1")
+
+    with pytest.raises(CollectionLockNotHeldError, match="lock_for\\('unlocked-caller-col'\\) is not held"):
+        await connected_store.update_collection_meta(meta, _locked_by_caller=True)
+
+    assert await connected_store.get_collection_meta(meta.name) is None
+    assert not connected_store.lock_for(meta.name).locked()
+
+
+@pytest.mark.asyncio
 async def test_get_all_collections_meta_returns_namespace(connected_store: SearchStore) -> None:
     from archon_search.collection_meta import CollectionMeta
     from archon_search.constants import DEFAULT_NAMESPACE
@@ -1829,6 +1868,7 @@ async def test_centroid_sum_json_round_trips(connected_store: SearchStore) -> No
     assert abs(retrieved.centroid_sum[0] - 1.0) < 1e-9
     assert abs(retrieved.centroid_sum[1] - 2.0) < 1e-9
 
+
 @pytest.mark.asyncio
 async def test_centroid_sum_json_none_round_trips(connected_store: SearchStore) -> None:
     from archon_search.collection_meta import CollectionMeta
@@ -1837,6 +1877,7 @@ async def test_centroid_sum_json_none_round_trips(connected_store: SearchStore) 
     retrieved = await connected_store.get_collection_meta("b5-centroid-sum-none")
     assert retrieved is not None
     assert retrieved.centroid_sum is None
+
 
 @pytest.mark.asyncio
 async def test_malformed_centroid_sum_json_parses_to_none(connected_store: SearchStore) -> None:
@@ -1876,6 +1917,7 @@ async def test_malformed_centroid_sum_json_parses_to_none(connected_store: Searc
     assert retrieved is not None
     assert retrieved.centroid_sum is None
 
+
 @pytest.mark.asyncio
 async def test_mutations_since_recompute_round_trips(connected_store: SearchStore) -> None:
     from archon_search.collection_meta import CollectionMeta
@@ -1884,6 +1926,7 @@ async def test_mutations_since_recompute_round_trips(connected_store: SearchStor
     retrieved = await connected_store.get_collection_meta("b5-mutations-rt")
     assert retrieved is not None
     assert retrieved.mutations_since_recompute == 42
+
 
 @pytest.mark.asyncio
 async def test_needs_recompute_round_trips(connected_store: SearchStore) -> None:
@@ -1894,6 +1937,7 @@ async def test_needs_recompute_round_trips(connected_store: SearchStore) -> None
     assert retrieved is not None
     assert retrieved.needs_recompute is True
 
+
 @pytest.mark.asyncio
 async def test_mutations_since_recompute_zero_round_trips(connected_store: SearchStore) -> None:
     from archon_search.collection_meta import CollectionMeta
@@ -1903,6 +1947,7 @@ async def test_mutations_since_recompute_zero_round_trips(connected_store: Searc
     assert retrieved is not None
     assert retrieved.mutations_since_recompute == 0
 
+
 @pytest.mark.asyncio
 async def test_needs_recompute_false_round_trips(connected_store: SearchStore) -> None:
     from archon_search.collection_meta import CollectionMeta
@@ -1911,6 +1956,7 @@ async def test_needs_recompute_false_round_trips(connected_store: SearchStore) -
     retrieved = await connected_store.get_collection_meta("b5-needs-recompute-false")
     assert retrieved is not None
     assert retrieved.needs_recompute is False
+
 
 @pytest.mark.asyncio
 async def test_update_collection_meta_writes_b5_columns(connected_store: SearchStore) -> None:
@@ -6341,6 +6387,7 @@ async def test_update_description_concurrent_with_ingest(tmp_path) -> None:
     finally:
         await store.disconnect()
 
+
 @pytest.mark.asyncio
 async def test_store_ingest_chunks_always_calls_incremental_update(tmp_path) -> None:
     """ingest_chunks always calls _do_update_meta_on_add regardless of any config flag."""
@@ -6600,6 +6647,7 @@ def test_scored_search_candidate_language_empty_not_none() -> None:
     )
     assert cand.language == "", f"Expected empty string, got {cand.language!r}"
 
+
 def test_read_empty_language_preserved() -> None:
     """language='' stored in DB must come back as '' not None."""
     from archon_search._types import SearchResult
@@ -6613,6 +6661,7 @@ def test_read_empty_language_preserved() -> None:
     )
     assert result.language == "", f"Expected '', got {result.language!r}"
 
+
 def test_read_specific_language_preserved() -> None:
     from archon_search._types import SearchResult
     row = {"language": "fr"}
@@ -6622,6 +6671,7 @@ def test_read_specific_language_preserved() -> None:
         language=lang,
     )
     assert result.language == "fr"
+
 
 def test_read_unknown_language_preserved() -> None:
     from archon_search._types import SearchResult
