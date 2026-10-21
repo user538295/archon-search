@@ -179,7 +179,7 @@ Proxies `POST /collections/{name}/migrate`. Without flags (or with `--dry-run`) 
 
 The same operations are available over HTTP for programmatic use (all require a `Bearer` token):
 
-- `POST /collections/` (202) — add; `DELETE /collections/{name}` — remove (409 pinned-only, 404 unknown).
+- `POST /collections/` (202) — add; `DELETE /collections/{name}` — remove (409 pinned-only, 404 unknown, 503 `store_busy` on a collection-lock timeout or while a base ingest job is still writing to the collection).
 - `GET /collections/` / `GET /collections/{name}` — list / detail.
 - `POST /collections/{name}/reindex` (202) / `.../reindex-metadata` (202) / `.../migrate` (202).
 - `POST /ingest` (202), `POST /sync`, `GET /jobs/{id}`, `DELETE /jobs/{id}` — job lifecycle.

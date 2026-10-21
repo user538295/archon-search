@@ -8,6 +8,23 @@
 
 ## Changelog
 
+### [next release] — `DELETE /collections/{name}` also returns `503 store_busy` while another namespace's ingest job writes to the collection; the ingest check runs after the lock wait (2026-10-21)
+
+**Surface**: `DELETE /collections/{name}` status, body and timing.
+
+**Behaviour-only change — no schema field was added, removed or retyped.** OpenAPI now describes the `503`.
+
+**What changed:**
+
+- **Any namespace**: `DELETE /collections/{name}` returned `503` `store_busy` only while a base ingest job of the caller's own namespace was `RUNNING`/`CANCELLING` on the collection. It now also returns it while such a job from **another** namespace is — the store keeps one table per collection name, so that ingest writes into the very table `DELETE` drops. The body is `{"detail": "an ingest job is in progress on this collection; retry after it completes", "code": "store_busy"}` (no job id); a job of the caller's own namespace still yields `"ingest job <id> is in progress; retry after it completes"`, and is preferred when both exist. `Retry-After: 30` as before.
+- **Check after the lock wait**: the active-ingest check now runs after the per-collection lock is acquired, not before the wait. A `DELETE` that waits longer than `INGEST_LOCK_TIMEOUT_S` (30 s) for the lock now gets the lock-timeout body `{"detail": "reindex in progress; retry after Retry-After seconds", "code": "store_busy"}` instead of the ingest-in-progress one; a `DELETE` that gets the lock now also catches an ingest that turned `RUNNING` while it waited.
+
+**Migration:** treat every `503` with `code == "store_busy"` from `DELETE /collections/{name}` as "retry later", whatever its `detail`, and honour `Retry-After`. Clients that read the job id out of the `detail` must handle the id-less detail.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — a job whose status write fails keeps its old status; `POST /jobs/{id}/resume` returns a JSON `500`; route-run jobs are created `RUNNING` (2026-10-20)
 
 **Surface**: `POST /jobs/{job_id}/resume` status and body; `POST /collections/{name}/migrate` (rewrite), `POST /collections/{name}/reindex-metadata`, `POST /graph/{collection}/rebuild-communities` status and body, and the created job's persisted `status`; `DELETE /jobs/{job_id}` status and body (on a sync job too), and the job status after a `500`; the bulk-job scheduler, and the `error` of a job it fails to dispatch; `GET /jobs/{id}` `status` / `error` of a community rebuild that fails unexpectedly; the startup sync job; `POST /sync` status and body, the created job's persisted `status`, the sync lock after a `500`, its `409` while the startup sync waits for the lock, and legacy `QUEUED`/`PENDING` sync job rows; the `MaintenanceLoop` failed-ingest expiry.

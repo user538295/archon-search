@@ -17,11 +17,11 @@ import math
 from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig, resolve_active_model, save_config
-from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S
+from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
-from archon_search.server._ingest_lock import acquire_collection_lock_or_503
+from archon_search.server._ingest_lock import acquire_collection_lock_or_503, store_busy_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.routes_jobs import _REINDEX_COLLECTION_LOG_CONTEXT, INTERNAL_ERROR_DETAIL, JOB_SUPERSEDED_DETAIL, REINDEX_FAILED_DETAIL, IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _persist_job_status, _reindex_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, ExpiringChunkItem, ExpiringChunksResponse, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
@@ -176,6 +176,64 @@ async def _rollback_add(
 
 def _collection_drop_failed_response() -> JSONResponse:
     return JSONResponse({"detail": COLLECTION_DROP_FAILED_DETAIL, "code": COLLECTION_DROP_FAILED_CODE}, status_code=500)
+
+
+#: Base-IngestJob statuses that mean the ingest may still be writing to its collection.
+#: RUNNING: the ingest task has started; on its dispatch path it releases the collection lock right
+#: after marking the job RUNNING and keeps writing without it (on the non-dispatch branch it holds
+#: the lock until the job is terminal). CANCELLING: DELETE /jobs/{id} sets it but does NOT cancel the
+#: task, so the ingest keeps writing until it completes.
+_ACTIVE_INGEST_STATUSES = frozenset({JobStatus.RUNNING, JobStatus.CANCELLING})
+#: Wire-facing 503 detail when the active ingest belongs to another namespace: its job id is not disclosed.
+INGEST_IN_PROGRESS_DETAIL = "an ingest job is in progress on this collection; retry after it completes"
+#: Wire-facing 503 detail when the active ingest belongs to the caller's namespace (``str.format`` with ``job_id``).
+INGEST_JOB_IN_PROGRESS_DETAIL_TEMPLATE = "ingest job {job_id} is in progress; retry after it completes"
+
+
+def _find_active_ingest(job_store: JobStore | None, name: str, ns: str) -> IngestJob | None:
+    """Return a base IngestJob that is RUNNING/CANCELLING on collection *name* in ANY namespace, else ``None``.
+
+    A match in the caller's namespace *ns* is preferred, so the caller sees its own job id when it has one.
+
+    Any namespace: the store keeps one LanceDB table per collection name (``drop_collection`` drops the
+    table by name alone) and ``lock_for`` keys the collection lock by name only, so an ingest submitted
+    from any namespace writes into the very table DELETE drops.
+
+    PENDING is excluded: on the REST POST /ingest path the caller holds the collection lock while the
+    job is PENDING, so the lock covers it; the maintenance-retry path creates PENDING jobs with no lock
+    and no dispatcher, so including PENDING would give permanent false positives.
+
+    ``type(j) is IngestJob`` is an exact-type check (not isinstance): subclass jobs (ReindexJob, SyncJob,
+    MetadataReindexJob, ...) do not block DELETE, and DELETE has no other guard for them. The check is
+    kept narrow to base ingest; a DELETE racing a running ReindexJob is a known separate gap, pinned by
+    ``test_delete_collection_200_when_reindex_running``. The idiom mirrors maintenance_loop.py
+    ("Only process exact base IngestJob instances (no subclasses).").
+    """
+    if job_store is None:
+        return None
+    active = [
+        j for j in job_store.list()
+        if type(j) is IngestJob and j.collection == name and j.status in _ACTIVE_INGEST_STATUSES
+    ]
+    return next((j for j in active if j.namespace == ns), next(iter(active), None))
+
+
+def _ingest_in_progress_503(job: IngestJob, name: str, ns: str) -> JSONResponse:
+    """Log and build the 503 ``store_busy`` refusing DELETE of *name* while *job* writes to it.
+
+    The job id appears in the detail only when *job* belongs to the caller's namespace *ns*.
+    """
+    logger.warning(
+        "DELETE /collections/%s refused: ingest job %s is %s (job namespace=%s, caller namespace=%s)",
+        name,
+        job.job_id,
+        job.status.value,
+        job.namespace,
+        ns,
+    )
+    if job.namespace == ns:
+        return store_busy_503(INGEST_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id=job.job_id))
+    return store_busy_503(INGEST_IN_PROGRESS_DETAIL)
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +480,13 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         401: {"model": ErrorDetail},
         404: {"model": ErrorDetail},
         409: {"model": ErrorDetail},
-        503: {"model": ErrorDetail},
+        503: {
+            "model": ErrorDetail,
+            "description": (
+                "Store busy (code store_busy): the collection lock was not acquired in time, "
+                "or a base ingest job is still writing to the collection"
+            ),
+        },
         **_ERROR_500_REMOVE_COLLECTION,
     },
 )
@@ -481,62 +545,6 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
             return persist_error
         return DeleteResponse(name=name, deleted=True)
 
-    # Refuse if a base IngestJob is actively writing to this collection.
-    #
-    # The collection lock is released early in _default_ingest_task_with_lock
-    # (before writes complete, to avoid asyncio.Lock re-entrancy deadlock with
-    # store.ingest_chunks), so the lock-based check below cannot protect against
-    # an ingest that is mid-flight.  The job store is the authoritative signal.
-    #
-    # Statuses covered:
-    #   RUNNING   — lock released, dispatch active.
-    #   CANCELLING — DELETE /jobs/{id} set this but does NOT cancel the task;
-    #                the ingest continues until it completes.
-    # PENDING is intentionally excluded: on the REST POST /ingest path the
-    # caller pre-acquires the lock before returning 202, so the lock-based
-    # guard below covers that window.  The maintenance-retry path creates PENDING
-    # jobs with no lock and no immediate dispatcher — adding PENDING here would
-    # produce permanent false positives for those orphaned retry records.
-    #
-    # type(j) is IngestJob — exact-type check (not isinstance).  Subclasses
-    # (ReindexJob, SyncJob, MetadataReindexJob, …) each have their own
-    # CollectionMeta job-id guard that returns 409, keeping guard responsibilities
-    # separate.  This mirrors the established idiom in maintenance_loop.py
-    # ("Only process exact base IngestJob instances — no subclasses").
-    job_store = getattr(request.app.state, "job_store", None)
-    if job_store is not None:
-        _active_write_statuses = {JobStatus.RUNNING, JobStatus.CANCELLING}
-        active_ingest = next(
-            (
-                j for j in job_store.list()
-                if type(j) is IngestJob
-                and j.collection == name
-                and j.namespace == ns
-                and j.status in _active_write_statuses
-            ),
-            None,
-        )
-        if active_ingest is not None:
-            logger.warning(
-                "DELETE /collections/%s refused: ingest job %s is %s (namespace=%s)",
-                name,
-                active_ingest.job_id,
-                active_ingest.status.value,
-                ns,
-            )
-            retry_after = str(math.ceil(INGEST_LOCK_TIMEOUT_S))
-            return JSONResponse(
-                {
-                    "detail": (
-                        f"ingest job {active_ingest.job_id} is in progress; "
-                        "retry after it completes"
-                    ),
-                    "code": "store_busy",
-                },
-                status_code=503,
-                headers={"Retry-After": retry_after},
-            )
-
     # Acquire the per-collection lock before mutating — 503 if a write is in progress.
     lock_result = await acquire_collection_lock_or_503(search_store, name)
     if isinstance(lock_result, JSONResponse):
@@ -544,6 +552,18 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
 
     table_gone = False
     try:
+        # Refuse if a base IngestJob is actively writing to this collection. Holding the lock alone
+        # is not enough: _default_ingest_task_with_lock releases it early (before its writes, to avoid
+        # an asyncio.Lock re-entrancy deadlock with store.ingest_chunks), so the job store is the
+        # authoritative signal. The check must run under the lock, not before it: an ingest that held
+        # the lock while this DELETE waited turns RUNNING and releases it, and only a check made after
+        # acquiring sees that (TOCTOU). No new RUNNING base IngestJob can appear meanwhile: POST /ingest
+        # and POST /collections/ pre-acquire this lock before creating theirs, and a PENDING job the
+        # maintenance retry creates without the lock is not dispatched (see _find_active_ingest).
+        active_ingest = _find_active_ingest(getattr(request.app.state, "job_store", None), name, ns)
+        if active_ingest is not None:
+            return _ingest_in_progress_503(active_ingest, name, ns)
+
         # Mutate the config only now, under the lock. The returned rollback re-inserts just
         # the entries it removed, so it never discards config changes made by others meanwhile.
         restore_config_lists = _drop_path_from_config(config, resolved)

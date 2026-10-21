@@ -4392,7 +4392,7 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Store busy (code store_busy): the collection lock was not acquired in time, or a base ingest job is still writing to the collection"
           }
         },
         "security": [

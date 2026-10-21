@@ -912,6 +912,38 @@ async def test_background_ingest_with_lock_never_releases_a_lock_another_holder_
     assert held_lock.locked(), "the other holder's lock acquisition was released by the ingest task"
 
 
+@pytest.mark.asyncio
+async def test_background_ingest_with_lock_marks_job_running_before_early_release(tmp_path: Path) -> None:
+    """On the early-release branch the job must be RUNNING before the pre-acquired lock is released.
+
+    DELETE /collections/{name} waits for this lock and then refuses while a base IngestJob is RUNNING;
+    releasing the lock while the job is still PENDING would let that DELETE drop the table mid-ingest.
+    """
+    real_store = JobStore(path=tmp_path / "jobs.json")
+    job = real_store.create(collection="docs")
+    statuses_at_release: list[JobStatus | None] = []
+
+    class _StatusRecordingLock(asyncio.Lock):
+        def release(self) -> None:
+            # Only record here: an assert raised inside release() would be swallowed by the task's handlers.
+            current = real_store.get(job.job_id)
+            statuses_at_release.append(current.status if current is not None else None)
+            super().release()
+
+    held_lock = _StatusRecordingLock()
+    await held_lock.acquire()
+    pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock()
+    with patch("archon_search.server.routes_jobs._dispatch_ingest", new=AsyncMock(return_value=([], []))):
+        await _default_ingest_task_with_lock(
+            job.job_id, real_store, IngestRequest(collection="docs"), held_lock=held_lock,
+            search_store=MagicMock(), embedder_cache=MagicMock(), pipeline=pipeline, config=MagicMock(),
+        )
+
+    assert statuses_at_release == [JobStatus.RUNNING], f"lock released while the job was {statuses_at_release}"
+    assert not held_lock.locked()
+
+
 _SECRET_PATH = "/very/secret/internal/path/store.lance"
 
 
