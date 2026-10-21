@@ -6,7 +6,7 @@ import logging
 import math
 import os
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Final
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Final
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -25,6 +25,9 @@ from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.schemas import CodedErrorDetail, ErrorDetail, JobListResponse, JobResponse
 from archon_search.types import DeleteJob, ExportJob, ImportJob, MigrationJob, ReindexJob, SyncJob
 
+if TYPE_CHECKING:
+    from archon_search.store import SearchStore
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -34,24 +37,34 @@ _TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED
 # Active statuses — DELETE sets CANCELLING
 _ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.PENDING}
 
-# Sanitized, wire-facing ``detail`` for DELETE /jobs/{id} on the SyncJob that
-# backs the startup sync (CLAUDE.md hard invariant: no str(exc)/internals in a
-# wire-facing detail field). The startup sync must be non-cancellable: nothing
-# actually cancels the lifespan task that runs it, so transitioning the row to
-# CANCELLING would be silently ignored by the sync itself AND would arm the
-# (sticky, since fix-brief-C item 1) crash-loop guard on the next boot —
-# CANCELLING is one of jobs/store.py's _CRASH_STATUSES.
-_STARTUP_SYNC_JOB_NOT_CANCELLABLE_DETAIL = "the startup sync cannot be cancelled"
+# Sanitized, wire-facing ``detail`` for DELETE /jobs/{id} on any non-terminal
+# SyncJob — the startup sync, a manual POST /sync, or a legacy QUEUED/PENDING
+# row (CLAUDE.md hard invariant: no str(exc)/internals in a wire-facing detail
+# field). A sync is non-cancellable: nothing interrupts the task that runs it,
+# so transitioning the row to CANCELLING would be silently ignored by the sync
+# itself AND would arm the (sticky, since fix-brief-C item 1) crash-loop guard
+# on the next boot — CANCELLING is one of jobs/store.py's _CRASH_STATUSES.
+_SYNC_JOB_NOT_CANCELLABLE_DETAIL = "a sync cannot be cancelled"
 
-# Job ``error`` text for background-task failures: the caught exception's message
-# may embed internals (ONNX model paths, LanceDB paths), so it goes to the server
-# log only.
+#: Wire-facing job ``error`` (served by GET /jobs) for an unexpected ingest / reindex failure; the
+#: exception text can embed server paths and library internals, so it is logged only.
 INGEST_FAILED_DETAIL = "ingest failed; see the server log for details"
 REINDEX_FAILED_DETAIL = "reindex failed; see the server log for details"
+#: Wire-facing body of a sanitized 500 whose cause is logged only.
+INTERNAL_ERROR_DETAIL = "internal error"
+#: Wire-facing job ``error`` for a legacy QUEUED/PENDING community-rebuild / metadata-reindex / sync job (an older
+#: server created those QUEUED first; nothing schedules any of these kinds) that a newer request of its route
+#: supersedes (POST /graph/{collection}/rebuild-communities, POST /collections/{name}/reindex-metadata, POST /sync).
+JOB_SUPERSEDED_DETAIL = "never started; superseded by a newer request"
+#: Log-line prefixes naming the writer of a best-effort job status write (see ``_persist_job_status``).
+_INGEST_LOG_CONTEXT = "background ingest"
+_REINDEX_LOG_CONTEXT = "_reindex_task"
+_REINDEX_COLLECTION_LOG_CONTEXT = "reindex_collection"
+
 # ``500`` ``detail`` when a job-store write (POST /ingest job creation, DELETE /jobs/{id}
-# cancel transition) raises OSError: its message names the job file path, so the cause is
-# logged with its traceback, never sent.
-JOB_STORE_WRITE_FAILED_DETAIL: Final[str] = "internal error"
+# cancel transition) fails: an OSError names the job file path, so the cause is logged
+# with its traceback, never sent.
+JOB_STORE_WRITE_FAILED_DETAIL: Final[str] = INTERNAL_ERROR_DETAIL
 # Prefix of the not-found job ``error``; the full text is ``f"{prefix}: {path}"``.
 INGEST_PATH_NOT_FOUND_PREFIX = "path does not exist or is not a file/directory"
 
@@ -267,41 +280,77 @@ async def _dispatch_ingest(
     return [], []
 
 
-_INGEST_TASK_LABEL = "background ingest"
-_REINDEX_TASK_LABEL = "_reindex_task"
+def _persist_job_status(job_store: JobStore, job_id: str, status: JobStatus, *, context: str, **fields: object) -> None:
+    """Best-effort job status write: any failure is logged with its traceback, never raised.
 
-
-def _persist_job_status(store: JobStore, job_id: str, task: str, status: JobStatus, **fields: Any) -> bool:
-    """Persist a terminal or lifecycle *status* from a background task; never raises.
-
-    The job store may be the very thing that failed, and nothing awaits a background
-    task's result, so any write error is logged with its traceback and reported as
-    False instead of escaping (an escaping error would also replace a re-raised
-    CancelledError).
+    That covers a persist failure (OSError, or a JSON-serialization TypeError/ValueError from
+    ``JobStore._write_atomic``) and, defensively, a KeyError for a job no longer in the store.
+    *context* names the writer in the log line (``_INGEST_LOG_CONTEXT``, ``_REINDEX_LOG_CONTEXT``, ...).
     """
     try:
-        store.update(job_id, status=status, **fields)
-    except Exception:  # noqa: BLE001
-        logger.exception("%s: could not persist %s status for job %s", task, status.value, job_id)
+        job_store.update(job_id, status=status, **fields)
+    except Exception:  # noqa: BLE001 — best-effort status write; logged with traceback
+        logger.error("%s: could not persist %s status for job %s", context, status.value, job_id, exc_info=True)
+
+
+def _cancel_requested(job_store: JobStore, job_id: str) -> bool:
+    """True when a DELETE /jobs/{id} has moved the job to CANCELLING and its task has not completed the cancel yet."""
+    job = job_store.get(job_id)
+    return job is not None and job.status == JobStatus.CANCELLING
+
+
+def _finish_requested_cancel(job_store: JobStore, job_id: str, *, context: str) -> bool:
+    """If a cancel is pending (CANCELLING), write CANCELLED and return True; else False.
+
+    A DELETE /jobs/{id} moves an active job to CANCELLING and leaves the rest to the job's task; a task that will
+    run no (further) work completes the cancel here. The write is best-effort (a failure is logged, and True is
+    still returned); any other status, or a missing job, is left untouched.
+    """
+    if not _cancel_requested(job_store, job_id):
         return False
+    _persist_job_status(job_store, job_id, JobStatus.CANCELLED, context=context)
     return True
 
 
-def _persist_ingest_outcome(
-    store: JobStore, job_id: str, cancelling: bool, warnings: list[str], file_results: list[dict]
-) -> None:
-    """Mark a finished ingest CANCELLED (a cancel was requested) or DONE; never raises.
+def _log_refused_claim(job_id: str, job: IngestJob | None, *, context: str) -> None:
+    """Log why a PENDING -> RUNNING claim refused for a reason other than a requested cancel runs nothing.
 
-    Called outside the ingest's failure handlers: the ingest itself succeeded, so a failing
-    status write is logged by ``_persist_job_status`` and never turned into FAILED.
+    Already CANCELLED is where a cancel would leave the job anyway, so it is logged at DEBUG only; a missing job or
+    any other status (RUNNING from a second task for the same job, or terminal) is unexpected and logged as WARNING.
     """
-    if cancelling:
-        _persist_job_status(store, job_id, _INGEST_TASK_LABEL, JobStatus.CANCELLED)
+    level = logging.DEBUG if job is not None and job.status == JobStatus.CANCELLED else logging.WARNING
+    status = "missing" if job is None else job.status.value
+    logger.log(level, "%s: job %s not claimed as RUNNING (status %s); nothing run", context, job_id, status)
+
+
+def _complete_refused_claim(job_store: JobStore, job_id: str, *, context: str) -> None:
+    """A task's PENDING -> RUNNING claim was refused, so it runs nothing: complete a requested cancel, else log why."""
+    if not _finish_requested_cancel(job_store, job_id, context=context):
+        _log_refused_claim(job_id, job_store.get(job_id), context=context)
+
+
+def _claim_ingest(store: JobStore, job_id: str) -> bool:
+    """Claim an ingest job RUNNING by compare-and-set from PENDING; False (nothing to run) when the claim is refused.
+
+    Unlike ``_claim_reindex``, a failed persist of the claim raises (the job stays PENDING): the ingest task's
+    own exception handler then writes it FAILED.
+    """
+    if store.transition(job_id, {JobStatus.PENDING}, JobStatus.RUNNING) is not None:
+        return True
+    _complete_refused_claim(store, job_id, context=_INGEST_LOG_CONTEXT)
+    return False
+
+
+def _persist_final_ingest_status(
+    store: JobStore, job_id: str, ingest_warnings: list[str], ingest_file_results: list[dict]
+) -> None:
+    """Write a successful ingest's terminal status: CANCELLED when cancellation was requested meanwhile, else DONE."""
+    if _finish_requested_cancel(store, job_id, context=_INGEST_LOG_CONTEXT):
         return
-    result: dict = {"warnings": warnings}
-    if file_results:
-        result["file_results"] = file_results
-    _persist_job_status(store, job_id, _INGEST_TASK_LABEL, JobStatus.DONE, result=result)
+    result_dict: dict = {"warnings": ingest_warnings}
+    if ingest_file_results:
+        result_dict["file_results"] = ingest_file_results
+    _persist_job_status(store, job_id, JobStatus.DONE, context=_INGEST_LOG_CONTEXT, result=result_dict)
 
 
 async def _default_ingest_task(
@@ -316,9 +365,14 @@ async def _default_ingest_task(
     pipeline: Any = None,
     config: Any = None,
 ) -> None:
-    """Lifecycle wrapper: PENDING → RUNNING → DONE/FAILED/CANCELLED."""
+    """Lifecycle wrapper: PENDING → RUNNING → DONE/FAILED/CANCELLED.
+
+    RUNNING is claimed by compare-and-set from PENDING: a job cancelled before the task starts ends CANCELLED
+    without running, and a failed persist of the claim (the job stays PENDING) is an ingest failure → FAILED.
+    """
     try:
-        store.update(job_id, status=JobStatus.RUNNING)
+        if not _claim_ingest(store, job_id):
+            return
         ingest_warnings: list[str] = []
         ingest_file_results: list[dict] = []
         if pipeline_fn is None and search_store is not None and embedder_cache is not None and pipeline is not None and config is not None:
@@ -326,28 +380,25 @@ async def _default_ingest_task(
         else:
             await _run_pipeline(job_id, store, body, pipeline_fn, namespace=namespace)
         await await_models_warm(pipeline, job_id)
-        # Check for cancellation before marking DONE
-        job = store.get(job_id)
-        cancelling = job is not None and job.status == JobStatus.CANCELLING
     except asyncio.CancelledError:
-        _persist_job_status(store, job_id, _INGEST_TASK_LABEL, JobStatus.CANCELLED)
+        _persist_job_status(store, job_id, JobStatus.CANCELLED, context=_INGEST_LOG_CONTEXT)
         raise
     except EmbedderNotReadyError as exc:
-        # Retryable, not a genuine failure: MaintenanceLoop._run_failed_ingest_retry
-        # re-enqueues FAILED base IngestJob instances (up to retry_max_attempts)
-        # before they age into FAILED_EXPIRED, so leaving this job FAILED with a
-        # clean message is sufficient — no extra retry wiring needed here.
+        # Not a genuine failure: FAILED with a clean message. MaintenanceLoop._run_failed_ingest_retry
+        # re-enqueues a FAILED base IngestJob as a new PENDING job; nothing in this module runs that job.
         logger.warning("Ingest task %s: embedder not ready — %s", job_id, exc)
-        _persist_job_status(store, job_id, _INGEST_TASK_LABEL, JobStatus.FAILED, error=EMBEDDER_NOT_READY_DETAIL)
+        _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=EMBEDDER_NOT_READY_DETAIL)
     except IngestPathNotFoundError as exc:
         # Curated text echoing only the caller's own path: safe as the job error.
         logger.warning("Ingest task %s failed: %s", job_id, exc)
-        _persist_job_status(store, job_id, _INGEST_TASK_LABEL, JobStatus.FAILED, error=str(exc))
+        _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=str(exc))
     except Exception:  # noqa: BLE001
         logger.exception("Ingest task %s failed", job_id)
-        _persist_job_status(store, job_id, _INGEST_TASK_LABEL, JobStatus.FAILED, error=INGEST_FAILED_DETAIL)
+        _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=INGEST_FAILED_DETAIL)
     else:
-        _persist_ingest_outcome(store, job_id, cancelling, ingest_warnings, ingest_file_results)
+        # Outside the ``try``: failing to persist a successful ingest's terminal status is no ingest
+        # failure — it is logged, never reported FAILED (which MaintenanceLoop would then retry).
+        _persist_final_ingest_status(store, job_id, ingest_warnings, ingest_file_results)
 
 
 async def _default_ingest_task_with_lock(
@@ -366,62 +417,112 @@ async def _default_ingest_task_with_lock(
     """Lifecycle wrapper that releases held_lock in try/finally on success, failure, and cancellation.
 
     The held_lock was pre-acquired by the request handler; passing locked_by_caller=True
-    to _run_pipeline signals the pipeline not to re-acquire the same lock.
+    to _run_pipeline signals the pipeline not to re-acquire the same lock. RUNNING is claimed
+    as in _default_ingest_task.
     """
+    # The lock while this task still owns it; None once released early, so the ``finally``
+    # never releases an acquisition another holder (e.g. a DELETE) made in between.
+    owned_lock = held_lock
     try:
-        store.update(job_id, status=JobStatus.RUNNING)
+        if not _claim_ingest(store, job_id):
+            return
         ingest_warnings: list[str] = []
         ingest_file_results: list[dict] = []
         if pipeline_fn is None and search_store is not None and embedder_cache is not None and pipeline is not None and config is not None:
             # Release the pre-acquired lock before dispatch: pipeline.ingest_file /
             # ingest_directory will acquire it internally. Holding it here would
             # deadlock since asyncio.Lock is not reentrant.
-            if held_lock is not None and held_lock.locked():
-                held_lock.release()
+            if owned_lock is not None and owned_lock.locked():
+                owned_lock.release()
+            owned_lock = None
             ingest_warnings, ingest_file_results = await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
         else:
             await _run_pipeline(
                 job_id, store, body, pipeline_fn, namespace=namespace, locked_by_caller=True
             )
         await await_models_warm(pipeline, job_id)
-        job = store.get(job_id)
-        cancelling = job is not None and job.status == JobStatus.CANCELLING
     except asyncio.CancelledError:
-        _persist_job_status(store, job_id, _INGEST_TASK_LABEL, JobStatus.CANCELLED)
+        _persist_job_status(store, job_id, JobStatus.CANCELLED, context=_INGEST_LOG_CONTEXT)
         raise
     except EmbedderNotReadyError as exc:
-        # Retryable, not a genuine failure — see the sibling handler in
-        # _default_ingest_task for why FAILED is sufficient here.
+        # Not a genuine failure — see the sibling handler in _default_ingest_task.
         logger.warning("Ingest task %s: embedder not ready — %s", job_id, exc)
-        _persist_job_status(store, job_id, _INGEST_TASK_LABEL, JobStatus.FAILED, error=EMBEDDER_NOT_READY_DETAIL)
+        _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=EMBEDDER_NOT_READY_DETAIL)
     except IngestPathNotFoundError as exc:
         # Curated text — see the sibling handler in _default_ingest_task.
         logger.warning("Ingest task %s failed: %s", job_id, exc)
-        _persist_job_status(store, job_id, _INGEST_TASK_LABEL, JobStatus.FAILED, error=str(exc))
+        _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=str(exc))
     except Exception:  # noqa: BLE001
         logger.exception("Ingest task %s failed", job_id)
-        _persist_job_status(store, job_id, _INGEST_TASK_LABEL, JobStatus.FAILED, error=INGEST_FAILED_DETAIL)
+        _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=INGEST_FAILED_DETAIL)
     else:
-        _persist_ingest_outcome(store, job_id, cancelling, ingest_warnings, ingest_file_results)
+        # Outside the ``try`` — see the sibling ``else`` in _default_ingest_task.
+        _persist_final_ingest_status(store, job_id, ingest_warnings, ingest_file_results)
     finally:
-        # Release the pre-acquired lock regardless of outcome or cancellation.
-        if held_lock is not None and held_lock.locked():
-            held_lock.release()
+        # Release the pre-acquired lock regardless of outcome or cancellation — unless already released.
+        if owned_lock is not None and owned_lock.locked():
+            owned_lock.release()
 
 
-async def _clear_reindex_job_id(store: Any, collection: str, namespace: str, job_id: str) -> None:
-    """Clear the collection's ``reindex_job_id`` on a non-success exit; never raises.
+async def _clear_reindex_job_id(search_store: SearchStore, collection: str, namespace: str, job_id: str) -> None:
+    """Best-effort: clear the collection's ``reindex_job_id`` if it still names *job_id*; a failure is logged, never raised.
 
-    The meta store may be the very thing that failed, so a cleanup error is logged
-    and swallowed — the caller must still be able to mark the job terminal.
+    A pointer to another job is left alone: once this job is CANCELLING, the reindex route's 409 guard treats it as
+    stale, so a newer reindex may already own the collection.
     """
     try:
-        meta = await store.get_collection_meta(collection, namespace)
-        if meta is not None:
+        meta = await search_store.get_collection_meta(collection, namespace)
+        if meta is not None and meta.reindex_job_id == job_id:
             meta.reindex_job_id = None
-            await store.update_collection_meta(meta)
+            await search_store.update_collection_meta(meta)
     except Exception:  # noqa: BLE001
         logger.exception("_reindex_task: failed to clear reindex_job_id for job %s", job_id)
+
+
+async def _end_reindex_cancelled_or_failed(
+    search_store: SearchStore, job_store: JobStore, collection: str, namespace: str, job_id: str, *,
+    error: str | None = None,
+) -> None:
+    """End a reindex that runs nothing more: clear the collection's ``reindex_job_id``, THEN write the job CANCELLED
+    when a DELETE requested a cancel (CANCELLING), else FAILED with *error*.
+
+    ``error=None`` never writes FAILED: only a requested cancel is completed (the job is already terminal, or the
+    caller has checked that a cancel is pending). The clear comes first because it rewrites the whole meta row: a
+    client that waits for the terminal status and then starts a new reindex or PATCH must not have its row clobbered
+    by this task's stale write. Both steps are best-effort (failures are logged, never raised).
+    """
+    await _clear_reindex_job_id(search_store, collection, namespace, job_id)
+    if _finish_requested_cancel(job_store, job_id, context=_REINDEX_LOG_CONTEXT) or error is None:
+        return
+    _persist_job_status(job_store, job_id, JobStatus.FAILED, context=_REINDEX_LOG_CONTEXT, error=error)
+
+
+async def _claim_reindex(
+    search_store: SearchStore, job_store: JobStore, collection: str, namespace: str, job_id: str
+) -> bool:
+    """Claim a reindex job RUNNING by compare-and-set from PENDING; on False the caller runs nothing more.
+
+    Unlike ``_claim_ingest``, a failed persist of the claim is handled here and never raised: it leaves the job
+    PENDING, which nothing would ever run, so the job is ended FAILED — or CANCELLED, when a DELETE landed meanwhile
+    (``_end_reindex_cancelled_or_failed``). A refused claim ends the same way with no FAILED write: a requested
+    cancel is completed, any other status is logged (``_log_refused_claim``). A RUNNING job is the exception — owned
+    by another task, so its pointer names a live job and still drives the reindex/PATCH 409 guards: it is only logged.
+    """
+    try:
+        if job_store.transition(job_id, {JobStatus.PENDING}, JobStatus.RUNNING) is not None:
+            return True
+    except Exception:  # noqa: BLE001 — the claim did not happen; handled below, never raised
+        logger.exception("_reindex_task: failed to persist job %s as RUNNING", job_id)
+        await _end_reindex_cancelled_or_failed(
+            search_store, job_store, collection, namespace, job_id, error=REINDEX_FAILED_DETAIL
+        )
+        return False
+    job = job_store.get(job_id)
+    if job is None or job.status != JobStatus.CANCELLING:
+        _log_refused_claim(job_id, job, context=_REINDEX_LOG_CONTEXT)
+    if job is None or job.status != JobStatus.RUNNING:
+        await _end_reindex_cancelled_or_failed(search_store, job_store, collection, namespace, job_id)
+    return False
 
 
 async def _reindex_task(
@@ -437,7 +538,19 @@ async def _reindex_task(
 ) -> None:
     """Lifecycle wrapper for reindex: resolves embedder, ingests, promotes model on success.
 
-    Never raises — catches all exceptions.
+    Embedder-resolution and ingest failures (a cancelled ingest included), collection-meta read/write
+    failures, and job-status write failures (see ``_persist_job_status``) are logged, never raised. Not
+    caught: ``asyncio.CancelledError`` outside the ingest step (e.g. while the embedder loads).
+
+    RUNNING is claimed by compare-and-set from PENDING after the embedder loads: a job cancelled before
+    the claim ends CANCELLED without any ingest or model promotion (also when the embedder load then fails);
+    a failed persist of the claim → FAILED, or CANCELLED when a DELETE landed meanwhile. A cancel landing
+    during the model promotion ends CANCELLED with the model promoted (the vectors were re-embedded).
+
+    On every non-success exit the collection's ``reindex_job_id`` is cleared (only while it names this job)
+    BEFORE the terminal status is written (``_end_reindex_cancelled_or_failed`` has why); a non-cancel failure
+    before any work ran (embedder load, "not a ReindexJob", claim persist) ends CANCELLED instead of FAILED when a
+    DELETE requested a cancel meanwhile; a failed ingest ends FAILED regardless (the work's outcome wins).
     """
     # --- Guards ---
     job = job_store.get(job_id)
@@ -448,12 +561,11 @@ async def _reindex_task(
 
     if not isinstance(job, ReindexJob):
         logger.error("_reindex_task: job %s is not a ReindexJob (got %s)", job_id, type(job))
-        _persist_job_status(job_store, job_id, _REINDEX_TASK_LABEL, JobStatus.FAILED, error="not a ReindexJob")
-        await _clear_reindex_job_id(store, collection, namespace, job_id)
+        await _end_reindex_cancelled_or_failed(store, job_store, collection, namespace, job_id, error="not a ReindexJob")
         return
 
     if job.status in (JobStatus.CANCELLING, JobStatus.CANCELLED):
-        await _clear_reindex_job_id(store, collection, namespace, job_id)
+        await _end_reindex_cancelled_or_failed(store, job_store, collection, namespace, job_id)
         return
 
     # --- Step 1 & 2: resolve embedder ---
@@ -471,21 +583,17 @@ async def _reindex_task(
         # `collection reindex`. That gap predates this fix and is out of scope
         # here; this only sanitizes the error message (never str(exc) on the wire).
         logger.warning("_reindex_task: embedder not ready for job %s — %s", job_id, exc)
-        await _clear_reindex_job_id(store, collection, namespace, job_id)
-        _persist_job_status(job_store, job_id, _REINDEX_TASK_LABEL, JobStatus.FAILED, error=EMBEDDER_NOT_READY_DETAIL)
+        await _end_reindex_cancelled_or_failed(
+            store, job_store, collection, namespace, job_id, error=EMBEDDER_NOT_READY_DETAIL
+        )
         return
     except Exception:  # noqa: BLE001
         logger.exception("_reindex_task: embedder resolution failed for job %s", job_id)
-        await _clear_reindex_job_id(store, collection, namespace, job_id)
-        _persist_job_status(job_store, job_id, _REINDEX_TASK_LABEL, JobStatus.FAILED, error=REINDEX_FAILED_DETAIL)
+        await _end_reindex_cancelled_or_failed(store, job_store, collection, namespace, job_id, error=REINDEX_FAILED_DETAIL)
         return
 
-    # --- Step 3: mark RUNNING ---
-    # A job whose RUNNING write failed would be invisible to GET /jobs while it
-    # ingests: abort instead, and try to leave it FAILED rather than PENDING.
-    if not _persist_job_status(job_store, job_id, _REINDEX_TASK_LABEL, JobStatus.RUNNING):
-        await _clear_reindex_job_id(store, collection, namespace, job_id)
-        _persist_job_status(job_store, job_id, _REINDEX_TASK_LABEL, JobStatus.FAILED, error=REINDEX_FAILED_DETAIL)
+    # --- Step 3: claim RUNNING (a DELETE may have landed during the embedder load) ---
+    if not await _claim_reindex(store, job_store, collection, namespace, job_id):
         return
 
     # --- Step 4: ingest ---
@@ -519,27 +627,30 @@ async def _reindex_task(
 
     if cancelled or ingest_error is not None:
         if ingest_error is not None:
-            # Outside the except block: pass the exception so the traceback is logged.
+            # Outside the ``except`` block, so the exception is passed explicitly for the traceback.
             logger.error("_reindex_task: ingest failed for job %s", job_id, exc_info=ingest_error)
         # Step 6: failure path — do NOT touch active_embedding_model
+        # The work itself ended, so its outcome wins over a pending cancel (as in the ingest tasks): CANCELLED
+        # when the task was cancelled (a DELETE, or shutdown while still RUNNING), FAILED when the ingest failed —
+        # so this exit cannot use _end_reindex_cancelled_or_failed; same clear-first order.
         await _clear_reindex_job_id(store, collection, namespace, job_id)
         if cancelled:
-            _persist_job_status(job_store, job_id, _REINDEX_TASK_LABEL, JobStatus.CANCELLED)
+            _persist_job_status(job_store, job_id, JobStatus.CANCELLED, context=_REINDEX_LOG_CONTEXT)
         else:
-            _persist_job_status(job_store, job_id, _REINDEX_TASK_LABEL, JobStatus.FAILED, error=REINDEX_FAILED_DETAIL)
+            _persist_job_status(job_store, job_id, JobStatus.FAILED, context=_REINDEX_LOG_CONTEXT, error=REINDEX_FAILED_DETAIL)
         return
 
-    # Check for cancellation between ingest and DONE (mirrors _default_ingest_task)
-    current_job = job_store.get(job_id)
-    if current_job and current_job.status == JobStatus.CANCELLING:
-        await _clear_reindex_job_id(store, collection, namespace, job_id)
-        _persist_job_status(job_store, job_id, _REINDEX_TASK_LABEL, JobStatus.CANCELLED)
+    # Check for cancellation between ingest and DONE (mirrors _persist_final_ingest_status): skip the promotion
+    if _cancel_requested(job_store, job_id):
+        await _end_reindex_cancelled_or_failed(store, job_store, collection, namespace, job_id)
         return
 
     # --- Step 5: success path — promote model ---
     try:
         meta = await store.get_collection_meta(collection, namespace)
         if meta is not None:
+            if meta.reindex_job_id == job_id:  # another job's pointer is left alone (see _clear_reindex_job_id)
+                meta.reindex_job_id = None
             # Only promote the model when the chunks were actually re-embedded.
             # A source-less no-op reindex (collection_path is None) skipped the
             # scan, so promoting active_embedding_model would advertise a model the
@@ -548,7 +659,6 @@ async def _reindex_task(
             if target_model is not None and collection_path is not None:
                 # Model-change path
                 meta.active_embedding_model = target_model
-                meta.reindex_job_id = None
                 pending = meta.pending_embedding_model
                 if pending == target_model:
                     meta.pending_embedding_model = None
@@ -559,16 +669,16 @@ async def _reindex_task(
                 else:
                     # pending is None
                     meta.needs_reindex = False
-            else:
-                # Data-only path — only clear reindex_job_id
-                meta.reindex_job_id = None
             await store.update_collection_meta(meta)
         else:
             logger.warning("_reindex_task: collection meta not found at success for job %s", job_id)
     except Exception:  # noqa: BLE001
         logger.exception("_reindex_task: failed to update collection meta for job %s", job_id)
 
-    _persist_job_status(job_store, job_id, _REINDEX_TASK_LABEL, JobStatus.DONE)
+    # A DELETE may have landed during the promotion awaits: the model is promoted (the vectors were re-embedded with
+    # it), so CANCELLED is truthful. No await between this check and the write, so no DELETE can slip in between.
+    if not _finish_requested_cancel(job_store, job_id, context=_REINDEX_LOG_CONTEXT):
+        _persist_job_status(job_store, job_id, JobStatus.DONE, context=_REINDEX_LOG_CONTEXT)
 
 
 _ERROR_401 = {401: {"model": ErrorDetail}}
@@ -583,8 +693,8 @@ _INGEST_ERRORS: dict[int | str, dict[str, Any]] = {
         "model": CodedErrorDetail,
         "description": "A single-file path or an inline document exceeds the configured max_file_mb limit",
     },
-    500: {"model": ErrorDetail, "description": "The job could not be recorded"},
-    503: {"description": "Store busy — reindex in progress"},
+    500: {"model": ErrorDetail, "description": f'Creating the ingest job failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})'},
+    503: {"model": ErrorDetail, "description": "Store busy — reindex in progress"},
 }
 
 
@@ -653,17 +763,20 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
                         status_code=413, detail={"code": err.code, "message": err.message}
                     )
 
-    try:
-        job = store.create(namespace=ns, collection=body.collection, path=body.path or "")
-    except OSError:
-        logger.exception("POST /ingest: job store create failed")
-        return JSONResponse({"detail": JOB_STORE_WRITE_FAILED_DETAIL}, status_code=500)
-
-    # Pre-acquire the per-collection lock to return 503 synchronously on contention.
+    # Pre-acquire the per-collection lock to return 503 synchronously on contention —
+    # before creating the job, so a 503 leaves no PENDING job that nothing ever runs.
     search_store = getattr(request.app.state, "search_store", None)
     lock_result = await acquire_collection_lock_or_503(search_store, body.collection)
     if isinstance(lock_result, JSONResponse):
         return lock_result
+
+    try:
+        job = store.create(namespace=ns, collection=body.collection, path=body.path or "")
+    except Exception:  # noqa: BLE001 — any failure maps to one sanitized 500 and releases the lock
+        logger.exception("Failed to create the ingest job for collection %s", body.collection)
+        if lock_result is not None and lock_result.locked():
+            lock_result.release()
+        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
     pipeline = getattr(request.app.state, "pipeline", None)
     embedder_cache = getattr(request.app.state, "embedder_cache", None)
@@ -779,6 +892,7 @@ async def get_job(job_id: str, request: Request) -> JobResponse:
         404: {"model": ErrorDetail},
         409: {"model": ErrorDetail},
         422: {"model": ErrorDetail},
+        500: {"model": ErrorDetail, "description": f'Persisting the resume failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})'},
     },
 )
 async def resume_job(job_id: str, request: Request) -> JobResponse | JSONResponse:
@@ -814,7 +928,11 @@ async def resume_job(job_id: str, request: Request) -> JobResponse | JSONRespons
             return JSONResponse({"error": "source_not_found"}, status_code=422)
 
     # Atomically transition FAILED → QUEUED
-    updated = store.transition(job_id, {JobStatus.FAILED}, JobStatus.QUEUED)
+    try:
+        updated = store.transition(job_id, {JobStatus.FAILED}, JobStatus.QUEUED)
+    except Exception:  # noqa: BLE001 — the job stays FAILED; any failure maps to one sanitized 500
+        logger.exception("Failed to persist the resume of job %s", job_id)
+        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
     if updated is None:
         # Race: status changed between our check and transition
         job = store.get(job_id)
@@ -836,7 +954,17 @@ async def resume_job(job_id: str, request: Request) -> JobResponse | JSONRespons
         202: {"model": JobResponse},
         401: {"model": ErrorDetail},
         404: {"model": ErrorDetail},
-        409: {"model": ErrorDetail},
+        409: {
+            "model": ErrorDetail,
+            "description": f'The job is a non-terminal sync, which cannot be cancelled (body {{"detail": "{_SYNC_JOB_NOT_CANCELLABLE_DETAIL}"}})',
+        },
+        500: {
+            "model": ErrorDetail,
+            "description": (
+                f'Persisting the cancel failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}}), or the job is in a '
+                'status DELETE does not handle, e.g. QUEUED (body {"detail": "Unknown job status: <status>"})'
+            ),
+        },
     },
 )
 async def delete_job(job_id: str, request: Request, response: Response) -> JobResponse | JSONResponse:
@@ -848,18 +976,15 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status in _TERMINAL_STATUSES:
         return JobResponse(**job_to_dict(job))
+    if isinstance(job, SyncJob):
+        return JSONResponse({"detail": _SYNC_JOB_NOT_CANCELLABLE_DETAIL}, status_code=409)
     if job.status in _ACTIVE_STATUSES:
-        if job_id == getattr(request.app.state, "_startup_sync_job_id", None):
-            return JSONResponse(
-                {"detail": _STARTUP_SYNC_JOB_NOT_CANCELLABLE_DETAIL},
-                status_code=409,
-            )
         # Use transition() to avoid TOCTOU race: only updates if still active
         try:
             updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)
-        except OSError:
-            logger.exception("DELETE /jobs/%s: job store transition failed", job_id)
-            return JSONResponse({"detail": JOB_STORE_WRITE_FAILED_DETAIL}, status_code=500)
+        except Exception:  # noqa: BLE001 — the job keeps its status; any failure maps to one sanitized 500
+            logger.exception("Failed to persist the cancel of job %s", job_id)
+            return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
         if updated is None:
             # Race: job became terminal between get() and transition() — idempotent 200
             job = store.get(job_id)
@@ -874,6 +999,6 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
     else:
         logger.error("DELETE /jobs/%s: unknown status %s", job_id, job.status)
         return JSONResponse(
-            content={"detail": f"Unknown job status: {job.status}"},
+            content={"detail": f"Unknown job status: {job.status.value}"},
             status_code=500,
         )

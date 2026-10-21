@@ -1,19 +1,26 @@
 """Integration tests for GET /jobs list endpoint (Task 6.1) and POST /jobs/{id}/resume (Task 6.2)."""
 from __future__ import annotations
 
-import time
+import logging
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock
 
-from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
-from archon_search.types import ExportJob, ImportJob, JobStatus, MigrationJob, MigrationKind
+from archon_search.types import JobStatus, MigrationKind
+from tests._job_store_faults import (
+    JOB_WRITE_FAILURES,
+    assert_error_logged_with_traceback,
+    failing_job_writes,
+    persisted_statuses,
+)
+
+_ROUTES_JOBS_LOGGER = "archon_search.server.routes_jobs"
 
 
 # ---------------------------------------------------------------------------
@@ -506,3 +513,41 @@ def test_resume_migration_job_no_file_check_required(
     assert response.status_code == 202
     data = response.json()
     assert data["status"] == "QUEUED"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("write_error", JOB_WRITE_FAILURES)
+def test_resume_transition_write_failure_returns_sanitized_500_and_keeps_job_failed(
+    client: TestClient,
+    tmp_store: JobStore,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    write_error: Exception,
+) -> None:
+    """A resume whose FAILED->QUEUED persist fails (with any exception, not only OSError) must answer the
+    sanitized 500 envelope (never the raw exception), log the cause with its traceback, and leave the job
+    FAILED — a QUEUED job in memory would be dispatched by the scheduler even though the client was told the
+    resume failed."""
+    job = tmp_store.create_migration(
+        collection="col",
+        kind=MigrationKind.REWRITE,
+        backup_confirmed=True,
+        namespace=DEFAULT_NAMESPACE,
+    )
+    tmp_store.update(job.job_id, status=JobStatus.FAILED)
+
+    # The failing write reaches disk (QUEUED in the file) before raising; the corrective rewrite restores
+    # FAILED there — so the on-disk assertion below is not satisfied by an untouched file.
+    caplog.set_level(logging.ERROR, logger=_ROUTES_JOBS_LOGGER)
+    with failing_job_writes(count=1, exc=write_error, fail_after_write=1) as writes:
+        response = client.post(f"/jobs/{job.job_id}/resume")  # must not raise: the route answers 500
+
+    assert writes.statuses_of(job.job_id) == [JobStatus.QUEUED.value, JobStatus.FAILED.value]
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+    assert_error_logged_with_traceback(caplog, _ROUTES_JOBS_LOGGER)
+    in_memory = tmp_store.get(job.job_id)
+    assert in_memory is not None
+    assert in_memory.status == JobStatus.FAILED
+    assert persisted_statuses(tmp_path / "jobs.json")[job.job_id] == JobStatus.FAILED.value

@@ -37,17 +37,18 @@ If `/health` is up and `/status` shows no rising `error_count`, look at telemetr
 
 ## Failure modes
 
-### Stuck job (ingest or reindex)
+### Stuck job (ingest, reindex or sync)
 
 **Symptoms**: a collection sits at `status: "indexing"`, `processed_files` stops advancing, `eta_seconds` grows unboundedly, no log entries for that job for several minutes.
 
 **Triage**:
 
 1. `GET /jobs/{job_id}` for the suspect job. Job IDs surface in the response of `POST /ingest`, `POST /collections/`, `POST /collections/{name}/reindex`, `POST /sync`, and the `--wait` output of the matching CLI proxies.
-2. If `status` is `RUNNING` or `QUEUED` but log activity has stopped, `DELETE /jobs/{job_id}`. On the next tick the job marks itself cancelled.
-3. If `DELETE` returns immediately, the job already terminated — inspect the final status.
+2. If `status` is `RUNNING` or not yet started (`status: PENDING`) but log activity has stopped, `DELETE /jobs/{job_id}`. `202` with `status: "CANCELLING"` means the cancel was recorded: a not-yet-started ingest or reindex job ends `CANCELLED` without running once its task starts (a reindex whose embedding model is loading, once the load completes), while a `RUNNING` job is not interrupted and settles only when its work finishes — if that work is itself stuck, see step 5. A not-yet-started job with no task to run it does not settle on its own: an ingest job the maintenance loop re-enqueued after a failure (`source: "maintenance"`), or any not-yet-started job left over from before a restart (loading the job store keeps `status: PENDING` as saved). Cancelling one leaves it `CANCELLING` until the next restart, which rewrites it `FAILED` `"process_restart"`; for an ingest job that rewrite also suppresses the startup sync (`GET /status` `sync_result: "suppressed"`) until a clean `POST /sync` — when the config lists any `collections` or `pinned_collections` (with none, no startup sync runs anyway). A `QUEUED` job is not cancellable this way (`500` `"Unknown job status: QUEUED"`).
+3. Read the `DELETE` status code: `200` means the job was already terminal — inspect the final status. `409` `{"detail": "a sync cannot be cancelled"}` means the job is a sync (the startup sync or a `POST /sync`), which can never be cancelled — the job did **not** terminate; see the sync bullet below.
 4. Re-issue the ingest. Terminal jobs are evicted after 7 days by the job store.
 5. A process restart marks any in-flight (`RUNNING`/`CANCELLING`) job as failed via the crash-recovery path. Use this if the asyncio task itself is unresponsive — `DELETE` only flips the stored status, so an unresponsive task will not honour cancellation and a restart is the actual recovery.
+6. **Stuck sync** (`kind: "sync"`): `DELETE` answers `409`, so restart the server. A graceful stop (SIGTERM) cancels the sync and records it `CANCELLED`, and the next boot runs the startup sync again (unless it is already suppressed). If the process has to be killed instead (`kill -9`, OOM, a supervisor's SIGKILL), the `RUNNING` sync row reloads as `FAILED` `"process_restart"` — an ingest-family crash marker that **suppresses the startup sync on every boot** (`checks.sync: "warn"`, `sync_result: "suppressed"`) until a clean `POST /sync` / `archon-search sync`. See [140 — JobStore persist failures and `POST /sync`](../Architecture/140_error_handling_strategy.md#jobstore-persist-failures-and-post-sync) and the `checks.sync: "warn"` alert in [20_monitoring_and_alerts.md](20_monitoring_and_alerts.md#suggested-alert-rules).
 
 Underlying causes typically logged in `archon-search.log`: parser failure on a specific document, model-load timeout, or disk-full on `db_path`. See [50_maintenance_and_jobs.md](50_maintenance_and_jobs.md) for the job lifecycle and the `FAILED`/`FAILED_EXPIRED` distinction (below).
 
@@ -72,7 +73,7 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 
 **Symptoms**: `/search` surfaces a LanceDB lock/IO condition as either a `503` (metadata-lookup branch) or a `500` (pipeline path); or `archon-search start` fails to connect to the store; or two processes are running against the same `db_path`. Check the log for LanceDB lock/IO messages — do not rely on the HTTP status alone.
 
-**Not a fault**: `POST /collections/` returning `503 {"detail": "store busy; retry in N seconds"}` with a `Retry-After` header, or `POST /ingest` returning `503 {"error": "store_busy", ...}` with `Retry-After: 30`, is the intentional signal that a reindex holds the per-collection ingest lock. Honour `Retry-After` and retry; ingest to a *different* collection is unaffected. Treat a sustained store-busy window like a stuck reindex (above).
+**Not a fault**: `POST /collections/` returning `503 {"detail": "store busy; retry in N seconds"}` with a `Retry-After` header, or `POST /ingest` returning `503 {"detail": "reindex in progress; retry after Retry-After seconds", "code": "store_busy"}` with `Retry-After: 30`, is the intentional signal that a reindex holds the per-collection ingest lock. `DELETE /collections/{name}` returns the same `store_busy` body on a lock timeout, and a `503` with `"code": "store_busy"` and an ingest-in-progress detail while a base ingest job is still writing to the collection. A base ingest job stuck `RUNNING`/`CANCELLING` blocks `DELETE` until it finishes or the server restarts — on load the job store rewrites `RUNNING`/`CANCELLING` jobs to `FAILED` (`error: "process_restart"`). Honour `Retry-After` and retry; ingest to a *different* collection is unaffected. Treat a sustained store-busy window like a stuck reindex (above).
 
 **Triage**:
 

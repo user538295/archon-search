@@ -11,7 +11,6 @@ from archon_search.types import ExportJob, ImportJob, JobStatus, MigrationJob
 logger = logging.getLogger(__name__)
 
 _SCHEDULER_TICK_SECONDS: int = 5
-
 # Job ``error`` when ``dispatch_fn`` raises: the exception's message may embed
 # internals, so it goes to the server log only. Keeps the ``dispatch_failed`` prefix.
 DISPATCH_FAILED_DETAIL = "dispatch_failed; see the server log for details"
@@ -41,6 +40,9 @@ class JobScheduler:
         # ``_tick()`` reads it via attribute access, not a closed-over local.
         self.dispatch_fn = dispatch_fn
         self._active: set[asyncio.Task] = set()
+        # Job ids whose QUEUED -> RUNNING claim failed on their latest attempt: only the first failure of
+        # such a streak logs a traceback, so a persistently failing disk does not flood the log every tick.
+        self._claim_failures: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public API
@@ -77,9 +79,15 @@ class JobScheduler:
     def _tick(self) -> None:
         """Single scheduler tick: promote QUEUED jobs up to max_concurrent."""
         queued = self._store.list_queued_bulk()
+        self._claim_failures.intersection_update(job.job_id for job in queued)  # forget jobs no longer QUEUED
         slots = max(0, self._max_concurrent - self._active_count_running)
         for job in queued[:slots]:
-            promoted = self._store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+            try:
+                promoted = self._store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+            except Exception:  # noqa: BLE001 — the claim did not happen; the job stays QUEUED for a later tick
+                self._log_claim_failure(job.job_id)
+                continue
+            self._claim_failures.discard(job.job_id)
             if promoted is None:
                 # Another tick or concurrent caller beat us — skip this job.
                 continue
@@ -94,3 +102,11 @@ class JobScheduler:
                         "JobScheduler: failed to mark job %s as FAILED after dispatch error",
                         job.job_id,
                     )
+
+    def _log_claim_failure(self, job_id: str) -> None:
+        """Log a failed claim: with its traceback on the first failure of a streak, as one line after that."""
+        if job_id in self._claim_failures:
+            logger.warning("JobScheduler: persisting job %s as RUNNING failed again — still QUEUED", job_id)
+            return
+        self._claim_failures.add(job_id)
+        logger.exception("JobScheduler: failed to persist job %s as RUNNING — leaving it QUEUED", job_id)

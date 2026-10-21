@@ -10,12 +10,11 @@ Covers S11, S11b, S12, S12b:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -428,3 +427,35 @@ async def test_maintenance_loop_recent_failed_job_stays_failed(
     assert len(maintenance_jobs) >= 1, (
         f"Expected at least 1 maintenance re-enqueue; got: {[j.source for j in all_jobs]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_failed_expired_transition_write_failure_keeps_job_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real JobStore: when the FAILED->FAILED_EXPIRED persist fails, the job must stay FAILED in memory and on
+    disk (consistent), so the next pass retries the expiry instead of skipping a job memory calls expired."""
+    from tests._job_store_faults import SIMULATED_WRITE_FAILURE, failing_job_writes, persisted_statuses
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    jobs_path = tmp_path / "jobs.json"
+    job_store = JobStore(path=jobs_path)
+    aged = job_store.create_job(_make_failed_ingest_job(str(tmp_path / "old_file.txt"), age_hours=100.0))
+    loop = _make_loop(tmp_path, job_store=job_store, search_store=MagicMock(), retry_max_age_hours=72)
+
+    # The transition's error propagates out of the retry pass (``_run_one_pass`` catches and logs it).
+    with failing_job_writes() as writes, pytest.raises(OSError, match=SIMULATED_WRITE_FAILURE):
+        await loop._run_failed_ingest_retry({}, {})
+
+    assert writes.statuses_of(aged.job_id)[0] == JobStatus.FAILED_EXPIRED.value  # the expiry was attempted
+    failed = job_store.get(aged.job_id)
+    assert failed is not None
+    assert failed.status == JobStatus.FAILED
+    assert persisted_statuses(jobs_path)[aged.job_id] == JobStatus.FAILED.value
+
+    await loop._run_failed_ingest_retry({}, {})  # next pass, writes succeed
+
+    expired = job_store.get(aged.job_id)
+    assert expired is not None
+    assert expired.status == JobStatus.FAILED_EXPIRED
+    assert persisted_statuses(jobs_path)[aged.job_id] == JobStatus.FAILED_EXPIRED.value

@@ -116,9 +116,9 @@ async def test_reindex_metadata_task_failure_does_not_echo_store_error(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     job_store = _job_store(tmp_path)
-    queued = job_store.create_metadata_reindex(collection=_COLLECTION)
-    running = job_store.transition(queued.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
-    assert running is not None
+    # The route creates these jobs RUNNING (no QUEUED -> RUNNING claim).
+    running = queued = job_store.create_metadata_reindex(collection=_COLLECTION)
+    assert running.status == JobStatus.RUNNING
     store = _search_store()
     store.reindex_metadata = AsyncMock(side_effect=OSError(LANCE_MSG))
 
@@ -359,9 +359,9 @@ async def test_reindex_task_ingest_failure_does_not_echo_pipeline_error(
 async def _run_community_rebuild(tmp_path: Path, get_all_nodes: AsyncMock) -> tuple[JobStore, str]:
     """Drive ``_community_rebuild_task`` with a real CommunityBuilder over a failing graph store."""
     job_store = _job_store(tmp_path)
-    queued = job_store.create_community_rebuild(collection=_COLLECTION, namespace=_NAMESPACE)
-    running = job_store.transition(queued.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
-    assert running is not None
+    # The route creates these jobs RUNNING (no QUEUED -> RUNNING claim).
+    running = queued = job_store.create_community_rebuild(collection=_COLLECTION, namespace=_NAMESPACE)
+    assert running.status == JobStatus.RUNNING
     graph_store = MagicMock()
     graph_store.get_all_nodes = get_all_nodes
 

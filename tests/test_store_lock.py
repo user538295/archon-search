@@ -181,6 +181,117 @@ async def test_drop_collection_removes_lock_entry(
     await connected_store.drop_collection(other)  # no lock_for() called
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_drop_collection_locked_by_caller_keeps_held_lock_entry(
+    connected_store: SearchStore,
+) -> None:
+    """With ``_locked_by_caller=True`` the caller still holds the lock after the drop, so
+    ``lock_for`` must keep handing out that same lock (mutual exclusion) until the caller
+    releases it and calls ``discard_lock``."""
+    col = f"test-{uuid.uuid4().hex[:8]}"
+    await connected_store.ensure_collection(col, _DIM)
+    held = connected_store.lock_for(col)
+    await held.acquire()
+
+    await connected_store.drop_collection(col, _locked_by_caller=True)
+
+    assert connected_store.lock_for(col) is held
+    assert held.locked()
+    held.release()
+    connected_store.discard_lock(col)
+    assert connected_store.lock_for(col) is not held
+
+
+@pytest.mark.asyncio
+async def test_discard_lock_keeps_a_held_lock(tmp_path: Path) -> None:
+    """``discard_lock`` never forgets a lock that is still held; it is a no-op for an unknown name."""
+    store = SearchStore(tmp_path / "db")
+    held = store.lock_for("col")
+    await held.acquire()
+
+    store.discard_lock("col")
+    store.discard_lock("never-locked")
+
+    assert store.lock_for("col") is held
+    assert "never-locked" not in store._collection_locks
+    held.release()
+
+
+async def _start_waiter(store: SearchStore, collection: str, acquired: list[asyncio.Lock]) -> asyncio.Task[None]:
+    """Start a task blocked on ``lock_for(collection)``; it records the lock it ends up holding."""
+
+    async def _wait() -> None:
+        lock = store.lock_for(collection)
+        async with lock:
+            acquired.append(lock)
+
+    task = asyncio.create_task(_wait())
+    await asyncio.sleep(0)  # let it block in acquire()
+    return task
+
+
+@pytest.mark.asyncio
+async def test_discard_lock_keeps_a_lock_a_woken_waiter_has_not_yet_acquired(tmp_path: Path) -> None:
+    """Right after ``release()`` the woken waiter has not re-acquired yet (``locked()`` is False); discarding
+    then would hand a later ``lock_for`` a second lock — two concurrent holders. The entry must be kept."""
+    store = SearchStore(tmp_path / "db")
+    held = store.lock_for("col")
+    await held.acquire()
+    acquired: list[asyncio.Lock] = []
+    waiter = await _start_waiter(store, "col", acquired)
+
+    held.release()
+    store.discard_lock("col")
+
+    assert store.lock_for("col") is held
+    await waiter
+    assert acquired == [held]
+    store.discard_lock("col")
+    assert "col" not in store._collection_locks
+
+
+@pytest.mark.asyncio
+async def test_drop_collection_keeps_lock_entry_while_a_waiter_is_queued(tmp_path: Path) -> None:
+    """drop_collection (taking the lock itself) must not discard the entry while another task waits on it."""
+    store = SearchStore(tmp_path / "db")
+    acquired: list[asyncio.Lock] = []
+    waiters: list[asyncio.Task[None]] = []
+
+    mock_db = MagicMock()
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+
+    async def _drop_while_a_waiter_queues(*_args: object, **_kwargs: object) -> None:
+        waiters.append(await _start_waiter(store, "col", acquired))
+
+    mock_db.drop_table = AsyncMock(side_effect=_drop_while_a_waiter_queues)
+    store._db = mock_db
+
+    await store.drop_collection("col")
+    lock_after_drop = store.lock_for("col")
+    await waiters[0]
+
+    assert acquired == [lock_after_drop]
+
+
+@pytest.mark.asyncio
+async def test_drop_collection_missing_table_discards_its_own_lock_entry(tmp_path: Path) -> None:
+    """drop_collection taking the lock itself discards the entry even when the table is missing (KeyError)."""
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = []
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    store._db = mock_db
+
+    with pytest.raises(KeyError):
+        await store.drop_collection("ghost")
+
+    assert "ghost" not in store._collection_locks
+
+
 # ---------------------------------------------------------------------------
 # Check-then-act: drop/rename must hold the per-collection lock
 # ---------------------------------------------------------------------------

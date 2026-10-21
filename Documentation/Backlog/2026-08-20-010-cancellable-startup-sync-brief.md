@@ -1,93 +1,40 @@
-# Brief: Make the startup sync cancellable — today `DELETE /jobs/{id}` always 409s on it
+# Brief: Make a sync cancellable — today `DELETE /jobs/{id}` always 409s on every non-terminal sync
 
 **ID:** 2026-08-20-010 · **Type:** Enhancement · **Status:** Open — deferred, no implementation yet
-**Found during:** fix-brief-D documentation sweep, following up on
-[[2026-08-19-000-oom-crash-incident-report.md]] (the operator stopped the runaway startup sync by
-`launchctl bootout`-ing the whole service — there is still no in-band way to do that)
+**Found during:** fix-brief-D documentation sweep, following up on [[2026-08-19-000-oom-crash-incident-report.md]] (the operator stopped the runaway startup sync by `launchctl bootout`-ing the whole service — there is still no in-band way to do that)
 
 ## Problem
 
-An operator watching RSS climb during the automatic startup collection sync has no way to stop
-just that sync short of killing the whole process (`launchctl bootout` / `kill`). `DELETE
-/jobs/{id}` on the `SyncJob` that backs the startup sync always answers `409` with
-`{"detail": "the startup sync cannot be cancelled"}` (`_STARTUP_SYNC_JOB_NOT_CANCELLABLE_DETAIL`,
-`archon_search/server/routes_jobs.py:43`), regardless of how the sync is behaving. That 409 is
-deliberate, not an oversight — this brief is about whether and how to remove it, not a bug repro.
+An operator watching RSS climb during a collection sync — the automatic startup sync or a manual `POST /sync` — has no way to stop just that sync short of stopping the whole process (`launchctl bootout` / `kill`). `DELETE /jobs/{id}` on any non-terminal `SyncJob` always answers `409` with `{"detail": "a sync cannot be cancelled"}` (`routes_jobs.delete_job`; it answered `"the startup sync cannot be cancelled"` for the startup sync only until the next release extended the 409 to every non-terminal `SyncJob`, manual `POST /sync` ones and legacy `QUEUED`/`PENDING` rows included), regardless of how the sync is behaving. That 409 is deliberate, not an oversight — this brief is about whether and how to remove it, not a bug repro.
 
 ## Why it 409s today (verified against source)
 
-`delete_job` (`routes_jobs.py:721-757`) special-cases the job whose id matches
-`app.state._startup_sync_job_id` (set once, right after `_start_startup_sync_job` succeeds inside
-`_run_startup_sync`, `archon_search/server/app.py:213-214`) and refuses before it would otherwise
-transition an active job to `CANCELLING`. The reason is recorded in the `app.state` init comment
-(`app.py:1049-1057`):
+`delete_job` (`archon_search/server/routes_jobs.py`) answers `404` for a missing or other-namespace job and an idempotent `200` for a terminal one; then, for any job where `isinstance(job, SyncJob)` holds, it returns `409` with `_SYNC_JOB_NOT_CANCELLABLE_DETAIL` before it would otherwise transition an active job to `CANCELLING`. The reason is recorded in the comment above `_SYNC_JOB_NOT_CANCELLABLE_DETAIL`:
 
-- The lifespan's `_run_startup_sync` task does not poll or observe its own job's status — it drives
-  the job row forward itself and has no code path that reacts to an external `CANCELLING` write.
-  Moving the row to `CANCELLING` via `DELETE` would therefore not actually stop anything; the sync
-  keeps running.
-- `CANCELLING` is one of `_CRASH_STATUSES` (`archon_search/jobs/store.py:32`, alongside `RUNNING`).
-  If the process were then killed (or crashed) with the job stuck at `CANCELLING`, the next boot's
-  `JobStore._load()` would rewrite it to `FAILED / "process_restart"` — exactly the marker
-  `crashed_ingest_on_load` keys on — arming the crash-loop guard for a cancel request that was
-  never a crash. Since suppression is now sticky (fix-brief-C item 1 / fix-brief-D docs), that
-  false marker would suppress every subsequent boot's startup sync until an operator ran a clean
-  `POST /sync`, which is a strictly worse outcome than the current 409.
+- Neither sync task polls or observes its own job's status. The lifespan's `_run_startup_sync` (`archon_search/server/app.py`) and the manual path's `_sync_task` (`archon_search/server/routes_sync.py`) drive the job row forward themselves and have no code path that reacts to an external `CANCELLING` write. Moving the row to `CANCELLING` via `DELETE` would therefore not actually stop anything; the sync keeps running.
+- `CANCELLING` is one of `_CRASH_STATUSES` (`archon_search/jobs/store.py`, alongside `RUNNING`), and sync jobs are ingest-family (`_INGEST_FAMILY_JOB_TYPES`). If the process were then killed (or crashed) with the job stuck at `CANCELLING`, the next boot's `JobStore._load()` would rewrite it to `FAILED / "process_restart"` — exactly the marker `crashed_ingest_on_load` keys on — arming the crash-loop guard for a cancel request that was never a crash. Since suppression is sticky (fix-brief-C item 1 / fix-brief-D docs), that false marker would suppress every subsequent boot's startup sync until an operator ran a clean `POST /sync`, which is a strictly worse outcome than the current 409.
 
 ## What would need to change
 
-1. **Actually stop the sync.** The task handle already exists at `app.state._startup_sync_task`
-   (assigned at `app.py:947` right after the task is created; defaults to `None` and is documented
-   at `app.py:1046-1048`). `DELETE /jobs/{id}` would need to call `.cancel()` on it instead of (or
-   in addition to) writing `CANCELLING` to the job row.
-2. **Record the right terminal status.** `_run_startup_sync`'s `except asyncio.CancelledError:`
-   branch (`app.py:257-266`) currently sets `app_state.sync_result = StartupSyncResult.FAILED` and
-   finishes the job `status=JobStatus.FAILED, error=_STARTUP_SYNC_ERROR_CANCELLED` — i.e. today, a
-   cancellation (including an ordinary clean shutdown mid-sync, not just a hypothetical future
-   operator-initiated one) is indistinguishable from a real failure. Contrast with
-   `routes_sync.py`'s `_sync_task` (the manual `POST /sync` path), which was fixed in this same
-   round to record `JobStatus.CANCELLED` on `asyncio.CancelledError` instead of leaving the job
-   `RUNNING`. `_run_startup_sync` needs the equivalent fix — record `CANCELLED`, not `FAILED` — both
-   as a prerequisite for a clean operator-cancel feature and as a latent inconsistency in its own
-   right (a plain shutdown mid-startup-sync currently looks like a failure in `GET /status` /
-   `sync_result`, not a cancellation).
+1. **Actually stop the sync.** The startup sync's task handle exists at `app.state._startup_sync_task` (assigned in the lifespan right after the task is created; defaults to `None` in `create_app`'s `app.state` init). A manual sync's task is only tracked anonymously in `app.state._background_tasks` (`routes_sync._spawn_sync_task`), so it would need a job-id → task mapping. `DELETE /jobs/{id}` would then call `.cancel()` on the task instead of writing `CANCELLING` to the job row.
+2. **Record the right terminal status — done for the job row.** Both sync paths already catch `asyncio.CancelledError` and record `JobStatus.CANCELLED` (`_run_startup_sync` via `_finish_startup_sync_job(..., status=JobStatus.CANCELLED)`; `_sync_task` via `_persist_job_status`), so a clean shutdown mid-sync no longer looks like a failure in `GET /jobs`. Still open: `_run_startup_sync`'s `CancelledError` branch sets `app_state.sync_result = StartupSyncResult.FAILED`, which is moot during shutdown but would make an operator-initiated cancel read as `checks.sync: "fail"` / `sync_result: "failed"` (see the readiness question below).
 
 ## Open questions
 
-- **Shutdown ordering.** An operator-initiated cancel and the lifespan's own shutdown-time
-  cancellation would call `.cancel()` on the same task through different code paths. `asyncio.Task
-  .cancel()` is idempotent, but the interaction with `job_store.update()` racing a concurrent
-  shutdown write has not been worked out — needs a design pass, not just a call-site change.
-- **`sync_lock` release.** `_run_startup_sync` holds `app_state.sync_lock` via `async with
-  app_state.sync_lock:` around the `collection_sync.sync()` call only (`app.py:221-222`); a
-  cancellation propagating through that `async with` should release the lock via the normal
-  context-manager exit path, but this has not been exercised under test — verify before shipping.
-- **Mid-sync consistency.** Does cancelling `collection_sync.sync()` partway through a collection
-  leave `IndexingStateStore` / LanceDB tables in a state a subsequent `POST /sync` can cleanly
-  resume from, or does it need its own cleanup? Unverified — `sync.py`'s per-collection write path
-  was not audited for cancellation-safety as part of this brief.
-- **Readiness during cancellation.** `_startup_sync_pending()` (`routes_ready.py`) gates on `not
-  task.done()`. A cancelled task becomes `done()` once the `CancelledError` has propagated and been
-  handled, so `/ready` should recover promptly — but this interacts with the terminal-status
-  question above (does `checks.sync` read `"fail"` for an operator-requested cancel, same as a real
-  failure, or does it need its own `CheckStatus`?).
-- **Wire contract.** Does a successful cancel return `202` like every other `DELETE /jobs/{id}`, or
-  does the special-cased job deserve a distinct response? `GET /openapi.json` is authoritative —
-  any change here is a breaking-contract change requiring a `BREAKING.md` entry.
+- **Shutdown ordering.** An operator-initiated cancel and the lifespan's own shutdown-time cancellation (which cancels every task in `app.state._background_tasks`) would call `.cancel()` on the same task through different code paths. `asyncio.Task.cancel()` is idempotent, but the interaction with the job-store write racing a concurrent shutdown write has not been worked out — needs a design pass, not just a call-site change.
+- **`sync_lock` release.** `_run_startup_sync` holds `app_state.sync_lock` via `async with app_state.sync_lock:` around the `collection_sync.sync()` call only; `_sync_task` releases it in its `finally`. A cancellation should release the lock via those normal exit paths, but an operator-initiated cancel has not been exercised under test — verify before shipping.
+- **Mid-sync consistency.** Does cancelling `collection_sync.sync()` partway through a collection leave `IndexingStateStore` / LanceDB tables in a state a subsequent `POST /sync` can cleanly resume from, or does it need its own cleanup? Unverified — `sync.py`'s per-collection write path was not audited for cancellation-safety as part of this brief.
+- **Readiness during cancellation.** `_startup_sync_pending()` (`routes_ready.py`) gates on `not task.done()`. A cancelled task becomes `done()` once the `CancelledError` has propagated and been handled, so `/ready` should recover promptly — but this interacts with the `sync_result` question in item 2 (does `checks.sync` read `"fail"` for an operator-requested cancel, same as a real failure, or does it need its own `CheckStatus`?).
+- **Wire contract.** Does a successful cancel return `202` like every other `DELETE /jobs/{id}`, or does a sync deserve a distinct response? `GET /openapi.json` is authoritative — replacing the `409` is a breaking-contract change requiring a `BREAKING.md` entry.
 
 ## Non-goals
 
-This brief is scope-defining only. It does not propose cancelling a **manual** `POST /sync`
-(`_sync_task` in `routes_sync.py`) differently than today — that path already supports
-`DELETE /jobs/{id}` normally, since it is not the startup-sync special case.
+This brief is scope-defining only. It covers both the startup sync and a manual `POST /sync`, since both now answer the same `409`; it does not propose making them cancellable in different ways, nor changing how a server shutdown already cancels them (recording `CANCELLED`).
 
 ## References
 
-- [[archon_search/server/routes_jobs.py]] — `delete_job` startup-sync special case (:721-757),
-  `_STARTUP_SYNC_JOB_NOT_CANCELLABLE_DETAIL` (:43)
-- [[archon_search/server/app.py]] — `_run_startup_sync` (:186-290), `CancelledError` handling
-  (:257-266), `app.state._startup_sync_task` / `_startup_sync_job_id` init comments (:1046-1057)
-- [[archon_search/server/routes_sync.py]] — `_sync_task`'s `CancelledError` → `CANCELLED` handling
-  (the pattern `_run_startup_sync` would need to mirror)
-- [[archon_search/jobs/store.py]] — `_CRASH_STATUSES` (:32)
+- [[archon_search/server/routes_jobs.py]] — `delete_job`'s `isinstance(job, SyncJob)` 409 branch and `_SYNC_JOB_NOT_CANCELLABLE_DETAIL` (with its rationale comment)
+- [[archon_search/server/app.py]] — `_run_startup_sync` and its `CancelledError` → `CANCELLED` branch, the lifespan's shutdown task cancellation, the `app.state._startup_sync_task` init comment in `create_app`
+- [[archon_search/server/routes_sync.py]] — `_sync_task`'s `CancelledError` → `CANCELLED` handling, `_spawn_sync_task`
+- [[archon_search/jobs/store.py]] — `_CRASH_STATUSES`, `_INGEST_FAMILY_JOB_TYPES`
 - [[2026-08-19-000-oom-crash-incident-report.md]] — the manual `launchctl bootout` this would replace

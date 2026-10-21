@@ -33,6 +33,10 @@ from tests._install_hint_leak import assert_install_hint_logged_not_sent, patch_
 
 pytestmark = pytest.mark.asyncio
 
+_ROUTES_GRAPH_LOGGER = "archon_search.server.routes_graph"
+_ROUTES_JOBS_LOGGER = "archon_search.server.routes_jobs"
+_SECRET_KEY_TEXT = "/secret/internal/key"
+
 
 # ---------------------------------------------------------------------------
 # Unit tests — CommunityBuilder.build is mocked; only the task's outcome
@@ -48,7 +52,6 @@ async def test_rebuild_task_success_sets_done_with_count(tmp_path: Path) -> None
         jobs_path = tmp_path / f"jobs-{n}.json"
         job_store = JobStore(path=jobs_path)
         job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
-        job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
 
         fake_communities = [object() for _ in range(n)]
         with patch(
@@ -81,7 +84,6 @@ async def test_rebuild_task_zero_nodes_sets_failed(tmp_path: Path, caplog: pytes
     jobs_path = tmp_path / "jobs.json"
     job_store = JobStore(path=jobs_path)
     job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
-    job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
 
     with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls, \
             caplog.at_level(logging.WARNING, logger="archon_search.server.routes_graph"):
@@ -119,7 +121,6 @@ async def test_rebuild_task_missing_leidenalg_sets_failed_with_fixed_detail(
     jobs_path = tmp_path / "jobs.json"
     job_store = JobStore(path=jobs_path)
     job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
-    job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
 
     def _partition_without_leidenalg(*args: object, **kwargs: object) -> None:
         with patch.dict(sys.modules, {"igraph": None, "leidenalg": None}):
@@ -152,7 +153,6 @@ async def test_rebuild_task_runtime_error_sets_failed(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
     job_store = JobStore(path=jobs_path)
     job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
-    job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
 
     with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls:
         mock_builder_cls.return_value.build = AsyncMock(side_effect=RuntimeError("graph store I/O failed"))
@@ -169,6 +169,77 @@ async def test_rebuild_task_runtime_error_sets_failed(tmp_path: Path) -> None:
     assert updated is not None
     assert updated.status == JobStatus.FAILED
     assert updated.error == COMMUNITY_REBUILD_FAILED_DETAIL
+
+
+async def test_rebuild_task_unexpected_error_sets_failed_with_sanitized_detail_and_clears_meta_id(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An exception outside (ValueError, ImportError, RuntimeError) — e.g. a KeyError — must not leave the job
+    RUNNING with ``community_rebuild_job_id`` still set (every later rebuild would 409 until a restart): the job
+    goes FAILED with the fixed sanitized detail (never the exception text, which is logged with its traceback
+    instead) and the meta id is cleared."""
+    import logging
+    from types import SimpleNamespace
+
+    from tests._job_store_faults import assert_error_logged_with_traceback
+
+    from archon_search.server.routes_graph import COMMUNITY_REBUILD_FAILED_DETAIL, _community_rebuild_task
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
+    meta = SimpleNamespace(community_rebuild_job_id=job.job_id)
+    search_store = SimpleNamespace(
+        get_collection_meta=AsyncMock(return_value=meta),
+        update_collection_meta=AsyncMock(),
+    )
+
+    with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls:
+        mock_builder_cls.return_value.build = AsyncMock(side_effect=KeyError(_SECRET_KEY_TEXT))
+        caplog.set_level(logging.ERROR, logger=_ROUTES_GRAPH_LOGGER)
+
+        await _community_rebuild_task(
+            job=job_store.get(job.job_id),
+            job_store=job_store,
+            graph_store=object(),
+            graph_config=object(),
+            search_store=search_store,
+        )
+
+    updated = job_store.get(job.job_id)
+    assert updated is not None
+    assert updated.status == JobStatus.FAILED
+    assert updated.error == COMMUNITY_REBUILD_FAILED_DETAIL
+    assert _SECRET_KEY_TEXT not in (updated.error or "")
+    assert_error_logged_with_traceback(caplog, _ROUTES_GRAPH_LOGGER)
+    assert meta.community_rebuild_job_id is None
+    search_store.update_collection_meta.assert_awaited_once_with(meta)
+
+
+async def test_rebuild_task_done_write_failure_does_not_escape(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A failed persist of the terminal DONE status (any exception, here a serialization TypeError) is logged with
+    its traceback and suppressed: it must not escape the fire-and-forget task as an unretrieved exception."""
+    import logging
+
+    from archon_search.server.routes_graph import _community_rebuild_task
+    from tests._job_store_faults import assert_error_logged_with_traceback, failing_job_writes
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
+    caplog.set_level(logging.ERROR, logger=_ROUTES_JOBS_LOGGER)
+
+    with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls, \
+         failing_job_writes(exc=TypeError("simulated serialization failure")) as writes:
+        mock_builder_cls.return_value.build = AsyncMock(return_value=[])
+
+        await _community_rebuild_task(  # must not raise
+            job=job_store.get(job.job_id),
+            job_store=job_store,
+            graph_store=object(),
+            graph_config=object(),
+        )
+
+    assert writes.statuses_of(job.job_id)[0] == JobStatus.DONE.value  # the DONE write was attempted (and failed)
+    assert_error_logged_with_traceback(caplog, _ROUTES_JOBS_LOGGER)  # _persist_job_status logs it
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +282,6 @@ async def test_rebuild_job_reaches_done_visible_in_jobs(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
     job_store = JobStore(path=jobs_path)
     job = job_store.create_community_rebuild(collection=col, namespace=ns)
-    job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
 
     await _community_rebuild_task(
         job=job_store.get(job.job_id),

@@ -35,6 +35,7 @@ from fastapi.testclient import TestClient
 
 from tests.integration.conftest import make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests._job_store_faults import JOB_WRITE_FAILURES
 
 pytestmark = pytest.mark.integration
 
@@ -358,8 +359,10 @@ def test_rebuild_targets_token_namespace_tables(tmp_path: Path, monkeypatch: pyt
 # ---------------------------------------------------------------------------
 
 
-def test_second_rebuild_returns_409(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An active community_rebuild_job_id -> 409, no duplicate job created (S7)."""
+@pytest.mark.parametrize("active_status", ["RUNNING", "CANCELLING"])
+def test_second_rebuild_returns_409(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, active_status: str) -> None:
+    """An active community_rebuild_job_id -> 409, no duplicate job created (S7). CANCELLING counts:
+    DELETE /jobs/{id} does not stop the running task."""
     install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
@@ -368,7 +371,7 @@ def test_second_rebuild_returns_409(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
         job_store = client.app.state.job_store
         active_job = job_store.create_community_rebuild(collection="testcol", namespace="default")
-        job_store.transition(active_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+        job_store.update(active_job.job_id, status=JobStatus(active_status))
 
         search_store = client.app.state.search_store
         meta = asyncio.run(search_store.get_collection_meta("testcol", namespace="default"))
@@ -447,8 +450,7 @@ def test_task_clears_job_id_on_every_terminal_exit(tmp_path: Path, monkeypatch: 
                 chunk_count=0,
                 namespace="default",
             )
-            job = job_store.create_community_rebuild(collection="testcol", namespace="default")
-            running_job = job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+            running_job = job_store.create_community_rebuild(collection="testcol", namespace="default")
             meta.community_rebuild_job_id = running_job.job_id
             await search_store.update_collection_meta(meta)
 
@@ -528,7 +530,6 @@ def test_crash_recovery_unwedges_via_lazy_clear(tmp_path: Path, monkeypatch: pyt
 
         job_store = client.app.state.job_store
         crashed_job = job_store.create_community_rebuild(collection="testcol", namespace="default")
-        job_store.transition(crashed_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
         # Stand in for the post-restart _load crash-status flip (RUNNING -> FAILED)
         # that never touches CollectionMeta.
         job_store.update(crashed_job.job_id, status=JobStatus.FAILED, error="process_restart")
@@ -545,6 +546,41 @@ def test_crash_recovery_unwedges_via_lazy_clear(tmp_path: Path, monkeypatch: pyt
 
         reloaded = asyncio.run(search_store.get_collection_meta("testcol", namespace="default"))
         assert reloaded.community_rebuild_job_id != crashed_job.job_id
+
+
+@pytest.mark.parametrize("legacy_status", ["QUEUED", "PENDING"])
+def test_legacy_queued_rebuild_job_is_stale_and_cleared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_status: str
+) -> None:
+    """A community_rebuild_job_id pointing at a QUEUED/PENDING job (an older server created rebuild jobs QUEUED
+    first) is stale: nothing schedules a CommunityRebuildJob, so it never runs. The request must lazily clear
+    it, mark the old job FAILED (terminal, so evictable and deletable) and proceed to 202 — not answer 409
+    forever."""
+    install_graph_engine_stub(monkeypatch, empty=True)
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        asyncio.run(_seed_collection(cfg.db_path, "testcol"))
+
+        from archon_search.types import JobStatus
+
+        job_store = client.app.state.job_store
+        legacy_job = job_store.create_community_rebuild(collection="testcol", namespace="default")
+        job_store.update(legacy_job.job_id, status=JobStatus(legacy_status))
+
+        search_store = client.app.state.search_store
+        meta = asyncio.run(search_store.get_collection_meta("testcol", namespace="default"))
+        meta.community_rebuild_job_id = legacy_job.job_id
+        asyncio.run(search_store.update_collection_meta(meta))
+
+        resp = client.post("/graph/testcol/rebuild-communities", headers=_auth(api_key))
+
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["job_id"] != legacy_job.job_id
+        # The legacy row is marked FAILED so it does not stay non-terminal (never evicted) forever.
+        from archon_search.server.routes_jobs import JOB_SUPERSEDED_DETAIL
+
+        superseded = job_store.get(legacy_job.job_id)
+        assert superseded.status is JobStatus.FAILED
+        assert superseded.error == JOB_SUPERSEDED_DETAIL
 
 
 # ---------------------------------------------------------------------------
@@ -705,3 +741,62 @@ def test_rebuild_namespace_query_param_mismatch_returns_422(
     assert "namespace mismatch" in detail
     assert "default" in detail
     assert "other_ns" in detail
+
+
+# ---------------------------------------------------------------------------
+# The route runs the rebuild itself, so its job is created RUNNING in one write — never QUEUED.
+# ---------------------------------------------------------------------------
+
+
+def test_rebuild_route_persists_job_only_as_running(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rebuild job's first persisted status is RUNNING: no QUEUED row whose RUNNING claim could then fail."""
+    from tests._job_store_faults import recording_job_writes
+
+    install_graph_engine_stub(monkeypatch, empty=True)
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        asyncio.run(_seed_collection(cfg.db_path, "testcol"))
+
+        with recording_job_writes() as writes:
+            resp = client.post("/graph/testcol/rebuild-communities", headers=_auth(api_key))
+
+        assert resp.status_code == 202, resp.text
+        statuses = writes.statuses_of(resp.json()["job_id"])
+        assert statuses, "the rebuild job was never persisted"
+        assert statuses[0] == "RUNNING", f"rebuild job persisted as {statuses}"
+        assert "QUEUED" not in statuses
+
+
+
+
+@pytest.mark.parametrize("write_error", JOB_WRITE_FAILURES)
+def test_rebuild_route_job_write_failure_returns_sanitized_500_and_never_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, write_error: Exception
+) -> None:
+    """A failed job persist answers the sanitized 500 envelope (never the raw exception), logs the cause with its
+    traceback, leaves no rebuild job and no community_rebuild_job_id on the collection, and never starts the
+    rebuild (the route builds the task coroutine synchronously before returning)."""
+    import logging
+    from unittest.mock import patch
+
+    import archon_search.server.routes_graph as routes_graph_mod
+    from archon_search.types import CommunityRebuildJob
+    from tests._job_store_faults import assert_error_logged_with_traceback, failing_job_writes
+
+    install_graph_engine_stub(monkeypatch, empty=True)
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        asyncio.run(_seed_collection(cfg.db_path, "testcol"))
+        job_store = client.app.state.job_store
+        caplog.set_level(logging.ERROR, logger=routes_graph_mod.__name__)
+
+        with patch.object(routes_graph_mod, "_community_rebuild_task") as rebuild_spy, \
+             failing_job_writes(exc=write_error):
+            resp = client.post("/graph/testcol/rebuild-communities", headers=_auth(api_key))
+
+        assert resp.status_code == 500
+        assert resp.json() == {"detail": "internal error"}
+        assert_error_logged_with_traceback(caplog, routes_graph_mod.__name__)
+        assert [j for j in job_store.list() if isinstance(j, CommunityRebuildJob)] == []
+        rebuild_spy.assert_not_called()
+        meta = asyncio.run(client.app.state.search_store.get_collection_meta("testcol", namespace="default"))
+        assert meta is not None
+        assert meta.community_rebuild_job_id is None
