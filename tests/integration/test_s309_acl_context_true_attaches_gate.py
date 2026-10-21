@@ -5,7 +5,7 @@ Regression test for S309-acl_context_true_attaches_gate.
 Setup: ingest two docs mentioning "programming language" into an isolated collection.
 Assert:
 - acl_context=true  → every result carries a populated acl_gate dict with a `source`.
-- acl_context=false → no result carries a populated acl_gate (omitted or null).
+- acl_context=false → every result carries the acl_gate key, set to null.
 - acl_context omitted → HTTP 200 with a results list, no error.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ _QUERY = "programming language"
 
 
 def test_s309_acl_context_toggles_acl_gate(tmp_path, monkeypatch) -> None:
-    """acl_context=true attaches acl_gate; false/omitted does not error and does not attach it."""
+    """acl_context=true attaches acl_gate; false leaves it null; omitted does not error."""
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
@@ -69,9 +69,12 @@ def test_s309_acl_context_toggles_acl_gate(tmp_path, monkeypatch) -> None:
         assert resp.status_code == 200, (
             f"POST /search (acl_context=false) returned {resp.status_code}: {resp.text}"
         )
-        for r in resp.json()["results"]:
-            assert r.get("acl_gate") is None, (
-                f"acl_gate must be omitted or null when acl_context=false; got {r.get('acl_gate')!r}"
+        results_false = resp.json()["results"]
+        assert results_false, "expected at least one result for the acl_context=false query"
+        for r in results_false:
+            assert "acl_gate" in r, f"acl_gate key must always be serialized; got keys {sorted(r)!r}"
+            assert r["acl_gate"] is None, (
+                f"acl_gate must be null when acl_context=false; got {r['acl_gate']!r}"
             )
 
         # Step 4: acl_context omitted entirely → 200 with a results list.

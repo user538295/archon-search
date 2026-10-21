@@ -901,11 +901,19 @@ class ImpactGroupResponse(BaseModel):
 
 
 class AclGateSchema(BaseModel):
-    """ACL provenance envelope returned per search result when acl_context=true (g15 BE-5).
+    """ACL provenance envelope attached to a result (g15 BE-5 / BE-7).
 
-    Present only when the caller requests ``acl_context=true`` in ``POST /search``.
-    ``warnings`` is always a non-null list (C3); the other fields may be null for
-    pre-G15 chunks whose provenance was not recorded.
+    ``POST /search``: every result always serializes the ``acl_gate`` key — this
+    object when the request sets ``acl_context=true``, ``null`` otherwise.
+    ``POST /explain`` (and the MCP ``explain`` tool): every top-level result always
+    carries this object, no flag required; ``near_misses`` entries never carry it.
+    ``warnings`` is always a non-null list (C3). ``allowed_principals`` is null when
+    no ACL applies to the chunk (open to all), including fail-open cases reported in
+    ``warnings``. ``source`` is null when no provenance is stored (pre-G15 chunks, or
+    a collection without the provenance columns) or the stored value is unrecognised;
+    graph-sourced candidates (communities, PPR) carry the same stored provenance as
+    hybrid hits. ``sidecar_path`` is non-null only when ``source`` is ``"sidecar"``,
+    even if that sidecar was ignored.
     """
 
     allowed_principals: list[str] | None = None
