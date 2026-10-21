@@ -80,6 +80,7 @@ def _make_loop(
     js = job_store if job_store is not None else MagicMock()
     ss = search_store if search_store is not None else MagicMock()
     return MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=js,
         search_store=ss,
         config=cfg,
@@ -428,11 +429,6 @@ async def test_run_one_pass_includes_prune_policy(tmp_path: Path) -> None:
 
     loop = _make_loop(tmp_path, prune_expired_chunks=True, search_store=ss)
 
-    fts_mock = AsyncMock()
-    orphan_mock = AsyncMock()
-    prune_mock = AsyncMock()
-    retry_mock = AsyncMock()
-
     call_order: list[str] = []
 
     async def _fts(col: str, ns: str) -> None:
@@ -539,7 +535,6 @@ async def test_run_one_pass_preserves_last_expired_pruned_at_when_disabled(
             "last_run_at": None,
             "next_run_at": None,
             "collection_health": {},
-            "retry_counts": {},
             "last_expired_pruned_at": prev_ts,
         }),
         encoding="utf-8",
@@ -658,6 +653,7 @@ async def test_maintenance_loop_prune_deletes_expired_and_updates_state(
             prune_expired_chunks=True,
         )
         loop = MaintenanceLoop(
+            dispatch_retry=lambda _job: None,
             job_store=job_store,
             search_store=store,
             config=cfg,

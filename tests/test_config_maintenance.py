@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.config import MaintenanceConfig, SearchConfig, load_config
+from archon_search.config import load_config
 
 
 @pytest.fixture
@@ -89,11 +89,12 @@ def test_retry_max_age_hours_zero_emits_warning(
         config = load_config(path=cfg_path)
 
     assert config.maintenance.retry_max_age_hours == 0
-    assert any(
-        "retry_max_age_hours" in record.message
-        for record in caplog.records
-        if record.levelno == logging.WARNING
-    ), f"Expected WARNING mentioning retry_max_age_hours; got: {[r.message for r in caplog.records]}"
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING and "retry_max_age_hours" in r.message]
+    assert warnings, f"Expected WARNING mentioning retry_max_age_hours; got: {[r.message for r in caplog.records]}"
+    # Precise about what is expired: excluded collections' failures, and failures a newer non-FAILED job
+    # supersedes, stay FAILED (a newer FAILED job is the chain end, which expires every failure of the file).
+    assert "excluded" in warnings[0]
+    assert "superseded by a newer pending, running, successful or client-cancelled job" in warnings[0]
 
 
 # ---------------------------------------------------------------------------

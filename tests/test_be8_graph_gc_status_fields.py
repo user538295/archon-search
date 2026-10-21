@@ -10,7 +10,6 @@ Covers:
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -19,7 +18,6 @@ import pytest
 from archon_search.config import GraphConfig, SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
-from archon_search.jobs.store import JobStore
 from archon_search.server.schemas import (
     GraphCollectionStats,
     GraphStatusDetail,
@@ -143,7 +141,6 @@ async def test_build_graph_status_reads_communities_invalidated_from_state() -> 
                 "orphans_removed_last_run": 0,
             }
         },
-        "retry_counts": {},
         "last_expired_pruned_at": None,
         "last_graph_gc_at": "2026-07-05T10:00:00+00:00",
         "stale_mention_count": 5,
@@ -187,7 +184,6 @@ async def test_build_graph_status_reads_communities_invalidated_both_true_and_fa
                 "communities_invalidated": invalidated,
             }
         },
-        "retry_counts": {},
         "last_expired_pruned_at": None,
         "last_graph_gc_at": None,
         "stale_mention_count": 0,
@@ -223,7 +219,6 @@ async def test_build_graph_status_communities_invalidated_defaults_false_when_no
         "last_run_at": None,
         "next_run_at": None,
         "collection_health": {},
-        "retry_counts": {},
         "last_expired_pruned_at": None,
         "last_graph_gc_at": None,
         "stale_mention_count": 0,
@@ -257,7 +252,6 @@ async def test_build_graph_status_stale_mention_count_from_state() -> None:
         "last_run_at": None,
         "next_run_at": None,
         "collection_health": {},
-        "retry_counts": {},
         "last_expired_pruned_at": None,
         "last_graph_gc_at": None,
         "stale_mention_count": 17,
@@ -319,6 +313,7 @@ async def test_build_maintenance_status_last_graph_gc_at_from_state(tmp_path: Pa
     mock_store.count_expired_chunks = AsyncMock(return_value=0)
 
     loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=MagicMock(),
         search_store=mock_store,
         config=config.maintenance,
@@ -328,7 +323,6 @@ async def test_build_maintenance_status_last_graph_gc_at_from_state(tmp_path: Pa
         "last_run_at": gc_ts,
         "next_run_at": None,
         "collection_health": {},
-        "retry_counts": {},
         "last_expired_pruned_at": None,
         "last_graph_gc_at": gc_ts,
         "stale_mention_count": 0,
@@ -361,6 +355,7 @@ async def test_build_maintenance_status_entry_has_documented_fields(tmp_path: Pa
     mock_store.count_expired_chunks = AsyncMock(return_value=0)
 
     loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=MagicMock(),
         search_store=mock_store,
         config=config.maintenance,
@@ -377,7 +372,6 @@ async def test_build_maintenance_status_entry_has_documented_fields(tmp_path: Pa
                 "communities_invalidated": True,
             }
         },
-        "retry_counts": {},
     })
 
     mock_request = MagicMock()
@@ -405,6 +399,7 @@ async def test_build_maintenance_status_last_graph_gc_at_null_before_gc(tmp_path
     mock_store.count_expired_chunks = AsyncMock(return_value=0)
 
     loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=MagicMock(),
         search_store=mock_store,
         config=config.maintenance,
@@ -504,7 +499,6 @@ async def test_get_status_graph_fields_after_gc(
                     "expired_chunks_removed_last_run": 0,
                 }
             },
-            "retry_counts": {},
             "last_expired_pruned_at": None,
             "last_graph_gc_at": gc_ts,
             "stale_mention_count": 3,

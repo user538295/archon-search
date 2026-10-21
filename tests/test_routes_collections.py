@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+from collections.abc import Iterable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,8 @@ from archon_search.server.app import create_app
 from archon_search.server.routes_collections import INGEST_IN_PROGRESS_DETAIL, INGEST_JOB_IN_PROGRESS_DETAIL_TEMPLATE
 from archon_search.store import StoreBusyError
 from archon_search.sync import path_to_collection_name
-from archon_search.types import IngestJob, ReindexJob
+from archon_search.types import ExportJob, IngestJob, IngestOptions, ReindexJob
+from tests._parked_lock import parked_waiters, reaping, until_parked
 
 
 @pytest.fixture
@@ -1558,7 +1560,7 @@ def test_delete_collection_200_when_reindex_running(
 ) -> None:
     """DELETE is not blocked by a RUNNING ReindexJob — subclasses are intentionally excluded.
 
-    This pins the ``type(j) is IngestJob`` exact-type check as deliberate: changing it to
+    This pins the ``is_base_ingest`` exact-type check as deliberate: changing it to
     isinstance would block DELETE while a ReindexJob (or another IngestJob subclass) runs.
     """
     src = tmp_path / "reindex_running_col"
@@ -1674,9 +1676,9 @@ def test_delete_collection_200_when_no_active_ingest_on_collection(
 ) -> None:
     """DELETE drops the collection when no base IngestJob is RUNNING/CANCELLING on it.
 
-    PENDING is excluded (a REST ingest holds the lock while PENDING; a maintenance-retry PENDING job
-    has no dispatcher), terminal and queued jobs write nothing, and a RUNNING ingest on another
-    collection is irrelevant.
+    PENDING is excluded (a REST ingest and a maintenance retry both hold or wait for the lock while
+    PENDING), terminal and queued jobs write nothing, and a RUNNING ingest on another collection is
+    irrelevant.
     """
     app, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
     job_collection = name if same_collection else f"{name}-other"
@@ -1689,6 +1691,142 @@ def test_delete_collection_200_when_no_active_ingest_on_collection(
     mock_search_store.drop_collection.assert_awaited_once()
     mock_search_store.delete_collection_meta.assert_awaited_once_with(name, "default")
     assert app.state.config.collections == []
+
+
+def _seed_retry_candidates(tmp_store: JobStore, name: str) -> dict[str, IngestJob]:
+    """Base ingest jobs a DELETE of *name* (namespace ``default``) may or may not end, keyed by job id."""
+    jobs = {
+        "failed": _ingest_job("failed", JobStatus.FAILED, name),
+        "pending": _ingest_job("pending", JobStatus.PENDING, name),
+        "done": _ingest_job("done", JobStatus.DONE, name),
+        "other-collection": _ingest_job("other-collection", JobStatus.FAILED, f"{name}-other"),
+        "other-namespace": _ingest_job("other-namespace", JobStatus.FAILED, name, namespace="other-team"),
+        "reindex": ReindexJob(
+            job_id="reindex", status=JobStatus.FAILED, created_at=_INGEST_JOB_TIMESTAMP,
+            updated_at=_INGEST_JOB_TIMESTAMP, collection=name,
+        ),
+        "export": ExportJob(
+            job_id="export", status=JobStatus.PENDING, created_at=_INGEST_JOB_TIMESTAMP,
+            updated_at=_INGEST_JOB_TIMESTAMP, collection=name,
+        ),
+    }
+    for job in jobs.values():
+        tmp_store.create_job(job)
+    return jobs
+
+
+def _statuses(tmp_store: JobStore, job_ids: Iterable[str]) -> dict[str, JobStatus]:
+    statuses: dict[str, JobStatus] = {}
+    for job_id in job_ids:
+        job = tmp_store.get(job_id)
+        assert job is not None
+        statuses[job_id] = job.status
+    return statuses
+
+
+def test_delete_collection_ends_its_maintenance_retries(tmp_path: Path, tmp_store: JobStore) -> None:
+    """A DELETE that drops the collection stops every maintenance retry from re-creating it: its FAILED base ingest
+    jobs (never retried) and PENDING ones (a retry waiting for the collection lock DELETE holds, whose claim is then
+    refused) end CANCELLED — in every namespace, as the dropped table is shared by name — not FAILED_EXPIRED, which
+    would count as a failed ingest to re-submit. Other statuses, collections and subclass jobs are left as they are."""
+    _, client, _, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    jobs = _seed_retry_candidates(tmp_store, name)
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 200, response.text
+    assert _statuses(tmp_store, jobs) == {
+        "failed": JobStatus.CANCELLED,
+        "pending": JobStatus.CANCELLED,
+        "done": JobStatus.DONE,
+        "other-collection": JobStatus.FAILED,
+        "other-namespace": JobStatus.CANCELLED,
+        "reindex": JobStatus.FAILED,
+        "export": JobStatus.PENDING,
+    }
+
+
+def test_delete_collection_keeps_retries_when_the_drop_fails(tmp_path: Path, tmp_store: JobStore) -> None:
+    """A failed table drop leaves the collection in place, so its retries are left as they are."""
+    _, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    mock_search_store.drop_collection = AsyncMock(side_effect=RuntimeError("drop failed"))
+    jobs = _seed_retry_candidates(tmp_store, name)
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 500
+    assert _statuses(tmp_store, jobs) == {job_id: job.status for job_id, job in jobs.items()}
+
+
+def test_delete_collection_succeeds_when_ending_retries_fails(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Ending the retries is auxiliary: a failed job-store write is logged at WARNING, the jobs keep their statuses
+    and the DELETE still succeeds."""
+    from tests._job_store_faults import failing_job_writes
+
+    _, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    jobs = _seed_retry_candidates(tmp_store, name)
+
+    with failing_job_writes(), caplog.at_level("WARNING", logger="archon_search.jobs.store"):
+        response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 200, response.text
+    mock_search_store.delete_collection_meta.assert_awaited_once_with(name, "default")
+    assert _statuses(tmp_store, jobs) == {job_id: job.status for job_id, job in jobs.items()}
+    assert any(
+        f"could not cancel the ingest jobs of dropped collection {name}" in r.getMessage() for r in caplog.records
+    )
+
+
+async def test_delete_collection_cancels_a_retry_parked_on_its_lock(tmp_path: Path, tmp_store: JobStore) -> None:
+    """A real DELETE racing a maintenance retry over ONE shared collection lock: the DELETE holds the lock while it
+    drops the table, the retry dispatched meanwhile parks on that lock still PENDING, the DELETE cancels it, and once
+    the lock frees the retry's claim is refused — it ends CANCELLED and never ingests into the dropped collection."""
+    import httpx
+
+    from archon_search.server.routes_jobs import make_retry_dispatcher
+
+    app, _, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    lock = asyncio.Lock()
+    mock_search_store.lock_for = MagicMock(return_value=lock)
+    dropping, finish_drop = asyncio.Event(), asyncio.Event()
+
+    async def drop_collection(*_args: Any, **_kwargs: Any) -> None:
+        dropping.set()
+        await finish_drop.wait()
+
+    mock_search_store.drop_collection = AsyncMock(side_effect=drop_collection)
+    pipeline_fn = AsyncMock()
+    app.state.ingest_pipeline = pipeline_fn
+    app.state._background_tasks = set()
+    retry = tmp_store.create(
+        source="maintenance", path="/data/doc.md", collection=name,
+        ingest_options=IngestOptions(submitted_path="/data/doc.md", ingested_by="http"),
+    )
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Authorization": f"Bearer {key}"}
+    ) as client:
+        delete_task = asyncio.create_task(client.delete(f"/collections/{name}"))
+        async with reaping({delete_task}), reaping(app.state._background_tasks):
+            await asyncio.wait_for(dropping.wait(), timeout=5.0)
+            assert lock.locked(), "precondition: DELETE holds the collection lock while it drops the table"
+            make_retry_dispatcher(app.state)(retry)
+            (retry_task,) = app.state._background_tasks
+            await until_parked(lock)  # the retry parks on the lock DELETE holds
+            finish_drop.set()
+            response = await asyncio.wait_for(delete_task, timeout=5.0)
+            await asyncio.wait_for(retry_task, timeout=5.0)
+
+    assert response.status_code == 200, response.text
+    final = tmp_store.get(retry.job_id)
+    assert final is not None
+    assert final.status == JobStatus.CANCELLED
+    pipeline_fn.assert_not_awaited()
+    assert not lock.locked()
+    assert parked_waiters(lock) == 0
 
 
 def test_delete_collection_200_without_job_store(tmp_path: Path, tmp_store: JobStore) -> None:
@@ -2910,11 +3048,11 @@ def test_add_collection_uses_validator_returned_path(
         captured.append(body.path)
 
     monkeypatch.setattr(
-        "archon_search.server.routes_collections._default_ingest_task",
+        "archon_search.server.routes_jobs._default_ingest_task",
         _capturing_ingest_task,
     )
     monkeypatch.setattr(
-        "archon_search.server.routes_collections._default_ingest_task_with_lock",
+        "archon_search.server.routes_jobs._default_ingest_task_with_lock",
         _capturing_ingest_task,
     )
 
@@ -2974,10 +3112,8 @@ def test_add_collection_ingest_body_keeps_the_submitted_path(
     async def _capturing_ingest_task(job_id, store, body, **kwargs):  # type: ignore[no-untyped-def]
         captured.append(body)
 
-    monkeypatch.setattr("archon_search.server.routes_collections._default_ingest_task", _capturing_ingest_task)
-    monkeypatch.setattr(
-        "archon_search.server.routes_collections._default_ingest_task_with_lock", _capturing_ingest_task
-    )
+    monkeypatch.setattr("archon_search.server.routes_jobs._default_ingest_task", _capturing_ingest_task)
+    monkeypatch.setattr("archon_search.server.routes_jobs._default_ingest_task_with_lock", _capturing_ingest_task)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 

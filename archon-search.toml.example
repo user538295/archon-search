@@ -412,7 +412,10 @@ num_queries = 2
 # URL-sourced, inline-ingested and imported chunks are skipped.
 # orphan_cleanup = true
 #
-# Enable automatic re-enqueue of failed IngestJobs within the retry age and attempt limits.
+# Enable automatic re-enqueue of failed IngestJobs within the retry age and attempt limits. Each retry
+# runs like POST /ingest on the job's source_path (only the newest failed job per file), with the
+# original request's chunk_ttl_seconds, chunk_scopes and X-Ingested-By. A failed ingest saved by an
+# older server (no stored request) is expired instead, never retried.
 # failed_ingest_retry = true
 #
 # Enable automatic pruning of expired chunks (chunks whose expires_at < now_utc).
@@ -423,10 +426,12 @@ num_queries = 2
 # nodes and unsupported mention-derived edges). false skips GC on every pass, manual included.
 # graph_gc = true
 #
-# Maximum number of retry attempts per source file per collection before giving up.
+# Maximum number of retry attempts per submission of a source file, per collection, before giving up
+# (a new POST /ingest of the file starts over).
 # retry_max_attempts = 3
 #
-# Only retry failed IngestJobs created within this many hours ago.
+# Only retry failed IngestJobs whose original request was made within this many hours ago
+# (the window does not restart with each retry).
 # retry_max_age_hours = 72
 #
 # Collections to exclude from maintenance passes. Accepts bare names (matches across

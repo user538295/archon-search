@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -11,16 +12,20 @@ from typing import Any
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
+from starlette.datastructures import State
 
 from archon_search._types import IngestResult
 from archon_search.collection_meta import CollectionMeta
-from archon_search.config import SearchConfig
+from archon_search.config import MaintenanceConfig, SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderNotReadyError
+from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.model import JobStatus, job_to_dict
-from archon_search.jobs.store import JobStore
+from archon_search.jobs.store import NOT_STARTED_BEFORE_RESTART_DETAIL, PROCESS_RESTART_ERROR, JobStore
 from archon_search.server.app import create_app
 from archon_search.server.routes_jobs import (
     INGEST_FAILED_DETAIL,
@@ -31,9 +36,11 @@ from archon_search.server.routes_jobs import (
     _default_ingest_task_with_lock,
     _reindex_task,
     _run_pipeline,
+    make_retry_dispatcher,
 )
-from archon_search.types import IngestJob, MigrationKind, ReindexJob
+from archon_search.types import IngestJob, IngestOptions, MigrationKind, ReindexJob
 from tests._internal_error_leak import LEAK_NEEDLE, assert_logged_with_traceback, permission_error
+from tests._parked_lock import parked_waiters, reaping, until_parked
 
 
 def _running_ingest_job(job_id: str) -> IngestJob:
@@ -2857,3 +2864,514 @@ async def test_ingest_task_running_claim_persist_failure_marks_failed_without_in
     assert final.error == INGEST_FAILED_DETAIL
     assert [before for before, written in status_writes if written == JobStatus.FAILED] == [JobStatus.PENDING]
     pipeline_fn.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# make_retry_dispatcher — runs an already-created PENDING IngestJob (a MaintenanceLoop retry)
+# ---------------------------------------------------------------------------
+
+_RETRY_OPTIONS = IngestOptions(
+    submitted_path="~/retry.md", ingested_by="cli", chunk_ttl_seconds=3600, chunk_scopes=("team-a",)
+)
+#: ``_RETRY_OPTIONS`` as the pipeline receives them.
+_RETRY_PIPELINE_KWARGS: dict[str, Any] = {"ingested_by": "cli", "chunk_ttl_seconds": 3600, "chunk_scopes": ["team-a"]}
+
+
+def _create_retry_job(
+    store: JobStore,
+    path: str = "/data/retry.md",
+    *,
+    namespace: str = DEFAULT_NAMESPACE,
+    options: IngestOptions = _RETRY_OPTIONS,
+) -> IngestJob:
+    """A PENDING maintenance retry job carrying the original request's *options*."""
+    return store.create(
+        namespace=namespace, source="maintenance", path=path, collection="docs", ingest_options=options
+    )
+
+
+def _retry_app_state(store: JobStore, **attrs: Any) -> State:
+    return State({"job_store": store, "_background_tasks": set(), **attrs})
+
+
+async def _run_dispatched(state: State, job: IngestJob) -> None:
+    make_retry_dispatcher(state)(job)
+    (task,) = state._background_tasks
+    await task
+
+
+def test_ingest_persists_request_options_for_a_retry_off_the_wire(client: TestClient, tmp_store: JobStore) -> None:
+    """POST /ingest stores the options a maintenance retry must re-apply on the job — never in its wire shape."""
+    response = client.post(
+        "/ingest",
+        json={"collection": "docs", "path": "~/missing-retry-doc.md", "chunk_ttl_seconds": 3600, "chunk_scopes": ["team-a"]},
+        headers={"X-Ingested-By": "cli"},
+    )
+
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    job = tmp_store.get(job_id)
+    assert job is not None
+    assert job.source_path == str(Path("~/missing-retry-doc.md").expanduser().resolve())
+    assert job.ingest_options == IngestOptions(
+        submitted_path="~/missing-retry-doc.md", ingested_by="cli", chunk_ttl_seconds=3600, chunk_scopes=("team-a",)
+    )
+    listed = [item for item in client.get("/jobs").json()["items"] if item["job_id"] == job_id]
+    for wire_job in (response.json(), client.get(f"/jobs/{job_id}").json(), *listed):
+        assert "source_path" in wire_job, "presence anchor: the wire job shape was read"
+        assert not {"ingest_options", "submitted_path", "chunk_scopes", "chunk_ttl_seconds"} & set(wire_job)
+    assert len(listed) == 1
+
+
+def test_inline_ingest_stores_no_ingest_options(client: TestClient, tmp_store: JobStore) -> None:
+    """An inline (``documents``) ingest has no path a retry could re-read, so it stores no options."""
+    response = client.post(
+        "/ingest", json={"collection": "docs", "documents": [{"text": "hi", "source_path": "/virtual/a.md"}]}
+    )
+
+    assert response.status_code == 202
+    job = tmp_store.get(response.json()["job_id"])
+    assert job is not None
+    assert job.ingest_options is None
+
+
+@pytest.mark.anyio
+async def test_retry_dispatcher_runs_pending_job_with_its_request_options(tmp_path: Path) -> None:
+    """The dispatched job runs through POST /ingest's ingest task — claimed RUNNING, DONE — on the request the
+    original ingest made: its path as submitted and resolved, ``ingested_by``, TTL and scopes."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = _create_retry_job(store, namespace="tenantA")
+    seen: dict[str, Any] = {}
+
+    async def pipeline_fn(job_id: str, s: JobStore, body: IngestRequest, **kwargs: Any) -> None:
+        claimed = s.get(job_id)
+        assert claimed is not None
+        seen.update(status=claimed.status, body=body, namespace=kwargs["namespace"])
+
+    state = _retry_app_state(store, ingest_pipeline=pipeline_fn)
+    await _run_dispatched(state, job)
+
+    body: IngestRequest = seen["body"]
+    assert (seen["status"], seen["namespace"]) == (JobStatus.RUNNING, "tenantA")
+    assert (body.collection, body.path, body.submitted_path) == ("docs", "/data/retry.md", "~/retry.md")
+    assert (body.ingested_by, body.chunk_ttl_seconds, body.chunk_scopes) == ("cli", 3600, ["team-a"])
+    final = store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.DONE
+    assert state._background_tasks == set(), "the finished task must be discarded from app.state._background_tasks"
+
+
+@pytest.mark.anyio
+async def test_retry_dispatcher_reads_app_state_when_a_job_is_dispatched(tmp_path: Path) -> None:
+    """The dispatcher is built before the lifespan fills app.state, so it must read app.state at dispatch time."""
+    state = State()
+    dispatch = make_retry_dispatcher(state)
+    store = JobStore(path=tmp_path / "jobs.json")
+    state.job_store, state._background_tasks, state.ingest_pipeline = store, set(), AsyncMock()
+    job = _create_retry_job(store)
+
+    dispatch(job)
+    (task,) = state._background_tasks
+    await task
+
+    state.ingest_pipeline.assert_awaited_once()
+    final = store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.DONE
+
+
+@pytest.mark.anyio
+async def test_retry_dispatcher_production_branch_ingests_with_request_options(tmp_path: Path) -> None:
+    """With the real dependencies wired (no ``ingest_pipeline`` hook), the retry ingests its file through the
+    pipeline with the original request's options, under the collection lock it then releases."""
+    doc = tmp_path / "retry.md"
+    doc.write_text("retry me", encoding="utf-8")
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = _create_retry_job(store, str(doc))
+    search_store, embedder_cache, pipeline, config, fake_embedder = _make_ingest_mocks()
+    lock = asyncio.Lock()
+    search_store.lock_for = MagicMock(return_value=lock)
+    state = _retry_app_state(
+        store, search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config
+    )
+
+    await _run_dispatched(state, job)
+
+    pipeline.ingest_file.assert_awaited_once_with(
+        doc, "docs", embedder=fake_embedder, namespace=DEFAULT_NAMESPACE, **_RETRY_PIPELINE_KWARGS
+    )
+    search_store.lock_for.assert_called_once_with("docs")
+    assert not lock.locked()
+    final = store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.DONE
+
+
+def _parked_retry(
+    store: JobStore, lock: asyncio.Lock, **attrs: Any
+) -> tuple[State, IngestJob, AsyncMock]:
+    """App state whose collection lock is *lock*, a PENDING retry job, and the ``ingest_pipeline`` hook it would run."""
+    search_store = MagicMock()
+    search_store.lock_for = MagicMock(return_value=lock)
+    pipeline_fn = AsyncMock()
+    state = _retry_app_state(store, search_store=search_store, ingest_pipeline=pipeline_fn, **attrs)
+    return state, _create_retry_job(store), pipeline_fn
+
+
+@pytest.mark.anyio
+async def test_retry_dispatcher_takes_collection_lock_before_claiming(tmp_path: Path) -> None:
+    """A retry waits for the collection lock while still PENDING, so a cancel landing meanwhile (CANCELLING) is
+    honoured: once the lock frees, the claim is refused and the job ends CANCELLED without ingesting."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    lock = asyncio.Lock()
+    state, job, pipeline_fn = _parked_retry(store, lock)
+
+    await lock.acquire()  # held by another writer
+    async with reaping(state._background_tasks):
+        make_retry_dispatcher(state)(job)
+        (task,) = state._background_tasks
+        await until_parked(lock)
+        waiting = store.get(job.job_id)
+        assert waiting is not None
+        assert waiting.status == JobStatus.PENDING, "the claim must wait for the collection lock"
+        store.transition(job.job_id, {JobStatus.PENDING}, JobStatus.CANCELLING)
+        lock.release()
+        await task
+
+    final = store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.CANCELLED
+    pipeline_fn.assert_not_awaited()
+    assert not lock.locked()
+
+
+@pytest.mark.anyio
+async def test_retry_dispatcher_waits_for_the_lock_without_a_timeout(tmp_path: Path) -> None:
+    """A background retry is no HTTP request: it awaits the lock itself — never under ``asyncio.wait_for`` /
+    ``asyncio.timeout`` — so it waits past the lock-wait bound (``INGEST_LOCK_TIMEOUT_S``) instead of failing:
+    contention never burns an attempt. It runs once the lock frees."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    lock = asyncio.Lock()
+    state, job, pipeline_fn = _parked_retry(store, lock)
+    timeout_used = AssertionError("the retry's lock wait must not be bounded")
+
+    await lock.acquire()
+    async with reaping(state._background_tasks):
+        with (
+            patch("archon_search.constants.INGEST_LOCK_TIMEOUT_S", 0.01),
+            patch("asyncio.wait_for", side_effect=timeout_used),
+            patch("asyncio.timeout", side_effect=timeout_used),
+        ):
+            make_retry_dispatcher(state)(job)
+            (task,) = state._background_tasks
+            await until_parked(lock)
+            await asyncio.sleep(0.05)  # five lock-wait bounds
+            assert not task.done()
+            assert parked_waiters(lock) == 1
+            waiting = store.get(job.job_id)
+            assert waiting is not None
+            assert waiting.status == JobStatus.PENDING
+        lock.release()
+        await task
+
+    final = store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.DONE
+    pipeline_fn.assert_awaited_once()
+    assert not lock.locked()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("cancel_requested", "expected"),
+    [(False, JobStatus.PENDING), (True, JobStatus.CANCELLED)],
+    ids=["shutdown", "shutdown-after-cancel-request"],
+)
+async def test_retry_dispatcher_cancelled_while_parked(
+    tmp_path: Path, cancel_requested: bool, expected: JobStatus
+) -> None:
+    """Cancelling the task parked on the lock (lifespan shutdown) runs nothing and leaves the lock neither held nor
+    waited on. A shutdown is no client's cancel, so the job stays PENDING (the restart's recovery marks it FAILED
+    "never started", which stays retryable); a cancel a client already requested (CANCELLING) ends CANCELLED."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    lock = asyncio.Lock()
+    state, job, pipeline_fn = _parked_retry(store, lock)
+
+    await lock.acquire()
+    async with reaping(state._background_tasks):
+        make_retry_dispatcher(state)(job)
+        (task,) = state._background_tasks
+        await until_parked(lock)
+        if cancel_requested:
+            store.transition(job.job_id, {JobStatus.PENDING}, JobStatus.CANCELLING, cancel_requested=True)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    final = store.get(job.job_id)
+    assert final is not None
+    assert final.status == expected
+    pipeline_fn.assert_not_awaited()
+    assert parked_waiters(lock) == 0
+    lock.release()
+    assert not lock.locked()
+
+
+@pytest.mark.anyio
+async def test_retry_dispatcher_shutdown_cancel_never_overwrites_a_settled_job(tmp_path: Path) -> None:
+    """The cancel write is a guarded transition from CANCELLING only: a parked job some other writer already made
+    terminal keeps that status."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    lock = asyncio.Lock()
+    state, job, _ = _parked_retry(store, lock)
+
+    await lock.acquire()
+    async with reaping(state._background_tasks):
+        make_retry_dispatcher(state)(job)
+        (task,) = state._background_tasks
+        await until_parked(lock)
+        store.update(job.job_id, status=JobStatus.FAILED_EXPIRED)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    final = store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.FAILED_EXPIRED
+
+
+def _failed_original(store: JobStore) -> IngestJob:
+    """The client's FAILED POST /ingest job a maintenance retry descends from."""
+    original = store.create(path="/data/retry.md", collection="docs", ingest_options=_RETRY_OPTIONS)
+    return store.update(original.job_id, status=JobStatus.FAILED, error="ingest failed")
+
+
+def _retry_loop(store: JobStore, tmp_path: Path, dispatch: MagicMock) -> MaintenanceLoop:
+    return MaintenanceLoop(
+        job_store=store, search_store=MagicMock(), config=MaintenanceConfig(), data_dir=tmp_path,
+        dispatch_retry=dispatch,
+    )
+
+
+def _app_with_parked_retry(
+    tmp_path: Path, store: JobStore, lock: asyncio.Lock
+) -> tuple[Any, IngestJob, AsyncMock]:
+    """A real app sharing *store* whose collection lock is *lock*, plus a PENDING retry job (attempt 1) and the
+    ``ingest_pipeline`` hook it would run."""
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, store)
+    pipeline_fn = AsyncMock()
+    app.state.search_store = MagicMock(lock_for=MagicMock(return_value=lock))
+    app.state.ingest_pipeline = pipeline_fn
+    app.state._background_tasks = set()
+    retry = store.create(
+        source="maintenance", path="/data/retry.md", collection="docs", ingest_options=_RETRY_OPTIONS, retry_count=1
+    )
+    return app, retry, pipeline_fn
+
+
+async def _delete_job(app: Any, auth_headers: dict[str, str], job_id: str) -> httpx.Response:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=auth_headers
+    ) as http:
+        return await http.delete(f"/jobs/{job_id}")
+
+
+@pytest.mark.anyio
+async def test_delete_job_while_retry_parked_ends_the_retry_chain(
+    tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]
+) -> None:
+    """DELETE /jobs/{id} on a retry parked on the collection lock answers 202 CANCELLING; once the lock frees the job
+    ends CANCELLED and runs nothing. The client's cancel supersedes the FAILED original it retries, so no maintenance
+    pass starts another retry — neither while the cancel settles nor after."""
+    original = _failed_original(tmp_store)
+    lock = asyncio.Lock()
+    app, retry, pipeline_fn = _app_with_parked_retry(tmp_path, tmp_store, lock)
+    dispatch = MagicMock()
+    loop = _retry_loop(tmp_store, tmp_path, dispatch)
+
+    await lock.acquire()
+    async with reaping(app.state._background_tasks):
+        make_retry_dispatcher(app.state)(retry)
+        (task,) = app.state._background_tasks
+        await until_parked(lock)
+        response = await _delete_job(app, auth_headers, retry.job_id)
+        assert (response.status_code, response.json()["status"]) == (202, JobStatus.CANCELLING.value)
+        await loop._run_failed_ingest_retry({})  # the cancel is still settling
+        lock.release()
+        await task
+    await loop._run_failed_ingest_retry({})
+
+    final = tmp_store.get(retry.job_id)
+    assert final is not None
+    assert final.status == JobStatus.CANCELLED
+    pipeline_fn.assert_not_awaited()
+    dispatch.assert_not_called()
+    assert sorted(j.job_id for j in tmp_store.list()) == sorted([original.job_id, retry.job_id])
+    kept = tmp_store.get(original.job_id)
+    assert kept is not None
+    assert kept.status == JobStatus.FAILED, "superseded, not rewritten"
+
+    # Positive control: the same CANCELLED retry without the client's cancel request (as a shutdown writes it)
+    # leaves the chain open, so the pass retries — the cancel request alone stopped it above.
+    tmp_store.update(retry.job_id, cancel_requested=False)
+    await loop._run_failed_ingest_retry({})
+    dispatch.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_shutdown_while_retry_parked_is_retried_after_restart_recovery(tmp_path: Path) -> None:
+    """A shutdown never ends a retry chain: the parked retry stays PENDING, the restart's recovery marks it FAILED
+    "never started", and the next pass retries it as the next attempt with the same options."""
+    jobs_path = tmp_path / "jobs.json"
+    store = JobStore(path=jobs_path)
+    _failed_original(store)
+    lock = asyncio.Lock()
+    app, retry, _ = _app_with_parked_retry(tmp_path, store, lock)
+
+    await lock.acquire()
+    async with reaping(app.state._background_tasks):
+        make_retry_dispatcher(app.state)(retry)
+        (task,) = app.state._background_tasks
+        await until_parked(lock)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    restarted = JobStore(path=jobs_path)
+    recovered = restarted.get(retry.job_id)
+    assert recovered is not None
+    assert (recovered.status, recovered.error) == (JobStatus.FAILED, NOT_STARTED_BEFORE_RESTART_DETAIL)
+    assert not restarted.crashed_ingest_on_load
+    dispatch = MagicMock()
+    await _retry_loop(restarted, tmp_path, dispatch)._run_failed_ingest_retry({})
+
+    (next_retry,) = [c.args[0] for c in dispatch.call_args_list]
+    assert (next_retry.retry_count, next_retry.ingest_options) == (2, _RETRY_OPTIONS)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("user_cancel", "retried"), [(False, True), (True, False)], ids=["shutdown", "user-cancel"])
+async def test_running_retry_cancelled_by_shutdown_stays_retryable_unlike_a_user_cancel(
+    tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str], user_cancel: bool, retried: bool
+) -> None:
+    """A RUNNING retry the shutdown cancels ends CANCELLED as any interrupted ingest does, but that is no client's
+    cancel: the next pass retries the chain again, as the next attempt — the interrupted retry used its attempt. One a
+    client cancelled (DELETE /jobs/{id}) before the shutdown ends the chain. ``cancel_requested`` tells them apart and
+    never reaches the wire."""
+    _failed_original(tmp_store)
+    lock = asyncio.Lock()
+    app, retry, pipeline_fn = _app_with_parked_retry(tmp_path, tmp_store, lock)
+    started = asyncio.Event()
+
+    async def _ingest_until_cancelled(*_: Any, **__: Any) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    pipeline_fn.side_effect = _ingest_until_cancelled
+    async with reaping(app.state._background_tasks):
+        make_retry_dispatcher(app.state)(retry)
+        (task,) = app.state._background_tasks
+        await started.wait()
+        if user_cancel:
+            response = await _delete_job(app, auth_headers, retry.job_id)
+            assert response.status_code == 202
+            assert "cancel_requested" not in response.json()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    final = tmp_store.get(retry.job_id)
+    assert final is not None
+    assert (final.status, final.cancel_requested) == (JobStatus.CANCELLED, user_cancel)
+    dispatch = MagicMock()
+    await _retry_loop(tmp_store, tmp_path, dispatch)._run_failed_ingest_retry({})
+    assert [c.args[0].retry_count for c in dispatch.call_args_list] == ([2] if retried else [])
+
+
+@pytest.mark.anyio
+async def test_delete_job_on_parked_retry_then_crash_loads_as_process_restart(
+    tmp_path: Path, auth_headers: dict[str, str]
+) -> None:
+    """Pins a known limit: a retry a client cancelled while it was parked is still CANCELLING if the process then
+    dies, and the restart cannot tell it never ran — it loads FAILED ``process_restart`` and arms the crash-loop
+    guard. The chain still ends (the client's intent) and nothing is retried."""
+    jobs_path = tmp_path / "jobs.json"
+    store = JobStore(path=jobs_path)
+    _failed_original(store)
+    lock = asyncio.Lock()
+    app, retry, _ = _app_with_parked_retry(tmp_path, store, lock)
+
+    await lock.acquire()
+    async with reaping(app.state._background_tasks):
+        make_retry_dispatcher(app.state)(retry)
+        await until_parked(lock)
+        response = await _delete_job(app, auth_headers, retry.job_id)
+        assert response.status_code == 202
+        # The process dies here: the task never runs again.
+
+        restarted = JobStore(path=jobs_path)
+        recovered = restarted.get(retry.job_id)
+        assert recovered is not None
+        assert (recovered.status, recovered.error) == (JobStatus.FAILED, PROCESS_RESTART_ERROR)
+        assert restarted.crashed_ingest_on_load
+        dispatch = MagicMock()
+        await _retry_loop(restarted, tmp_path, dispatch)._run_failed_ingest_retry({})
+        dispatch.assert_not_called()
+
+
+def test_delete_job_records_the_cancel_request_off_the_wire(
+    tmp_path: Path, client: TestClient, tmp_store: JobStore
+) -> None:
+    """DELETE /jobs/{id} marks the job ``cancel_requested`` (kept in the jobs file) without adding a wire field."""
+    job = tmp_store.create(path="/data/file.md", collection="docs")
+
+    response = client.delete(f"/jobs/{job.job_id}")
+
+    assert response.status_code == 202
+    assert "cancel_requested" not in response.json()
+    assert "cancel_requested" not in client.get(f"/jobs/{job.job_id}").json()
+    rows = {row["job_id"]: row for row in json.loads((tmp_path / "jobs.json").read_text())}
+    assert (rows[job.job_id]["status"], rows[job.job_id]["cancel_requested"]) == (JobStatus.CANCELLING.value, True)
+
+
+def test_retry_dispatcher_rejects_invalid_persisted_options(tmp_path: Path) -> None:
+    """Options that no longer validate as an ``IngestRequest`` raise from the dispatcher (MaintenanceLoop then
+    writes the job FAILED) and spawn no task."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = _create_retry_job(store, options=replace(_RETRY_OPTIONS, chunk_ttl_seconds=0))
+    state = _retry_app_state(store, ingest_pipeline=AsyncMock())
+
+    with pytest.raises(ValidationError):
+        make_retry_dispatcher(state)(job)
+
+    assert state._background_tasks == set()
+
+
+def test_retry_dispatcher_rejects_a_job_without_ingest_options(tmp_path: Path) -> None:
+    """A job whose original request is unknown is never run with request defaults (no scopes would widen access):
+    the dispatcher raises and spawns no task."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create(source="maintenance", path="/data/retry.md", collection="docs")
+    state = _retry_app_state(store, ingest_pipeline=AsyncMock())
+
+    with pytest.raises(ValueError, match="no ingest options"):
+        make_retry_dispatcher(state)(job)
+
+    assert state._background_tasks == set()
+
+
+@pytest.mark.anyio
+async def test_retry_dispatcher_failure_is_sanitized(tmp_path: Path) -> None:
+    """A failing dispatched ingest ends FAILED with the sanitized detail, never the exception text."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = _create_retry_job(store)
+    state = _retry_app_state(store, ingest_pipeline=AsyncMock(side_effect=RuntimeError(LEAK_NEEDLE)))
+
+    await _run_dispatched(state, job)
+
+    final = store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.FAILED
+    assert final.error == INGEST_FAILED_DETAIL

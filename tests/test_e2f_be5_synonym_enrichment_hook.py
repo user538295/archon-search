@@ -15,8 +15,7 @@ Tests:
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -88,6 +87,7 @@ def _make_maintenance_loop(tmp_path, graph_store=None, graph_config=None):
     config.failed_ingest_retry = False
 
     loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=job_store,
         search_store=search_store,
         config=config,
@@ -200,7 +200,6 @@ def test_pipeline_calls_on_synonym_edges_written_after_write_graph(tmp_path):
     when the callback is set and graph extraction succeeds.
     """
     import asyncio
-    from pathlib import Path
 
     from archon_search.config import GraphConfig
     from archon_search.graph_types import GraphExtractionResult
@@ -292,7 +291,6 @@ def test_pipeline_calls_on_synonym_edges_written_after_write_graph(tmp_path):
 def test_synonym_enrichment_gated_by_enrichment_auto_false(tmp_path):
     """When enrichment_auto=False, on_synonym_edges_written is NOT called after ingest."""
     import asyncio
-    from pathlib import Path
 
     from archon_search.config import GraphConfig
     from archon_search.graph_types import GraphExtractionResult
@@ -381,7 +379,6 @@ def test_synonym_enrichment_failure_does_not_propagate(tmp_path):
     """Exception in the synonym enrichment path is caught, WARNING logged, result returned ok."""
     import asyncio
     import logging
-    from pathlib import Path
 
     from archon_search.config import GraphConfig
     from archon_search.graph_types import GraphExtractionResult

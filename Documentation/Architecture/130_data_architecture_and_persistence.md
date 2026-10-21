@@ -35,7 +35,7 @@ In the table below, paths are relative to the data-directory root — `~/.archon
 | `archon-search-jobs.json` | `jobs/store.py` | job state for long-running ingest/reindex | `get_jobs_file()` in `jobs/model.py` |
 | `archon-search-sync-suppressed.json` | `sync_suppression.py` | sticky sentinel for the startup-sync crash-loop guard: one `suppressed_at` ISO timestamp | `get_sync_suppressed_file()`, resolved fresh from `get_data_dir()` on every call, no per-path env override; written when the lifespan suppresses the startup sync, deleted by a clean `POST /sync` (`routes_sync._clear_degraded_sync_state`); presence persists suppression across a process restart |
 | `.indexing_state.json` | `progress.py` (`IndexingStateStore`) | per-collection indexing progress/status | atomic-rename writes; RMW serialized by an internal `RLock` (see "Indexing state") |
-| `.maintenance-state.json` | `jobs/maintenance_loop.py` (`MaintenanceLoop`) | last/next run timestamps, per-collection health, retry counts | atomic-rename write after each pass; absent/corrupt → fresh empty state (no error); see "Maintenance state" |
+| `.maintenance-state.json` | `jobs/maintenance_loop.py` (`MaintenanceLoop`) | last/next run timestamps, per-collection health, expiry and graph-GC timestamps | atomic-rename write after each pass; absent/corrupt → fresh empty state (no error); see "Maintenance state" |
 | `models/` | written by `install/licenses.py`, read by `language_detector.py`; also the fastembed cache written/read by `embedder.py`, `reranker.py`, `install/prewarm.py`, and `model_validation.py`'s startup probes | fasttext language detector (`lid.176.ftz`); fastembed embedding + cross-encoder ONNX weights | fasttext file only if `multilingual=True`, resolved lazily via `paths.get_fasttext_models_dir()`. **BE-26 / S278** — every fastembed `TextEmbedding` / `TextCrossEncoder` construction passes `cache_dir=str(paths.get_fastembed_cache_dir())` — `models/` unless `FASTEMBED_CACHE_PATH` is set (S493) — never fastembed's own default cache. A probe that omits it warms a *different* directory, so `checks.models` reports `ok` while the runtime cache is still cold and the first `POST /search` pays the full download inline |
 | `models/graph/<model>-<revision>/` | `huggingface_hub` (via `GLiNER.from_pretrained`), read by `prose_extraction_backend.py` | pinned GLiNER prose-extraction checkpoint cache; `<model>` is `GRAPH_NER_MODEL_NAME` with its repo-id `/` replaced by `--`, `<revision>` is `GRAPH_NER_MODEL_REVISION` | resolved lazily via `paths.get_graph_models_dir()` — the only accessor, and both constants live in `paths.py` too, so a revision bump moves the directory. Populated by the wizard's graph pre-warm (`install/prewarm.py` `_prewarm_graph_model`, non-fatal) when the graph extra is installed, otherwise on the first `ProseExtractionBackend.load()`; not guaranteed to exist before either. `model_validation.py` never touches this path — `graph_ner_status()` probes engine importability only. A missing or unloadable artifact degrades prose extraction to code-symbol-only instead of failing an ingest |
 | `history/sessions/` | `cli/ingest.py` | default `--sessions-dir` for the `ingest` subcommand | resolved lazily via `get_data_dir()` |
@@ -365,7 +365,7 @@ The persisted schema is the closed field set declared in `telemetry/entry.py::DO
 
 ## Job state
 
-Long-running operations (ingest, reindex, delete) are tracked in `~/.archon-search/archon-search-jobs.json` (resolved lazily via `get_jobs_file()` in `jobs/model.py`; honours `ARCHON_SEARCH_DATA_DIR`). Each job carries `JobStatus ∈ {PENDING, QUEUED, RUNNING, DONE, FAILED, FAILED_EXPIRED, CANCELLED, CANCELLING}` plus a `result` dict or an `error` string (see `archon_search/types.py::IngestJob`). The file is rewritten on every transition via `atomic_write_json` (see [Durability contract](#durability-contract) above); see source: `archon_search/jobs/store.py` for the exact concurrency model.
+Long-running operations (ingest, reindex, delete) are tracked in `~/.archon-search/archon-search-jobs.json` (resolved lazily via `get_jobs_file()` in `jobs/model.py`; honours `ARCHON_SEARCH_DATA_DIR`). Each job carries `JobStatus ∈ {PENDING, QUEUED, RUNNING, DONE, FAILED, FAILED_EXPIRED, CANCELLED, CANCELLING}` plus a `result` dict or an `error` string (see `archon_search/types.py::IngestJob`). A path ingest created by `POST /ingest` (and each maintenance retry of it) also persists `ingest_options` — the request a `MaintenanceLoop` retry re-applies (`IngestOptions`: `submitted_path`, `ingested_by`, `chunk_ttl_seconds`, `chunk_scopes`) — which `GET /jobs` does not serve; a row without it (every other job, and rows an older server wrote) loads with `ingest_options = None` and is never retried. A server that predates the key cannot load such a file: it logs `corrupt jobs file` and starts with no jobs. The file is rewritten on every transition via `atomic_write_json` (see [Durability contract](#durability-contract) above); see source: `archon_search/jobs/store.py` for the exact concurrency model.
 
 ## Indexing state
 
@@ -381,6 +381,8 @@ Schema (C3 contract):
   "last_run_at": "<ISO-8601> | null",
   "next_run_at": "<ISO-8601> | null",
   "last_expired_pruned_at": "<ISO-8601> | null",
+  "last_graph_gc_at": "<ISO-8601> | null",
+  "stale_mention_count": <int>,
   "collection_health": {
     "{namespace}/{collection}": {
       "fts_optimized_at":           "<ISO-8601> | null",
@@ -389,16 +391,14 @@ Schema (C3 contract):
       "last_error":                 "<string> | null",
       "meta_chunk_count":           <int>,
       "expired_chunks_removed_last_run": <int>,
-      "mutations_since_recompute":  <int>
+      "mutations_since_recompute":  <int>,
+      "communities_invalidated":    <bool>
     }
-  },
-  "retry_counts": {
-    "{namespace}/{collection}/{absolute_source_file_path}": <int>
   }
 }
 ```
 
-`meta_chunk_count` comes from `CollectionMeta.chunk_count` (the O(1) metadata-row value from `store.get_collection_meta()`), not the live `count_rows()` from `CollectionInfo.chunk_count`. `retry_counts` keys use `{namespace}/{collection}/{absolute_source_file_path}` to scope retry limits correctly when the same file is ingested into multiple collections. Keys whose source path is no longer tracked in `JobStore.list()` and whose count is 0 are pruned at each retry-policy pass to bound growth.
+`meta_chunk_count` comes from `CollectionMeta.chunk_count` (the O(1) metadata-row value from `store.get_collection_meta()`), not the live `count_rows()` from `CollectionInfo.chunk_count`. The failed-ingest retry keeps no state here: a path's attempt count is the highest `retry_count` among the maintenance retries of its current submission in the job store (keyed by `{namespace}/{collection}/{source_path}`, any status), so it needs no pruning and a re-submitted path starts over; a `retry_counts` key an older server wrote is ignored and dropped by the next pass's write.
 
 ## Backup and recovery
 

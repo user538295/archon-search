@@ -19,12 +19,14 @@ from archon_search.types import (
     DeleteJob,
     ExportJob,
     ImportJob,
+    IngestOptions,
     JobKind,
     MetadataReindexJob,
     MigrationJob,
     MigrationKind,
     ReindexJob,
     SyncJob,
+    is_base_ingest,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,17 @@ _INGEST_JOB_TYPE = "ingest"
 # still arms on the next boot regardless of how the collection was
 # originally populated.
 _INGEST_FAMILY_JOB_TYPES = {_INGEST_JOB_TYPE, JobKind.sync.value}
+#: Wire-facing ``error`` (served by GET /jobs) of a job loaded ``RUNNING`` / ``CANCELLING``: the previous process died
+#: while it ran. For an ingest-family job it arms the crash-loop guard, and ``MaintenanceLoop`` never retries such an
+#: ingest — re-running it could re-enter the workload that killed the process.
+PROCESS_RESTART_ERROR = "process_restart"
+#: Wire-facing ``error`` (served by GET /jobs) of a base ingest job loaded still ``PENDING``: it never started, and
+#: its task died with the previous process, so nothing would ever run it. Nothing ran, so unlike ``process_restart``
+#: it does not arm the crash-loop guard; as a ``FAILED`` path ingest, ``MaintenanceLoop`` may retry it.
+NOT_STARTED_BEFORE_RESTART_DETAIL = "never started; the server restarted before it ran"
+#: Statuses of a base ingest job a ``MaintenanceLoop`` retry may still act on: FAILED (a retry candidate) and
+#: PENDING (a retry not yet claimed RUNNING). ``cancel_ingest_retries`` ends them.
+_RETRY_CANDIDATE_STATUSES = frozenset({JobStatus.FAILED, JobStatus.PENDING})
 _EVICTION_DAYS = 7
 # Only terminal jobs are eligible for eviction; non-terminal jobs (PENDING, QUEUED,
 # RUNNING, CANCELLING) are retained regardless of age.
@@ -57,6 +70,42 @@ _TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _ingest_options_from_json(job_id: object, raw: object) -> IngestOptions | None:
+    """Job *job_id*'s ``ingest_options`` as loaded from the jobs file (JSON has no tuple); ``None`` when the row has
+    none — or an unusable one (not an object, an unknown or missing key, a value of the wrong JSON type: e.g. a
+    ``chunk_scopes`` string, which would otherwise split into one-letter scopes), which is logged at WARNING: that job
+    alone loses its options, so ``MaintenanceLoop`` never retries it, and the rest of the jobs file loads unharmed.
+    Value ranges (TTL bounds, scope lengths) are ``IngestRequest``'s to check when a retry is dispatched.
+    """
+    if raw is None:
+        return None
+    try:
+        if not isinstance(raw, dict):
+            raise TypeError(f"not an object but {type(raw).__name__}")
+        scopes = raw.get("chunk_scopes")
+        if scopes is not None and not (isinstance(scopes, list) and all(isinstance(scope, str) for scope in scopes)):
+            raise TypeError("chunk_scopes is not a list of strings")
+        options = IngestOptions(**{**raw, "chunk_scopes": tuple(scopes) if scopes is not None else None})
+        if not isinstance(options.submitted_path, str) or not isinstance(options.ingested_by, str):
+            raise TypeError("submitted_path or ingested_by is not a string")
+        ttl = options.chunk_ttl_seconds
+        if ttl is not None and (isinstance(ttl, bool) or not isinstance(ttl, int)):
+            raise TypeError("chunk_ttl_seconds is not an integer")
+        return options
+    except TypeError as exc:
+        logger.warning("JobStore: job %s has unusable ingest_options (%s); loading it without them", job_id, exc)
+        return None
+
+
+def _cancel_requested_from_json(job_id: object, raw: object) -> bool:
+    """Job *job_id*'s ``cancel_requested`` as loaded from the jobs file; a value that is not a JSON boolean is no
+    client's cancel — logged at WARNING and loaded False, so a truthy ``"false"`` cannot end a retry chain."""
+    if isinstance(raw, bool):
+        return raw
+    logger.warning("JobStore: job %s has a non-boolean cancel_requested (%r); loading it as False", job_id, raw)
+    return False
 
 
 class JobStore:
@@ -93,7 +142,12 @@ class JobStore:
         source: Literal["user", "backup", "maintenance"] = "user",
         path: str = "",
         collection: str = "",
+        *,
+        ingest_options: IngestOptions | None = None,
+        retry_count: int = 0,
     ) -> IngestJob:
+        """Create a PENDING base ``IngestJob``. *ingest_options*: the POST /ingest request, kept so a
+        ``MaintenanceLoop`` retry re-ingests with it; *retry_count*: which retry attempt the job is (0: none)."""
         now = _now_iso()
         job = IngestJob(
             job_id=str(uuid.uuid4()),
@@ -104,6 +158,8 @@ class JobStore:
             source=source,
             source_path=path,
             collection=collection,
+            ingest_options=ingest_options,
+            retry_count=retry_count,
         )
         return self.create_job(job)
 
@@ -159,8 +215,10 @@ class JobStore:
         job_id: str,
         from_statuses: set[JobStatus],
         to_status: JobStatus,
+        **fields: object,
     ) -> IngestJob | None:
-        """Atomically update status only if current status is in from_statuses.
+        """Atomically update status only if current status is in from_statuses, with any other job *fields* in the
+        same write (e.g. ``cancel_requested``).
 
         Returns the updated job, or None if the transition was rejected
         (job not found or status not in from_statuses).
@@ -179,7 +237,7 @@ class JobStore:
         if job is None or job.status not in from_statuses:
             return None
         try:
-            return self.update(job_id, status=to_status)
+            return self.update(job_id, status=to_status, **fields)
         except BaseException:
             self._jobs[job_id] = job
             self._rewrite_after_failed_persist()
@@ -211,6 +269,36 @@ class JobStore:
 
     def list(self) -> list[IngestJob]:
         return list(self._jobs.values())
+
+    def cancel_ingest_retries(self, collection: str) -> None:
+        """Cancel every base ingest job on *collection* a ``MaintenanceLoop`` retry could still run or re-create.
+
+        For DELETE /collections/{name}, under the collection lock, once the table is dropped: each FAILED or PENDING
+        base ``IngestJob`` on it becomes CANCELLED, in every namespace — the table and lock are keyed by name alone,
+        so any namespace's retry would re-create the dropped table. Under the lock a PENDING one is a retry waiting
+        for it, whose PENDING -> RUNNING claim is then refused. Subclass jobs are untouched. All the cancels are
+        persisted in one write. Best-effort and all-or-nothing: a failed write is logged at WARNING, every job keeps
+        its old status (memory restored, as in ``transition``), and nothing is raised.
+        """
+        old_jobs = {
+            job.job_id: job
+            for job in self._jobs.values()
+            if is_base_ingest(job) and job.collection == collection and job.status in _RETRY_CANDIDATE_STATUSES
+        }
+        if not old_jobs:
+            return
+        now = _now_iso()
+        for job_id, job in old_jobs.items():
+            self._jobs[job_id] = dataclasses.replace(job, status=JobStatus.CANCELLED, updated_at=now)
+        try:
+            self._write_atomic()
+        except Exception:  # noqa: BLE001 — auxiliary write: logged, never fails the caller
+            self._jobs.update(old_jobs)
+            self._rewrite_after_failed_persist()
+            logger.warning(
+                "JobStore: could not cancel the ingest jobs of dropped collection %s (%s)",
+                collection, ", ".join(old_jobs), exc_info=True,
+            )
 
     def create_export(
         self,
@@ -400,6 +488,10 @@ class JobStore:
                 item.setdefault("source_path", "")
                 item.setdefault("collection", "")
                 item.setdefault("retry_count", 0)
+                item["ingest_options"] = _ingest_options_from_json(item.get("job_id"), item.get("ingest_options"))
+                item["cancel_requested"] = _cancel_requested_from_json(
+                    item.get("job_id"), item.get("cancel_requested", False)
+                )
                 job_type = item.pop("job_type", _INGEST_JOB_TYPE)
                 if job_type == "export":
                     job: IngestJob = ExportJob(**item)
@@ -426,12 +518,22 @@ class JobStore:
                     job = dataclasses.replace(
                         job,
                         status=JobStatus.FAILED,
-                        error="process_restart",
+                        error=PROCESS_RESTART_ERROR,
                         updated_at=_now_iso(),
                     )
                     modified = True
                     if job_type in _INGEST_FAMILY_JOB_TYPES:
                         self._crashed_ingest_on_load = True
+                elif job.status == JobStatus.PENDING and job_type == _INGEST_JOB_TYPE:
+                    # Every base ingest job's task is spawned when the job is created, so one still PENDING
+                    # lost its task with the previous process; other kinds keep their PENDING semantics.
+                    job = dataclasses.replace(
+                        job,
+                        status=JobStatus.FAILED,
+                        error=NOT_STARTED_BEFORE_RESTART_DETAIL,
+                        updated_at=_now_iso(),
+                    )
+                    modified = True
                 self._jobs[job.job_id] = job
             count_before = len(self._jobs)
             # Ordering is load-bearing: the rewrite above sets status=FAILED, which
@@ -458,6 +560,11 @@ class JobStore:
             for job in self._jobs.values():
                 item = dataclasses.asdict(job)
                 item["status"] = item["status"].value if hasattr(item["status"], "value") else item["status"]
+                # A row without options / a cancel request keeps the shape it had before those fields existed.
+                if item["ingest_options"] is None:
+                    del item["ingest_options"]
+                if not item["cancel_requested"]:
+                    del item["cancel_requested"]
                 if isinstance(job, MigrationJob):
                     item["job_type"] = "migration"
                 elif isinstance(job, ExportJob):

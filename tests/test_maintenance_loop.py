@@ -89,7 +89,7 @@ def _make_loop(
     )
     js = job_store if job_store is not None else MagicMock()
     ss = search_store if search_store is not None else MagicMock()
-    return MaintenanceLoop(job_store=js, search_store=ss, config=cfg, data_dir=tmp_path)
+    return MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=js, search_store=ss, config=cfg, data_dir=tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +199,6 @@ def test_load_state_missing_file_returns_empty(tmp_path: Path) -> None:
         "last_run_at": None,
         "next_run_at": None,
         "collection_health": {},
-        "retry_counts": {},
         "last_expired_pruned_at": None,
         "last_graph_gc_at": None,
         "stale_mention_count": 0,
@@ -221,7 +220,6 @@ def test_load_state_corrupt_file_returns_empty_and_warns(
         "last_run_at": None,
         "next_run_at": None,
         "collection_health": {},
-        "retry_counts": {},
         "last_expired_pruned_at": None,
         "last_graph_gc_at": None,
         "stale_mention_count": 0,
@@ -236,7 +234,6 @@ def test_save_state_writes_atomically(tmp_path: Path) -> None:
         "last_run_at": "2025-01-01T00:00:00+00:00",
         "next_run_at": None,
         "collection_health": {},
-        "retry_counts": {},
     }
     loop._save_state(state)
 
@@ -251,7 +248,7 @@ def test_save_state_writes_atomically(tmp_path: Path) -> None:
 
 
 def test_save_state_conforms_to_c3_schema(tmp_path: Path) -> None:
-    """C3: state file has exactly top-level keys: last_run_at, next_run_at, collection_health, retry_counts."""
+    """C3: state file has exactly the top-level keys it is given: last_run_at, next_run_at, collection_health."""
     loop = _make_loop(tmp_path)
     now_str = datetime.now(timezone.utc).isoformat()
     health = {
@@ -267,18 +264,16 @@ def test_save_state_conforms_to_c3_schema(tmp_path: Path) -> None:
         "last_run_at": now_str,
         "next_run_at": None,
         "collection_health": health,
-        "retry_counts": {"default/docs/some/file.txt": 1},
     }
     loop._save_state(state)
 
     state_file = tmp_path / ".maintenance-state.json"
     loaded = json.loads(state_file.read_text(encoding="utf-8"))
 
-    assert set(loaded.keys()) == {"last_run_at", "next_run_at", "collection_health", "retry_counts"}
+    assert set(loaded.keys()) == {"last_run_at", "next_run_at", "collection_health"}
     assert isinstance(loaded["collection_health"], dict)
     # The key is {ns}/{col}
     assert "default/docs" in loaded["collection_health"]
-    assert isinstance(loaded["retry_counts"], dict)
 
 
 # ---------------------------------------------------------------------------
@@ -803,7 +798,7 @@ async def test_run_graph_gc_fetches_live_chunk_ids_with_correct_namespace(
     gs.delete_orphan_nodes_and_edges = AsyncMock(return_value=MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0))
 
     cfg = MaintenanceConfig(interval_hours=0)
-    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop = MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
 
     # This will fail if _run_graph_gc is not implemented yet, which is expected in TDD phase
@@ -840,7 +835,7 @@ async def test_run_graph_gc_calls_prune_then_delete_orphans(tmp_path: Path) -> N
     )
 
     cfg = MaintenanceConfig(interval_hours=0)
-    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop = MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
 
     await loop._run_graph_gc("docs", "default")
@@ -866,7 +861,7 @@ async def test_run_graph_gc_sets_communities_invalidated_when_nodes_removed(tmp_
     gs.delete_orphan_nodes_and_edges = AsyncMock(return_value=gc_result)
 
     cfg = MaintenanceConfig(interval_hours=0)
-    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop = MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
     # Prevent fire-and-forget rebuild task leak; this test asserts the result flag, not the rebuild side effect.
     loop._spawn_rebuild_task = MagicMock()
@@ -882,7 +877,7 @@ async def test_run_graph_gc_skips_when_graph_disabled(tmp_path: Path) -> None:
     """BE-7 S8a: graph_store=None → no calls, no exception."""
     ss = AsyncMock()
     cfg = MaintenanceConfig(interval_hours=0)
-    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop = MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     # graph_store NOT set
 
     stale_count, gc_result_returned = await loop._run_graph_gc("docs", "default")
@@ -901,7 +896,7 @@ async def test_run_graph_gc_skips_when_maintenance_graph_gc_false_with_live_stor
     gs = MagicMock()
 
     cfg = MaintenanceConfig(interval_hours=0, graph_gc=False)
-    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop = MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
 
     with caplog.at_level(logging.ERROR, logger="archon_search.jobs.maintenance_loop"):
@@ -955,6 +950,7 @@ def _make_gc_bookkeeping_pass_loop(
 
     cfg = MaintenanceConfig(interval_hours=0, prune_expired_chunks=False, graph_gc=graph_gc)
     loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path, graph_store=graph_store
     )
     loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
@@ -1175,7 +1171,7 @@ async def test_run_graph_gc_aborts_when_list_chunks_raises_exception(
     gs.delete_orphan_nodes_and_edges = AsyncMock()
 
     cfg = MaintenanceConfig(interval_hours=0)
-    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop = MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
 
     with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
@@ -1205,7 +1201,7 @@ async def test_run_graph_gc_prunes_when_collection_genuinely_empty(tmp_path: Pat
     gs.delete_orphan_nodes_and_edges = AsyncMock(return_value=gc_result)
 
     cfg = MaintenanceConfig(interval_hours=0)
-    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop = MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
     # Prevent fire-and-forget rebuild task leak; this test asserts the result flag, not the rebuild side effect.
     loop._spawn_rebuild_task = MagicMock()
@@ -1240,7 +1236,7 @@ async def test_run_graph_gc_no_invalidation_when_zero_orphans(tmp_path: Path) ->
     gs.delete_orphan_nodes_and_edges = AsyncMock(return_value=gc_result)
 
     cfg = MaintenanceConfig(interval_hours=0)
-    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop = MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
 
     stale_count, gc_result_returned = await loop._run_graph_gc("docs", "default")
@@ -1271,7 +1267,7 @@ async def test_maintenance_state_writes_last_graph_gc_at(tmp_path: Path) -> None
     gc_result = MagicMock(orphan_nodes_removed=1, orphan_edges_removed=2, communities_invalidated=True)
 
     cfg = MaintenanceConfig(interval_hours=0, prune_expired_chunks=False)
-    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop = MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
 
     # Stub the GC method — returns (stale_count, gc_result) tuple
@@ -1317,7 +1313,7 @@ async def test_stale_mention_count_is_sum_across_collections(tmp_path: Path) -> 
     gc_result = MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0, communities_invalidated=False)
 
     cfg = MaintenanceConfig(interval_hours=0, prune_expired_chunks=False)
-    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop = MaintenanceLoop(dispatch_retry=lambda _job: None, job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
 
     # _run_graph_gc returns (stale_count, gc_result) — 3 stale per collection
@@ -1410,6 +1406,7 @@ async def test_maintenance_loop_uses_shared_rebuild_lock(tmp_path: Path, _clear_
     # _spawn_rebuild_task does -- it constructs its own fresh CommunityBuilder
     # internally from loop._graph_store / loop._graph_config / loop._search_store.
     gc_loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=MagicMock(),
         search_store=MagicMock(),
         config=MaintenanceConfig(interval_hours=0),
@@ -1481,6 +1478,7 @@ async def test_maintenance_loop_uses_shared_rebuild_lock(tmp_path: Path, _clear_
         return store
 
     neg_gc_loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=MagicMock(),
         search_store=MagicMock(),
         config=MaintenanceConfig(interval_hours=0),
@@ -1538,6 +1536,7 @@ async def test_maintenance_loop_receives_enrichment_client(tmp_path: Path) -> No
     sentinel_client = MagicMock(name="enrichment_client_sentinel")
 
     loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=MagicMock(),
         search_store=MagicMock(),
         config=MaintenanceConfig(interval_hours=0),

@@ -23,11 +23,11 @@ from archon_search.jobs.store import JobStore
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503, store_busy_503
 from archon_search.server._ingested_by import parse_ingested_by_header
-from archon_search.server.routes_jobs import _REINDEX_COLLECTION_LOG_CONTEXT, INTERNAL_ERROR_DETAIL, JOB_SUPERSEDED_DETAIL, REINDEX_FAILED_DETAIL, IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _persist_job_status, _reindex_task
+from archon_search.server.routes_jobs import _REINDEX_COLLECTION_LOG_CONTEXT, INTERNAL_ERROR_DETAIL, JOB_SUPERSEDED_DETAIL, REINDEX_FAILED_DETAIL, IngestRequest, _ingest_task, _persist_job_status, _reindex_task, _track_background_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, ExpiringChunkItem, ExpiringChunksResponse, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
 from archon_search.store import STORE_SCHEMA_VERSION, SearchStore, StoreBusyError
 from archon_search.sync import path_to_collection_name
-from archon_search.types import IngestJob, JobStatus, MetadataReindexJob, MigrationJob, MigrationKind, MigrationSpec
+from archon_search.types import IngestJob, JobStatus, MetadataReindexJob, MigrationJob, MigrationKind, MigrationSpec, is_base_ingest
 
 logger = logging.getLogger(__name__)
 
@@ -208,21 +208,22 @@ def _find_active_ingest(job_store: JobStore | None, name: str, ns: str) -> Inges
     table by name alone) and ``lock_for`` keys the collection lock by name only, so an ingest submitted
     from any namespace writes into the very table DELETE drops.
 
-    PENDING is excluded: on the REST POST /ingest path the caller holds the collection lock while the
-    job is PENDING, so the lock covers it; the maintenance-retry path creates PENDING jobs with no lock
-    and no dispatcher, so including PENDING would give permanent false positives.
+    PENDING is excluded: the lock covers it. POST /ingest and POST /collections/ hold the collection lock
+    while their job is PENDING, and a maintenance retry waits for the lock before its PENDING -> RUNNING
+    claim (``routes_jobs._run_maintenance_retry``) — a DELETE that holds the lock cancels such a retry
+    instead (``JobStore.cancel_ingest_retries``).
 
-    ``type(j) is IngestJob`` is an exact-type check (not isinstance): subclass jobs (ReindexJob, SyncJob,
+    ``is_base_ingest`` is an exact-type check (not isinstance): subclass jobs (ReindexJob, SyncJob,
     MetadataReindexJob, ...) do not block DELETE, and DELETE has no other guard for them. The check is
     kept narrow to base ingest; a DELETE racing a running ReindexJob is a known separate gap, pinned by
-    ``test_delete_collection_200_when_reindex_running``. The idiom mirrors maintenance_loop.py
-    ("Only process exact base IngestJob instances (no subclasses).").
+    ``test_delete_collection_200_when_reindex_running``. ``MaintenanceLoop``'s failed-ingest retry and
+    ``JobStore.cancel_ingest_retries`` select the same base ingest jobs.
     """
     if job_store is None:
         return None
     active = [
         j for j in job_store.list()
-        if type(j) is IngestJob and j.collection == name and j.status in _ACTIVE_INGEST_STATUSES
+        if is_base_ingest(j) and j.collection == name and j.status in _ACTIVE_INGEST_STATUSES
     ]
     return next((j for j in active if j.namespace == ns), next(iter(active), None))
 
@@ -457,27 +458,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     ingest_body = IngestRequest(
         collection=collection_name, path=body.path, ingested_by=ingested_by
     ).with_resolved_path(resolved)
-
-    pipeline = getattr(request.app.state, "pipeline", None)
-    embedder_cache = getattr(request.app.state, "embedder_cache", None)
-    config_state = getattr(request.app.state, "config", None)
-
-    if lock_result is not None:
-        task = asyncio.create_task(
-            _default_ingest_task_with_lock(
-                job.job_id, store, ingest_body, namespace=ns, held_lock=lock_result,
-                search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config_state,
-            )
-        )
-    else:
-        task = asyncio.create_task(
-            _default_ingest_task(
-                job.job_id, store, ingest_body, namespace=ns,
-                search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config_state,
-            )
-        )
-    request.app.state._background_tasks.add(task)
-    task.add_done_callback(request.app.state._background_tasks.discard)
+    _track_background_task(request.app.state, _ingest_task(request.app.state, job.job_id, ingest_body, ns, lock_result))
 
     return JobResponse(**job_to_dict(job))
 
@@ -500,7 +481,12 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     },
 )
 async def remove_collection(name: str, request: Request) -> DeleteResponse | JSONResponse:
-    """Remove a collection: delete config entry and drop LanceDB data."""
+    """Remove a collection: delete config entry and drop LanceDB data.
+
+    Once the table is dropped, the collection's base ingest jobs that are `FAILED` or `PENDING` — in every
+    namespace, as the table is shared by name — become `CANCELLED`, so no maintenance retry re-creates the
+    collection (best-effort: a failed write is logged and the delete still succeeds).
+    """
     config: SearchConfig = request.app.state.config
     search_store = getattr(request.app.state, "search_store", None)
     ns: str = request.state.namespace
@@ -567,9 +553,10 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
         # authoritative signal. The check must run under the lock, not before it: an ingest that held
         # the lock while this DELETE waited turns RUNNING and releases it, and only a check made after
         # acquiring sees that (TOCTOU). No new RUNNING base IngestJob can appear meanwhile: POST /ingest
-        # and POST /collections/ pre-acquire this lock before creating theirs, and a PENDING job the
-        # maintenance retry creates without the lock is not dispatched (see _find_active_ingest).
-        active_ingest = _find_active_ingest(getattr(request.app.state, "job_store", None), name, ns)
+        # and POST /collections/ pre-acquire this lock before creating theirs, and a maintenance retry
+        # waits for it before its claim (see _find_active_ingest).
+        job_store = getattr(request.app.state, "job_store", None)
+        active_ingest = _find_active_ingest(job_store, name, ns)
         if active_ingest is not None:
             return _ingest_in_progress_503(active_ingest, name, ns)
 
@@ -594,6 +581,9 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
                 _save_config_after_rollback(config, request, "collection drop failure")
                 return _collection_drop_failed_response()
             table_gone = True
+            if job_store is not None:
+                # Auxiliary (best-effort, never fails the DELETE): no maintenance retry may re-create the table.
+                job_store.cancel_ingest_retries(name)
             try:
                 await search_store.delete_collection_meta(name, ns)
             except Exception:  # noqa: BLE001 — the table is already gone, so the config removal stays

@@ -224,11 +224,11 @@ See [`90_export_import.md`](./90_export_import.md) for the full export/import wo
 
 ## Symptom: FAILED_EXPIRED ingest jobs
 
-`GET /status` reports `failed_expired_ingest_count > 0`, or `archon-search status` shows a count with a re-ingest hint. A `FAILED_EXPIRED` job failed and either aged past `retry_max_age_hours` or exhausted `retry_max_attempts`; it is never retried automatically.
+`GET /status` reports `failed_expired_ingest_count > 0`, or `archon-search status` shows a count with a re-ingest hint. A `FAILED_EXPIRED` job failed and either aged past `retry_max_age_hours` (counted from the original request, not from each retry) or exhausted `retry_max_attempts`, or was never eligible for a retry — saved by an older server (no stored request), failed after you cancelled it, or failed `process_restart` (running when the server died); it is never retried automatically. Re-submit the ingests you still need.
 
 1. **List them**: `GET /jobs?status=FAILED_EXPIRED`. Each job's `error` is a short failure summary — an unexpected failure reads `ingest failed; see the server log for details`, so look up the job id in the server log for the cause; `source_path` is the original file. (`result` is `null` for failed jobs.)
 2. **Re-ingest** after fixing the root cause: `archon-search ingest <path>` (or `POST /ingest`).
-3. **Tune retry policy**: raise `[maintenance].retry_max_age_hours` (default 72) or `retry_max_attempts` (default 3). Changes take effect on the next maintenance pass.
+3. **Tune retry policy**: raise `[maintenance].retry_max_age_hours` (default 72) or `retry_max_attempts` (default 3). The `[maintenance]` section is read once at startup, so restart the server for a change to take effect. Raising a limit never revives a `FAILED_EXPIRED` job — it applies only to jobs still `FAILED`; re-submit the expired ones (step 2).
 
 ## Symptom: ACL sidecar skipped — ingest returns warnings
 

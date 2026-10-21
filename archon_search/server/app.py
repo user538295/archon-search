@@ -78,7 +78,7 @@ from archon_search.server.routes_explain import router as explain_router
 from archon_search.server.routes_export import router as export_router
 from archon_search.server.routes_graph import router as graph_router
 from archon_search.server.routes_health import router as health_router
-from archon_search.server.routes_jobs import router as jobs_router
+from archon_search.server.routes_jobs import make_retry_dispatcher, router as jobs_router
 from archon_search.server.routes_ready import router as ready_router
 from archon_search.server.routes_route import router as route_router
 from archon_search.server.routes_search import router as search_router
@@ -716,6 +716,8 @@ def create_app(
             graph_store=_graph_store,
             graph_config=config.graph,
             enrichment_client=_enrichment_client,
+            # Failed-ingest retries run through POST /ingest's ingest task (jobs/ never imports server/).
+            dispatch_retry=make_retry_dispatcher(app.state),
         )
         app.state.maintenance_loop = maintenance_loop
         maintenance_task = asyncio.create_task(maintenance_loop.run())

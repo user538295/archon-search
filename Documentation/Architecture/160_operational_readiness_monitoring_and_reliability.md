@@ -322,7 +322,7 @@ The `maintenance.collection_health` block in `GET /status` is namespace-scoped t
 | `collection_health[n].fts_optimized_at` | Last time FTS was optimized for this collection; `null` if never or index absent |
 | `collection_health[n].orphans_removed_last_run` | Number of orphaned source paths removed in the last pass |
 | `collection_health[n].last_retry_at` | Last time a failed-ingest retry was enqueued for this collection |
-| `collection_health[n].last_error` | Most recent per-collection policy failure, as fixed text naming the policy (e.g. `fts_optimize failed; see the server log for details` — `*_FAILED_DETAIL` in `jobs/maintenance_loop.py`), never the exception text; `null` when last pass was clean |
+| `collection_health[n].last_error` | Most recent per-collection policy failure, as fixed text naming the policy (e.g. `fts_optimize failed; see the server log for details` — `*_FAILED_DETAIL` in `jobs/maintenance_loop.py`), never the exception text — or `maintenance retry could not be started; see the server log for details` when a failed-ingest retry job could neither be started nor marked `FAILED`; `null` when last pass was clean |
 | `collection_health[n].meta_chunk_count` | Chunk count from the O(1) metadata row (written at ingest time) |
 | `collection_health[n].mutations_since_recompute` | Mutations since last centroid recompute (from metadata row) |
 | `collection_health[n].centroid_recompute_threshold` | Current configured threshold for triggering a centroid recompute |
@@ -339,7 +339,17 @@ The `maintenance.collection_health` block in `GET /status` is namespace-scoped t
 
 **Orphan cleanup takes > 60 s**: a WARNING is logged with the elapsed time. Increase `interval_hours` or reduce collection size. The pass still completes — the warning is advisory.
 
-**Failed ingest job not retried**: check that `source_path` is non-empty on the job (`GET /jobs/{job_id}`). Pre-D5 jobs with `source_path=""` are skipped by the retry policy (source path is unknown). Re-trigger manually via `POST /ingest`.
+**Failed ingest job not retried**: look the job up (`GET /jobs/{job_id}`, and `GET /jobs` for its path) and the maintenance log lines naming it. Only a `FAILED` path ingest submitted through `POST /ingest` is retried, and only while it is the newest job for its `{namespace}/{collection}/{source_path}`. Causes, in the order the pass checks them:
+
+- **No `source_path`** — an inline (`documents`) or `POST /collections/` ingest, or a pre-D5 job: never retried (DEBUG `skipping pre-D5 FAILED job`).
+- **Excluded collection** — the collection matches `[maintenance].exclude`: left `FAILED`, neither retried nor expired.
+- **Superseded** — the path has a newer `PENDING`/`RUNNING`/`DONE`/`FAILED` job (the newest one is the one retried), or a newer job a client cancelled with `DELETE /jobs/{id}` (a user cancel ends the path's retries; a `CANCELLED` written by a server shutdown does not): left `FAILED` (DEBUG `superseded by job`).
+- **No stored request (`ingest_options`)** — saved by an older server, so its scopes are unknown: expired `FAILED_EXPIRED` (WARNING `original request is unknown`).
+- **Cancelled by a client** — it failed after a `DELETE /jobs/{id}`: expired (WARNING `was cancelled by a client`).
+- **`process_restart`** — it was running when the server died: expired, as a retry could re-enter the workload that killed the process (WARNING `was running when the previous process died`).
+- **Aged out / exhausted** — the original request is older than `retry_max_age_hours`, or the retries of the current submission (any status — a shutdown-interrupted one counts) reached `retry_max_attempts`: expired (WARNING `has aged out` / `has reached max retry attempts`).
+
+To retry anyway, re-submit the path with `POST /ingest` (with its original `chunk_scopes`, `chunk_ttl_seconds` and `X-Ingested-By`): a new submission starts a new chain with the full attempt budget.
 
 **FTS index not found (`fts_optimized_at` stays null after a pass)**: the collection has no FTS index (never searched with FTS or no documents ingested). A WARNING is logged at the DEBUG level and the policy skips silently. Ingest at least one document and run a search to create the FTS index, then re-trigger.
 

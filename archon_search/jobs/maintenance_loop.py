@@ -33,13 +33,17 @@ from typing import TYPE_CHECKING, Any
 
 from archon_search._durable_io import atomic_write_json
 from archon_search.constants import INGEST_LOCK_TIMEOUT_S, NOT_DISK_INGESTED_CHUNK_MARKERS
+from archon_search.jobs.store import PROCESS_RESTART_ERROR
 from archon_search.store import FTSIndexNotFoundError, doc_id_for_source_path, parse_metadata
 from archon_search.types import (
     IngestJob,
     JobStatus,
+    is_base_ingest,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from archon_search.config import GraphConfig, MaintenanceConfig
     from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
     from archon_search.graph_store import GraphStore
@@ -68,6 +72,15 @@ ORPHAN_CLEANUP_FAILED_DETAIL = _policy_failed_detail(_ORPHAN_CLEANUP)
 EXPIRED_CHUNK_PRUNING_FAILED_DETAIL = _policy_failed_detail(_EXPIRED_CHUNK_PRUNING)
 GRAPH_GC_FAILED_DETAIL = _policy_failed_detail(_GRAPH_GC)
 
+#: Wire-facing ``error`` (served by GET /jobs) of a re-enqueued retry job whose dispatch raised; the
+#: exception text can embed internals, so it is logged only.
+RETRY_DISPATCH_FAILED_DETAIL = "maintenance retry could not be started; see the server log for details"
+
+# Statuses of a newer job that supersede an older FAILED job for the same retry key: a retry still outstanding
+# (PENDING/RUNNING) or the work's settled outcome (DONE/FAILED). A CANCELLED, CANCELLING or FAILED_EXPIRED job is no
+# outcome of the work, so the older FAILED job stays eligible — unless a client asked for that cancel (``_supersedes``).
+_SUPERSEDING_STATUSES = frozenset({JobStatus.PENDING, JobStatus.RUNNING, JobStatus.DONE, JobStatus.FAILED})
+
 # Empty health entry shape written per collection each pass.
 _EMPTY_HEALTH_ENTRY: dict[str, Any] = {
     "fts_optimized_at": None,
@@ -84,11 +97,102 @@ _EMPTY_STATE: dict[str, Any] = {
     "last_run_at": None,
     "next_run_at": None,
     "collection_health": {},
-    "retry_counts": {},
     "last_expired_pruned_at": None,
     "last_graph_gc_at": None,
     "stale_mention_count": 0,
 }
+
+
+def _retry_key(job: IngestJob) -> str:
+    """The failed-ingest retry key, ``{namespace}/{collection}/{source_path}``."""
+    return f"{job.namespace}/{job.collection}/{job.source_path}"
+
+
+def _unretriable_reason(job: IngestJob) -> str | None:
+    """Why the FAILED *job* must never be retried (a log phrase), or ``None`` when a retry is allowed.
+
+    A job with no ``ingest_options`` has no known original request — a retry without its ``chunk_scopes`` would write
+    chunks every scope filter matches. A job a client asked to cancel (``cancel_requested``) and that then failed must
+    not be re-run against that request. A ``PROCESS_RESTART_ERROR`` job — the exact text ``JobStore``'s load recovery
+    writes — was running when the process died, so re-running it could re-enter the workload the startup crash-loop
+    guard keeps the server out of.
+    """
+    if job.ingest_options is None:
+        return "has no stored ingest options (its original request is unknown)"
+    if job.cancel_requested:
+        return "was cancelled by a client (DELETE /jobs/{id})"
+    if job.error == PROCESS_RESTART_ERROR:
+        return "was running when the previous process died (a retry could re-enter the workload that killed it)"
+    return None
+
+
+def _supersedes(job: IngestJob) -> bool:
+    """Whether *job* settles its retry key's older FAILED jobs: an outstanding try or an outcome of the work
+    (``_SUPERSEDING_STATUSES``), or a client's cancel (``cancel_requested``: CANCELLING / CANCELLED by DELETE
+    /jobs/{id}). A CANCELLED written when the server shut down carries no ``cancel_requested``, so it never ends a
+    retry chain."""
+    return job.status in _SUPERSEDING_STATUSES or job.cancel_requested
+
+
+def _created_at(job: IngestJob) -> datetime | None:
+    """*job*'s timezone-aware ``created_at``; ``None`` when it does not parse or is naive (not comparable)."""
+    try:
+        created = datetime.fromisoformat(job.created_at)
+    except (ValueError, TypeError):
+        return None
+    return created if created.tzinfo is not None else None
+
+
+@dataclass(frozen=True)
+class _RetryKeyHistory:
+    """What the jobs of one retry key say about retrying it.
+
+    The key's lineage is its jobs that settle it (``_supersedes``): an outcome of the work, an outstanding try, or a
+    client's cancel; other CANCELLED, CANCELLING and FAILED_EXPIRED jobs settle nothing and are left out.
+    ``latest``: the newest lineage job — on equal ``created_at`` a non-FAILED job wins, then the greater ``job_id``, so
+    the choice is deterministic. ``origin_created``: when the retry chain began — the newest lineage job a client or
+    backup submitted (``source`` other than ``"maintenance"``; the retries descend from it), else the oldest lineage
+    job — so ``retry_max_age_hours`` bounds the whole chain, not each retry. Jobs whose ``created_at`` is unusable
+    (``_created_at``) are ignored; ``None`` when none is left. ``failed``: every FAILED base ``IngestJob`` of the key,
+    which ending the chain expires together. ``attempts_used``: the highest ``retry_count`` among the key's
+    maintenance retries created since ``origin_created``, whatever their status — every retry of the current
+    submission uses its attempt, even one a shutdown cancelled — so ``retry_max_attempts`` is a hard bound; 0 when
+    there is none.
+    """
+
+    latest: IngestJob | None
+    origin_created: datetime | None
+    failed: tuple[IngestJob, ...]
+    attempts_used: int
+
+    @classmethod
+    def of(cls, key_jobs: list[IngestJob]) -> _RetryKeyHistory:
+        lineage = [
+            (created, job)
+            for job in key_jobs
+            if _supersedes(job) and (created := _created_at(job)) is not None
+        ]
+        latest = max(
+            lineage, key=lambda pair: (pair[0], pair[1].status != JobStatus.FAILED, pair[1].job_id), default=None
+        )
+        requested = [created for created, job in lineage if job.source != "maintenance"]
+        origin = max(requested) if requested else min((created for created, _ in lineage), default=None)
+        failed = tuple(job for job in key_jobs if is_base_ingest(job) and job.status == JobStatus.FAILED)
+        attempts_used = max(
+            (
+                job.retry_count
+                for job in key_jobs
+                if job.source == "maintenance"
+                and origin is not None
+                and (created := _created_at(job)) is not None
+                and created >= origin
+            ),
+            default=0,
+        )
+        return cls(
+            latest=latest[1] if latest is not None else None, origin_created=origin, failed=failed,
+            attempts_used=attempts_used,
+        )
 
 
 def _is_not_disk_ingested(chunk: dict[str, Any]) -> bool:
@@ -163,11 +267,16 @@ class MaintenanceLoop:
         search_store: "SearchStore",
         config: "MaintenanceConfig",
         data_dir: Path,
+        *,
+        dispatch_retry: Callable[[IngestJob], None],
         graph_store: "GraphStore | None" = None,
         graph_config: "GraphConfig | None" = None,
         enrichment_client: "LLMEnrichmentClientProtocol | None" = None,
     ) -> None:
+        """*dispatch_retry* starts each PENDING retry job the failed-ingest retry creates
+        (``routes_jobs.make_retry_dispatcher`` in the lifespan); required, as nothing else would run the job."""
         self._job_store = job_store
+        self._dispatch_retry = dispatch_retry
         self._search_store = search_store
         self._config = config
         self._graph_store = graph_store
@@ -239,7 +348,6 @@ class MaintenanceLoop:
             "last_run_at": raw.get("last_run_at"),
             "next_run_at": raw.get("next_run_at"),
             "collection_health": raw.get("collection_health", {}),
-            "retry_counts": raw.get("retry_counts", {}),
             "last_expired_pruned_at": raw.get("last_expired_pruned_at"),
             "last_graph_gc_at": raw.get("last_graph_gc_at"),
             "stale_mention_count": raw.get("stale_mention_count", 0),
@@ -948,211 +1056,196 @@ class MaintenanceLoop:
         builder = PageRankBuilder(self._graph_store)
         await builder.build(collection, ns)
 
-    async def _run_failed_ingest_retry(
-        self, health: dict[str, Any], retry_counts: dict[str, int]
-    ) -> None:
+    async def _run_failed_ingest_retry(self, health: dict[str, Any]) -> None:
         """Pass-level failed-ingest retry (BE-8).
 
         Called once per pass, after all per-collection policies complete.
-        Processes ALL namespaces and collections.
+        Processes ALL namespaces and collections. It contains no ``await``, so no route
+        runs while it reads and changes the job store.
 
-        Mutates ``health`` and ``retry_counts`` in-place; the caller
-        (``_run_one_pass``) is responsible for persisting them.
+        Mutates ``health`` in-place; the caller (``_run_one_pass``) is responsible for
+        persisting it. The attempt count is no loop state: it is the highest ``retry_count`` among
+        the retries of the key's current submission, whatever their status
+        (``_RetryKeyHistory.attempts_used``), so a new submission starts a new chain with the full
+        ``retry_max_attempts``.
 
-        Algorithm:
-        1. Check for DONE resets: if the latest job for a source_path is DONE,
-           reset its retry count to 0.
-        2. Prune stale keys: remove keys where the source_path no longer appears
-           in JobStore AND count == 0.
-        3. Filter JobStore.list() for FAILED IngestJobs (only base IngestJob, not
-           subclasses like ExportJob/MigrationJob).
-        4. Skip jobs where source_path == '' (pre-D5 jobs — log DEBUG).
-           Skip jobs with unparseable created_at (log WARNING).
-        5. Aged-out jobs (job_created < cutoff) → transition to FAILED_EXPIRED via
-           ``transition(from_statuses={FAILED}, to_status=FAILED_EXPIRED)``.
-           Retry-exhausted jobs (retry_count >= max_attempts, within age) → same.
-           If transition() returns None, the job was already handled or evicted (log DEBUG).
-        6. Re-enqueue eligible jobs via JobStore.create(source="maintenance").
-           On create() failure: log WARNING; retry_count still incremented.
-        7. Increment retry_counts keyed '{namespace}/{collection}/{source_path}'.
-        8. Update last_retry_at in collection_health for each collection that had
-           at least one re-enqueued job.
-        9. Deduplicate: only ONE transition/re-enqueue per unique retry_key per pass.
+        Algorithm, per retry key ``{namespace}/{collection}/{source_path}``
+        (``_RetryKeyHistory`` summarises the key's jobs):
+        1. Consider only FAILED base IngestJobs (``is_base_ingest``: not subclasses like ExportJob/MigrationJob);
+           skip jobs where source_path == '' (pre-D5, inline and POST /collections/ ingests — log DEBUG) and
+           jobs on a collection ``[maintenance].exclude`` names (DEBUG; neither retried nor expired).
+        2. Superseded: a FAILED job that is not the key's latest job is skipped (DEBUG) — a
+           newer retry is outstanding (PENDING/RUNNING) or settled (DONE/FAILED), or a client
+           cancelled a newer job (``cancel_requested``). It is not marked seen, so the key's latest
+           FAILED job is handled in the same pass; it stays FAILED until that chain ends (step 3)
+           or the job store evicts it.
+        3. The key's latest FAILED job is retried or its chain ends (``_retry_or_end_chain``).
+        4. Deduplicate: only ONE transition/re-enqueue per unique retry_key per pass.
         """
         if not self._config.failed_ingest_retry:
             return
 
-        # Step 1: collect all jobs from JobStore.
         all_jobs: list[Any] = self._job_store.list()
 
-        # Build a set of all source_paths currently tracked in JobStore
-        # (keyed by '{namespace}/{collection}/{source_path}').
-        job_store_paths: set[str] = set()
-        for job in all_jobs:
-            if job.source_path:
-                job_store_paths.add(f"{job.namespace}/{job.collection}/{job.source_path}")
-
-        # Step 1: reset retry_counts for source paths where the latest job is DONE.
-        # Group all jobs by key to find the most recent one per path.
         jobs_by_key: dict[str, list[Any]] = defaultdict(list)
         for job in all_jobs:
             if job.source_path:
-                key = f"{job.namespace}/{job.collection}/{job.source_path}"
-                jobs_by_key[key].append(job)
+                jobs_by_key[_retry_key(job)].append(job)
+        histories = {key: _RetryKeyHistory.of(key_jobs) for key, key_jobs in jobs_by_key.items()}
 
-        for key, key_jobs in jobs_by_key.items():
-            # Use ISO timestamp comparison for correct chronological ordering.
-            try:
-                latest = max(key_jobs, key=lambda j: datetime.fromisoformat(j.created_at))
-            except (ValueError, TypeError):
-                logger.debug(
-                    "MaintenanceLoop: skipping DONE-reset for key %s — unparseable created_at in job group",
-                    key,
-                )
-                continue
-            if latest.status == JobStatus.DONE and key in retry_counts:
-                retry_counts[key] = 0
-
-        # Step 2: prune stale keys (not in JobStore AND count == 0).
-        keys_to_prune = [
-            k for k, count in retry_counts.items()
-            if k not in job_store_paths and count == 0
-        ]
-        for k in keys_to_prune:
-            del retry_counts[k]
-
-        # Step 3: filter for FAILED IngestJobs within age and attempt limits.
-        # Only exact IngestJob instances — exclude all subclasses.
-        max_age_hours = self._config.retry_max_age_hours
-        max_attempts = self._config.retry_max_attempts
         now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(hours=max_age_hours)
+        # retry_max_age_hours=0 puts the cutoff at now, so every job is aged out: retry is disabled.
+        cutoff = now - timedelta(hours=self._config.retry_max_age_hours)
 
-        # Track collections that had at least one re-enqueue.
         retried_collections: set[str] = set()
-        # Deduplicate: only one transition/re-enqueue per unique retry_key per pass.
         seen_keys: set[str] = set()
 
         for job in all_jobs:
-            # Only process exact base IngestJob instances (no subclasses).
-            if type(job) is not IngestJob:
+            if not is_base_ingest(job) or job.status != JobStatus.FAILED:
                 continue
-            if job.status != JobStatus.FAILED:
-                continue
-
-            # Step 4: skip pre-D5 jobs with no source path.
             if not job.source_path:
-                logger.debug(
-                    "MaintenanceLoop: skipping pre-D5 FAILED job %s (no source_path)",
-                    job.job_id,
-                )
+                logger.debug("MaintenanceLoop: skipping pre-D5 FAILED job %s (no source_path)", job.job_id)
                 continue
-
-            # Compute retry_key before age filter — needed for dedup and FAILED_EXPIRED transition.
-            retry_key = f"{job.namespace}/{job.collection}/{job.source_path}"
-
-            # Deduplicate — skip if already processed this key in this pass.
+            retry_key = _retry_key(job)
             if retry_key in seen_keys:
                 continue
-
-            current_count = retry_counts.get(retry_key, 0)
-
-            # Age filter — aged-out jobs transition to FAILED_EXPIRED regardless of retry count.
-            # When retry_max_age_hours=0, cutoff=now so every existing job is aged out,
-            # effectively disabling retry (no job is ever young enough).
-            try:
-                job_created = datetime.fromisoformat(job.created_at)
-                aged_out = job_created < cutoff
-            except (ValueError, TypeError):
-                logger.warning(
-                    "MaintenanceLoop: FAILED job %s for %s in %s/%s has an unparseable "
-                    "created_at timestamp (%r); skipping",
-                    job.job_id,
-                    job.source_path,
-                    job.namespace,
-                    job.collection,
-                    job.created_at,
+            if self._is_excluded(job.namespace, job.collection):
+                logger.debug(
+                    "MaintenanceLoop: FAILED job %s for %s in excluded collection %s/%s; not retried",
+                    job.job_id, job.source_path, job.namespace, job.collection,
                 )
                 seen_keys.add(retry_key)
                 continue
-            if aged_out:
-                logger.warning(
-                    "MaintenanceLoop: FAILED job %s for %s in %s/%s has aged out "
-                    "(created %s, cutoff %s); transitioning to FAILED_EXPIRED",
-                    job.job_id,
-                    job.source_path,
-                    job.namespace,
-                    job.collection,
-                    job.created_at,
-                    cutoff.isoformat(),
-                )
-                result = self._job_store.transition(
-                    job.job_id,
-                    from_statuses={JobStatus.FAILED},
-                    to_status=JobStatus.FAILED_EXPIRED,
-                )
-                if result is None:
-                    logger.debug(
-                        "MaintenanceLoop: transition to FAILED_EXPIRED for job %s "
-                        "returned None — already handled or evicted",
-                        job.job_id,
-                    )
-                seen_keys.add(retry_key)
+            history = histories[retry_key]
+            if self._is_superseded(job, history.latest):
                 continue
-
-            # Retry-exhausted jobs (within age cutoff) also transition to FAILED_EXPIRED.
-            if current_count >= max_attempts:
-                logger.warning(
-                    "MaintenanceLoop: FAILED job %s for %s in %s/%s has reached "
-                    "max retry attempts (%d); transitioning to FAILED_EXPIRED",
-                    job.job_id,
-                    job.source_path,
-                    job.namespace,
-                    job.collection,
-                    max_attempts,
-                )
-                result = self._job_store.transition(
-                    job.job_id,
-                    from_statuses={JobStatus.FAILED},
-                    to_status=JobStatus.FAILED_EXPIRED,
-                )
-                if result is None:
-                    logger.debug(
-                        "MaintenanceLoop: transition to FAILED_EXPIRED for job %s "
-                        "returned None — already handled or evicted",
-                        job.job_id,
-                    )
-                seen_keys.add(retry_key)
-                continue
-
-            # Re-enqueue eligible jobs via JobStore.create().
-            try:
-                self._job_store.create(
-                    path=job.source_path,
-                    collection=job.collection,
-                    namespace=job.namespace,
-                    source="maintenance",
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "MaintenanceLoop: failed to re-enqueue job for %s in %s/%s: %s",
-                    job.source_path,
-                    job.namespace,
-                    job.collection,
-                    exc,
-                )
-
-            # Increment retry count regardless of create() success/failure.
-            retry_counts[retry_key] = current_count + 1
-            retried_collections.add(f"{job.namespace}/{job.collection}")
             seen_keys.add(retry_key)
+            if self._retry_or_end_chain(job, history, cutoff, health):
+                retried_collections.add(f"{job.namespace}/{job.collection}")
 
-        # Update last_retry_at in collection_health for retried collections.
         now_str = now.isoformat()
         for col_key in retried_collections:
-            if col_key not in health:
-                health[col_key] = dict(_EMPTY_HEALTH_ENTRY)
-            health[col_key]["last_retry_at"] = now_str
+            health.setdefault(col_key, dict(_EMPTY_HEALTH_ENTRY))["last_retry_at"] = now_str
+
+    def _retry_or_end_chain(
+        self, job: IngestJob, history: _RetryKeyHistory, cutoff: datetime, health: dict[str, Any]
+    ) -> bool:
+        """Retry *job*, the newest FAILED job of its key, or end the key's chain; True when a retry was attempted.
+
+        Never retried — the chain ends (``_end_retry_chain``): a job ``_unretriable_reason`` names; a chain whose
+        origin (``_RetryKeyHistory.origin_created``) is older than ``retry_max_age_hours`` (aged out); or one whose
+        submission already used ``retry_max_attempts`` retries (``attempts_used``: exhausted). A key whose lineage
+        has no usable created_at is skipped (WARNING). Otherwise the job is re-enqueued as attempt
+        ``attempts_used + 1`` with its ``ingest_options`` and started (``_reenqueue_retry``) — True even when
+        create() failed, which uses no attempt; a retry left PENDING with nothing to run it records
+        ``RETRY_DISPATCH_FAILED_DETAIL`` as the collection's ``last_error``.
+        """
+        if (reason := _unretriable_reason(job)) is not None:
+            self._end_retry_chain(job, history, reason)
+            return False
+        if history.origin_created is None:
+            logger.warning(
+                "MaintenanceLoop: FAILED job %s for %s in %s/%s has an unparseable "
+                "created_at timestamp (%r); skipping",
+                job.job_id, job.source_path, job.namespace, job.collection, job.created_at,
+            )
+            return False
+        if history.origin_created < cutoff:
+            self._end_retry_chain(
+                job, history,
+                f"has aged out (retries began {history.origin_created.isoformat()}, cutoff {cutoff.isoformat()})",
+            )
+            return False
+        max_attempts = self._config.retry_max_attempts
+        if history.attempts_used >= max_attempts:
+            self._end_retry_chain(job, history, f"has reached max retry attempts ({max_attempts})")
+            return False
+        if self._reenqueue_retry(job, attempt=history.attempts_used + 1):
+            col_key = f"{job.namespace}/{job.collection}"
+            health.setdefault(col_key, dict(_EMPTY_HEALTH_ENTRY))["last_error"] = RETRY_DISPATCH_FAILED_DETAIL
+        return True
+
+    @staticmethod
+    def _is_superseded(job: IngestJob, latest: IngestJob | None) -> bool:
+        """True (logged at DEBUG) when *latest*, the newest superseding job of *job*'s retry key, is another job."""
+        if latest is None or latest.job_id == job.job_id:
+            return False
+        logger.debug(
+            "MaintenanceLoop: FAILED job %s for %s in %s/%s superseded by job %s (%s); not retried",
+            job.job_id, job.source_path, job.namespace, job.collection, latest.job_id, latest.status.value,
+        )
+        return True
+
+    def _end_retry_chain(self, job: IngestJob, history: _RetryKeyHistory, reason: str) -> None:
+        """End *job*'s retry key for good: log *reason* (WARNING) and move every FAILED job of the key to
+        FAILED_EXPIRED in this pass. Each write is best-effort: a failed one is logged (WARNING, with traceback) and
+        the job stays FAILED for the next pass; a rejected transition (already handled or evicted) is logged at
+        DEBUG."""
+        logger.warning(
+            "MaintenanceLoop: FAILED job %s for %s in %s/%s %s; transitioning the path's %d FAILED job(s) to "
+            "FAILED_EXPIRED",
+            job.job_id, job.source_path, job.namespace, job.collection, reason, len(history.failed),
+        )
+        for failed in history.failed:
+            try:
+                result = self._job_store.transition(
+                    failed.job_id, from_statuses={JobStatus.FAILED}, to_status=JobStatus.FAILED_EXPIRED
+                )
+            except Exception:  # noqa: BLE001 — one failed write must not abort the pass
+                logger.warning(
+                    "MaintenanceLoop: could not expire job %s; it stays FAILED until the next pass",
+                    failed.job_id, exc_info=True,
+                )
+                continue
+            if result is None:
+                logger.debug(
+                    "MaintenanceLoop: transition to FAILED_EXPIRED for job %s returned None — already handled or "
+                    "evicted",
+                    failed.job_id,
+                )
+
+    def _reenqueue_retry(self, job: IngestJob, *, attempt: int) -> bool:
+        """Re-enqueue *job*'s ingest as a new ``source="maintenance"`` job — retry number *attempt* (its
+        ``retry_count``), carrying *job*'s ``ingest_options`` — then start it (``_start_retry_job``); never raises.
+        True when the retry is stranded (``_start_retry_job``).
+
+        The options make the retry re-ingest as the original request did — without ``chunk_scopes`` its chunks would
+        match every scope filter. A failed create() is logged (WARNING); nothing was created, so nothing is stranded.
+        """
+        try:
+            retry_job = self._job_store.create(
+                path=job.source_path,
+                collection=job.collection,
+                namespace=job.namespace,
+                source="maintenance",
+                ingest_options=job.ingest_options,
+                retry_count=attempt,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "MaintenanceLoop: failed to re-enqueue job for %s in %s/%s: %s",
+                job.source_path, job.namespace, job.collection, exc,
+            )
+            return False
+        return self._start_retry_job(retry_job)
+
+    def _start_retry_job(self, retry_job: IngestJob) -> bool:
+        """Hand a re-enqueued PENDING retry job to ``dispatch_retry``; never raises. True when the job is stranded.
+
+        A dispatch that raises would leave a PENDING job nothing runs, so the job is written FAILED
+        (best-effort) with the sanitized ``RETRY_DISPATCH_FAILED_DETAIL``, which the next pass retries; the cause is
+        logged only. When that write fails too, the job is stranded: it stays PENDING until a restart recovers it.
+        """
+        try:
+            self._dispatch_retry(retry_job)
+        except Exception:  # noqa: BLE001 — logged with traceback; the pass continues
+            logger.exception("MaintenanceLoop: failed to dispatch retry job %s", retry_job.job_id)
+            try:
+                self._job_store.update(retry_job.job_id, status=JobStatus.FAILED, error=RETRY_DISPATCH_FAILED_DETAIL)
+            except Exception:  # noqa: BLE001 — best-effort status write
+                logger.exception("MaintenanceLoop: could not persist FAILED status for retry job %s", retry_job.job_id)
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Main pass
@@ -1175,7 +1268,6 @@ class MaintenanceLoop:
 
         state = self._load_state()
         health: dict[str, Any] = state.get("collection_health", {})
-        retry_counts: dict[str, int] = state.get("retry_counts", {})
 
         # Compute next_run_at for the state file.
         interval_hours = self._config.interval_hours
@@ -1310,10 +1402,10 @@ class MaintenanceLoop:
             logger.error("MaintenanceLoop: _drain_communities_pending_rebuild failed: %s", exc)
 
         # Pass-level retry (once per pass, after all per-collection work).
-        # Passes the pass-level health and retry_counts dicts so the method
-        # mutates them in-place; no internal save is done by the method.
+        # Passes the pass-level health dict so the method mutates it in-place;
+        # no internal save is done by the method.
         try:
-            await self._run_failed_ingest_retry(health, retry_counts)
+            await self._run_failed_ingest_retry(health)
         except Exception as exc:  # noqa: BLE001
             logger.error("MaintenanceLoop: _run_failed_ingest_retry failed: %s", exc)
 
@@ -1322,7 +1414,6 @@ class MaintenanceLoop:
             "last_run_at": now_str,
             "next_run_at": next_run_at,
             "collection_health": health,
-            "retry_counts": retry_counts,
             "last_expired_pruned_at": last_expired_pruned_at,
             "last_graph_gc_at": last_graph_gc_at,
             "stale_mention_count": stale_mention_count,

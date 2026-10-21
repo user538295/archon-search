@@ -5,12 +5,14 @@ import asyncio
 import logging
 import math
 import os
+from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, PrivateAttr, field_validator
+from starlette.datastructures import State
 
 from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search._types import IngestError, _file_exceeds_limit
@@ -23,7 +25,7 @@ from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._job_warmup import await_models_warm
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.schemas import CodedErrorDetail, ErrorDetail, JobListResponse, JobResponse
-from archon_search.types import DeleteJob, ExportJob, ImportJob, MigrationJob, ReindexJob, SyncJob
+from archon_search.types import DeleteJob, ExportJob, ImportJob, IngestOptions, MigrationJob, ReindexJob, SyncJob
 
 if TYPE_CHECKING:
     from archon_search.store import SearchStore
@@ -293,7 +295,7 @@ def _persist_job_status(job_store: JobStore, job_id: str, status: JobStatus, *, 
         logger.error("%s: could not persist %s status for job %s", context, status.value, job_id, exc_info=True)
 
 
-def _cancel_requested(job_store: JobStore, job_id: str) -> bool:
+def _is_cancelling(job_store: JobStore, job_id: str) -> bool:
     """True when a DELETE /jobs/{id} has moved the job to CANCELLING and its task has not completed the cancel yet."""
     job = job_store.get(job_id)
     return job is not None and job.status == JobStatus.CANCELLING
@@ -306,7 +308,7 @@ def _finish_requested_cancel(job_store: JobStore, job_id: str, *, context: str) 
     run no (further) work completes the cancel here. The write is best-effort (a failure is logged, and True is
     still returned); any other status, or a missing job, is left untouched.
     """
-    if not _cancel_requested(job_store, job_id):
+    if not _is_cancelling(job_store, job_id):
         return False
     _persist_job_status(job_store, job_id, JobStatus.CANCELLED, context=context)
     return True
@@ -384,8 +386,9 @@ async def _default_ingest_task(
         _persist_job_status(store, job_id, JobStatus.CANCELLED, context=_INGEST_LOG_CONTEXT)
         raise
     except EmbedderNotReadyError as exc:
-        # Not a genuine failure: FAILED with a clean message. MaintenanceLoop._run_failed_ingest_retry
-        # re-enqueues a FAILED base IngestJob as a new PENDING job; nothing in this module runs that job.
+        # Not a genuine failure: FAILED with a clean message. MaintenanceLoop._run_failed_ingest_retry re-enqueues a
+        # FAILED POST /ingest path job (one with ingest_options) as a new PENDING job, run here via
+        # make_retry_dispatcher; an inline or POST /collections/ ingest has no options and is never retried.
         logger.warning("Ingest task %s: embedder not ready — %s", job_id, exc)
         _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=EMBEDDER_NOT_READY_DETAIL)
     except IngestPathNotFoundError as exc:
@@ -578,8 +581,8 @@ async def _reindex_task(
             embedder = await embedder_cache.get_or_load(resolve_active_model(meta, config))
     except EmbedderNotReadyError as exc:
         # Unlike _default_ingest_task's IngestJob, a FAILED ReindexJob is not
-        # auto-retried by MaintenanceLoop._run_failed_ingest_retry (exact
-        # ``type(job) is IngestJob`` only) — an operator must manually re-run
+        # auto-retried by MaintenanceLoop._run_failed_ingest_retry (base ingest
+        # jobs only, ``is_base_ingest``) — an operator must manually re-run
         # `collection reindex`. That gap predates this fix and is out of scope
         # here; this only sanitizes the error message (never str(exc) on the wire).
         logger.warning("_reindex_task: embedder not ready for job %s — %s", job_id, exc)
@@ -641,7 +644,7 @@ async def _reindex_task(
         return
 
     # Check for cancellation between ingest and DONE (mirrors _persist_final_ingest_status): skip the promotion
-    if _cancel_requested(job_store, job_id):
+    if _is_cancelling(job_store, job_id):
         await _end_reindex_cancelled_or_failed(store, job_store, collection, namespace, job_id)
         return
 
@@ -701,9 +704,6 @@ _INGEST_ERRORS: dict[int | str, dict[str, Any]] = {
 @router.post("/ingest", status_code=202, response_model=JobResponse, responses=_INGEST_ERRORS)
 async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONResponse:
     store: JobStore = request.app.state.job_store
-    pipeline_fn: Callable[..., Awaitable[None]] | None = getattr(
-        request.app.state, "ingest_pipeline", None
-    )
     # Populate ingested_by from HTTP header (normalized at boundary).
     body.ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     if body.path is not None:
@@ -771,34 +771,111 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
         return lock_result
 
     try:
-        job = store.create(namespace=ns, collection=body.collection, path=body.path or "")
+        job = store.create(
+            namespace=ns, collection=body.collection, path=body.path or "", ingest_options=_ingest_options(body)
+        )
     except Exception:  # noqa: BLE001 — any failure maps to one sanitized 500 and releases the lock
         logger.exception("Failed to create the ingest job for collection %s", body.collection)
         if lock_result is not None and lock_result.locked():
             lock_result.release()
         return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
-    pipeline = getattr(request.app.state, "pipeline", None)
-    embedder_cache = getattr(request.app.state, "embedder_cache", None)
-    config = getattr(request.app.state, "config", None)
-
-    if lock_result is not None:
-        task = asyncio.create_task(
-            _default_ingest_task_with_lock(
-                job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn, held_lock=lock_result,
-                search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config,
-            )
-        )
-    else:
-        task = asyncio.create_task(
-            _default_ingest_task(
-                job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn,
-                search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config,
-            )
-        )
-    request.app.state._background_tasks.add(task)
-    task.add_done_callback(request.app.state._background_tasks.discard)
+    _track_background_task(request.app.state, _ingest_task(request.app.state, job.job_id, body, ns, lock_result))
     return JobResponse(**job_to_dict(job))
+
+
+def _ingest_options(body: IngestRequest) -> IngestOptions | None:
+    """The options a ``MaintenanceLoop`` retry of *body*'s job re-applies; ``None`` for an inline (``documents``)
+    ingest, which has no path to retry."""
+    if body.path is None:
+        return None
+    return IngestOptions(
+        submitted_path=body.submitted_path,
+        ingested_by=body.ingested_by,
+        chunk_ttl_seconds=body.chunk_ttl_seconds,
+        chunk_scopes=tuple(body.chunk_scopes) if body.chunk_scopes is not None else None,
+    )
+
+
+def _ingest_task(
+    app_state: State, job_id: str, body: IngestRequest, namespace: str, held_lock: asyncio.Lock | None
+) -> Coroutine[Any, Any, None]:
+    """The ingest task coroutine for *job_id*: ``_default_ingest_task_with_lock`` when the caller holds the
+    collection lock (*held_lock*), else ``_default_ingest_task``.
+
+    Its dependencies are read from *app_state* the way POST /ingest always has: an absent attribute is ``None``, so
+    the ``ingest_pipeline`` test hook, or the stub pipeline when the real dependencies are not all wired, runs.
+    """
+    deps: dict[str, Any] = {
+        "pipeline_fn": getattr(app_state, "ingest_pipeline", None),
+        "search_store": getattr(app_state, "search_store", None),
+        "embedder_cache": getattr(app_state, "embedder_cache", None),
+        "pipeline": getattr(app_state, "pipeline", None),
+        "config": getattr(app_state, "config", None),
+    }
+    if held_lock is not None:
+        return _default_ingest_task_with_lock(
+            job_id, app_state.job_store, body, namespace=namespace, held_lock=held_lock, **deps
+        )
+    return _default_ingest_task(job_id, app_state.job_store, body, namespace=namespace, **deps)
+
+
+def _track_background_task(app_state: State, coro: Coroutine[Any, Any, None]) -> None:
+    """Run *coro* as a task kept in ``app_state._background_tasks`` until it finishes (the lifespan cancels them)."""
+    task = asyncio.create_task(coro)
+    app_state._background_tasks.add(task)
+    task.add_done_callback(app_state._background_tasks.discard)
+
+
+async def _run_maintenance_retry(app_state: State, job_id: str, body: IngestRequest, namespace: str) -> None:
+    """Run a MaintenanceLoop retry job as POST /ingest runs its job, taking the collection lock BEFORE the
+    PENDING -> RUNNING claim, as POST /ingest does.
+
+    That serializes the claim with DELETE /collections/{name}: a DELETE holding the lock cancels this still-PENDING
+    job, so the claim is refused and nothing re-creates the dropped collection; a DELETE that gets the lock after the
+    claim finds the job RUNNING and refuses with 503. Unlike POST /ingest, the wait has no bound: no client waits on
+    a background retry, so contention neither fails the job nor burns a retry attempt. Cancelling the task while it
+    waits (lifespan shutdown) takes no lock and completes only a cancel a client requested (CANCELLING ->
+    CANCELLED); otherwise the job stays PENDING — a shutdown is no client's cancel — and the next start's recovery
+    marks it FAILED "never started", which ``MaintenanceLoop`` retries.
+    """
+    search_store = getattr(app_state, "search_store", None)
+    lock: asyncio.Lock | None = search_store.lock_for(body.collection) if search_store is not None else None
+    if lock is not None:
+        try:
+            await lock.acquire()
+        except asyncio.CancelledError:
+            _finish_requested_cancel(app_state.job_store, job_id, context=_INGEST_LOG_CONTEXT)
+            raise
+    await _ingest_task(app_state, job_id, body, namespace, lock)
+
+
+def make_retry_dispatcher(app_state: State) -> Callable[[IngestJob], None]:
+    """Build ``MaintenanceLoop``'s ``dispatch_retry``: it runs an already-created PENDING path ``IngestJob`` (a retry).
+
+    The job runs through POST /ingest's own task on the request the original ingest made — its ``ingest_options``:
+    ``path`` as submitted (resolved: the job's ``source_path``), ``ingested_by``, ``chunk_ttl_seconds`` and
+    ``chunk_scopes`` — with the same collection lock, PENDING -> RUNNING claim and sanitized terminal status
+    (``_run_maintenance_retry``). *app_state* is read when a job is dispatched, so the dispatcher may be built before
+    the lifespan wires its dependencies. Raises ``ValueError`` for a job without ``ingest_options`` (it is never run
+    with request defaults, which would drop its scopes) and ``pydantic.ValidationError`` when the options no longer
+    validate as an ``IngestRequest``.
+    """
+
+    def dispatch_retry(job: IngestJob) -> None:
+        options = job.ingest_options
+        if options is None:
+            raise ValueError(f"job {job.job_id} has no ingest options to retry with")
+        body = IngestRequest(
+            collection=job.collection,
+            path=options.submitted_path,
+            ingested_by=options.ingested_by,
+            chunk_ttl_seconds=options.chunk_ttl_seconds,
+            chunk_scopes=list(options.chunk_scopes) if options.chunk_scopes is not None else None,
+        ).with_resolved_path(job.source_path)
+        _track_background_task(app_state, _run_maintenance_retry(app_state, job.job_id, body, job.namespace))
+
+    return dispatch_retry
 
 
 _KIND_TYPE_MAP: dict[str, type] = {
@@ -981,7 +1058,8 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
     if job.status in _ACTIVE_STATUSES:
         # Use transition() to avoid TOCTOU race: only updates if still active
         try:
-            updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)
+            # cancel_requested (off the wire) tells this client's cancel from a CANCELLED a shutdown writes.
+            updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING, cancel_requested=True)
         except Exception:  # noqa: BLE001 — the job keeps its status; any failure maps to one sanitized 500
             logger.exception("Failed to persist the cancel of job %s", job_id)
             return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)

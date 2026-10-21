@@ -47,7 +47,6 @@ def _make_state_file(tmp_path: Path, **overrides: object) -> Path:
                 "meta_chunk_count": 42,
             }
         },
-        "retry_counts": {},
     }
     state.update(overrides)
     state_file = tmp_path / ".maintenance-state.json"

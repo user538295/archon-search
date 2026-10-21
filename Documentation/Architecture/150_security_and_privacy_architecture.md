@@ -107,6 +107,8 @@ If both exist, front-matter wins and a warning is logged.
 
 `resolve_acl()` returns a named `AclResolutionResult` dataclass (`acl`, `source`, `sidecar_path`, `warnings`). The `source` field is a three-way enum: `"frontmatter"` | `"sidecar"` | `None` (no rule configured). `pipeline.py` synthesizes `"collection_default"` when `resolve_acl` returns `source=None` — this distinguishes "intentionally open by default" from "pre-G15 chunk with unknown provenance" (`source=null`).
 
+**Maintenance retries never widen access.** A failed path ingest the maintenance loop retries re-applies the original request's `chunk_scopes` and `ingested_by` (with its `chunk_ttl_seconds` and submitted path), which `POST /ingest` persists on the job as `ingest_options` in the jobs file (`make_retry_dispatcher`, `archon_search/server/routes_jobs.py`); a `FAILED` ingest job without stored options is moved to `FAILED_EXPIRED`, never retried with request defaults that would drop its scopes (`archon_search/jobs/maintenance_loop.py`).
+
 ### ACL provenance columns (g15)
 
 Three nullable per-chunk columns capture ACL provenance at ingest time so the information is available without re-reading the source file at query time:

@@ -457,6 +457,7 @@ def _failing_maintenance_loop(tmp_path: Path, failing_policy: str) -> tuple[Main
     graph_store.prune_stale_mentions = AsyncMock(return_value=0)
     graph_store.delete_orphan_nodes_and_edges = AsyncMock(return_value=MagicMock(communities_invalidated=False))
     loop = MaintenanceLoop(
+        dispatch_retry=lambda _job: None,
         job_store=MagicMock(), search_store=store,
         config=MaintenanceConfig(interval_hours=0, graph_gc=True), data_dir=tmp_path, graph_store=graph_store,
     )

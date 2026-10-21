@@ -4348,7 +4348,7 @@
     },
     "/collections/{name}": {
       "delete": {
-        "description": "Remove a collection: delete config entry and drop LanceDB data.",
+        "description": "Remove a collection: delete config entry and drop LanceDB data.\n\nOnce the table is dropped, the collection's base ingest jobs that are `FAILED` or `PENDING` \u2014 in every\nnamespace, as the table is shared by name \u2014 become `CANCELLED`, so no maintenance retry re-creates the\ncollection (best-effort: a failed write is logged and the delete still succeeds).",
         "operationId": "remove_collection_collections__name__delete",
         "parameters": [
           {
