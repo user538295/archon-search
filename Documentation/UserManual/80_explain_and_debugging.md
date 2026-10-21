@@ -38,7 +38,7 @@ REST (`ExplainRequest`, `routes_explain.py`):
 | `query` | string | — | Required, non-empty after strip. |
 | `collection` | string \| null | null | Pin one collection. |
 | `collections` | list \| null | null | Multi-collection fanout. Mutually exclusive with `collection`; capped at `[search] max_fanout`. |
-| `top_k` | int | 5 | `>= 1`; must be `<= [database] top_k_max`. |
+| `top_k` | int | 5 | `>= 1`; must be `<= [search].top_k_max`. |
 | `rerank` | bool | true | Set `false` to see the raw RRF ordering before the cross-encoder. |
 | `hyde` | bool | false | Run HyDE query expansion. |
 | `rag_fusion` | bool | false | Run RAG-Fusion. Suppresses HyDE. |

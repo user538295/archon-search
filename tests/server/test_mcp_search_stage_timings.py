@@ -18,6 +18,7 @@ if "fastmcp" not in sys.modules:
     _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
     sys.modules["fastmcp"] = _fastmcp
 
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search._types import SearchResult
 from archon_search.config import SearchConfig
 from archon_search.observability import correlation_id as _correlation_id, record_stage
@@ -81,6 +82,7 @@ def _make_search_pipeline() -> MagicMock:
 def _make_search_with_context_pipeline() -> MagicMock:
     """Pipeline whose search_with_context() records embed + context stages."""
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
 
     async def _search_with_context(*args: Any, **kwargs: Any):

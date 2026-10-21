@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
+
 pytestmark = pytest.mark.xdist_group("mcp")
 
 # ---------------------------------------------------------------------------
@@ -149,6 +151,7 @@ async def test_mcp_search_empty_active_model_falls_back_to_global() -> None:
 async def test_mcp_search_with_context_calls_embedder_cache_get_or_load() -> None:
     """search_with_context tool must call embedder_cache.get_or_load with active model."""
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     meta = _make_collection_meta("model-X")
     pipeline.get_collection_meta = AsyncMock(return_value=meta)
     from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
@@ -166,6 +169,7 @@ async def test_mcp_search_with_context_calls_embedder_cache_get_or_load() -> Non
 async def test_mcp_search_with_context_passes_resolved_embedder_to_pipeline() -> None:
     """search_with_context tool must pass resolved embedder to pipeline."""
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     meta = _make_collection_meta("model-X")
     pipeline.get_collection_meta = AsyncMock(return_value=meta)
     from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult

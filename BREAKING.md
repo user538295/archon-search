@@ -8,6 +8,43 @@
 
 ## Changelog
 
+### [next release] — MCP `search_with_context`: `context_window` must be in `[0, [search].context_window_max]` (default 10); `GET /status` `search` gains `context_window_max` (2026-10-17)
+
+**Surface**: the MCP tool `search_with_context` → its `context_window` argument; the new config key `[search].context_window_max`; `GET /status` → `search` (`SearchStatusDetail`).
+
+**The tool's input schema keeps `context_window` as `int`, default `1`, with no `minimum` / `maximum`; only its `description` now states the `[0, [search].context_window_max]` bound. In `GET /openapi.json`, `SearchStatusDetail` gains the required integer `context_window_max` (additive; the tool itself has no REST counterpart).**
+
+**What changed:**
+
+- Any `context_window` integer was accepted. A large value made the server build up to `2 * context_window` neighbour chunk ids per hit and query them all at once — an unbounded memory allocation and an equally oversized database query (the lower side is clamped at chunk `0`, so `10**9` still meant at least `10**9` ids); a negative value silently returned empty `context_before` / `context_after`. A value outside `[0, context_window_max]` now returns `{"error": "context_window must be in [0, N]; got M", "code": "validation_error"}` before any search runs, where `N` is the configured bound. `0` stays valid and returns no neighbours.
+- The bound is the operator setting `[search].context_window_max` (integer, default `10`, must be `>= 1` so the tool's default window of `1` stays valid; a value below `1`, a boolean, a fractional or a non-numeric value is a `ConfigError` at load time).
+- `GET /status` → `search` reports the live value as `context_window_max`, next to `max_fanout` and `top_k_max`.
+
+**Migration**: clients passing `context_window` above the bound (`10` unless the operator set `[search].context_window_max`) must lower it, or the operator must raise the setting; clients passing a negative value must pass `0` for the same empty-context result. Clients with strict `StatusResponse` type stubs add `context_window_max: int` to `search`. Nothing else is needed.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — config: number keys reject booleans, `inf`/`nan` and fractional integers; `[database].validation_timeout_seconds` is a float (2026-10-17)
+
+**Surface**: `archon-search.toml` loading (`load_config`, server startup, every CLI command that reads the config).
+
+**What changed:**
+
+- **A TOML boolean in a float key is a `ConfigError` at load time** (`Expected float for '<key>', got bool`). Before, `float(True)` silently became `1.0` for `[database].language_detection_confidence_threshold`, `[search].fanout_timeout_seconds`, `[routing].routing_confidence_threshold`, `[routing].routing_description_weight`, `[hyde].timeout_seconds`, `[rag_fusion].timeout_seconds` and `[graph].extraction_timeout_seconds`. `false` (`0.0`) loaded silently only for the two `[routing]` keys, whose range is `[0.0, 1.0]`; the other five already failed their range check with `0.0`. The `[graph]` keys `leiden_resolution`, `ppr_damping`, `synonym_threshold`, `ner_confidence` and `relation_confidence` already rejected booleans and are unchanged.
+- **`inf`, `-inf` and `nan` in any float key are a `ConfigError`** (`Expected finite float for '<key>', got inf`), including the quoted string forms (`"inf"`). Before, a key whose only check was `> 0` loaded them — `inf` as a timeout (`fanout_timeout_seconds`, `[hyde]`/`[rag_fusion]`/`[graph]` timeouts) or `leiden_resolution`, and `nan` there too, since `nan <= 0` is false. A TOML integer too large for a float is also a `ConfigError` (`Expected finite float for '<key>', got an int beyond float range`) instead of an uncaught `OverflowError`.
+- **A TOML boolean in a lenient integer key is a `ConfigError`** (`Expected integer for '<key>', got bool`). The lenient integer keys are the ones loaded through `_coerce_int`: `[server].port`; `[database]` `chunk_size`, `top_k_retrieve`, `top_k_return`, `centroid_recompute_threshold`, `embedder_cache_size`; `[search]` `max_fanout`, `fanout_leg_trim`, `top_k_max`; `[routing].routing_shortlist_size`; `[logging].backup_count`; `[telemetry].retention_days`; `[hyde].max_requests_per_minute`; `[rag_fusion]` `max_requests_per_minute`, `num_queries`; `[jobs]` `max_concurrent_bulk`, `checkpoint_interval`; `[backup]` `interval_hours`, `keep`; `[maintenance]` `interval_hours`, `retry_max_attempts`, `retry_max_age_hours`; `[auth].rotate_grace_seconds`; `[graph]` `extraction_rate_limit_rpm`, `extraction_token_budget`. Before, `int(True)` loaded every one of them as `1`. `false` (`0`) loaded silently only for the keys whose range admits `0` — `[logging].backup_count`, `[backup].interval_hours`, `[backup].keep`, `[maintenance].interval_hours`, `[maintenance].retry_max_age_hours` and `[auth].rotate_grace_seconds`; the others already failed their `> 0` / `>= 1` range check with `0`.
+- **A fractional value in a lenient integer key is a `ConfigError`** (`Expected integer for '<key>', got Float`) instead of being truncated — `top_k_return = 5.9` used to load as `5`. `inf` there is the same `ConfigError` instead of an uncaught `OverflowError`; `nan` already raised that exact `ConfigError` and is unchanged. Integral floats such as `5.0` and numeric strings such as `"5"` still load as `5` in these keys.
+- **The strict integer keys are unchanged.** `[ingest].max_file_mb`, `[ingest].max_tasks_per_child`, `[graph].backend_threshold_edges`, the `[graph]` keys `max_community_size`, `community_summary_chunks`, `max_global_candidates`, `max_inspection_nodes`, `max_inspection_edges`, `ppr_top_entities`, `naive_max_expansion_terms`, and `[openai_shim].top_k` already required a TOML integer: any boolean, float (`5.0` included) or string was, and still is, a `ConfigError`.
+- **`[database].validation_timeout_seconds` is now a float** (`SearchConfig.validation_timeout_seconds: float = 60.0`). Fractional values such as `1.5` are honoured instead of being truncated by `int()`. `true`, which `int(True)` previously turned into a 1-second timeout, and `false`, which previously loaded as `0` and then warned and fell back to `60`, are now a `ConfigError`. `inf` (formerly an uncaught `OverflowError`) and `nan` are a `ConfigError` too; values `<= 0` still warn and fall back to `60.0`. The timeout warning in `provider_warnings` still reads `validation timed out after 60s` for whole-second values (`1.5` renders `1.5s`).
+
+**Migration**: replace any `true`/`false` in a number key with a number (`true` was equivalent to `1`), replace `inf`/`nan` with a finite value, and write integer keys as whole numbers. Library callers reading `SearchConfig.validation_timeout_seconds` receive a `float`; an integer in the TOML file still loads (as `30.0` for `30`).
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — Default config path follows `ARCHON_SEARCH_DATA_DIR`; `serve` no longer warns about an unset `ARCHON_SEARCH_CONFIG` (2026-10-17)
 
 **What changed:** With `ARCHON_SEARCH_CONFIG` unset, the default config (`config.get_default_config_path()`, via `paths.get_data_dir()`) is now `<data-dir>/archon-search.toml` instead of always `~/.archon-search/archon-search.toml`, so it follows `ARCHON_SEARCH_DATA_DIR`; with the default data dir the path is unchanged. In the Docker image (`ARCHON_SEARCH_DATA_DIR=/data`, `HOME=/data`, no `ARCHON_SEARCH_CONFIG`) it moves from `/data/.archon-search/archon-search.toml` to `/data/archon-search.toml`. Without `--config`, the plist/unit written by `install` / `wizard` already pointed at `<data-dir>/archon-search.toml` while the wizard wrote its config to `~/.archon-search/archon-search.toml`; both now use the same default, and the plist/unit also honours an `ARCHON_SEARCH_CONFIG` set at install time (`platform/macos.py`, `platform/linux.py`). `archon-search serve` no longer logs the `ARCHON_SEARCH_DATA_DIR is set but ARCHON_SEARCH_CONFIG is not` warning.
@@ -226,7 +263,7 @@ A job the scheduler fails to start still reports `dispatch_failed: <exception te
 2. **Trigger the maintenance pass** (`POST /maintenance/trigger`, or `archon-search maintenance run`). Its graph GC sweep is what actually deletes the orphaned nodes and their unsupported edges.
 3. **Rebuild communities** (`archon-search graph build-communities <collection>`), because community membership computed over the pre-sweep graph is stale once step 2 removes nodes.
 
-**Two settings gate this silently, and neither reports an error if it is off**: `[maintenance].graph_gc` must be `true` or step 2's GC sweep never runs at all, and `[graph].gc_rebuild_communities` must be `true` for step 3 to happen automatically after the sweep (leave it `false` and you must run `graph build-communities` by hand). Both default to `true` (`config.py:106,177`). Check both before concluding the cleanup worked.
+**Two settings gate this silently, and neither reports an error if it is off**: `[maintenance].graph_gc` must be `true` or step 2's GC sweep never runs at all, and `[graph].gc_rebuild_communities` must be `true` for step 3 to happen automatically after the sweep (leave it `false` and you must run `graph build-communities` by hand). Both default to `true` (`MaintenanceConfig.graph_gc`, `GraphConfig.gc_rebuild_communities` in `config.py`). Check both before concluding the cleanup worked.
 
 ---
 

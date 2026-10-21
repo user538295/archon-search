@@ -215,6 +215,35 @@ def test_mcp_smoke_search_with_context(smoke_env) -> None:
     )
 
 
+def test_mcp_search_with_context_honours_toml_context_window_max(tmp_path, monkeypatch) -> None:
+    """TOML [search].context_window_max = 2 bounds search_with_context over the real /mcp mount."""
+    toml_content = "[search]\ncontext_window_max = 2\n"
+    with make_real_app(tmp_path, monkeypatch, mcp_enabled=True, toml_content=toml_content) as (
+        client,
+        _cfg,
+        api_key,
+    ):
+        session_id = _mcp_initialize(client, api_key)
+
+        over = _assert_tool_response_valid(
+            _mcp_call_tool(client, api_key, session_id, "search_with_context", {
+                "query": "anything", "collection": "missing", "context_window": 3,
+            }),
+            "search_with_context",
+        )
+        assert over["code"] == "validation_error", over
+        assert over["error"] == "context_window must be in [0, 2]; got 3", over
+
+        at_cap = _assert_tool_response_valid(
+            _mcp_call_tool(client, api_key, session_id, "search_with_context", {
+                "query": "anything", "collection": "missing", "context_window": 2,
+            }),
+            "search_with_context",
+        )
+        # Past the bound check: the missing collection is the next rejection.
+        assert at_cap["code"] == "not_found", at_cap
+
+
 # ---------------------------------------------------------------------------
 # Smoke test 3: explain
 # ---------------------------------------------------------------------------

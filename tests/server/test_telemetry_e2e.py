@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search._types import SearchResult
 from archon_search.config import SearchConfig, TelemetryConfig
 from archon_search.jobs.store import JobStore
@@ -131,6 +132,7 @@ def _make_ok_pipeline(results: list[SearchResult]) -> MagicMock:
     from archon_search.pipeline import SearchPipelineResult
 
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=results, acl_filtered=False))
     swc_items = [{"result": r, "context_before": [], "context_after": []} for r in results]
@@ -144,6 +146,7 @@ def _make_ok_pipeline(results: list[SearchResult]) -> MagicMock:
 
 def _make_error_pipeline(exc: Exception) -> MagicMock:
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.search = AsyncMock(side_effect=exc)
     pipeline.search_with_context = AsyncMock(side_effect=exc)

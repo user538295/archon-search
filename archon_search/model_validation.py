@@ -458,7 +458,7 @@ def validate_providers_shared(
 
 async def validate_models_async(
     config: SearchConfig,
-    timeout_seconds: float = 60,
+    timeout_seconds: float = 60.0,
     embedder_is_warm: bool = False,
 ) -> ModelValidationResult:
     """Validate the configured embedder and reranker without blocking startup (C1).
@@ -522,7 +522,7 @@ async def validate_models_async(
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
-        return _result(False, False, [f"validation timed out after {timeout_seconds}s"])
+        return _result(False, False, [f"validation timed out after {timeout_seconds:.15g}s"])
     except BaseException as exc:  # includes CancelledError — never re-raise
         logger.warning("model validation failed unexpectedly: %s", exc, exc_info=True)
         return _result(False, False, [_VALIDATION_FAILED_MESSAGE])

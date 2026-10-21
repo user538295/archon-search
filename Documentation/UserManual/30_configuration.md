@@ -10,7 +10,7 @@
 1. **One file, one process.** All server config lives in a single TOML file. The default is `<data-dir>/archon-search.toml` (`~/.archon-search/archon-search.toml` unless `ARCHON_SEARCH_DATA_DIR` is set); the `ARCHON_SEARCH_CONFIG` environment variable can redirect to any other path.
 2. **Defaults are safe.** Every key has a default in `archon_search/config.py:SearchConfig`; a missing file or missing section uses defaults rather than failing.
 3. **The auth key is a separate concern.** API keys live in `~/.archon-search/.search.env` (mode `600`), not in the TOML — see [Authentication](#authentication).
-4. **Validation is strict where it matters.** Numeric ranges (port, thresholds, retention) raise `ConfigError` on bad values, and malformed TOML fails loudly at load time. String fields are coerced permissively via `str()`, so e.g. `host = 123` becomes `"123"` rather than raising.
+4. **Validation is strict where it matters.** Numeric ranges (port, thresholds, retention) raise `ConfigError` on bad values, as does a boolean or `inf`/`nan` in a number key and a fractional value in an integer key; malformed TOML fails loudly at load time. String fields are coerced permissively via `str()`, so e.g. `host = 123` becomes `"123"` rather than raising.
 
 The fully annotated reference is `archon-search.toml.example` at the repo root — every key, default, and validation rule is commented there. This page is the task-oriented summary.
 
@@ -65,7 +65,7 @@ Vector store location, models, chunking, and provider/GPU wiring.
 | `reranker_providers` | absent | When present, overrides `providers` for the reranker only (`[]` forces CPU). Written by the wizard in split-provider mode. |
 | `top_k_retrieve` | `15` | First-stage candidate pool size (>0). |
 | `top_k_return` | `5` | Results returned per query (>0). |
-| `validation_timeout_seconds` | `60` | Timeout for the background model-validation probe; values ≤0 warn and fall back to 60. `GET /ready` answers `503`/`checks.models: "pending"` until model warm-up and this probe both finish; a failed warm-up ends the wait at once with `checks.models: "fail"`. The probe starts alongside warm-up and never fails startup (its only exception is a shutdown cancellation arriving during the startup probes below, which propagates); it first runs its startup probes in order: the llama-server reachability probe (3 s; only when `llama_cpp` is the `provider` of `[hyde]`, `[rag_fusion]` or `[graph]`), the graph NER importability check (only when `[graph].enabled`), and the extraction-model probe (up to min(`[graph].extraction_timeout_seconds`, 75 s); only when configured — `[graph].enabled`, `[graph].extraction_model` set, a `[graph].provider` with a buildable enrichment client and, for `llama_cpp`, a reachable llama-server). Only then does this timeout start, so it bounds only the last part of the `/ready` `503` window. A timeout reports `checks.models: "fail"`: both `embedder_ok` and `reranker_ok` false with `validation timed out after <N>s` or, when `reranker_providers` is set and the reranker's split-provider re-check overruns the remaining budget, only `reranker_ok` false with `reranker split-provider validation timed out after <X.X>s` (or `reranker split-provider validation skipped: timeout budget exhausted` when the first probe used up the whole budget). A `warn`/`fail` result never gates readiness. |
+| `validation_timeout_seconds` | `60.0` | Timeout in seconds for the background model-validation probe. A float: fractional values such as `1.5` are honoured, not truncated; values ≤0 warn and fall back to 60.0; a boolean, `inf` or `nan` is a config error. `GET /ready` answers `503`/`checks.models: "pending"` until model warm-up and this probe both finish; a failed warm-up ends the wait at once with `checks.models: "fail"`. The probe starts alongside warm-up and never fails startup (its only exception is a shutdown cancellation arriving during the startup probes below, which propagates); it first runs its startup probes in order: the llama-server reachability probe (3 s; only when `llama_cpp` is the `provider` of `[hyde]`, `[rag_fusion]` or `[graph]`), the graph NER importability check (only when `[graph].enabled`), and the extraction-model probe (up to min(`[graph].extraction_timeout_seconds`, 75 s); only when configured — `[graph].enabled`, `[graph].extraction_model` set, a `[graph].provider` with a buildable enrichment client and, for `llama_cpp`, a reachable llama-server). Only then does this timeout start, so it bounds only the last part of the `/ready` `503` window. A timeout reports `checks.models: "fail"`: both `embedder_ok` and `reranker_ok` false with `validation timed out after <N>s` or, when `reranker_providers` is set and the reranker's split-provider re-check overruns the remaining budget, only `reranker_ok` false with `reranker split-provider validation timed out after <X.X>s` (or `reranker split-provider validation skipped: timeout budget exhausted` when the first probe used up the whole budget). A `warn`/`fail` result never gates readiness. |
 | `centroid_recompute_threshold` | `10000` | Full centroid recompute after this many mutations (≥1). |
 | `profile` | `""` | Install profile (`minimal`/`balanced`/`max`), set by `install --profile`. |
 | `multilingual` | `false` | Per-document language detection (requires `archon-search[multilingual]` + `lid.176.ftz`). |
@@ -75,7 +75,7 @@ Vector store location, models, chunking, and provider/GPU wiring.
 
 ### `[search]`
 
-Multi-collection fan-out execution bounds and the top-k ceiling.
+Multi-collection fan-out execution bounds, the top-k ceiling, and the context-window ceiling.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -83,6 +83,7 @@ Multi-collection fan-out execution bounds and the top-k ceiling.
 | `fanout_leg_trim` | `40` | Per-leg candidate pool kept by local RRF score before the global merge (≥1). |
 | `fanout_timeout_seconds` | `30.0` | Whole-fan-out timeout; exceeding it returns HTTP 504 (>0). |
 | `top_k_max` | `100` | Operator ceiling on `top_k` accepted by `POST /search` and `POST /explain` (>0). |
+| `context_window_max` | `10` | Operator ceiling on `context_window` (neighbour chunks per side of a hit) accepted by the MCP `search_with_context` tool; a larger value returns `code="validation_error"` (integer ≥1, so the tool's default window of `1` stays valid). No upper limit, like `top_k_max`: each hit fetches up to `2 * context_window_max` neighbour chunks in one query, so raise it with care. |
 
 ### `[routing]`
 

@@ -349,7 +349,7 @@ def test_config_toml_empty_model_with_ollama_provider_raises_config_error() -> N
     """_apply_toml with [hyde] provider='ollama' and model='' raises ConfigError.
 
     _apply_toml validates model non-emptiness independently of provider — the
-    generic empty-string guard at config.py:615-616 fires before _check_provider_deps.
+    generic empty-string guard in ``_apply_toml``'s ``[hyde]`` branch fires before _check_provider_deps.
     """
     from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
 

@@ -36,11 +36,13 @@ def make_reranker() -> Reranker:
     return Reranker(MockRerankerBackend())
 
 
-def make_pipeline(store):  # type: ignore[no-untyped-def]
+def make_pipeline(store, *, context_window_max: int | None = None):  # type: ignore[no-untyped-def]
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
+    # Forwarded only when given, so callers that omit it keep exercising the constructor default.
+    overrides = {} if context_window_max is None else {"context_window_max": context_window_max}
     return SearchPipeline(
         store=store,
         embedder=make_embedder(),
@@ -49,4 +51,5 @@ def make_pipeline(store):  # type: ignore[no-untyped-def]
         parser=DocumentParser(),
         top_k_retrieve=10,
         top_k_return=5,
+        **overrides,
     )

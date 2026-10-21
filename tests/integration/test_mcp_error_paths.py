@@ -20,6 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
+
 pytestmark = pytest.mark.integration
 
 
@@ -259,6 +261,7 @@ async def test_mcp_search_with_context_hyde_dependency_absent_returns_error() ->
     code='validation_error'.
     """
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     embedder = MagicMock()
     embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
     pipeline._global_embedder = embedder

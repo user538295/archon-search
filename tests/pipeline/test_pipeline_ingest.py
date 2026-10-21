@@ -1054,6 +1054,31 @@ async def test_create_pipeline_passes_fanout_config() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_pipeline_passes_context_window_max(tmp_path: Path) -> None:
+    """create_pipeline injects [search].context_window_max as search_with_context's bound."""
+    from unittest.mock import MagicMock, patch
+
+    from archon_search.config import SearchConfig
+    from archon_search.pipeline import create_pipeline
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "db")
+    cfg.context_window_max = 2
+
+    with (
+        patch("archon_search.pipeline.ModelEmbedder", return_value=MockEmbedderBackend()),
+        patch("archon_search.pipeline.ModelReranker", return_value=MockRerankerBackend()),
+        patch("archon_search.pipeline.DocumentChunker"),
+        patch("archon_search.pipeline.DocumentParser"),
+        patch("archon_search.pipeline.SearchStore", return_value=MagicMock()),
+    ):
+        pipeline = create_pipeline(cfg)
+
+    with pytest.raises(ValueError, match=r"^context_window must be in \[0, 2\]; got 3$"):
+        await pipeline.search_with_context("query", "col", context_window=3, embedder=MagicMock())
+
+
+@pytest.mark.asyncio
 async def test_create_pipeline_does_not_auto_connect():
     from unittest.mock import MagicMock
     from archon_search.pipeline import create_pipeline

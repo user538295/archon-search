@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 from dataclasses import dataclass, field
@@ -12,6 +13,8 @@ from typing import TYPE_CHECKING
 import tomlkit
 
 from archon_search.constants import (
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_CONTEXT_WINDOW_MAX,
     DEFAULT_DOCLING_MAX_TASKS_PER_CHILD,
     DEFAULT_FAST_MODEL,
     DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
@@ -265,13 +268,15 @@ class SearchConfig:
     top_k_retrieve: int = 15
     top_k_return: int = 5
     # [database] — D6 install-time / background provider validation
-    validation_timeout_seconds: int = 60
+    validation_timeout_seconds: float = 60.0
     # [search] — multi-collection fan-out execution bounds (B3)
     max_fanout: int = 8
     fanout_leg_trim: int = 40
     fanout_timeout_seconds: float = 30.0
     # [search] — E0c operator-configurable top_k ceiling
     top_k_max: int = 100
+    # [search] — ceiling on MCP search_with_context's context_window
+    context_window_max: int = DEFAULT_CONTEXT_WINDOW_MAX
     # [routing]
     routing_shortlist_size: int = 8
     routing_confidence_threshold: float = 0.30
@@ -440,17 +445,32 @@ def warn_if_legacy_config_ignored(explicit_config: Path | str | None) -> None:
 
 
 def _coerce_int(value: object, field_name: str) -> int:
+    """Coerce to int, rejecting bool (``int(True)`` is ``1``) and fractional floats (``int(5.9)`` truncates)."""
+    message = f"Expected integer for '{field_name}', got {type(value).__name__}"
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ConfigError(message)
+    if isinstance(value, float) and not value.is_integer():  # also rejects inf and nan
+        raise ConfigError(message)
     try:
-        return int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"Expected integer for '{field_name}', got {type(value).__name__}") from exc
+        return int(value)
+    except ValueError as exc:
+        raise ConfigError(message) from exc
 
 
 def _coerce_float(value: object, field_name: str) -> float:
+    """Coerce to a finite float, rejecting bool (``float(True)`` is ``1.0``) and inf/nan."""
+    message = f"Expected float for '{field_name}', got {type(value).__name__}"
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ConfigError(message)
     try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"Expected float for '{field_name}', got {type(value).__name__}") from exc
+        result = float(value)
+    except ValueError as exc:
+        raise ConfigError(message) from exc
+    except OverflowError as exc:  # float() of an int beyond float range
+        raise ConfigError(f"Expected finite float for '{field_name}', got an int beyond float range") from exc
+    if not math.isfinite(result):
+        raise ConfigError(f"Expected finite float for '{field_name}', got {result}")
+    return result
 
 
 def _coerce_bounded_int(raw: object, field_name: str, *, minimum: int) -> int:
@@ -465,8 +485,6 @@ def _coerce_bounded_int(raw: object, field_name: str, *, minimum: int) -> int:
 
 def _coerce_bounded_float(raw: object, field_name: str, *, minimum: float, maximum: float) -> float:
     """Coerce to float and validate against (minimum, maximum] — exclusive lower, inclusive upper bound."""
-    if isinstance(raw, bool):
-        raise ConfigError(f"Expected float for '{field_name}', got bool")
     value = _coerce_float(raw, field_name)
     if not (minimum < value <= maximum):
         raise ConfigError(f"{field_name} must be in ({minimum}, {maximum}], got {value}")
@@ -609,7 +627,7 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             raise ConfigError(f"top_k_return must be > 0, got {top_k_return}")
         config.top_k_return = top_k_return
     if "validation_timeout_seconds" in database:
-        validation_timeout = _coerce_int(
+        validation_timeout = _coerce_float(
             database["validation_timeout_seconds"], "validation_timeout_seconds"
         )
         if validation_timeout > 0:
@@ -678,6 +696,13 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         if top_k_max <= 0:
             raise ConfigError(f"top_k_max must be > 0, got {top_k_max}")
         config.top_k_max = top_k_max
+    if "context_window_max" in search:
+        context_window_max = _coerce_int(search["context_window_max"], "context_window_max")
+        # Floor is DEFAULT_CONTEXT_WINDOW, not 0: a ceiling below the default context_window
+        # would reject every call that omits the argument.
+        if context_window_max < DEFAULT_CONTEXT_WINDOW:
+            raise ConfigError(f"context_window_max must be >= {DEFAULT_CONTEXT_WINDOW}, got {context_window_max}")
+        config.context_window_max = context_window_max
 
     routing = doc.get("routing", {})
     if "routing_shortlist_size" in routing:
@@ -686,10 +711,10 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             raise ConfigError(f"routing_shortlist_size must be > 0, got {routing_shortlist_size}")
         config.routing_shortlist_size = routing_shortlist_size
     if "routing_confidence_threshold" in routing:
-        threshold = _coerce_float(routing["routing_confidence_threshold"], "routing_confidence_threshold")
-        if not 0.0 <= threshold <= 1.0:
-            raise ConfigError(f"routing_confidence_threshold must be in [0.0, 1.0], got {threshold}")
-        config.routing_confidence_threshold = threshold
+        routing_threshold = _coerce_float(routing["routing_confidence_threshold"], "routing_confidence_threshold")
+        if not 0.0 <= routing_threshold <= 1.0:
+            raise ConfigError(f"routing_confidence_threshold must be in [0.0, 1.0], got {routing_threshold}")
+        config.routing_confidence_threshold = routing_threshold
     if "max_parallel_collections" in routing:
         _logger.warning(
             "max_parallel_collections is deprecated and ignored; the knob was never "
@@ -968,8 +993,8 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     ingest = IngestConfig()
     if "max_file_mb" in ingest_cfg:
         raw = ingest_cfg["max_file_mb"]
-        # _coerce_int not used here: int() silently coerces floats and strings,
-        # but the spec requires those to raise ConfigError for this field.
+        # _coerce_int not used here: it accepts integral floats (5.0 → 5) and numeric strings
+        # ("5" → 5), but the spec requires a TOML integer here — any float or string is a ConfigError.
         if not isinstance(raw, int) or isinstance(raw, bool):
             raise ConfigError(
                 f"Expected integer for '[ingest].max_file_mb', got {type(raw).__name__}"
@@ -1007,8 +1032,9 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     if "backend_threshold_edges" in graph_cfg:
         raw_threshold = graph_cfg["backend_threshold_edges"]
         # Reject booleans and non-integers explicitly: bool is a subclass of int in Python,
-        # so isinstance alone is not enough. _coerce_int would silently truncate floats
-        # (10000.5 → 10000), so we guard with isinstance first (same pattern as max_file_mb).
+        # so isinstance alone is not enough. _coerce_int would accept integral floats
+        # (10000.0 → 10000) and numeric strings, so we require a TOML integer with an
+        # isinstance guard instead (same pattern as max_file_mb).
         if not isinstance(raw_threshold, int) or isinstance(raw_threshold, bool):
             raise ConfigError(
                 f"Expected integer for '[graph].backend_threshold_edges', got {type(raw_threshold).__name__}"
@@ -1019,12 +1045,9 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             )
         graph.backend_threshold_edges = raw_threshold
     if "leiden_resolution" in graph_cfg:
-        raw_leiden_resolution = graph_cfg["leiden_resolution"]
-        if isinstance(raw_leiden_resolution, bool):
-            raise ConfigError(
-                "Expected float for '[graph].leiden_resolution', got bool"
-            )
-        leiden_resolution = _coerce_float(raw_leiden_resolution, "[graph].leiden_resolution")
+        leiden_resolution = _coerce_float(
+            graph_cfg["leiden_resolution"], "[graph].leiden_resolution"
+        )
         if leiden_resolution <= 0:
             raise ConfigError(
                 f"[graph].leiden_resolution must be > 0, got {leiden_resolution}"
@@ -1075,10 +1098,7 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     if "enrichment_auto" in graph_cfg:
         graph.enrichment_auto = _coerce_bool(graph_cfg["enrichment_auto"], "[graph].enrichment_auto")
     if "ppr_damping" in graph_cfg:
-        raw_pd = graph_cfg["ppr_damping"]
-        if isinstance(raw_pd, bool):
-            raise ConfigError("Expected float for '[graph].ppr_damping', got bool")
-        ppr_damping = _coerce_float(raw_pd, "[graph].ppr_damping")
+        ppr_damping = _coerce_float(graph_cfg["ppr_damping"], "[graph].ppr_damping")
         if not (0.0 < ppr_damping < 1.0):
             raise ConfigError(
                 f"[graph].ppr_damping must be in (0.0, 1.0) exclusive, got {ppr_damping}"

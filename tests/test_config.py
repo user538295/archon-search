@@ -1497,14 +1497,18 @@ def test_rag_fusion_config_num_queries_one_warns(tmp_path: Path, caplog: pytest.
 
 
 def test_validation_timeout_seconds_default() -> None:
-    assert SearchConfig().validation_timeout_seconds == 60
+    timeout = SearchConfig().validation_timeout_seconds
+    assert timeout == 60.0
+    assert type(timeout) is float
 
 
 def test_validation_timeout_seconds_from_toml(tmp_path: Path) -> None:
     toml_file = tmp_path / "archon-search.toml"
     toml_file.write_text("[database]\nvalidation_timeout_seconds = 30\n", encoding="utf-8")
     config = load_config(path=toml_file)
-    assert config.validation_timeout_seconds == 30
+    assert config.validation_timeout_seconds == 30.0
+    # A TOML integer is widened to float, never kept as int.
+    assert type(config.validation_timeout_seconds) is float
 
 
 def test_validation_timeout_seconds_zero_rejected(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -1526,6 +1530,145 @@ def test_validation_timeout_seconds_negative_rejected(tmp_path: Path, caplog: py
     with caplog.at_level(logging.WARNING):
         config = load_config(path=toml_file)
     assert config.validation_timeout_seconds == 60
+    assert any("validation_timeout_seconds" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("raw", ["1.5", "0.001"])
+def test_validation_timeout_seconds_fraction_kept(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, raw: str
+) -> None:
+    import logging
+
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(f"[database]\nvalidation_timeout_seconds = {raw}\n", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        config = load_config(path=toml_file)
+    assert config.validation_timeout_seconds == float(raw)
+    # test_validation_timeout_seconds_zero_rejected proves this warning is emitted, so its absence here is meaningful.
+    assert not any("validation_timeout_seconds" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("raw", "type_name"), [("inf", "Float"), ("nan", "Float"), ("1.5", "Float"), ("5.9", "Float"), ("[1]", "Array")]
+)
+def test_int_key_rejects_non_integral_or_non_scalar_value(tmp_path: Path, raw: str, type_name: str) -> None:
+    """Fractional/non-finite floats and non-scalars in an int key are a ConfigError — never truncated, never an
+    uncaught OverflowError/TypeError."""
+    import re
+
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(f"[database]\ntop_k_return = {raw}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=re.escape(f"Expected integer for 'top_k_return', got {type_name}")):
+        load_config(path=toml_file)
+
+
+def test_int_key_accepts_integral_float(tmp_path: Path) -> None:
+    """An integral float such as ``5.0`` still loads as the int ``5``."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[database]\ntop_k_return = 5.0\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.top_k_return == 5
+    assert type(config.top_k_return) is int
+
+
+def test_int_key_accepts_numeric_string(tmp_path: Path) -> None:
+    """A quoted numeric string such as ``"5"`` still loads as the int ``5``."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[database]\ntop_k_return = "5"\n', encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.top_k_return == 5
+    assert type(config.top_k_return) is int
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "field_name"),
+    [
+        ("server", "port", "port"),
+        ("database", "chunk_size", "chunk_size"),
+        ("database", "top_k_return", "top_k_return"),
+        ("backup", "keep", "[backup].keep"),
+    ],
+)
+def test_int_keys_reject_bool(tmp_path: Path, section: str, key: str, field_name: str) -> None:
+    """A TOML boolean in an int key is a ConfigError — ``int(True)`` would silently yield ``1``."""
+    import re
+
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(f"[{section}]\n{key} = true\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=re.escape(f"Expected integer for '{field_name}', got bool")):
+        load_config(path=toml_file)
+
+
+# Every float key in archon-search.toml (all _coerce_float / _coerce_bounded_float callers in config.py).
+_FLOAT_KEYS = [
+    ("database", "validation_timeout_seconds", "validation_timeout_seconds"),
+    ("database", "language_detection_confidence_threshold", "language_detection_confidence_threshold"),
+    ("search", "fanout_timeout_seconds", "fanout_timeout_seconds"),
+    ("routing", "routing_confidence_threshold", "routing_confidence_threshold"),
+    ("routing", "routing_description_weight", "routing_description_weight"),
+    ("hyde", "timeout_seconds", "[hyde].timeout_seconds"),
+    ("rag_fusion", "timeout_seconds", "[rag_fusion].timeout_seconds"),
+    ("graph", "extraction_timeout_seconds", "[graph].extraction_timeout_seconds"),
+    ("graph", "leiden_resolution", "[graph].leiden_resolution"),
+    ("graph", "ppr_damping", "[graph].ppr_damping"),
+    ("graph", "synonym_threshold", "[graph].synonym_threshold"),
+    ("graph", "ner_confidence", "[graph].ner_confidence"),
+    ("graph", "relation_confidence", "[graph].relation_confidence"),
+]
+
+
+@pytest.mark.parametrize(("section", "key", "field_name"), _FLOAT_KEYS)
+def test_float_keys_reject_bool(tmp_path: Path, section: str, key: str, field_name: str) -> None:
+    """A TOML boolean in a float key is a ConfigError — ``float(True)`` would silently yield ``1.0``."""
+    import re
+
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(f"[{section}]\n{key} = true\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=re.escape(f"Expected float for '{field_name}', got bool")):
+        load_config(path=toml_file)
+
+
+@pytest.mark.parametrize("raw", ["inf", "-inf", "nan", '"inf"'])
+@pytest.mark.parametrize(("section", "key", "field_name"), _FLOAT_KEYS)
+def test_float_keys_reject_non_finite(tmp_path: Path, section: str, key: str, field_name: str, raw: str) -> None:
+    """inf/nan in a float key is a ConfigError — ``inf`` would disable a timeout and ``nan`` fails every comparison."""
+    import re
+
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(f"[{section}]\n{key} = {raw}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=re.escape(f"Expected finite float for '{field_name}'")):
+        load_config(path=toml_file)
+
+
+def test_float_keys_cover_every_float_call_site() -> None:
+    """_FLOAT_KEYS must name every field passed to _coerce_float/_coerce_bounded_float in config.py, so a new
+    float key cannot skip the bool/inf/nan tests above."""
+    import re
+
+    import archon_search.config as config_module
+
+    source = Path(config_module.__file__).read_text(encoding="utf-8")
+    # (first argument, second argument) of every call; the def lines do not match ``(`` + ``,`` + quote/word.
+    calls = re.findall(r"(?<!def )\b_coerce_(?:bounded_)?float\(\s*([^,]+?),\s*(\"[^\"]*\"|\w+)", source)
+    # _coerce_bounded_float forwards its own parameters to _coerce_float — not a TOML key.
+    field_names = sorted(name.strip('"') for first, name in calls if (first, name) != ("raw", "field_name"))
+    assert field_names == sorted(field_name for _, _, field_name in _FLOAT_KEYS)
+
+
+def test_float_key_rejects_non_scalar(tmp_path: Path) -> None:
+    """An array in a float key is a ConfigError, never an uncaught TypeError from ``float([1])``."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[search]\nfanout_timeout_seconds = [1]\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="Expected float for 'fanout_timeout_seconds', got Array"):
+        load_config(path=toml_file)
+
+
+def test_float_key_rejects_int_too_large_for_float(tmp_path: Path) -> None:
+    """A TOML integer beyond float range is a ConfigError, never an uncaught OverflowError."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(f"[search]\nfanout_timeout_seconds = 1{'0' * 400}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="Expected finite float for 'fanout_timeout_seconds'"):
+        load_config(path=toml_file)
 
 
 # --- BE-1: McpConfig ---
@@ -1880,7 +2023,7 @@ def test_graph_config_synonym_threshold_bool_raises(tmp_path: Path) -> None:
     """synonym_threshold = true in TOML raises ConfigError."""
     toml_file = tmp_path / "archon-search.toml"
     toml_file.write_text("[graph]\nsynonym_threshold = true\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="synonym_threshold"):
+    with pytest.raises(ConfigError, match=r"synonym_threshold.*got bool"):
         load_config(path=toml_file)
 
 

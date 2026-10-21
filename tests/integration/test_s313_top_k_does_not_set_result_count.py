@@ -6,7 +6,7 @@ must answer 200, and the number of results must be the collection's configured
 ``top_k=3`` still returns 5, ``top_k=50`` also returns 5, never 50. The
 documented contract is ``Documentation/UserManual/60_searching.md`` principle 3
 ("Result count is server-configured. Per-request ``top_k`` is validated
-(``1..[database].top_k_max``) but does not set the returned count") and the
+(``1..[search].top_k_max``) but does not set the returned count") and the
 ``top_k`` row of the request-field table; the default lives in
 ``Documentation/UserManual/30_configuration.md`` (``top_k_return`` = 5).
 

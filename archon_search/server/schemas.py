@@ -296,12 +296,15 @@ class SearchStatusDetail(BaseModel):
     """Search configuration status sub-object for GET /status (E0c BE-4 / C4).
 
     Exposes the operator-configured search limits so clients can introspect
-    the active ceiling without reading TOML directly.  Both fields always
-    reflect the live ``SearchConfig`` values — defaults or TOML overrides.
+    the active ceiling without reading TOML directly.  ``max_fanout`` and
+    ``top_k_max`` reflect the live ``SearchConfig`` values — defaults or TOML
+    overrides.  ``context_window_max`` is the bound the served ``SearchPipeline``
+    enforces on ``search_with_context``, set from ``[search].context_window_max``.
     """
 
     max_fanout: int
     top_k_max: int
+    context_window_max: int
 
 
 class ExpiringChunkItem(BaseModel):

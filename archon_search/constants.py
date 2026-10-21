@@ -37,6 +37,17 @@ DEFAULT_NAMESPACE: str = "default"
 # Shared by router.py, config.py, and eval/runner.py to avoid hardcoding 0.3.
 DEFAULT_ROUTING_DESCRIPTION_WEIGHT: Final[float] = 0.3
 
+# Default neighbour chunks per side for search_with_context (pipeline and MCP tool), and the
+# floor config.py enforces on [search].context_window_max so a default call is never rejected.
+DEFAULT_CONTEXT_WINDOW: Final[int] = 1
+
+# Default [search].context_window_max: ceiling on search_with_context's context_window,
+# the neighbour chunks fetched on each side of a hit — at most 2 * context_window_max chunks
+# per hit (top_k_return hits), each up to [database].chunk_size tokens. A chosen cap (10x
+# DEFAULT_CONTEXT_WINDOW), not a measured limit. A constant (unlike the top_k_max literal)
+# because the SearchPipeline constructor default and the MCP schema description need it too.
+DEFAULT_CONTEXT_WINDOW_MAX: Final[int] = 10
+
 # S107: emitted when [logging].log_file is empty (file logging disabled) outside
 # container mode. Shared by config.load_config and logging_setup.configure_logging
 # so the two call sites never drift.

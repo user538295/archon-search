@@ -22,6 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
+
 pytestmark = pytest.mark.xdist_group("mcp")
 
 # ---------------------------------------------------------------------------
@@ -150,6 +152,7 @@ async def test_search_with_context_tool_uses_resolved_namespace() -> None:
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     swc_result = SearchWithContextResult(results=[], pipeline_result=_make_search_result())
     pipeline.search_with_context = AsyncMock(return_value=swc_result)
