@@ -56,7 +56,7 @@ def _make_edge(src: GraphNode, tgt: GraphNode) -> GraphEdge:
 
 
 def _make_chunk(doc_id: str, chunk_idx: int = 0) -> ChunkRecord:
-    # chunk_id must match [a-f0-9]{64}-\d{6}; hash the logical doc_id to get valid hex
+    # chunk_id must fully match [a-f0-9]{64}-[0-9]{6}; hash the logical doc_id to get valid hex
     hex_doc_id = hashlib.sha256(doc_id.encode()).hexdigest()
     chunk_id = f"{hex_doc_id}-{chunk_idx:06d}"
     return ChunkRecord(

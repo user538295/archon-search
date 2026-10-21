@@ -19,21 +19,18 @@ Flow:
 """
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app, search
+from tests.integration.conftest import (
+    ingest_file_via_path,
+    make_real_app,
+    search,
+    trigger_maintenance_and_wait_for_orphans,
+)
 
 pytestmark = pytest.mark.integration
-
-_POLL_TIMEOUT_S: float = 15.0
-_POLL_INTERVAL_S: float = 0.1
-
-
-def _auth(api_key: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {api_key}"}
 
 
 def test_orphan_cleanup_removes_deleted_source(
@@ -79,45 +76,10 @@ def test_orphan_cleanup_removes_deleted_source(
         doc.unlink()
         assert not doc.exists(), "source file must be deleted before triggering maintenance"
 
-        # Step 4: POST /maintenance/trigger
-        trigger_resp = client.post("/maintenance/trigger", headers=_auth(api_key))
-        assert trigger_resp.status_code == 202, (
-            f"expected 202, got {trigger_resp.status_code}: {trigger_resp.text}"
-        )
-        assert trigger_resp.json().get("status") == "triggered", (
-            f"expected status='triggered', got: {trigger_resp.json()}"
-        )
-
-        # Step 5: Poll GET /status until orphans_removed_last_run > 0
-        deadline = time.monotonic() + _POLL_TIMEOUT_S
-        maintenance_block = None
-        orphans_removed = None
-        last_error_in_entry: str | None = "NOT_SET"  # sentinel to detect absence
-
-        while time.monotonic() < deadline:
-            status_resp = client.get("/status", headers=_auth(api_key))
-            assert status_resp.status_code == 200, (
-                f"GET /status failed: {status_resp.status_code} {status_resp.text}"
-            )
-            status_body = status_resp.json()
-            maintenance_block = status_body.get("maintenance")
-            if maintenance_block is not None:
-                health = maintenance_block.get("collection_health", [])
-                for entry in health:
-                    if entry.get("collection") == col:
-                        count = entry.get("orphans_removed_last_run", 0)
-                        if count > 0:
-                            orphans_removed = count
-                            last_error_in_entry = entry.get("last_error")
-                            break
-            if orphans_removed is not None:
-                break
-            time.sleep(_POLL_INTERVAL_S)
-        else:
-            pytest.fail(
-                f"orphans_removed_last_run did not become > 0 within {_POLL_TIMEOUT_S}s; "
-                f"last maintenance block: {maintenance_block}"
-            )
+        # Steps 4-5: POST /maintenance/trigger, poll GET /status until orphans_removed_last_run > 0
+        entry, maintenance_block = trigger_maintenance_and_wait_for_orphans(client, col, api_key=api_key)
+        orphans_removed = entry["orphans_removed_last_run"]
+        last_error_in_entry = entry.get("last_error")
 
         # Step 6: Assert orphans_removed_last_run == 1 (exactly one unique source_path)
         assert orphans_removed == 1, (
@@ -125,7 +87,6 @@ def test_orphan_cleanup_removes_deleted_source(
         )
 
         # Step 7a: Assert last_run_at is non-null (pass completed and state was written)
-        assert maintenance_block is not None
         assert maintenance_block["last_run_at"] is not None, (
             "maintenance.last_run_at must be non-null after a completed pass"
         )

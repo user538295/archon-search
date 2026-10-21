@@ -183,7 +183,7 @@ In-process maintenance passes (FTS optimize, orphan cleanup, failed-ingest retry
 | --- | --- | --- |
 | `interval_hours` | `0` | Hours between scheduled passes; `0` = no scheduled pass (≥0). |
 | `fts_optimize` | `true` | Optimize the FTS index each pass. |
-| `orphan_cleanup` | `true` | Remove chunks whose `source_path` no longer exists (URL-sourced chunks skipped). |
+| `orphan_cleanup` | `true` | Remove chunks whose `source_path` no longer exists (URL-sourced, inline-ingested and imported chunks skipped). |
 | `failed_ingest_retry` | `true` | Re-enqueue failed `IngestJob`s within the retry limits. |
 | `retry_max_attempts` | `3` | Max retry attempts per file per collection (≥1). |
 | `retry_max_age_hours` | `72` | Only retry failures newer than this (≥0; `0` warns — immediate churn). |

@@ -161,7 +161,7 @@ What is **not** validated (accepted trade-offs, deferred to a future `allowed_di
 
 ## SQL boundary defense-in-depth (A5b)
 
-Two modules build LanceDB (DataFusion) `where` / `delete` / `count_rows` predicates: `store.py` (from `name`, `namespace`, `doc_id`, constructed `chunk_id`) and `graph_store.py` (from `collection`, `namespace`, `doc_id`, `entity_id`, `entity_name`). The **primary** security boundary remains the upstream regex gates, which make injection unreachable today: `_COLLECTION_RE` (name), `_DOC_ID_RE` (doc_id) and `_CHUNK_ID_RE` (`^[a-f0-9]{64}-\d{6}$`, enforced per chunk at the top of `ingest_chunks`) live in `store.py`; `_validate_namespace` / `_NAMESPACE_RE` (namespace) live in `constants.py`, shared with every other module that validates a namespace.
+Two modules build LanceDB (DataFusion) `where` / `delete` / `count_rows` predicates: `store.py` (from `name`, `namespace`, `doc_id`, constructed `chunk_id`) and `graph_store.py` (from `collection`, `namespace`, `doc_id`, `entity_id`, `entity_name`). The **primary** security boundary remains the upstream regex gates, which make injection unreachable today: `_COLLECTION_RE` (name), `_DOC_ID_RE` (doc_id) and `_CHUNK_ID_RE` (`[a-f0-9]{64}-[0-9]{6}`, matched in full by `is_valid_chunk_id`, which `validate_chunk_record` applies per chunk at the top of `ingest_chunks`) live in `store.py`; `_validate_namespace` / `_NAMESPACE_RE` (namespace) live in `constants.py`, shared with every other module that validates a namespace.
 
 As defense-in-depth, the rule is that **every value interpolated into a predicate passes through `_sql_quote_str`** (`store_filters.py`) — never through bare f-string interpolation. Two composition styles satisfy that rule and both are in use in both modules:
 

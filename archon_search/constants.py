@@ -1,6 +1,8 @@
 """Standalone constants for archon-search — defined independently of archon.ai.constants."""
 
 import re
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 # Pre-A1 sentinel for ``ingested_by``. Stored on legacy rows; normalized to
@@ -80,6 +82,22 @@ DEFAULT_DOCLING_MAX_TASKS_PER_CHILD: Final[int] = 25
 # The value is a string because `store.parse_metadata` coerces every value to `str`.
 INLINE_CHUNK_METADATA_KEY: Final[str] = "_inline"
 INLINE_CHUNK_METADATA_VALUE: Final[str] = "true"
+
+# Chunk-metadata marker for a chunk written by `POST /collections/{name}/import`. The
+# archive keeps the exporting host's source_path verbatim, so the maintenance orphan sweep
+# must not read its missing file as a deleted one. Re-ingest semantics: see
+# `MaintenanceLoop._run_orphan_cleanup` and OperatorGuide/50_maintenance_and_jobs.md.
+# The value is the string "true" because chunk metadata is dict[str, str].
+IMPORTED_CHUNK_METADATA_KEY: Final[str] = "_imported"
+IMPORTED_CHUNK_METADATA_VALUE: Final[str] = "true"
+
+# Every system-set marker of a chunk not ingested from a file on this host (inline or
+# imported), by key. The orphan sweep never deletes a document carrying any of them. The
+# keys count toward the metadata field cap like any other key.
+NOT_DISK_INGESTED_CHUNK_MARKERS: Final[Mapping[str, str]] = MappingProxyType({
+    INLINE_CHUNK_METADATA_KEY: INLINE_CHUNK_METADATA_VALUE,
+    IMPORTED_CHUNK_METADATA_KEY: IMPORTED_CHUNK_METADATA_VALUE,
+})
 
 _NAMESPACE_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}")
 

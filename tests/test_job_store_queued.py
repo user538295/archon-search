@@ -14,7 +14,7 @@ import pytest
 
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.store import JobStore
-from archon_search.types import ExportJob, ImportJob, IngestJob, JobStatus
+from archon_search.types import ExportJob, ImportJob, JobStatus
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +252,25 @@ def test_update_progress_overwrites_previous(store: JobStore) -> None:
     updated = store.get(job.job_id)
     assert updated is not None
     assert updated.progress == {"processed": 150, "total": 200, "phase": "packaging"}
+
+
+def test_update_progress_persists_import_resume_fields_outside_progress(tmp_path: Path) -> None:
+    """The ImportJob resume fields are saved with the checkpoint, survive a reload, and stay out of progress."""
+    jobs_path = tmp_path / "jobs.json"
+    job = JobStore(path=jobs_path).create_import(
+        collection="col", archive_path="/tmp/a.tar.gz", force_overwrite=False, ignore_schema_version=False, on_error="skip",
+    )
+    # Both flags default to False, so True proves each one is persisted.
+    JobStore(path=jobs_path).update_progress(
+        job.job_id, 2, 7, "ingesting", lines_consumed=4, collection_claimed=True, collection_claim_revoked=True,
+    )
+
+    reloaded = JobStore(path=jobs_path).get(job.job_id)
+    assert isinstance(reloaded, ImportJob)
+    assert (reloaded.lines_consumed, reloaded.progress) == (4, {"processed": 2, "total": 7, "phase": "ingesting"})
+    assert (reloaded.collection_claimed, reloaded.collection_claim_revoked) == (True, True), (
+        "the claim flags must survive a JobStore reload"
+    )
 
 
 # ---------------------------------------------------------------------------

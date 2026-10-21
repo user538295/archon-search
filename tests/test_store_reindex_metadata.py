@@ -71,8 +71,8 @@ async def test_reindex_updates_row_whose_chunk_id_contains_a_quote(
 ) -> None:
     """``reindex_metadata`` must survive a ``'`` in a chunk_id and update only that row.
 
-    ``ingest_chunks`` (store.py:1764) is the only path that mints or validates a
-    chunk_id against ``_CHUNK_ID_RE``; the migration re-add and the reindex read
+    ``SearchStore.ingest_chunks`` is the only write path that validates a chunk_id
+    (``validate_chunk_record`` → ``is_valid_chunk_id``); the migration re-add and the reindex read
     copy it verbatim. So the row is planted straight into the chunk table to
     reach the predicate. With a raw f-string predicate the SQL becomes
     ``chunk_id = 'a'b''`` — a syntax error — so this test fails on a revert of

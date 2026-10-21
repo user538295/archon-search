@@ -9,9 +9,9 @@ archon_search/jobs/maintenance_loop.py.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
-import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,7 +19,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search.config import MaintenanceConfig
-from archon_search.constants import INLINE_CHUNK_METADATA_KEY, INLINE_CHUNK_METADATA_VALUE
+from archon_search.constants import (
+    IMPORTED_CHUNK_METADATA_KEY,
+    IMPORTED_CHUNK_METADATA_VALUE,
+    INLINE_CHUNK_METADATA_KEY,
+    INLINE_CHUNK_METADATA_VALUE,
+    NOT_DISK_INGESTED_CHUNK_MARKERS,
+)
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
 
 
@@ -477,7 +483,6 @@ async def test_orphan_cleanup_real_store(
 ) -> None:
     """Integration: ingest file, delete file from disk, run _run_orphan_cleanup, assert chunks gone."""
     import gc
-    import os
 
     from tests.integration.conftest import make_real_pipeline
 
@@ -558,6 +563,36 @@ async def test_orphan_cleanup_real_store(
         await store.disconnect()
 
 
+def _make_orphan_store(chunks: list[dict]) -> AsyncMock:
+    """A store mock whose ``list_chunks_raw`` yields *chunks*."""
+    ss = AsyncMock()
+    ss.list_chunks_raw = MagicMock(return_value=_async_iter(chunks))
+    ss.delete_by_source_path = AsyncMock()
+    ss.lock_for = MagicMock(return_value=asyncio.Lock())
+    ss.optimize_fts = AsyncMock()
+    return ss
+
+
+def _local_doc_id(path: Path) -> str:
+    """Independent oracle for the doc_id this host derives from *path*: sha256 of the resolved path's string."""
+    return hashlib.sha256(str(path.resolve()).encode()).hexdigest()
+
+
+def _marked(chunk: dict, key: str, value: str) -> dict:
+    """*chunk* carrying the metadata marker *key* = *value* beside other metadata."""
+    chunk["metadata"] = json.dumps({"team": "a", key: value})
+    return chunk
+
+
+#: The imported marker as a (key, value) pair, for tests that need just one marker.
+_IMPORTED_MARKER_ITEM = (IMPORTED_CHUNK_METADATA_KEY, IMPORTED_CHUNK_METADATA_VALUE)
+
+#: Every marker of a chunk not ingested from a file on this host, one test case each.
+_NOT_DISK_INGESTED_MARKERS = [
+    pytest.param(key, value, id=key) for key, value in NOT_DISK_INGESTED_CHUNK_MARKERS.items()
+]
+
+
 @pytest.mark.asyncio
 async def test_orphan_cleanup_keeps_inline_ingested_chunks(tmp_path: Path) -> None:
     """S293: a document ingested inline has no backing file, so it is never an orphan.
@@ -570,15 +605,259 @@ async def test_orphan_cleanup_keeps_inline_ingested_chunks(tmp_path: Path) -> No
 
     chunk = _make_chunk(str(never_on_disk), doc_id="inline1", chunk_id="inline1-000001")
     chunk["metadata"] = json.dumps({INLINE_CHUNK_METADATA_KEY: INLINE_CHUNK_METADATA_VALUE})
-
-    ss = AsyncMock()
-    ss.list_chunks_raw = MagicMock(return_value=_async_iter([chunk]))
-    ss.delete_by_source_path = AsyncMock()
-    ss.lock_for = MagicMock(return_value=asyncio.Lock())
-    ss.optimize_fts = AsyncMock()
+    ss = _make_orphan_store([chunk])
 
     loop = _make_loop(tmp_path, search_store=ss)
     await loop._run_orphan_cleanup("docs", "default")
 
     ss.delete_by_source_path.assert_not_called()
     assert loop._current_health["orphans_removed_last_run"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("key", "value"), _NOT_DISK_INGESTED_MARKERS)
+@pytest.mark.parametrize("with_unmarked_foreign_chunk", [False, True], ids=["marked-only", "beside-unmarked"])
+async def test_orphan_cleanup_keeps_marked_chunks_whose_doc_id_is_not_local(
+    tmp_path: Path, key: str, value: str, with_unmarked_foreign_chunk: bool
+) -> None:
+    """A marked chunk of another host's path is never an orphan, and a delete that removes nothing is no orphan.
+
+    No doc_id here is the one ``delete_by_source_path`` derives from the path, so a delete would remove
+    nothing — yet still count an orphan and run ``optimize_fts``. Accepted survivor (beside-unmarked): the
+    unmarked chunk under a non-local doc_id is not swept either, since no delete by path can reach it.
+    """
+    other_host_path = str(tmp_path / "other-host" / "notes.md")
+    chunks = [_marked(_make_chunk(other_host_path, doc_id="imp1", chunk_id="imp1-000001"), key, value)]
+    if with_unmarked_foreign_chunk:
+        chunks.append(_make_chunk(other_host_path, doc_id="dsk1", chunk_id="dsk1-000001"))
+    ss = _make_orphan_store(chunks)
+
+    loop = _make_loop(tmp_path, search_store=ss)
+    await loop._run_orphan_cleanup("docs", "default")
+
+    ss.delete_by_source_path.assert_not_called()
+    ss.optimize_fts.assert_not_awaited()
+    assert loop._current_health["orphans_removed_last_run"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("key", "value"), _NOT_DISK_INGESTED_MARKERS)
+async def test_orphan_cleanup_deletes_missing_disk_file_beside_marked_chunk(
+    tmp_path: Path, key: str, value: str
+) -> None:
+    """A marked chunk exempts nothing but its own path: another path whose file is gone is deleted."""
+    marked = _marked(_make_chunk(str(tmp_path / "marked.md"), doc_id="imp1", chunk_id="imp1-000001"), key, value)
+    deleted_file = tmp_path / "deleted.md"
+    disk = _make_chunk(str(deleted_file), doc_id="dsk1", chunk_id="dsk1-000001")
+    ss = _make_orphan_store([marked, disk])
+
+    loop = _make_loop(tmp_path, search_store=ss)
+    await loop._run_orphan_cleanup("docs", "default")
+
+    ss.delete_by_source_path.assert_called_once_with(
+        "docs", str(deleted_file), namespace="default", skip_fts_optimize=True
+    )
+    assert loop._current_health["orphans_removed_last_run"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", list(NOT_DISK_INGESTED_CHUNK_MARKERS))
+async def test_orphan_cleanup_deletes_chunk_whose_marker_has_another_value(tmp_path: Path, key: str) -> None:
+    """Only the exact marker value exempts a chunk; any other value is ordinary disk-ingested metadata."""
+    deleted_file = tmp_path / "deleted.md"
+    chunk = _marked(_make_chunk(str(deleted_file), doc_id="dsk1", chunk_id="dsk1-000001"), key, "false")
+    ss = _make_orphan_store([chunk])
+
+    loop = _make_loop(tmp_path, search_store=ss)
+    await loop._run_orphan_cleanup("docs", "default")
+
+    ss.delete_by_source_path.assert_called_once_with(
+        "docs", str(deleted_file), namespace="default", skip_fts_optimize=True
+    )
+    assert loop._current_health["orphans_removed_last_run"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("key", "value"), _NOT_DISK_INGESTED_MARKERS)
+@pytest.mark.parametrize("marked_first", [True, False], ids=["marked-first", "unmarked-first"])
+async def test_orphan_cleanup_deletes_local_disk_document_sharing_path_with_foreign_marked_chunk(
+    tmp_path: Path, key: str, value: str, marked_first: bool
+) -> None:
+    """The path's local document is unmarked and its file is gone: it is deleted.
+
+    ``delete_by_source_path`` removes only the doc_id it derives from the path, so the marked chunk's
+    other doc_id survives the delete.
+    """
+    deleted_file = tmp_path / "deleted.md"
+    marked = _marked(_make_chunk(str(deleted_file), doc_id="imp1", chunk_id="imp1-000001"), key, value)
+    local_doc_id = _local_doc_id(deleted_file)
+    unmarked = _make_chunk(str(deleted_file), doc_id=local_doc_id, chunk_id=f"{local_doc_id}-000001")
+    ss = _make_orphan_store([marked, unmarked] if marked_first else [unmarked, marked])
+
+    loop = _make_loop(tmp_path, search_store=ss)
+    await loop._run_orphan_cleanup("docs", "default")
+
+    ss.delete_by_source_path.assert_called_once_with(
+        "docs", str(deleted_file), namespace="default", skip_fts_optimize=True
+    )
+    assert loop._current_health["orphans_removed_last_run"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("key", "value"), _NOT_DISK_INGESTED_MARKERS)
+@pytest.mark.parametrize("marked_first", [True, False], ids=["marked-first", "unmarked-first"])
+async def test_orphan_cleanup_keeps_path_whose_local_document_has_a_marked_chunk(
+    tmp_path: Path, key: str, value: str, marked_first: bool
+) -> None:
+    """The path's local doc_id has a marked chunk, which the delete would destroy: the path is kept.
+
+    The unmarked chunk of the same document must not doom the marked one.
+    """
+    missing_file = tmp_path / "missing.md"
+    local_doc_id = _local_doc_id(missing_file)
+    marked = _marked(
+        _make_chunk(str(missing_file), doc_id=local_doc_id, chunk_id=f"{local_doc_id}-000001"), key, value
+    )
+    unmarked = _make_chunk(str(missing_file), doc_id=local_doc_id, chunk_id=f"{local_doc_id}-000002")
+    ss = _make_orphan_store([marked, unmarked] if marked_first else [unmarked, marked])
+
+    loop = _make_loop(tmp_path, search_store=ss)
+    await loop._run_orphan_cleanup("docs", "default")
+
+    ss.delete_by_source_path.assert_not_called()
+    assert loop._current_health["orphans_removed_last_run"] == 0
+
+
+_DERIVATION = "archon_search.jobs.maintenance_loop.doc_id_for_source_path"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(RuntimeError("Symlink loop"), id="symlink-loop"),
+        pytest.param(ValueError("embedded null byte"), id="nul-byte"),
+        pytest.param(OSError("I/O error"), id="os-error"),
+    ],
+)
+async def test_orphan_cleanup_logs_failed_doc_id_derivation_and_sweeps_later_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, error: Exception
+) -> None:
+    """A path whose doc_id derivation raises is logged as WARNING; the sweep goes on to later paths.
+
+    Its marked and unmarked chunks force the derivation; the later path is an ordinary orphan, still deleted,
+    and the pass still counts it and runs ``optimize_fts``.
+    """
+    undecidable = tmp_path / "a-undecidable.md"
+    deleted_file = tmp_path / "b-deleted.md"
+    chunks = [
+        _marked(_make_chunk(str(undecidable), doc_id="imp1", chunk_id="imp1-000001"), *_IMPORTED_MARKER_ITEM),
+        _make_chunk(str(undecidable), doc_id="dsk1", chunk_id="dsk1-000001"),
+        _make_chunk(str(deleted_file), doc_id="dsk2", chunk_id="dsk2-000001"),
+    ]
+    ss = _make_orphan_store(chunks)
+
+    def failing_derivation(source_path: str) -> str:
+        raise error
+
+    monkeypatch.setattr(_DERIVATION, failing_derivation)
+    loop = _make_loop(tmp_path, search_store=ss)
+    with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
+        await loop._run_orphan_cleanup("docs", "default")  # must not raise
+
+    ss.delete_by_source_path.assert_called_once_with(
+        "docs", str(deleted_file), namespace="default", skip_fts_optimize=True
+    )
+    ss.optimize_fts.assert_awaited_once_with("docs")
+    assert loop._current_health["orphans_removed_last_run"] == 1
+    assert any(
+        r.levelno == logging.WARNING and str(undecidable) in r.getMessage() for r in caplog.records
+    ), f"Expected a WARNING naming {undecidable}; got: {[r.getMessage() for r in caplog.records]}"
+
+
+@pytest.mark.asyncio
+async def test_orphan_cleanup_logs_failed_existence_check_and_sweeps_later_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A path whose ``exists()`` check raises is logged as WARNING and skipped; a later orphan is still deleted.
+
+    The pass still counts the later orphan and runs ``optimize_fts``.
+    """
+    unreadable = tmp_path / "a-unreadable.md"
+    deleted_file = tmp_path / "b-deleted.md"
+    ss = _make_orphan_store([
+        _make_chunk(str(unreadable), doc_id="dsk1", chunk_id="dsk1-000001"),
+        _make_chunk(str(deleted_file), doc_id="dsk2", chunk_id="dsk2-000001"),
+    ])
+    real_exists = Path.exists
+
+    def exists_denied_for_unreadable(self: Path, *args: Any, **kwargs: Any) -> bool:
+        if self == unreadable:
+            raise PermissionError("Permission denied")
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists_denied_for_unreadable)
+    loop = _make_loop(tmp_path, search_store=ss)
+    with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
+        await loop._run_orphan_cleanup("docs", "default")  # must not raise
+
+    ss.delete_by_source_path.assert_called_once_with(
+        "docs", str(deleted_file), namespace="default", skip_fts_optimize=True
+    )
+    ss.optimize_fts.assert_awaited_once_with("docs")
+    assert loop._current_health["orphans_removed_last_run"] == 1
+    assert any(
+        r.levelno == logging.WARNING and str(unreadable) in r.getMessage() for r in caplog.records
+    ), f"Expected a WARNING naming {unreadable}; got: {[r.getMessage() for r in caplog.records]}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("key", "value"), _NOT_DISK_INGESTED_MARKERS)
+async def test_orphan_cleanup_keeps_marked_only_path_without_deriving_its_doc_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, value: str
+) -> None:
+    """A path with no disk-ingested chunk has nothing to sweep, so its doc_id is never derived (no thread hop)."""
+    missing_file = tmp_path / "missing.md"
+    ss = _make_orphan_store([_marked(_make_chunk(str(missing_file), doc_id="imp1", chunk_id="imp1-000001"), key, value)])
+    derivation = MagicMock(side_effect=AssertionError("doc_id derived for a path without a disk-ingested chunk"))
+    monkeypatch.setattr(_DERIVATION, derivation)
+
+    loop = _make_loop(tmp_path, search_store=ss)
+    await loop._run_orphan_cleanup("docs", "default")
+
+    derivation.assert_not_called()
+    ss.delete_by_source_path.assert_not_called()
+    assert loop._current_health["orphans_removed_last_run"] == 0
+
+
+@pytest.mark.asyncio
+async def test_orphan_cleanup_derives_doc_id_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweep's blocking ``Path.resolve`` runs in a worker thread: the event loop keeps ticking meanwhile."""
+    from tests.test_store_async_blocking_io import _assert_loop_was_free, _LoopProbe, _run_with_heartbeat
+
+    missing_file = tmp_path / "missing.md"
+    local_doc_id = _local_doc_id(missing_file)
+    chunks = [
+        _marked(_make_chunk(str(missing_file), doc_id="imp1", chunk_id="imp1-000001"), *_IMPORTED_MARKER_ITEM),
+        _make_chunk(str(missing_file), doc_id=local_doc_id, chunk_id=f"{local_doc_id}-000001"),
+    ]
+    ss = _make_orphan_store(chunks)
+    probe = _LoopProbe()
+    real_resolve = Path.resolve
+
+    def slow_resolve(self: Path, *args: Any, **kwargs: Any) -> Path:
+        if self == missing_file and probe.calls == 0:
+            probe.sample_around_blocking_sleep()
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", slow_resolve)
+    loop = _make_loop(tmp_path, search_store=ss)
+    await _run_with_heartbeat(probe, loop._run_orphan_cleanup("docs", "default"))
+
+    _assert_loop_was_free(probe, "resolve")
+    ss.delete_by_source_path.assert_awaited_once_with(
+        "docs", str(missing_file), namespace="default", skip_fts_optimize=True
+    )
+    assert loop._current_health["orphans_removed_last_run"] == 1

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 import pyarrow as pa
@@ -241,7 +241,6 @@ async def test_app_lifespan_calls_startup_migrations(tmp_path):
     BE-6 consolidated the five direct migrate_*() calls into _run_startup_migrations().
     This test verifies the lifespan wires up _run_startup_migrations correctly.
     """
-    from pathlib import Path
     from archon_search.config import SearchConfig
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
@@ -462,16 +461,14 @@ async def test_fetch_adjacent_chunks_returns_acl_field(tmp_path):
         await store.disconnect()
 
 
-@pytest.mark.asyncio
-async def test_fetch_adjacent_chunks_missing_acl_defaults_none(tmp_path):
-    """fetch_adjacent_chunks() uses .get('acl') — missing acl column yields ChunkRecord.acl=None."""
+_LEGACY_DOC_ID = "a" * 64
+
+
+async def _create_pre_acl_table(db_path, name: str) -> None:
+    """Create *name* with three chunks and no acl / TTL / scopes / G15 provenance columns (pre-migration)."""
     import lancedb
     import pyarrow as pa
-    from archon_search.store import SearchStore
 
-    db_path = tmp_path / "db"
-
-    # Create a table WITHOUT the acl column to simulate a pre-migration collection.
     schema_without_acl = pa.schema(
         [
             pa.field("doc_id", pa.utf8()),
@@ -486,19 +483,17 @@ async def test_fetch_adjacent_chunks_missing_acl_defaults_none(tmp_path):
             pa.field("custom_score", pa.float32()),
             pa.field("ingested_by", pa.utf8()),
             pa.field("updated_at", pa.utf8()),
-            # acl column intentionally omitted
+            # acl, expires_at, scopes, acl_source, acl_sidecar_path, acl_warning intentionally omitted
         ]
     )
-
-    doc_id = "a" * 64
     db_path.mkdir(parents=True, exist_ok=True)
     raw_db = await lancedb.connect_async(str(db_path))
     await raw_db.create_table(
-        "legacy_adj",
+        name,
         data=[
             {
-                "doc_id": doc_id,
-                "chunk_id": f"{doc_id}-{i:06d}",
+                "doc_id": _LEGACY_DOC_ID,
+                "chunk_id": f"{_LEGACY_DOC_ID}-{i:06d}",
                 "text": f"legacy chunk {i}",
                 "vector": [0.1, 0.2, 0.3, 0.4],
                 "source_path": "/tmp/legacy.md",
@@ -516,16 +511,123 @@ async def test_fetch_adjacent_chunks_missing_acl_defaults_none(tmp_path):
     )
     raw_db.close()
 
+
+@pytest.mark.asyncio
+async def test_fetch_adjacent_chunks_missing_acl_defaults_none(tmp_path):
+    """A pre-migration table without the ACL columns yields no ACL, scopes or provenance on neighbours."""
+    from archon_search.store import SearchStore
+
+    db_path = tmp_path / "db"
+    await _create_pre_acl_table(db_path, "legacy_adj")
+
     store = SearchStore(db_path)
     await store.connect()
     try:
         adjacent = await store.fetch_adjacent_chunks(
-            "legacy_adj", doc_id, center_idx=1, window=1
+            "legacy_adj", _LEGACY_DOC_ID, center_idx=1, window=1
         )
 
         assert len(adjacent) == 2
         for chunk in adjacent:
-            assert chunk.acl is None, f"Expected acl=None for missing column, got {chunk.acl}"
+            assert (chunk.acl, chunk.scopes, chunk.acl_source, chunk.acl_sidecar_path) == (None, None, None, None)
+            assert chunk.acl_warning == []
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_raw_on_pre_acl_table_exports_null_provenance(tmp_path):
+    """Exporting a pre-migration table reads the absent ACL / scope / provenance columns as None / []."""
+    from archon_search.store import SearchStore
+
+    db_path = tmp_path / "db"
+    await _create_pre_acl_table(db_path, "legacy_export")
+
+    store = SearchStore(db_path)
+    await store.connect()
+    try:
+        rows = [r async for r in store.list_chunks_raw("legacy_export", "default")]
+
+        assert len(rows) == 3
+        for row in rows:
+            assert {k: row[k] for k in ("acl", "scopes", "acl_source", "acl_sidecar_path", "acl_warning")} == {
+                "acl": None, "scopes": None, "acl_source": None, "acl_sidecar_path": None, "acl_warning": [],
+            }
+            assert row["expires_at"] is None
+    finally:
+        await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Read paths carry scopes + G15 ACL provenance from the stored row
+# ---------------------------------------------------------------------------
+
+_PROV_DOC_ID = "e" * 64
+_PROV_SIDECAR_PATH = "docs/doc.md.acl"
+_PROV_WARNINGS = ["acl sidecar entry 'deny-all' is not a valid namespace; ignored"]
+
+
+def _provenance_chunks(count: int):
+    from archon_search._types import ChunkRecord
+
+    return [
+        ChunkRecord(
+            doc_id=_PROV_DOC_ID,
+            chunk_id=f"{_PROV_DOC_ID}-{i:06d}",
+            text=f"provenance chunk {i}",
+            vector=[0.1, 0.2, 0.3, 0.4],
+            source_path="/tmp/doc.md",
+            indexed_at="2024-01-01T00:00:00+00:00",
+            acl=["default"],
+            scopes=["user:alice"],
+            acl_source="sidecar",
+            acl_sidecar_path=_PROV_SIDECAR_PATH,
+            acl_warning=list(_PROV_WARNINGS),
+        )
+        for i in range(count)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_adjacent_chunks_carries_scopes_and_acl_provenance(tmp_path):
+    """Neighbour chunks keep the stored scopes and ACL provenance, not only the acl list."""
+    from archon_search.store import SearchStore
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection("adj_prov", embedding_dim=4)
+        await store.ingest_chunks("adj_prov", _provenance_chunks(3))
+
+        adjacent = await store.fetch_adjacent_chunks("adj_prov", _PROV_DOC_ID, center_idx=1, window=1)
+
+        assert len(adjacent) == 2
+        for chunk in adjacent:
+            assert chunk.scopes == ["user:alice"]
+            assert (chunk.acl_source, chunk.acl_sidecar_path, chunk.acl_warning) == (
+                "sidecar", _PROV_SIDECAR_PATH, _PROV_WARNINGS,
+            )
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_hybrid_search_results_carry_acl_provenance(tmp_path):
+    """SearchStore.hybrid_search results keep the stored ACL provenance, not only the acl list."""
+    from archon_search.store import SearchStore
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection("hybrid_prov", embedding_dim=4)
+        await store.ingest_chunks("hybrid_prov", _provenance_chunks(1))
+
+        results = await store.hybrid_search("hybrid_prov", [0.1, 0.2, 0.3, 0.4], "provenance", top_k=5)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.acl == ["default"]
+        assert (r.acl_source, r.acl_sidecar_path, r.acl_warning) == ("sidecar", _PROV_SIDECAR_PATH, _PROV_WARNINGS)
     finally:
         await store.disconnect()
 

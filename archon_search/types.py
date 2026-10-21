@@ -69,6 +69,17 @@ class ImportJob(IngestJob):
     ignore_schema_version: bool = False
     on_error: str = "fail"  # "fail" | "skip"
     source: Literal["user", "backup"] = "user"
+    # Non-empty archive lines read (imported or skipped): the resume position. Written at each
+    # ingesting checkpoint, by the indexing write, and by the collection claim (which resets it
+    # on a restart from scratch). Persisted in jobs.json only; job_to_dict does not expose it.
+    lines_consumed: int = 0
+    # Set by the claim written right before a run's first ingest write to the collection. Rows may be committed
+    # before the first checkpoint, so a resume trusts this, not only `progress`.
+    collection_claimed: bool = False
+    # Set when another import (any namespace, any status) claims the same collection: the rows a previous run of
+    # this job wrote may be gone or overwritten, so a resume never continues into the collection. Cleared by this
+    # job's own next claim. Both flags are persisted in jobs.json only; job_to_dict does not expose them.
+    collection_claim_revoked: bool = False
 
 
 # UPPER_CASE names follow the convention of JobStatus and IndexingStatus.

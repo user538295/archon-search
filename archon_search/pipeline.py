@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
-import hashlib
 import inspect
 import logging
 import math
@@ -48,7 +47,14 @@ from archon_search.reranker import (
     RerankerBackend,
     RerankerWarmupTimeout,
 )
-from archon_search.store import STORE_SCHEMA_VERSION, SearchStore, StoreBusyError, elementwise_sum, parse_metadata, normalize_ingested_by
+from archon_search.store import (
+    STORE_SCHEMA_VERSION,
+    SearchStore,
+    StoreBusyError,
+    doc_id_for_source_path,
+    elementwise_sum,
+    row_to_scored_candidate,
+)
 from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
 from archon_search.graph_types import ChunkInput, GraphNode
 from archon_search.graph_expander import build_expanded_text, tokenize_and_generate_ngrams
@@ -168,32 +174,22 @@ class GraphCommunitiesNotBuiltError(Exception):
         )
 
 
-def _row_to_community_candidate(row: dict, collection: str) -> ScoredSearchCandidate:
-    """Convert a raw LanceDB chunk row dict to a ScoredSearchCandidate for global community ranking."""
-    metadata = parse_metadata(row.get("metadata", "{}"))
-    ingested_by = normalize_ingested_by(row.get("ingested_by", ""))
-    raw_acl = row.get("acl")
-    acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
+#: The rrf_score of every graph-sourced candidate: graph paths have no retrieval rank to fuse.
+_GRAPH_NEUTRAL_RRF_SCORE = 1.0
+
+
+def _row_to_graph_candidate(row: dict[str, Any], collection: str) -> ScoredSearchCandidate:
+    """Convert a raw LanceDB chunk row to a graph-sourced ScoredSearchCandidate.
+
+    Graph paths (global / local / PPR and their explain variants) have no retrieval
+    rank, so every candidate gets the same neutral breakdown (``_GRAPH_NEUTRAL_RRF_SCORE``).
+    """
     breakdown = SearchScoreBreakdown(
         vector_rank=None, vector_score=None, vector_score_kind=None,
         fts_rank=None, fts_score=None, fts_score_kind=None,
-        rrf_score=1.0, reranker_score=None,
+        rrf_score=_GRAPH_NEUTRAL_RRF_SCORE, reranker_score=None,
     )
-    return ScoredSearchCandidate(
-        chunk_id=row.get("chunk_id", ""),
-        source_path=row.get("source_path", ""),
-        text=row.get("text", ""),
-        collection=collection,
-        doc_id=row.get("doc_id", ""),
-        language=row.get("language", ""),
-        file_type=row.get("file_type", ""),
-        indexed_at=row.get("indexed_at", ""),
-        updated_at=row.get("updated_at", ""),
-        acl=acl,
-        metadata=metadata,
-        ingested_by=ingested_by,  # type: ignore[arg-type]
-        score_breakdown=breakdown,
-    )
+    return row_to_scored_candidate(row, collection, breakdown)
 
 
 _BINARY_EXTENSIONS = frozenset(
@@ -224,18 +220,6 @@ def context_window_error(context_window: int, context_window_max: int) -> str | 
     if 0 <= context_window <= context_window_max:
         return None
     return f"context_window must be in [0, {context_window_max}]; got {context_window}"
-
-
-def _doc_id_for(source_path: Path | str) -> str:
-    """Derive a document's ``doc_id`` from its source path.
-
-    Single source for the derivation every writer and deleter shares — ``ingest_file``,
-    ``ingest_documents`` and ``delete_by_source_path`` (and sync/watcher/maintenance
-    through it). The path is resolved first, non-strictly: a path that does not exist
-    normalizes fine, and two spellings of the same document must not produce two
-    doc_ids, or the chunks one writes become chunks the other can never delete.
-    """
-    return hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
 
 
 def _fuse_rag_fusion_results(
@@ -546,7 +530,7 @@ class SearchPipeline:
         chunk_ttl_seconds: int | None = None,
         chunk_scopes: list[str] | None = None,
     ) -> IngestResult:
-        doc_id = _doc_id_for(path)
+        doc_id = doc_id_for_source_path(path)
 
         # Skip .acl sidecar files — they are metadata, not indexable content
         if path.suffix == ".acl" or path.name.endswith(".acl"):
@@ -1275,7 +1259,7 @@ class SearchPipeline:
                 text,
                 path,
                 collection,
-                _doc_id_for(path),
+                doc_id_for_source_path(path),
                 rebuild_fts=False,
                 disk_backed=False,
                 embedder=embedder,
@@ -1582,7 +1566,7 @@ class SearchPipeline:
                     query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
                 )
 
-            candidates = [_row_to_community_candidate(r, collection) for r in rows]
+            candidates = [_row_to_graph_candidate(r, collection) for r in rows]
             candidates, acl_filtered = apply_acl_filter(candidates, lambda c: c.acl, namespace)
 
             if not candidates:
@@ -1695,7 +1679,7 @@ class SearchPipeline:
             return result
 
         # S4: convert to candidates; apply ACL filter.
-        ppr_candidates = [_row_to_community_candidate(r, collection) for r in ppr_rows]
+        ppr_candidates = [_row_to_graph_candidate(r, collection) for r in ppr_rows]
         if filters and filters.source_path_glob:
             glob_pattern = filters.source_path_glob
             ppr_candidates = [
@@ -1920,7 +1904,7 @@ class SearchPipeline:
             return result
 
         # Step 7: convert to candidates; apply glob + ACL filter.
-        community_candidates = [_row_to_community_candidate(r, collection) for r in community_rows]
+        community_candidates = [_row_to_graph_candidate(r, collection) for r in community_rows]
         if filters and filters.source_path_glob:
             glob_pattern = filters.source_path_glob
             community_candidates = [
@@ -2595,7 +2579,7 @@ class SearchPipeline:
         if not rows:
             return [], ppr_result.entities_matched
 
-        candidates = [_row_to_community_candidate(r, collection) for r in rows]
+        candidates = [_row_to_graph_candidate(r, collection) for r in rows]
 
         # Build provenance steps from matched entity IDs with names from the graph.
         steps: list[TraversalStep] = []
@@ -2866,7 +2850,7 @@ class SearchPipeline:
         # Build candidates with graph provenance attached.
         candidates: list[ScoredSearchCandidate] = []
         for row in rows:
-            candidate = _row_to_community_candidate(row, collection)
+            candidate = _row_to_graph_candidate(row, collection)
             provenance_entry = chunk_to_provenance.get(candidate.chunk_id)
             if provenance_entry is not None:
                 comm_id, e_name, e_id = provenance_entry
@@ -3283,7 +3267,7 @@ class SearchPipeline:
                         "search_many global mode: no chunks found for collection %r, skipping", coll
                     )
                     continue
-                all_candidates.extend(_row_to_community_candidate(r, coll) for r in rows)
+                all_candidates.extend(_row_to_graph_candidate(r, coll) for r in rows)
 
             if all_candidates:
                 all_candidates, acl_filtered = apply_acl_filter(all_candidates, lambda c: c.acl, namespace)
@@ -3418,7 +3402,7 @@ class SearchPipeline:
                     return await _hybrid_fallback()
 
                 # 6. Convert community rows to candidates.
-                community_candidates = [_row_to_community_candidate(r, coll) for r in community_rows]
+                community_candidates = [_row_to_graph_candidate(r, coll) for r in community_rows]
                 if filters and filters.source_path_glob:
                     _glob = filters.source_path_glob
                     community_candidates = [
@@ -3730,7 +3714,8 @@ class SearchPipeline:
         skip_fts_optimize: bool = False,
     ) -> int:
         """Delete a source file and its graph rows (sync/watcher path)."""
-        doc_id = _doc_id_for(source_path)
+        # Offloaded: resolve() walks the path with blocking readlink/stat syscalls.
+        doc_id = await asyncio.to_thread(doc_id_for_source_path, source_path)
         deleted = await self.store.delete_document(
             collection, doc_id, namespace=namespace, skip_fts_optimize=skip_fts_optimize
         )

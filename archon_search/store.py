@@ -14,10 +14,10 @@ import time
 from collections.abc import AsyncIterator, Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, TypedDict, cast
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
-from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult, normalize_iso_utc
+from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestedBy, SearchResult, normalize_iso_utc
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, PING_TIMEOUT_SECONDS, PING_TTL_SECONDS, _validate_namespace
 from archon_search.observability import record_stage, _stage_recorder
 from archon_search.store_filters import build_where, _compute_fetch, _sql_quote_str
@@ -81,7 +81,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CHUNK_ID_RE = re.compile(r"^[a-f0-9]{64}-\d{6}$")
+_CHUNK_ID_RE = re.compile(r"[a-f0-9]{64}-[0-9]{6}")  # matched with fullmatch: no trailing "\n"
 _DOC_ID_RE = re.compile(r"^[a-f0-9]{64}$")
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 _ARCHON_PREFIX = "_archon_"
@@ -126,7 +126,7 @@ _LANCEDB_TOKENIZER_MAP: dict[str, str] = {
 # Must stay in sync with: dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 _FIXED_WIDTH_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 
-_META_MAX_FIELDS = 50
+META_MAX_FIELDS = 50
 _META_MAX_KEY_LEN = 256
 _META_MAX_VAL_LEN = 4096
 
@@ -236,13 +236,32 @@ def elementwise_sum(vectors: list[list[float]]) -> list[float]:
     return [sum(v[i] for v in vectors) for i in range(dim)]
 
 
+def is_valid_chunk_id(chunk_id: object) -> bool:
+    """Return whether *chunk_id* is a ``str`` of the ``<64 hex doc_id>-<6-digit index>`` form ``ingest_chunks`` accepts."""
+    return isinstance(chunk_id, str) and _CHUNK_ID_RE.fullmatch(chunk_id) is not None
+
+
+def doc_id_for_source_path(source_path: Path | str) -> str:
+    """Derive a document's ``doc_id`` from its source path.
+
+    Contract: every code path that writes or deletes chunks by source path must derive the
+    doc_id here, never on its own. The path is resolved first, non-strictly: a path that does
+    not exist normalizes fine, and two spellings of the same document must not produce two
+    doc_ids, or the chunks one writes become chunks the other can never delete. Resolution
+    follows this host's symlinks, so the same string can map to different doc_ids on two hosts.
+    ``resolve()`` makes blocking readlink/stat syscalls: async callers should offload this call
+    (e.g. ``asyncio.to_thread``).
+    """
+    return hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
+
+
 def validate_metadata(metadata: dict[str, str]) -> None:
     """Validate metadata dict against size constraints.
 
     Raises ValueError if any constraint is violated.
     """
-    if len(metadata) > _META_MAX_FIELDS:
-        raise ValueError(f"metadata exceeds max {_META_MAX_FIELDS} fields (got {len(metadata)})")
+    if len(metadata) > META_MAX_FIELDS:
+        raise ValueError(f"metadata exceeds max {META_MAX_FIELDS} fields (got {len(metadata)})")
     for key, value in metadata.items():
         if not isinstance(key, str):
             raise ValueError(f"metadata key must be a string (got {type(key).__name__})")
@@ -252,6 +271,35 @@ def validate_metadata(metadata: dict[str, str]) -> None:
             raise ValueError(f"metadata key too long: max {_META_MAX_KEY_LEN} chars (got {len(key)})")
         if len(value) > _META_MAX_VAL_LEN:
             raise ValueError(f"metadata value too long: max {_META_MAX_VAL_LEN} chars (got {len(value)})")
+
+
+def validate_chunk_record(chunk: ChunkRecord) -> None:
+    """Raise if ``ingest_chunks`` would fail its batch on *chunk*, whatever else the batch holds.
+
+    Covers the ``chunk_id`` form, the metadata limits, the ``custom_score`` float conversion and the ``expires_at``
+    ISO-8601 normalization. It checks by running ``_do_ingest``'s conversions and discarding their results, so the two
+    must stay in step. Column types are not covered: pyarrow's handling of a non-str value in a string column depends
+    on the rest of the batch, so callers passing untyped records check those themselves. Neither is the vector, whose
+    length the table fixes.
+
+    Raises:
+        ValueError: a malformed ``chunk_id``, metadata over its limits or with a non-str key or value, or a
+            ``custom_score`` / ``expires_at`` string that does not convert.
+        TypeError: a non-dict metadata, or a ``custom_score`` / ``expires_at`` of a type that does not convert.
+        OverflowError: an int ``custom_score`` too large for a float, or an ``expires_at`` that falls before year 1
+            once converted to UTC (e.g. ``0001-01-01T00:00:00+05:00``).
+    """
+    if not is_valid_chunk_id(chunk.chunk_id):
+        raise ValueError(f"malformed chunk_id: {chunk.chunk_id!r}")
+    if not isinstance(chunk.metadata, dict):
+        raise TypeError(f"metadata must be a dict (got {type(chunk.metadata).__name__})")
+    validate_metadata(chunk.metadata)
+    if chunk.custom_score is not None:
+        float(chunk.custom_score)
+    if chunk.expires_at is not None:
+        if not isinstance(chunk.expires_at, (str, datetime)):
+            raise TypeError(f"expires_at must be an ISO-8601 string (got {type(chunk.expires_at).__name__})")
+        normalize_iso_utc(chunk.expires_at)
 
 
 def parse_metadata(raw: str) -> dict[str, str]:
@@ -271,7 +319,7 @@ def parse_metadata(raw: str) -> dict[str, str]:
         return {}
 
 
-def normalize_ingested_by(value: "str | None") -> str:
+def normalize_ingested_by(value: "str | None") -> IngestedBy:
     """Normalize a stored ``ingested_by`` value at the read boundary.
 
     None / empty / legacy ``"archon-search-cli"`` → ``"cli"``.
@@ -283,9 +331,96 @@ def normalize_ingested_by(value: "str | None") -> str:
     if not value or value == LEGACY_INGESTED_BY:
         return "cli"
     if value in INGESTED_BY_VALUES:
-        return value
+        return cast(IngestedBy, value)
     logger.debug("unexpected stored ingested_by %r; coerced to 'cli'", value)
     return "cli"
+
+
+class RowCommonFields(TypedDict):
+    """Non-ACL fields decoded from a raw chunk row, ready to ``**``-splat into ``ScoredSearchCandidate``,
+    ``SearchResult`` or ``ChunkRecord``."""
+
+    file_type: str
+    language: str
+    indexed_at: str
+    updated_at: str
+    ingested_by: IngestedBy
+    metadata: dict[str, str]
+
+
+def decode_row_common_fields(row: dict[str, Any]) -> RowCommonFields:
+    """Decode a raw chunk row's descriptive columns at the read boundary.
+
+    Missing or null ``file_type`` / ``language`` / ``indexed_at`` decode to ``""``,
+    ``metadata`` to ``{}`` (via ``parse_metadata``), ``ingested_by`` through
+    ``normalize_ingested_by``, and ``updated_at`` falls back to ``indexed_at``.
+    """
+    indexed_at = row.get("indexed_at") or ""
+    return RowCommonFields(
+        file_type=row.get("file_type") or "",
+        language=row.get("language") or "",
+        indexed_at=indexed_at,
+        updated_at=row.get("updated_at") or indexed_at,
+        ingested_by=normalize_ingested_by(row.get("ingested_by")),
+        metadata=parse_metadata(row.get("metadata") or "{}"),
+    )
+
+
+class RowAclFields(TypedDict):
+    """ACL fields decoded from a raw chunk row, ready to ``**``-splat into ``ScoredSearchCandidate`` or ``ChunkRecord``."""
+
+    acl: list[str] | None
+    scopes: list[str] | None
+    acl_source: str | None
+    acl_sidecar_path: str | None
+    acl_warning: list[str]
+
+
+def decode_row_acl_fields(row: dict[str, Any]) -> RowAclFields:
+    """Decode a raw chunk row's ACL, scope tags and ACL provenance at the read boundary.
+
+    The read paths that build ``ScoredSearchCandidate`` / ``SearchResult`` / ``ChunkRecord``
+    or export rows decode them here, so one stored row reads the same on each of them
+    (aggregations such as ``list_documents`` read the raw columns). Missing or null columns (tables predating the ACL /
+    TTL / G15 provenance migrations) decode to ``None``, except ``acl_warning``,
+    which is always a list (storage collapses ``[]`` to null). Non-list ``acl`` /
+    ``scopes`` / ``acl_warning`` values are treated as absent: LanceDB ``to_list``
+    yields Python lists for list columns. The returned lists are copies of the row's.
+    """
+    raw_acl = row.get("acl")
+    raw_scopes = row.get("scopes")
+    # ACL provenance — added by G15 migrate_acl_provenance; null for pre-G15 rows
+    raw_acl_warning = row.get("acl_warning")
+    return RowAclFields(
+        acl=list(raw_acl) if isinstance(raw_acl, list) else None,
+        scopes=list(raw_scopes) if isinstance(raw_scopes, list) else None,
+        acl_source=row.get("acl_source"),
+        acl_sidecar_path=row.get("acl_sidecar_path"),
+        acl_warning=list(raw_acl_warning) if isinstance(raw_acl_warning, list) else [],
+    )
+
+
+def row_to_scored_candidate(
+    row: dict[str, Any], collection: str, breakdown: SearchScoreBreakdown,
+) -> ScoredSearchCandidate:
+    """Build a ``ScoredSearchCandidate`` from a raw LanceDB chunk row.
+
+    The single row → candidate builder shared by the hybrid fuse step and every
+    graph path, so the same stored row yields the same candidate everywhere except
+    for *breakdown*. ``doc_id`` / ``chunk_id`` / ``text`` / ``source_path`` are
+    required (``KeyError`` otherwise); every other field comes from
+    ``decode_row_common_fields`` and ``decode_row_acl_fields``.
+    """
+    return ScoredSearchCandidate(
+        doc_id=row["doc_id"],
+        chunk_id=row["chunk_id"],
+        text=row["text"],
+        source_path=row["source_path"],
+        score_breakdown=breakdown,
+        collection=collection,
+        **decode_row_common_fields(row),
+        **decode_row_acl_fields(row),
+    )
 
 
 class SearchStore:
@@ -1871,9 +2006,7 @@ class SearchStore:
         self._validate_collection(collection)
         db = self._require_connected()
         for chunk in chunks:
-            if not _CHUNK_ID_RE.match(chunk.chunk_id):
-                raise ValueError(f"malformed chunk_id: {chunk.chunk_id!r}")
-            validate_metadata(chunk.metadata)
+            validate_chunk_record(chunk)
 
         if not chunks:
             return ChunkIngestResult(chunks_ingested=0, needs_recompute=False)
@@ -1944,7 +2077,7 @@ class SearchStore:
                 "updated_at": c.updated_at or c.indexed_at,
                 "acl": c.acl,
                 **({"expires_at": normalize_iso_utc(c.expires_at) if c.expires_at is not None else None, "scopes": c.scopes} if has_ttl_cols else {}),
-                # acl_warning or None: collapse [] to null on storage; reader re-widens null→[] (see candidate builder).
+                # acl_warning or None: collapse [] to null on storage; reader re-widens null→[] (see decode_row_acl_fields).
                 **({"acl_source": c.acl_source, "acl_sidecar_path": c.acl_sidecar_path, "acl_warning": c.acl_warning or None} if has_acl_provenance_cols else {}),
             }
             for c in chunks
@@ -2272,9 +2405,6 @@ class SearchStore:
 
         results = []
         for score, row in scored[:top_k]:
-            raw_acl = row.get("acl")
-            row_acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
-            indexed_at = row.get("indexed_at") or ""
             results.append(
                 SearchResult(
                     doc_id=row["doc_id"],
@@ -2282,14 +2412,10 @@ class SearchStore:
                     text=row["text"],
                     score=score,
                     source_path=row["source_path"],
-                    file_type=row.get("file_type") or "",
-                    language=row.get("language") or "",
-                    indexed_at=indexed_at,
-                    updated_at=row.get("updated_at") or indexed_at,
-                    ingested_by=normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
-                    metadata=parse_metadata(row.get("metadata") or "{}"),
-                    acl=row_acl,
                     collection=collection,
+                    **decode_row_common_fields(row),
+                    # SearchResult has no ``scopes`` field; every other decoded ACL field passes through.
+                    **{k: v for k, v in decode_row_acl_fields(row).items() if k != "scopes"},
                 )
             )
 
@@ -2437,18 +2563,16 @@ class SearchStore:
     ) -> int:
         """Delete all chunks for a source file by computing its doc_id.
 
-        ``source_path`` must be an absolute, resolved path — the same form
-        produced by ``str(path.resolve())`` at ingest time.  Relative paths
-        will resolve against the current working directory at call time and
-        may not match the stored doc_id.
+        ``source_path`` is resolved by ``doc_id_for_source_path``, the same
+        derivation ingest uses; a relative path resolves against the current
+        working directory at call time.
 
         ``skip_fts_optimize`` is forwarded to ``delete_document``; pass
         ``True`` from batch callers (e.g. sync.py delete loop) to suppress
         per-file FTS maintenance in favour of a single batch-end call.
         """
         # Offloaded: resolve() walks the path with blocking readlink/stat syscalls.
-        resolved = await asyncio.to_thread(Path(source_path).resolve)
-        doc_id = hashlib.sha256(str(resolved).encode()).hexdigest()
+        doc_id = await asyncio.to_thread(doc_id_for_source_path, source_path)
         return await self.delete_document(
             collection, doc_id, namespace=namespace, skip_fts_optimize=skip_fts_optimize
         )
@@ -2778,6 +2902,10 @@ class SearchStore:
         Callers must bound *window*: it builds up to ``2 * window`` chunk ids and an
         ``IN`` predicate of that size.
 
+        Each record carries the stored ``acl``, ``scopes`` and ACL provenance
+        (``decode_row_acl_fields``) for internal consumers; the MCP wire schema
+        ``ContextChunkSchema`` (``server/mcp_schemas.py``) exposes only ``acl``.
+
         Raises:
             RuntimeError: if the store is not connected.
             ValueError: if *collection* or *doc_id* is invalid.
@@ -2814,14 +2942,9 @@ class SearchStore:
                 text=r["text"],
                 vector=list(r["vector"]),
                 source_path=r["source_path"],
-                indexed_at=r["indexed_at"],
-                file_type=r.get("file_type") or "",
-                language=r.get("language") or "",
-                metadata=parse_metadata(r.get("metadata") or "{}"),
                 custom_score=r.get("custom_score"),
-                ingested_by=normalize_ingested_by(r.get("ingested_by")),
-                updated_at=r.get("updated_at") or r["indexed_at"],
-                acl=list(r.get("acl")) if isinstance(r.get("acl"), list) else None,
+                **decode_row_common_fields(r),
+                **decode_row_acl_fields(r),
             )
             for r in rows
         ]
@@ -2841,11 +2964,30 @@ class SearchStore:
         without making any DB call.
 
         Used by ``CommunityBuilder`` and ``SearchPipeline._search_graph_mode()``
-        to materialise representative chunks from stored community data.
-        Both callers must treat the result as unordered — LanceDB does not
-        guarantee insertion-order recall.
+        to materialise representative chunks from stored community data, and
+        by the import worker's resume ownership check, which compares a stored
+        row's ``indexed_at`` with the archived one. Callers must treat the
+        result as unordered — LanceDB does not guarantee insertion-order recall.
 
         SQL predicates use ``_where_in`` from ``store_filters`` — never f-strings.
+        """
+        return await self._query_rows_by_chunk_ids(collection, chunk_ids)
+
+    async def stored_chunk_ids(self, collection: str, chunk_ids: list[str]) -> set[str]:
+        """Return the subset of *chunk_ids* stored in *collection*, reading only the ``chunk_id`` column.
+
+        Returns an empty set for an empty *chunk_ids* list (without a DB call) or a missing collection.
+        Used by the import worker to skip chunks a failed run already stored.
+        """
+        rows = await self._query_rows_by_chunk_ids(collection, chunk_ids, columns=["chunk_id"])
+        return {row["chunk_id"] for row in rows}
+
+    async def _query_rows_by_chunk_ids(
+        self, collection: str, chunk_ids: list[str], columns: list[str] | None = None,
+    ) -> list[dict]:
+        """Return the rows of *collection* whose ``chunk_id`` is in *chunk_ids*, only *columns* when given.
+
+        Returns ``[]`` for an empty *chunk_ids* list (without a DB call) or a missing collection.
         """
         if not chunk_ids:
             return []
@@ -2855,9 +2997,11 @@ class SearchStore:
             table = await db.open_table(collection)
         except (ValueError, FileNotFoundError):
             return []
-        # chunk_ids are supplied by the caller (community store); _where_in is defense-in-depth
-        rows = await table.query().where(_where_in("chunk_id", chunk_ids)).to_list()
-        return list(rows)
+        # chunk_ids are supplied by the caller; _where_in is defense-in-depth
+        query = table.query().where(_where_in("chunk_id", chunk_ids))
+        if columns is not None:
+            query = query.select(columns)
+        return list(await query.to_list())
 
     async def get_chunks_for_doc(
         self,
@@ -2963,11 +3107,20 @@ class SearchStore:
 
         Includes all persisted fields: ``doc_id``, ``chunk_id``, ``text``,
         ``vector`` (as a list of floats), ``source_path``, ``indexed_at``,
-        ``file_type``, ``language``, ``metadata``, ``acl``, ``custom_score``,
-        ``ingested_by``, ``updated_at``, ``expires_at``, and ``scopes``.
+        ``file_type``, ``language``, ``metadata``, ``custom_score``,
+        ``ingested_by``, ``updated_at``, ``expires_at``, and the
+        ``decode_row_acl_fields`` set: ``acl``, ``scopes``, ``acl_source``,
+        ``acl_sidecar_path`` and ``acl_warning``.
 
-        ``expires_at`` and ``scopes`` are ``None`` on pre-migration collections
-        that do not yet have those columns.
+        ``expires_at``, ``scopes`` and the ACL provenance fields are ``None``
+        (``acl_warning``: ``[]``) on pre-migration collections that do not yet
+        have those columns.
+
+        Unlike ``metadata``, which is passed through as the raw stored JSON
+        string, the other descriptive columns go through ``decode_row_common_fields``
+        (null strings to ``""``, ``ingested_by`` normalized, ``updated_at`` falling
+        back to ``indexed_at``) and the ACL fields through ``decode_row_acl_fields``
+        (lists copied, a stored null ``acl_warning`` widened to ``[]``).
 
         The *namespace* parameter is accepted for API symmetry but does not
         affect table-name resolution (the collection name is the table name).
@@ -2989,16 +3142,12 @@ class SearchStore:
                 "text": r["text"],
                 "vector": list(r["vector"]),
                 "source_path": r["source_path"],
-                "indexed_at": r["indexed_at"],
-                "file_type": r.get("file_type") or "",
-                "language": r.get("language") or "",
+                **decode_row_common_fields(r),
+                # Overrides the decoded dict: the archive carries the stored JSON string verbatim.
                 "metadata": r.get("metadata") or "{}",
-                "acl": list(r["acl"]) if isinstance(r.get("acl"), list) else None,
                 "custom_score": r.get("custom_score"),
-                "ingested_by": r.get("ingested_by") or "",
-                "updated_at": r.get("updated_at") or r["indexed_at"],
                 "expires_at": r.get("expires_at"),
-                "scopes": r.get("scopes"),
+                **decode_row_acl_fields(r),
             }
 
     async def count_untagged_language_chunks(self, collection: str) -> int:
@@ -3200,23 +3349,11 @@ async def _hybrid_search_with_trace(
             if in_fts:
                 rrf += _rrf_score(fts_rank[chunk_id])
 
-            raw_acl = row.get("acl")
-            row_acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
-            raw_scopes = row.get("scopes")
-            row_scopes: list[str] | None = list(raw_scopes) if isinstance(raw_scopes, list) else None
-            indexed_at = row.get("indexed_at") or ""
-
-            # ACL provenance — added by G15 migrate_acl_provenance; null for pre-G15 rows
-            raw_acl_warning = row.get("acl_warning")
-            row_acl_warning: list[str] = list(raw_acl_warning) if isinstance(raw_acl_warning, list) else []
-
             candidates.append(
-                ScoredSearchCandidate(
-                    doc_id=row["doc_id"],
-                    chunk_id=chunk_id,
-                    text=row["text"],
-                    source_path=row["source_path"],
-                    score_breakdown=SearchScoreBreakdown(
+                row_to_scored_candidate(
+                    row,
+                    collection,
+                    SearchScoreBreakdown(
                         vector_rank=v_rank,
                         vector_score=v_score,
                         vector_score_kind=v_kind,
@@ -3226,18 +3363,6 @@ async def _hybrid_search_with_trace(
                         rrf_score=rrf,
                         reranker_score=None,
                     ),
-                    collection=collection,
-                    acl=row_acl,
-                    file_type=row.get("file_type") or "",
-                    indexed_at=indexed_at,
-                    updated_at=row.get("updated_at") or indexed_at,
-                    ingested_by=normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
-                    language=row.get("language") or "",
-                    metadata=parse_metadata(row.get("metadata") or "{}"),
-                    scopes=row_scopes,
-                    acl_source=row.get("acl_source"),
-                    acl_sidecar_path=row.get("acl_sidecar_path"),
-                    acl_warning=row_acl_warning,
                 )
             )
 
