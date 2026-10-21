@@ -36,7 +36,6 @@ MARKER_NAME = "archon_unset_data_dir"
 # Any test added here must exercise the Path.home() / ".archon-search" fallback codepath;
 # apply this marker only to tests in this frozenset or update it with a C17-plan amendment.
 MARKER_ALLOWLIST: frozenset[str] = frozenset({
-    "tests/test_cli_serve.py::test_serve_no_warning_when_data_dir_unset",
     "tests/test_cli_serve.py::test_serve_output_and_exit_code_unchanged",
     "tests/test_job_store.py::test_jobs_file_default_path",
     "tests/test_jobs_paths.py::test_get_jobs_file_default",
@@ -362,8 +361,8 @@ def test_meta_ast_finds_pytest_mark_decorator() -> None:
                                 break
 
         expected = {
-            f"test_sample.py::test_sample_decorated",
-            f"test_sample.py::TestSampleClass::test_method_decorated",
+            "test_sample.py::test_sample_decorated",
+            "test_sample.py::TestSampleClass::test_method_decorated",
         }
         assert found == expected, (
             f"_decorator_names / AST walker failed to detect @pytest.mark.{MARKER_NAME}. "

@@ -4,10 +4,13 @@ from __future__ import annotations
 import logging
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import click
 import httpx
 
+from archon_search.config import ConfigError
 from archon_search.platform.service import SearchServiceLifecycle
 
 logger = logging.getLogger(__name__)
@@ -28,6 +31,16 @@ _CONTAINER_MSG = (
 )
 # Must match the click default in every CLI command (collection.py:_DEFAULT_API_URL, etc.).
 _LOCAL_DEFAULT_URL = "http://localhost:8765"
+
+
+@contextmanager
+def _exit_on_config_error() -> Iterator[None]:
+    """Turn a `ConfigError` raised in the block into ``Error: <msg>`` on stderr + exit 1."""
+    try:
+        yield
+    except ConfigError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        raise SystemExit(1)
 
 
 def _server_connect_fail_msg(base_url: str | None = None) -> str:

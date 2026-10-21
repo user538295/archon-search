@@ -24,8 +24,10 @@ In the table below, paths are relative to the data-directory root — `~/.archon
 
 | Path | Owner | Contents | Notes |
 |------|-------|----------|-------|
-| `archon-search.toml` | user (or `config_cmd` CLI) | runtime config | optional; missing file → all defaults (`config.py::load_config`). **Note**: not relocated by `ARCHON_SEARCH_DATA_DIR` — use `ARCHON_SEARCH_CONFIG` instead. |
+| `archon-search.toml` | user (or `config_cmd` CLI) | runtime config | optional; missing file → all defaults (`config.py::load_config`). Default location from `config.get_default_config_path()`; `ARCHON_SEARCH_CONFIG` overrides it. |
 | `.search.env` | `key_manager.py` | `ARCHON_SEARCH_API_KEY=<hex>` | mode `0600`; auto-generated on first start if missing. Resolved lazily via `get_key_file()`. |
+| `.secrets.env` | wizard (`install/service_ops._create_secrets_env`) | provider env vars the operator adds (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, optionally `FASTEMBED_CACHE_PATH`) | mode `0600`, created empty and only if absent when HyDE or RAG Fusion is enabled (any provider). Loaded by the macOS launchd wrapper (`run-server.sh`) and the systemd unit's `EnvironmentFile=-`. Resolved lazily via `platform.service.get_secrets_env_file()`. |
+| `run-server.sh` | `platform/macos.py` (`LaunchdSearchService.register()`) | launchd wrapper: sources `.secrets.env` when present, then execs the server | macOS only; mode `0755`; regenerated on every service install |
 | `keys.json` | `key_manager.py` (`KeyStore`) | Durable multi-key store: JSON array of `KeyRecord` objects (`id`, `token_hash`, `namespace`, `label`, `created_at`, `expires_at`, `status`). Written with mode `0o600` via `atomic_write_bytes`. Created on first managed-key operation (D7). |
 | `search/` | `store.py` (LanceDB) | vector + FTS + collection meta tables | `db_path` config key; created on `SearchStore.connect()` |
 | `search-logs/` | `telemetry/writer.py` | `YYYY-MM-DD.jsonl` per UTC day | only if `[telemetry].enabled = true` |
@@ -39,7 +41,7 @@ In the table below, paths are relative to the data-directory root — `~/.archon
 | `history/sessions/` | `cli/ingest.py` | default `--sessions-dir` for the `ingest` subcommand | resolved lazily via `get_data_dir()` |
 
 Override paths:
-- `ARCHON_SEARCH_DATA_DIR` (C9) — relocates the entire layout above (except `archon-search.toml` — see `ARCHON_SEARCH_CONFIG`). The Docker image sets `ARCHON_SEARCH_DATA_DIR=/data`. Read lazily on every call by `paths.get_data_dir()`, `key_manager.get_key_file()`, `jobs.get_jobs_file()`, `paths.get_models_dir()`, `paths.get_fastembed_cache_dir()` (when `FASTEMBED_CACHE_PATH` is unset), `paths.get_fasttext_models_dir()`, `paths.get_graph_models_dir()`, `cli/ingest.py`, and `config.load_config()`.
+- `ARCHON_SEARCH_DATA_DIR` (C9) — relocates the entire layout above, `archon-search.toml` included unless `ARCHON_SEARCH_CONFIG` is set. The Docker image sets `ARCHON_SEARCH_DATA_DIR=/data`. Read lazily on every call by `paths.get_data_dir()`, `key_manager.get_key_file()`, `jobs.get_jobs_file()`, `paths.get_models_dir()`, `paths.get_fastembed_cache_dir()` (when `FASTEMBED_CACHE_PATH` is unset), `paths.get_fasttext_models_dir()`, `paths.get_graph_models_dir()`, `platform.service.get_secrets_env_file()`, `config.get_default_config_path()` (when `ARCHON_SEARCH_CONFIG` is unset), `cli/ingest.py`, and `config.load_config()`.
 - `ARCHON_SEARCH_KEY_FILE` overrides `.search.env` location (takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file).
 - `ARCHON_SEARCH_API_KEY` (env var) overrides reading any key file entirely.
 - `ARCHON_SEARCH_CONFIG` overrides `archon-search.toml` location.

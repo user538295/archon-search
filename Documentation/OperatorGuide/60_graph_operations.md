@@ -299,7 +299,7 @@ Operational properties:
 - **Refresh:** the maintenance loop re-summarizes only communities whose membership changed since the last build.
 - **No rate limiting for `llama_cpp`:** `extraction_rate_limit_rpm` is honored by `anthropic` but ignored by the `llama_cpp` enrichment client (local inference, unthrottled) — parity with the query-expansion adapters.
 
-Set the provider credential (e.g. `ANTHROPIC_API_KEY`) in the environment or via the wizard-managed `~/.archon-search/.secrets.env`. `ollama` and `llama_cpp` need no credential. Community texts and LLM prompts are never logged — the no-raw-query telemetry guarantee extends to enrichment.
+Set the provider credential (e.g. `ANTHROPIC_API_KEY`) in the environment or via the wizard-managed `<data-dir>/.secrets.env`. `ollama` and `llama_cpp` need no credential. Community texts and LLM prompts are never logged — the no-raw-query telemetry guarantee extends to enrichment.
 
 ---
 

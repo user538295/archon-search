@@ -14,6 +14,8 @@
 
 ## Where to look
 
+Paths are shown for the default data dir `~/.archon-search/`; `ARCHON_SEARCH_DATA_DIR` relocates every entry, the config included; `ARCHON_SEARCH_CONFIG`, when set, overrides the config location (the managed service bakes the config path in at install time: the `--config` path, else `ARCHON_SEARCH_CONFIG`, else `<data-dir>/archon-search.toml`), and `ARCHON_SEARCH_KEY_FILE`, when set, overrides the `.search.env` location. See [`30_configuration.md`](./30_configuration.md).
+
 | Location | Contents |
 | --- | --- |
 | `~/.archon-search/logs/archon-search.log` | Server log (level from `[logging].level`). |
@@ -21,16 +23,14 @@
 | `~/.archon-search/.secrets.env` | HyDE / RAG-Fusion provider keys (mode `600`; managed service only). |
 | `~/.archon-search/search/` | LanceDB data. Deleting forces a full rebuild on next sync. |
 | `~/.archon-search/search-logs/` | Telemetry JSONL — only present when telemetry is enabled. |
-| `~/.archon-search/archon-search.toml` | Config. Default location; overridable via `ARCHON_SEARCH_CONFIG`. |
-
-The whole tree relocates with `ARCHON_SEARCH_DATA_DIR` — substitute that root if you set it. See [`30_configuration.md`](./30_configuration.md).
+| `~/.archon-search/archon-search.toml` | Config. Default `<data-dir>/archon-search.toml`; overridable via `ARCHON_SEARCH_CONFIG`. |
 
 ## Symptom: server will not start
 
 Symptoms: `archon-search start` prints `Error: …` and exits 1.
 
 1. Run `archon-search config show` — does the printed TOML look correct?
-2. Force the loader to use the default config path (`~/.archon-search/archon-search.toml`) by clearing `ARCHON_SEARCH_CONFIG` for one invocation. An empty value is treated as unset, so this loads the default file rather than skipping config:
+2. Force the loader to use the default config path (`<data-dir>/archon-search.toml`, default `~/.archon-search/archon-search.toml`) by clearing `ARCHON_SEARCH_CONFIG` for one invocation. An empty value is treated as unset, so this loads the default file rather than skipping config:
    ```bash
    ARCHON_SEARCH_CONFIG= archon-search start
    ```
@@ -178,7 +178,7 @@ All three wordings are sanitized constants in `archon_search/graph_extractor.py`
 `POST /search` with `hyde=true` or `rag_fusion=true` returns a non-null `expansion_warning` (and `expansion_used: false` — expansion fell back to the original query embedding).
 
 1. **Check `GET /status`** — with `[hyde] enabled = true` or `[rag_fusion] enabled = true`, the response includes `hyde.key_available` / `rag_fusion.key_available`. A `false` value means the provider's required key is unset: `ANTHROPIC_API_KEY` for `provider = "anthropic"` (default), `OPENAI_API_KEY` for `provider = "openai"`. `ollama` and `claude_cli` report `key_available: true` (no API key) but that does **not** confirm Ollama is reachable or the `claude` CLI is logged in.
-2. **Managed service**: put the key in `~/.archon-search/.secrets.env` (`ANTHROPIC_API_KEY=sk-...` or `OPENAI_API_KEY=sk-...`), then restart (`archon-search stop && archon-search start`). The wizard creates this file (mode 600) when HyDE/RAG-Fusion is enabled.
+2. **Managed service**: put the key in `<data-dir>/.secrets.env` (`~/.archon-search/.secrets.env` by default; `ANTHROPIC_API_KEY=sk-...` or `OPENAI_API_KEY=sk-...`), then restart (`archon-search stop && archon-search start`). The wizard creates this file (mode 600) when HyDE/RAG-Fusion is enabled.
 3. **`archon-search serve` (container mode)**: pass the key as `-e ANTHROPIC_API_KEY=sk-...` / `-e OPENAI_API_KEY=sk-...`.
 4. **`archon-search status`** warns on stderr when the feature is enabled with a key-needing provider but the key is absent.
 5. Key set but still warned? The provider call may be timing out — raise `timeout_seconds` in `[hyde]`/`[rag_fusion]` (default `10.0`). For `ollama`, verify the server at `ollama_base_url`; for `claude_cli`, confirm `claude` is on PATH and logged in.

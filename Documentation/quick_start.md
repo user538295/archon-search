@@ -74,7 +74,7 @@ export ARCHON_SEARCH_API_KEY="your-key-here"
 
 ## 4. Locate the Config File
 
-Server configuration lives in `~/.archon-search/archon-search.toml`. To override the path, set `ARCHON_SEARCH_CONFIG` (absolute or tilde-prefixed; relative paths resolve against the working directory).
+Server configuration lives in `<data-dir>/archon-search.toml` — `~/.archon-search/archon-search.toml` unless `ARCHON_SEARCH_DATA_DIR` is set. To override the path, set `ARCHON_SEARCH_CONFIG` (absolute or tilde-prefixed; relative paths resolve against the working directory).
 
 A fully annotated reference is checked in at `../archon-search.toml.example`. Notable sections: `[server]`, `[database]`, `[routing]`, `[collections]`, `[logging]`, `[telemetry]`. Telemetry is **opt-in and off by default**; see `../README.md` "Telemetry (opt-in)" for the full surface.
 
@@ -114,7 +114,7 @@ First populate a collection. The fastest path from the CLI is:
 uv run archon-search collection add <path>
 ```
 
-`collection add` takes a single path argument: it appends the path to `[collections] collections` in `~/.archon-search/archon-search.toml`, derives the collection name from the path (`archon_search.sync.path_to_collection_name`), and ingests the directory. Alternatively, drive it over HTTP via the `/collections` and ingest endpoints (see `GET /openapi.json`).
+`collection add` takes a single path argument: it appends the path to `[collections] collections` in `<data-dir>/archon-search.toml` (default `~/.archon-search/archon-search.toml`; `ARCHON_SEARCH_CONFIG` overrides), derives the collection name from the path (`archon_search.sync.path_to_collection_name`), and ingests the directory. Alternatively, drive it over HTTP via the `/collections` and ingest endpoints (see `GET /openapi.json`).
 
 With a collection already ingested:
 

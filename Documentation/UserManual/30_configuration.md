@@ -7,7 +7,7 @@
 
 ## Principles
 
-1. **One file, one process.** All server config lives in a single TOML file. The default is `~/.archon-search/archon-search.toml`; the `ARCHON_SEARCH_CONFIG` environment variable can redirect to any other path.
+1. **One file, one process.** All server config lives in a single TOML file. The default is `<data-dir>/archon-search.toml` (`~/.archon-search/archon-search.toml` unless `ARCHON_SEARCH_DATA_DIR` is set); the `ARCHON_SEARCH_CONFIG` environment variable can redirect to any other path.
 2. **Defaults are safe.** Every key has a default in `archon_search/config.py:SearchConfig`; a missing file or missing section uses defaults rather than failing.
 3. **The auth key is a separate concern.** API keys live in `~/.archon-search/.search.env` (mode `600`), not in the TOML — see [Authentication](#authentication).
 4. **Validation is strict where it matters.** Numeric ranges (port, thresholds, retention) raise `ConfigError` on bad values, and malformed TOML fails loudly at load time. String fields are coerced permissively via `str()`, so e.g. `host = 123` becomes `"123"` rather than raising.
@@ -19,7 +19,9 @@ The fully annotated reference is `archon-search.toml.example` at the repo root �
 The loader (`archon_search.config.get_default_config_path`) resolves the path as follows:
 
 1. If `ARCHON_SEARCH_CONFIG` is set, use it. Tilde and relative paths are expanded; relative paths resolve against the current working directory, not `$HOME`.
-2. Otherwise use `~/.archon-search/archon-search.toml`.
+2. Otherwise use `<data-dir>/archon-search.toml` — `$ARCHON_SEARCH_DATA_DIR/archon-search.toml`, default `~/.archon-search/archon-search.toml`. An invalid `ARCHON_SEARCH_DATA_DIR` (empty, relative) raises `ConfigError`, so every command that resolves the config — `serve`, `start`, `config show/get/set`, `wizard`, `install`, `uninstall --delete-db` — prints `Error: ...` and exits `1`.
+
+The default used to be `~/.archon-search/archon-search.toml` regardless of `ARCHON_SEARCH_DATA_DIR`. When `ARCHON_SEARCH_CONFIG` is unset, `<data-dir>/archon-search.toml` does not exist and that legacy file does, `serve` (in the server log, once `[logging]` is applied), `config show/get/set`, `wizard`, `install` and `uninstall --delete-db` log a WARNING: move the file into the data dir or set `ARCHON_SEARCH_CONFIG` to it (see `BREAKING.md`) — before re-running `wizard` (which otherwise writes a fresh default config to the data dir) or `install` (which otherwise exits 1 with `No configuration found at <path>`).
 
 If the file does not exist, the loader returns an all-defaults `SearchConfig` — the server still starts.
 
@@ -170,7 +172,7 @@ Optional LLM-backed recall boosters, both **disabled by default**. They share th
 | `max_requests_per_minute` | `60` | Per-process rate limit (≥1); **not** enforced for `ollama`/`claude_cli`/`llama_cpp`. |
 | `num_queries` *(rag_fusion only)* | `2` | LLM-generated query variants, range `1–5`. Total searches = `num_queries + 1`. |
 
-> **Privacy warning:** with `provider = "anthropic"`, `"openai"`, or `"claude_cli"`, enabling these features sends raw query text to the provider on every boosted request. `provider = "ollama"` or `"llama_cpp"` keeps query text on the local host (zero-transmission). Enabling either feature causes the wizard to create `~/.archon-search/.secrets.env` (mode 0600) for provider API keys — not created for `ollama`/`claude_cli`/`llama_cpp`, which need none. See [`60_searching.md`](./60_searching.md) for worked examples and the residency caveats.
+> **Privacy warning:** with `provider = "anthropic"`, `"openai"`, or `"claude_cli"`, enabling these features sends raw query text to the provider on every boosted request. `provider = "ollama"` or `"llama_cpp"` keeps query text on the local host (zero-transmission). Enabling either feature causes the wizard to create `<data-dir>/.secrets.env` (`~/.archon-search/.secrets.env` by default; mode 0600) for provider API keys — created whatever the provider, though `ollama`/`claude_cli`/`llama_cpp` need none. See [`60_searching.md`](./60_searching.md) for worked examples and the residency caveats.
 
 ### `[maintenance]`
 
@@ -285,7 +287,7 @@ Read at config load, key resolution, and by every lazy path accessor. All overri
 
 | Variable | Effect | Default |
 | --- | --- | --- |
-| `ARCHON_SEARCH_CONFIG` | Path to `archon-search.toml`. | `~/.archon-search/archon-search.toml` |
+| `ARCHON_SEARCH_CONFIG` | Path to `archon-search.toml`. | unset → `<data-dir>/archon-search.toml` |
 | `ARCHON_SEARCH_API_KEY` | Bearer token; highest priority, bypasses the key file. | unset → key file or auto-generated |
 | `ARCHON_SEARCH_KEY_FILE` | Path to the key file (absolute). Takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file. | unset → `<data-dir>/.search.env` |
 | `ARCHON_SEARCH_HOST` | Bind-address override (env > TOML > default). Empty = not set. | unset → `[server].host` |
@@ -294,7 +296,7 @@ Read at config load, key resolution, and by every lazy path accessor. All overri
 | `ARCHON_SEARCH_CONTAINER` | `"1"` attaches a stderr handler so `docker logs` captures output. Docker sets `1`. | unset → no stderr handler |
 | `FASTEMBED_CACHE_PATH` | fastembed's own weight-cache directory for the embedder and reranker; archon-search passes it as `cache_dir` (`paths.get_fastembed_cache_dir()`), so it may lie outside the data dir. An empty value = not set. Docker sets `/data/fastembed-cache`. | unset → `<data-dir>/models` |
 
-`ARCHON_SEARCH_CONFIG` and `ARCHON_SEARCH_DATA_DIR` are **independent**: the TOML config file is not relocated by `ARCHON_SEARCH_DATA_DIR`. To also move the TOML onto a mounted volume, set `ARCHON_SEARCH_CONFIG` explicitly. `archon-search serve` warns at startup if `ARCHON_SEARCH_DATA_DIR` is set without `ARCHON_SEARCH_CONFIG`.
+`ARCHON_SEARCH_DATA_DIR` also relocates the TOML config file: without `ARCHON_SEARCH_CONFIG` it is `<data-dir>/archon-search.toml`, so on a mounted data volume the config lives on that volume too. `ARCHON_SEARCH_CONFIG` takes precedence and can point anywhere, inside or outside the data dir.
 
 ## Related documents
 

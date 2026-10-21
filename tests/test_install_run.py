@@ -892,7 +892,9 @@ def test_run_guard_abort_does_not_remove_legacy_service(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_register_and_start_no_config_returns_1(tmp_path: Path) -> None:
+def test_run_register_and_start_no_config_returns_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     config_path = tmp_path / "archon-search.toml"
     assert not config_path.exists()
 
@@ -900,6 +902,28 @@ def test_run_register_and_start_no_config_returns_1(tmp_path: Path) -> None:
     rc = installer.run_register_and_start()
 
     assert rc == 1
+    assert f"No configuration found at {config_path}." in capsys.readouterr().err
+
+
+def test_run_register_and_start_warns_about_ignored_legacy_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Upgrade with a custom data dir: the legacy ~/.archon-search config is named, not silently skipped."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    legacy = tmp_path / ".archon-search" / "archon-search.toml"
+    legacy.parent.mkdir()
+    legacy.write_text("[server]\n")
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        rc = create_installer().run_register_and_start()
+
+    assert rc == 1
+    assert any(
+        str(legacy) in r.getMessage() and str(data_dir / "archon-search.toml") in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_run_register_and_start_with_config_registers_and_starts(tmp_path: Path) -> None:
@@ -2654,12 +2678,12 @@ def test_bare_oserror_from_provisioning_degrades_instead_of_crashing(tmp_path: P
 
 
 # ---------------------------------------------------------------------------
-# S206: write_service_file threads the chosen --config path into register()
+# S206: write_service_file threads the chosen --config path into replace_registration()
 # ---------------------------------------------------------------------------
 
 
-def test_write_service_file_passes_config_file_to_register(tmp_path: Path) -> None:
-    """RealInstaller.write_service_file() must register the service with the
+def test_write_service_file_passes_config_file_to_replace_registration(tmp_path: Path) -> None:
+    """RealInstaller.write_service_file() must replace the service registration with the
     installer's config_file so the launchd/systemd unit's ARCHON_SEARCH_CONFIG
     points at the config the wizard just wrote, not the hardcoded default (S206).
     """
@@ -2674,4 +2698,121 @@ def test_write_service_file_passes_config_file_to_register(tmp_path: Path) -> No
         installer = create_installer(config_file=str(config_path))
         installer.write_service_file()
 
-    fake_svc.register.assert_called_once_with(dry_run=False, config_path=str(config_path))
+    fake_svc.replace_registration.assert_called_once_with(dry_run=False, config_path=str(config_path))
+
+
+def test_wizard_run_warns_about_ignored_legacy_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """run() (the wizard) names an ignored legacy config before any prompt or early exit."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    legacy = tmp_path / ".archon-search" / "archon-search.toml"
+    legacy.parent.mkdir()
+    legacy.write_text("[server]\n")
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        rc = create_installer(dry_run=True).run(non_interactive=True, force=True)
+
+    assert rc == 1  # --force without --delete-db: the first early exit after the warning
+    assert any(str(legacy) in r.getMessage() for r in caplog.records)
+
+
+def test_write_service_file_passes_default_config_path_to_replace_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --config, replace_registration() receives the installer's resolved default (<data dir>/archon-search.toml)."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+
+    fake_svc = MagicMock()
+    with patch("archon_search.install.installer.get_search_service", return_value=fake_svc):
+        create_installer().write_service_file()
+
+    fake_svc.replace_registration.assert_called_once_with(
+        dry_run=False, config_path=str(tmp_path / "archon-search.toml")
+    )
+
+
+def test_write_service_file_passes_config_env_path_to_replace_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --config, an install-time ARCHON_SEARCH_CONFIG is the installer's config_path and reaches replace_registration()."""
+    custom = tmp_path / "etc" / "archon-search.toml"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(custom))
+
+    fake_svc = MagicMock()
+    with patch("archon_search.install.installer.get_search_service", return_value=fake_svc):
+        installer = create_installer()
+        installer.write_service_file()
+
+    assert installer.config_path == custom
+    fake_svc.replace_registration.assert_called_once_with(dry_run=False, config_path=str(custom))
+
+
+_REFUSAL = "unit cannot hold this path"
+
+
+def _refusing_service() -> MagicMock:
+    svc = MagicMock()
+    svc.validate_registration.side_effect = RuntimeError(_REFUSAL)
+    return svc
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+@pytest.mark.parametrize(
+    ("get_service", "message"),
+    [
+        (_refusing_service, _REFUSAL),
+        # get_search_service() raises on an OS without a service backend; Step 15 always
+        # registers, so the install could never finish there either.
+        (
+            MagicMock(side_effect=NotImplementedError("Service lifecycle not implemented for platform: Plan9")),
+            "Service lifecycle not implemented for platform: Plan9",
+        ),
+    ],
+    ids=["refused-registration", "unsupported-platform"],
+)
+def test_run_unregistrable_service_fails_before_any_install_step(
+    tmp_path: Path,
+    dry_run: bool,
+    get_service: Any,
+    message: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A service that could never be registered fails the wizard up front: no lock, download, config or unit."""
+    target = DryRunInstaller if dry_run else RealInstaller
+    with (
+        _mock_installer(tmp_path) as config_path,
+        patch("archon_search.install.installer.get_search_service", get_service),
+        patch.object(target, "install_lock") as lock_mock,
+        patch.object(target, "create_logs_dir") as logs_dir_mock,
+        patch.object(target, "download_fasttext_model") as fasttext_mock,
+        patch.object(target, "preload_models") as preload_mock,
+        patch.object(target, "write_service_file") as write_svc_mock,
+    ):
+        installer = create_installer(config_file=str(config_path), dry_run=dry_run)
+        rc = installer.run(
+            non_interactive=True, profile="minimal", multilingual=True,
+            accept_fasttext_license=True, skip_preload=False,
+        )
+
+    assert rc == 1
+    assert f"Error during install: {message}" in capsys.readouterr().err
+    for step in (lock_mock, logs_dir_mock, fasttext_mock, preload_mock, write_svc_mock):
+        step.assert_not_called()
+    assert not config_path.exists()
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+def test_run_validates_registration_against_installer_config_path(tmp_path: Path, dry_run: bool) -> None:
+    """The up-front check validates the config path the service will be registered with, not a default."""
+    svc = _refusing_service()
+    with (
+        _mock_installer(tmp_path) as config_path,
+        patch("archon_search.install.installer.get_search_service", return_value=svc),
+    ):
+        rc = create_installer(config_file=str(config_path), dry_run=dry_run).run(non_interactive=True)
+
+    assert rc == 1
+    svc.validate_registration.assert_called_once_with(config_path=str(config_path))

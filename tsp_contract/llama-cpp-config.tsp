@@ -1,6 +1,6 @@
 // C4 — Config surface + status schema (INTERNAL DATA SEAM)
 // Config dataclasses in the Frameworks & Drivers layer
-// (archon_search/config.py), loaded from ~/.archon-search/archon-search.toml,
+// (archon_search/config.py), loaded from <data-dir>/archon-search.toml,
 // PLUS the GET /status ModelValidationStatus/ModelValidationResult schema
 // extension that surfaces the llama-server reachability probe.
 // This feature is additive: every new field carries a default, so no config

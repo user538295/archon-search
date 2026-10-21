@@ -1,12 +1,21 @@
-**Purpose**: Document how `~/.archon-search/archon-search.toml` evolves across releases — which keys are stable, which have quirks, and how to validate a config file.
+**Purpose**: Document how `<data-dir>/archon-search.toml` evolves across releases — which keys are stable, which have quirks, and how to validate a config file.
 **Audience**: Operators editing config across upgrades; maintainers changing the config schema in `archon_search/config.py`.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
+**Last reviewed**: 2026-10-17
 **Next review**: 2027-05-20
 
 # Configuration Migration
 
-`~/.archon-search/archon-search.toml` is the single config file consumed by the server. It is loaded by `archon_search/config.py` `load_config()` and validated against the `SearchConfig` dataclass. Defaults are baked into the dataclass; an absent file is equivalent to an all-defaults config (`load_config` returns the default `SearchConfig`).
+`<data-dir>/archon-search.toml` (data dir = `ARCHON_SEARCH_DATA_DIR`, default `~/.archon-search/`; `ARCHON_SEARCH_CONFIG` overrides) is the single config file consumed by the server. It is loaded by `archon_search/config.py` `load_config()` and validated against the `SearchConfig` dataclass. Defaults are baked into the dataclass; an absent file is equivalent to an all-defaults config (`load_config` returns the default `SearchConfig`).
+
+## Default config path follows `ARCHON_SEARCH_DATA_DIR` (NR-17)
+
+With `ARCHON_SEARCH_CONFIG` unset, the default config is now `<data-dir>/archon-search.toml` (`archon_search/config.py` `get_default_config_path()`) instead of always `~/.archon-search/archon-search.toml`; default-data-dir installs are unaffected. With a custom `ARCHON_SEARCH_DATA_DIR` and the config still at `~/.archon-search/archon-search.toml`, do one of these before re-running `wizard` or `install`:
+
+1. Move it to `<data-dir>/archon-search.toml` (in Docker: `/data/.archon-search/archon-search.toml` → `/data/archon-search.toml`).
+2. Set `ARCHON_SEARCH_CONFIG` to the file's current path.
+
+A legacy-config WARNING flags installs that still need this. Affected commands, the invalid-`ARCHON_SEARCH_DATA_DIR` exit and what happens if you skip the move: [`/BREAKING.md` → NR-17](../../BREAKING.md).
 
 ## Principles
 
@@ -85,8 +94,8 @@ archon-search start
 
 ## Upgrade checklist for config
 
-1. Diff your live `~/.archon-search/archon-search.toml` against [`archon-search.toml.example`](../../archon-search.toml.example) for the version you are about to install.
-2. For any key listed in `[next release]` of [`/BREAKING.md`](../../BREAKING.md) under a config surface, apply the migration step before restarting. #Unverified — the exact `[next release]` section heading in `BREAKING.md` has not been confirmed; consult the file's current structure when migrating.
+1. Diff your live `<data-dir>/archon-search.toml` (or the file `ARCHON_SEARCH_CONFIG` names) against [`archon-search.toml.example`](../../archon-search.toml.example) for the version you are about to install.
+2. For any key listed in `[next release]` of [`/BREAKING.md`](../../BREAKING.md) under a config surface, apply the migration step before restarting. Unreleased entries are headed `### [next release] — <title> (<date>)`.
 3. Run `archon-search config show` against the new wheel and confirm:
    - No `ConfigError` is raised.
    - No "export_enabled is reserved" warning appears unless you explicitly opted into that key.

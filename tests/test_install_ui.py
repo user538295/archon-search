@@ -1,6 +1,8 @@
 """Tests for _render_profile_table and _render_summary in archon_search/install.py."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from archon_search.install import (
@@ -13,6 +15,8 @@ from archon_search.install import (
 from archon_search.install.provisioning import ProvisionFailureKind
 from archon_search.install.render import _PROVISION_REMEDIES
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES, InstallProfile, get_profile
+
+_CONFIG_PATH = Path("/srv/archon/custom.toml")
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +67,7 @@ def test_render_table_multilingual_minimal_shows_no_reranker():
 def test_render_summary_balanced_english():
     """Balanced English profile summary contains key model name, chunk size, and profile label."""
     profile = get_profile("balanced", multilingual=False)
-    output = _render_summary("balanced", profile, multilingual=False, providers=[])
+    output = _render_summary("balanced", profile, multilingual=False, providers=[], config_path="archon-search.toml")
     assert "BAAI/bge-base-en-v1.5" in output
     assert "512" in output
     assert "Balanced" in output
@@ -72,14 +76,14 @@ def test_render_summary_balanced_english():
 def test_render_summary_shows_providers():
     """Providers list is rendered in the summary."""
     profile = get_profile("minimal", multilingual=False)
-    output = _render_summary("minimal", profile, multilingual=False, providers=["CoreMLExecutionProvider"])
+    output = _render_summary("minimal", profile, multilingual=False, providers=["CoreMLExecutionProvider"], config_path="archon-search.toml")
     assert "CoreML" in output
 
 
 def test_render_summary_multilingual_label():
     """multilingual=True: summary contains 'Multilingual'."""
     profile = get_profile("balanced", multilingual=True)
-    output = _render_summary("balanced", profile, multilingual=True, providers=[])
+    output = _render_summary("balanced", profile, multilingual=True, providers=[], config_path="archon-search.toml")
     assert "Multilingual" in output
 
 
@@ -87,14 +91,14 @@ def test_render_summary_no_reranker():
     """Profile with reranker=None: summary contains '(none)'."""
     profile = get_profile("minimal", multilingual=True)
     assert profile.reranker is None
-    output = _render_summary("minimal", profile, multilingual=True, providers=[])
+    output = _render_summary("minimal", profile, multilingual=True, providers=[], config_path="archon-search.toml")
     assert "(none)" in output
 
 
 def test_render_summary_no_providers():
     """Empty providers list: summary contains 'CPU default'."""
     profile = get_profile("minimal", multilingual=False)
-    output = _render_summary("minimal", profile, multilingual=False, providers=[])
+    output = _render_summary("minimal", profile, multilingual=False, providers=[], config_path="archon-search.toml")
     assert "CPU default" in output
 
 
@@ -146,14 +150,14 @@ def test_render_table_narrow_multilingual_minimal_no_reranker_no_plus():
 def test_render_summary_no_features():
     """features=None produces no 'Optional features' section (backward-compatible)."""
     profile = get_profile("minimal", multilingual=False)
-    output = _render_summary("minimal", profile, multilingual=False, providers=[], features=None)
+    output = _render_summary("minimal", profile, multilingual=False, providers=[], features=None, config_path="archon-search.toml")
     assert "Optional features" not in output
 
 
 def test_render_summary_all_defaults():
     """WizardFeatures() (all defaults) also produces no optional section."""
     profile = get_profile("minimal", multilingual=False)
-    output = _render_summary("minimal", profile, multilingual=False, providers=[], features=WizardFeatures())
+    output = _render_summary("minimal", profile, multilingual=False, providers=[], features=WizardFeatures(), config_path="archon-search.toml")
     assert "Optional features" not in output
 
 
@@ -166,6 +170,7 @@ def test_render_summary_explicit_false_bools_show_no_bullets():
         multilingual=False,
         providers=[],
         features=WizardFeatures(enable_watch=False, enable_telemetry=False, eager_load_embedders=False),
+        config_path="archon-search.toml",
     )
     assert "Watch directories (auto-reindex)" not in output
     assert "Telemetry enabled" not in output
@@ -182,6 +187,7 @@ def test_render_summary_with_code_and_telemetry():
         multilingual=False,
         providers=[],
         features=WizardFeatures(install_code_extra=True, enable_telemetry=True),
+        config_path="archon-search.toml",
     )
     assert "Optional features" in output
     assert "Code enrichment" in output
@@ -197,6 +203,7 @@ def test_render_summary_routing_hybrid():
         multilingual=False,
         providers=[],
         features=WizardFeatures(routing_strategy="hybrid"),
+        config_path="archon-search.toml",
     )
     assert "Optional features" in output
     assert "Routing: hybrid" in output
@@ -211,6 +218,7 @@ def test_render_summary_disable_reranker():
         multilingual=False,
         providers=[],
         features=WizardFeatures(disable_reranker=True),
+        config_path="archon-search.toml",
     )
     assert "Optional features" in output
     assert "Reranker disabled" in output
@@ -225,6 +233,7 @@ def test_render_summary_log_format_json():
         multilingual=False,
         providers=[],
         features=WizardFeatures(log_format="json"),
+        config_path="archon-search.toml",
     )
     assert "Optional features" in output
     assert "Log format: json" in output
@@ -239,6 +248,7 @@ def test_render_summary_eager_load_and_watch():
         multilingual=False,
         providers=[],
         features=WizardFeatures(eager_load_embedders=True, enable_watch=True),
+        config_path="archon-search.toml",
     )
     assert "Optional features" in output
     assert "Eager load" in output
@@ -254,6 +264,7 @@ def test_render_summary_multilingual_extra():
         multilingual=False,
         providers=[],
         features=WizardFeatures(install_multilingual_extra=True),
+        config_path="archon-search.toml",
     )
     assert "Optional features" in output
     assert "Language detection (fasttext)" in output
@@ -268,6 +279,7 @@ def test_render_summary_multilingual_header_and_extra_bullet():
         multilingual=True,
         providers=[],
         features=WizardFeatures(install_multilingual_extra=True),
+        config_path="archon-search.toml",
     )
     assert "· Multilingual" in output  # header separator+label (install.py:708)
     assert "Language detection (fasttext)" in output  # feature bullet
@@ -283,6 +295,7 @@ def test_render_summary_multilingual_extra_absent_by_default():
         multilingual=False,
         providers=[],
         features=WizardFeatures(enable_telemetry=True),
+        config_path="archon-search.toml",
     )
     assert "Optional features" in output  # section renders due to telemetry
     assert "Language detection" not in output  # multilingual bullet absent
@@ -296,6 +309,7 @@ def _render_graph_summary(multilingual: bool, install_graph_extra: bool = True) 
         multilingual=multilingual,
         providers=[],
         features=WizardFeatures(install_graph_extra=install_graph_extra),
+        config_path=str(_CONFIG_PATH),
     )
 
 
@@ -311,6 +325,12 @@ def test_pointer_absent_without_the_graph_extra():
     output = _render_graph_summary(multilingual=True, install_graph_extra=False)
     assert "ner_confidence" not in output
     assert "relation_confidence" not in output
+
+
+def test_pointer_names_the_installer_config_path():
+    """The tuning pointer names the config the installer wrote (e.g. --config), not a recomputed default."""
+    output = _render_graph_summary(multilingual=False)
+    assert f"[graph].relation_confidence in {_CONFIG_PATH}" in output
 
 
 def test_pointer_names_both_confidence_knobs():
@@ -329,6 +349,7 @@ def test_render_summary_base_content_preserved_with_features():
         multilingual=False,
         providers=[],
         features=WizardFeatures(enable_telemetry=True),
+        config_path="archon-search.toml",
     )
     # Base content still present
     assert "Balanced" in output
@@ -353,6 +374,7 @@ def test_summary_contains_db_path():
         multilingual=False,
         providers=[],
         db_path="/home/user/.archon-search/lancedb",
+        config_path="archon-search.toml",
     )
     assert "lancedb" in output
     assert "Database:" in output
@@ -368,6 +390,7 @@ def test_summary_contains_server_url():
         providers=[],
         host="127.0.0.1",
         port=8765,
+        config_path="archon-search.toml",
     )
     assert "http://127.0.0.1:8765" in output
     assert "Server:" in output
@@ -382,6 +405,7 @@ def test_summary_contains_download_size():
         multilingual=False,
         providers=[],
         total_bytes=300_000_000,
+        config_path="archon-search.toml",
     )
     assert "300 MB" in output
     assert "Download:" in output
@@ -398,6 +422,7 @@ def test_summary_api_key_masked(tmp_path):
         multilingual=False,
         providers=[],
         api_key_file=str(key_file),
+        config_path="archon-search.toml",
     )
     assert "abcdefgh" in output
     assert "qrst" in output
@@ -413,6 +438,7 @@ def test_summary_api_key_file_missing():
         multilingual=False,
         providers=[],
         api_key_file="/nonexistent/path/.search.env",
+        config_path="archon-search.toml",
     )
     assert "not yet generated" in output
     assert "API key:" in output
@@ -425,7 +451,7 @@ def test_summary_api_key_file_missing():
 
 def test_next_steps_all_commands_present(capsys):
     """_print_next_steps prints all four follow-up commands."""
-    _print_next_steps("127.0.0.1", 8765, "/tmp/test.env")
+    _print_next_steps("127.0.0.1", 8765, "/tmp/test.env", str(_CONFIG_PATH))
     out = capsys.readouterr().out
     assert "ingest" in out
     assert "status" in out
@@ -435,14 +461,14 @@ def test_next_steps_all_commands_present(capsys):
 
 def test_next_steps_shows_correct_host_port(capsys):
     """_print_next_steps uses the supplied host and port."""
-    _print_next_steps("0.0.0.0", 9000, "/tmp/test.env")
+    _print_next_steps("0.0.0.0", 9000, "/tmp/test.env", str(_CONFIG_PATH))
     out = capsys.readouterr().out
     assert "http://0.0.0.0:9000" in out
 
 
 def test_next_steps_shows_key_file_path(capsys):
     """_print_next_steps shows the api_key_file path."""
-    _print_next_steps("127.0.0.1", 8765, "/tmp/mykey.env")
+    _print_next_steps("127.0.0.1", 8765, "/tmp/mykey.env", str(_CONFIG_PATH))
     out = capsys.readouterr().out
     assert "/tmp/mykey.env" in out
 
@@ -450,14 +476,21 @@ def test_next_steps_shows_key_file_path(capsys):
 def test_next_steps_key_file_from_key_manager(capsys):
     """_print_next_steps with empty api_key_file falls back to key_manager.get_key_file()."""
     from archon_search import key_manager
-    _print_next_steps("127.0.0.1", 8765, "")
+    _print_next_steps("127.0.0.1", 8765, "", str(_CONFIG_PATH))
     out = capsys.readouterr().out
     assert str(key_manager.get_key_file()) in out
 
 
+def test_next_steps_shows_installer_config_path(capsys):
+    """_print_next_steps shows the config the installer wrote, not a recomputed default."""
+    _print_next_steps("127.0.0.1", 8765, "/tmp/test.env", str(_CONFIG_PATH))
+    out = capsys.readouterr().out
+    assert f"Config:  {_CONFIG_PATH}" in out
+
+
 def test_next_steps_shows_next_steps_header(capsys):
     """_print_next_steps output contains 'Next steps:' header."""
-    _print_next_steps("127.0.0.1", 8765, "/tmp/test.env")
+    _print_next_steps("127.0.0.1", 8765, "/tmp/test.env", str(_CONFIG_PATH))
     out = capsys.readouterr().out
     assert "Next steps:" in out
 
@@ -470,7 +503,7 @@ def test_next_steps_shows_next_steps_header(capsys):
 def test_summary_db_path_absent_when_empty():
     """_render_summary with default db_path='' must NOT emit a Database: line."""
     profile = get_profile("balanced", multilingual=False)
-    output = _render_summary("balanced", profile, multilingual=False, providers=[])
+    output = _render_summary("balanced", profile, multilingual=False, providers=[], config_path="archon-search.toml")
     assert "Database:" not in output
 
 
@@ -480,6 +513,7 @@ def test_summary_server_custom_host_port():
     output = _render_summary(
         "minimal", profile, multilingual=False, providers=[],
         host="0.0.0.0", port=9999,
+        config_path="archon-search.toml",
     )
     assert "http://0.0.0.0:9999" in output
 

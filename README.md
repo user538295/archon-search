@@ -115,7 +115,7 @@ uv tool uninstall archon-search
 # checkout / dev install — delete the cloned directory
 ```
 
-Neither step touches your data. `uninstall` only stops and unregisters the OS service; removing the package only removes the CLI binary. If you want a clean wipe, these paths are still on disk and need manual deletion:
+Neither step touches your data. `uninstall` only stops and unregisters the OS service; removing the package only removes the CLI binary. If you want a clean wipe, these paths are still on disk and need manual deletion (shown for the default data dir; with `ARCHON_SEARCH_DATA_DIR` set they live under that dir instead, and `ARCHON_SEARCH_CONFIG`, when set, names the config):
 
 | Path | Contents |
 |------|----------|
@@ -192,7 +192,7 @@ First start auto-generates a key and writes it to `~/.archon-search/.search.env`
 
 ## Configuration
 
-Everything server-side lives in one file: `~/.archon-search/archon-search.toml`.
+Everything server-side lives in one file: `~/.archon-search/archon-search.toml` (`$ARCHON_SEARCH_DATA_DIR/archon-search.toml` when that is set; `ARCHON_SEARCH_CONFIG` overrides both).
 
 - `[database]` — `db_path`, `embedding_model`, `chunk_size`, `top_k_return`, model paths, per-collection embedder pool sizing (`embedder_cache_size`, default `3`; `eager_load_embedders`, default `false` — startup always pre-warms `embedding_model` and the reranker cross-encoder; setting it `true` extends that to every distinct per-collection model)
 - `[search]` — multi-collection fan-out bounds (`max_fanout`, `fanout_timeout_seconds`)

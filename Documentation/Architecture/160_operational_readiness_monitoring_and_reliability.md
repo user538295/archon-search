@@ -74,7 +74,7 @@ The header name can be changed from the default `"X-Request-ID"` via `[observabi
 
 ### Log file
 
-`configure_logging()` (`archon_search/logging_setup.py`) is called as the first action in `run_server()`. When `[logging].log_file` is non-empty (the default is `~/.archon-search/logs/archon-search.log`), it opens a `TimedRotatingFileHandler` that rotates at UTC midnight and retains `[logging].backup_count` (default 7) rotated files. File logging is therefore **active by default** — no explicit opt-in is required.
+`configure_logging()` (`archon_search/logging_setup.py`) is called in `run_server()` right after the config path is resolved, before anything there logs. When `[logging].log_file` is non-empty (the default is `~/.archon-search/logs/archon-search.log`), it opens a `TimedRotatingFileHandler` that rotates at UTC midnight and retains `[logging].backup_count` (default 7) rotated files. File logging is therefore **active by default** — no explicit opt-in is required.
 
 Set `log_file = ""` to disable file logging and write to stderr only (recommended for containers and multi-worker deployments). For Docker the simpler path is to keep TOML at defaults and rely on `ARCHON_SEARCH_CONTAINER=1` (baked into the published image): `configure_logging()` then attaches a `StreamHandler(sys.stderr)` to the `archon_search` logger in addition to any file handler, so `docker logs` captures application output regardless of `log_file`. The container handler uses the same formatter as the file handler (text or JSON per `[logging].format`).
 
@@ -82,10 +82,11 @@ When `log_file` is non-empty, `configure_logging()` sets `logger.propagate = Fal
 
 **Log format**: when `[logging].format = "json"` (default is `text`), each record is a single-line JSON object suitable for ELK, Loki, or Datadog. JSON records emitted during an active HTTP request include a `correlation_id` field matching the request's `X-Request-ID`.
 
-Two independent code paths reference the log path and they are **not kept in sync**:
+Three independent code paths reference the log path and they are **not kept in sync**:
 
-- `platform/macos.py::LaunchdSearchService.register` derives the fixed `get_data_dir() / "logs" / "archon-search.log"` (`~/.archon-search/logs/archon-search.log` unless `ARCHON_SEARCH_DATA_DIR` is set) when formatting `_PLIST_TEMPLATE`'s `{log_path}` placeholder into `StandardOutPath` / `StandardErrorPath`. It does **not** read `cfg.log_file`.
-- `cli/install_cmd.py::install` ensures `Path(cfg.log_file).expanduser().parent` exists before service start, but never feeds `cfg.log_file` into the plist.
+- `platform/macos.py::LaunchdSearchService.register` derives the fixed `get_data_dir() / "logs" / "archon-search.log"` (`~/.archon-search/logs/archon-search.log` unless `ARCHON_SEARCH_DATA_DIR` is set) and writes it into the plist's `StandardOutPath` / `StandardErrorPath`. It does **not** read `cfg.log_file`.
+- `logging_setup.py::_attach_file_handler` (called by `configure_logging()` in the server process) creates `Path(cfg.log_file).expanduser().parent` and opens `cfg.log_file`. It does not feed `cfg.log_file` into the plist.
+- The installer's readiness gate (`install/installer.py::_service_log_offset` / `_service_log_crash`) reads `cfg.log_file` for startup crash lines. It does not feed `cfg.log_file` into the plist either.
 
 Consequence: if an operator customizes `cfg.log_file`, the macOS plist will still point at the data-dir-derived default path. The `cfg.log_file`-driven directory creation only affects code paths that actually open `cfg.log_file` (the in-process `TimedRotatingFileHandler`).
 
@@ -116,7 +117,7 @@ At the end of each handled request the structured log line emitted by the route 
 ```mermaid
 flowchart TB
   CLI[archon-search install] --> INST[cli/install_cmd.py::install]
-  INST --> CFG[Create ~/.archon-search/archon-search.toml<br/>if absent]
+  INST --> CFG[Create data-dir/archon-search.toml<br/>if absent]
   INST --> DIRS[mkdir db_path, logs/]
   INST --> LEGACY[Detect + remove legacy<br/>service definition]
   INST --> REG[service.register&#40;&#41;]
@@ -129,11 +130,11 @@ flowchart TB
 
 The active install path is `cli/install_cmd.py::install` (wired into `cli/main.py`). `archon_search/install/installer.py::RealInstaller` (constructed via `create_installer`) is the **profile-aware installer** called by `cli/install_cmd.py` — it handles disk-space checks, profile selection, Jina license gating, config writes, model pre-warming, service registration, and health polling. The full C0 install flow is documented in `100_system_architecture_overview.md` (see "Install Profile Registry (C0)").
 
-The `SearchServiceLifecycle` ABC (`platform/service.py`) declares `start`, `stop`, `restart`, `status`, `register`, `unregister`. Concrete implementations:
+The `SearchServiceLifecycle` ABC (`platform/service.py`) declares `start`, `stop`, `restart`, `status`, `register`, `unregister`, plus a side-effect-free `validate_registration` hook (default: accept; platforms that validate override it) and `replace_registration`, which the installer calls to run `validate_registration`, then `pre_activate_cleanup` (a best-effort stop: a failed stop is logged at DEBUG, not raised), then `register`, so a registration the platform refuses leaves the running service untouched. Concrete implementations:
 
-- **macOS (`platform/macos.py::LaunchdSearchService`)** — writes `~/Library/LaunchAgents/com.archon.search.plist`; `KeepAlive=true`, `ThrottleInterval=60`, wrapped in `/usr/sbin/taskpolicy -b` (background QoS). `start()` is a no-op if `launchctl list com.archon.search` already reports it loaded.
-- **Linux (`platform/linux.py::SystemdSearchService`)** — writes `~/.config/systemd/user/archon-search.service`; `Restart=always`, `RestartSec=5`, `Nice=10`, `CPUQuota=50%`. `register()` runs `daemon-reload`, `systemctl --user enable`, and `loginctl enable-linger $USER` so the service survives logout.
-- **Windows (`platform/windows.py::WindowsSearchService`)** — every lifecycle method raises `NotImplementedError("Windows service management not yet supported — run archon-search start manually")`. `status()` always reports `running=False`.
+- **macOS (`platform/macos.py::LaunchdSearchService`)** — writes `~/Library/LaunchAgents/com.archon.search.plist`; `KeepAlive=true`, `ThrottleInterval=60`, wrapped in `/usr/sbin/taskpolicy -b` (background QoS). `start()` is a no-op if `launchctl list com.archon.search` already reports it loaded. The plist is rendered with `plistlib` and the `run-server.sh` wrapper `shlex.quote`s its paths; `validate_registration()` refuses paths the plist or wrapper cannot carry intact, or that the server would read back stripped of surrounding whitespace, and `register()` runs the same check (`_validated_service_paths`) first, dry-run included; see `OperatorGuide/10_deployment_topologies.md`.
+- **Linux (`platform/linux.py::SystemdSearchService`)** — writes `~/.config/systemd/user/archon-search.service`; `Restart=always`, `RestartSec=5`, `Nice=10`, `CPUQuota=50%`. `register()` runs `daemon-reload`, `systemctl --user enable`, and `loginctl enable-linger $USER` so the service survives logout. `validate_registration()` refuses an empty or undetermined interpreter path and paths the unit file cannot carry, or that the server would read back stripped of surrounding whitespace, and `register()` runs the same check (`_validated_unit_fields`) first, dry-run included. The empty-interpreter and server-strip refusals are shared with macOS via `platform/service.py` and run first, before the systemd-specific checks; see `OperatorGuide/10_deployment_topologies.md`.
+- **Windows (`platform/windows.py::WindowsSearchService`)** — every lifecycle method, `validate_registration` included (so the wizard fails before any download), raises `NotImplementedError("Windows service management not yet supported — run archon-search start manually")`. `status()` always reports `running=False`.
 
 GPU detection (`platform/runtime.py::SearchRuntime.detect_gpu_type`) is **not gated by OS**: it first invokes `nvidia-smi` on any platform, and returns `GpuType.CUDA` whenever `nvidia-smi` exits with rc=0. Only if `nvidia-smi` is missing or fails does it fall back to checking `platform.system() == "Darwin" and platform.machine() == "arm64"`, which returns `GpuType.METAL` (mapped to the ONNX provider name `CoreMLExecutionProvider` by `install/installer.py::RealInstaller.configure_providers`). Otherwise it returns `GpuType.NONE` and no provider is written.
 
@@ -143,7 +144,7 @@ GPU detection (`platform/runtime.py::SearchRuntime.detect_gpu_type`) is **not ga
 
 ## Container deployment (C9)
 
-The Docker image bypasses the platform service lifecycle entirely: there is no `launchd` plist and no systemd unit. `tini` runs as PID 1 and execs `archon-search serve`, which calls `load_config(path, serve=True)` (host defaults to `0.0.0.0`) and then `run_server(config)` in the foreground. Lifecycle is the orchestrator's responsibility: `docker stop` sends `SIGTERM`, uvicorn drains in-flight HTTP requests, the FastAPI lifespan disconnects the store and drains telemetry, and the process exits; `docker-compose.yml` ships a 30-second `stop_grace_period` to give the lifespan room to finish.
+The Docker image bypasses the platform service lifecycle entirely: there is no `launchd` plist and no systemd unit. `tini` runs as PID 1 and execs `archon-search serve`, which calls `load_config(path, serve=True)` (host defaults to `0.0.0.0`) and then `run_server(config, config_path)` in the foreground. Lifecycle is the orchestrator's responsibility: `docker stop` sends `SIGTERM`, uvicorn drains in-flight HTTP requests, the FastAPI lifespan disconnects the store and drains telemetry, and the process exits; `docker-compose.yml` ships a 30-second `stop_grace_period` to give the lifespan room to finish.
 
 Two image variants are published to GHCR on every tag push by `.github/workflows/archon-search-release.yml`: `:latest` / `:<version>` (CPU, base `python:3.12-slim`) and `:gpu` / `:<version>-gpu` (NVIDIA CUDA + `onnxruntime-gpu`). Both bake the source commit into the `org.opencontainers.image.revision` label; `docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'` resolves which commit produced a given pulled tag, which matters because the `:gpu` floating tag is not deleted on a failed GPU build — operators may pull a stale `:gpu` and need to verify the SHA.
 

@@ -8,6 +8,36 @@
 
 ## Changelog
 
+### [next release] — Default config path follows `ARCHON_SEARCH_DATA_DIR`; `serve` no longer warns about an unset `ARCHON_SEARCH_CONFIG` (2026-10-17)
+
+**What changed:** With `ARCHON_SEARCH_CONFIG` unset, the default config (`config.get_default_config_path()`, via `paths.get_data_dir()`) is now `<data-dir>/archon-search.toml` instead of always `~/.archon-search/archon-search.toml`, so it follows `ARCHON_SEARCH_DATA_DIR`; with the default data dir the path is unchanged. In the Docker image (`ARCHON_SEARCH_DATA_DIR=/data`, `HOME=/data`, no `ARCHON_SEARCH_CONFIG`) it moves from `/data/.archon-search/archon-search.toml` to `/data/archon-search.toml`. Without `--config`, the plist/unit written by `install` / `wizard` already pointed at `<data-dir>/archon-search.toml` while the wizard wrote its config to `~/.archon-search/archon-search.toml`; both now use the same default, and the plist/unit also honours an `ARCHON_SEARCH_CONFIG` set at install time (`platform/macos.py`, `platform/linux.py`). `archon-search serve` no longer logs the `ARCHON_SEARCH_DATA_DIR is set but ARCHON_SEARCH_CONFIG is not` warning.
+
+**Affected commands:** every command that resolves the default config without `--config` — `serve`, `start`, `config show/get/set`, `wizard`, `install`, `uninstall --delete-db` — and the server's own config writes (`collection add/remove`). An invalid `ARCHON_SEARCH_DATA_DIR` (empty, relative) now fails default config path resolution with `ConfigError`: each of these commands prints `Error: ...` and exits `1`. `serve` and `start` already did (via `load_config`); `config` (which silently used `~/.archon-search/archon-search.toml`), `wizard`, `install` and `uninstall --delete-db` (which failed with a traceback) now exit cleanly, and `uninstall --delete-db` exits before stopping or unregistering the service.
+
+**Legacy warning:** with `ARCHON_SEARCH_CONFIG` unset and no `--config`, `serve`, `config show/get/set`, `wizard`, `install` and `uninstall --delete-db` log a WARNING when `<data-dir>/archon-search.toml` does not exist but a legacy `~/.archon-search/archon-search.toml` does, telling you to move it into the data dir or set `ARCHON_SEARCH_CONFIG`. `serve` emits it once logging is configured, so it lands in the configured `[logging]` destination and format (the log file, or stderr in container mode).
+
+**Migration** — installs with a custom `ARCHON_SEARCH_DATA_DIR`, no `ARCHON_SEARCH_CONFIG`, and a config at `~/.archon-search/archon-search.toml` (including Docker containers whose config sits at `/data/.archon-search/archon-search.toml`); default-data-dir installs need no change:
+
+1. Before re-running `wizard` or `install`, move the file to `<data-dir>/archon-search.toml` (`/data/archon-search.toml` in Docker), or set `ARCHON_SEARCH_CONFIG` to its current path. Otherwise the server starts with built-in defaults and its collections are no longer configured, `config set` starts a new file in the data dir, `wizard` writes a fresh default config to `<data-dir>/archon-search.toml` that the legacy file's settings never reach, and `install` exits 1 with `No configuration found at <path>`.
+2. Managed services keep the explicit `ARCHON_SEARCH_CONFIG` baked into their plist/unit until re-installed.
+3. Drop any log alert keyed on the removed `serve` warning.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — Linux systemd unit: `EnvironmentFile=` follows `ARCHON_SEARCH_DATA_DIR` (2026-10-17)
+
+**Surface**: the systemd user unit `archon-search install` writes on Linux (`~/.config/systemd/user/archon-search.service`) → `EnvironmentFile=`.
+
+**What changed:** The unit loaded `EnvironmentFile=-%h/.archon-search/.secrets.env` regardless of `ARCHON_SEARCH_DATA_DIR`, while the wizard creates the file under the data dir — so with a custom data dir the service never saw the provider keys added there. The unit now loads `EnvironmentFile=-<data-dir>/.secrets.env` (`archon_search/platform/linux.py`, via `platform.service.get_secrets_env_file()`), the same file the wizard creates and the macOS launchd wrapper sources. Only Linux installs with a custom `ARCHON_SEARCH_DATA_DIR` are affected; with the default data dir the path is unchanged.
+
+**Migration**: Linux installs with a custom `ARCHON_SEARCH_DATA_DIR` whose keys sit in `~/.archon-search/.secrets.env`: move those keys into `<data-dir>/.secrets.env`, then re-run `archon-search install` with the same `ARCHON_SEARCH_DATA_DIR`, passing `--config <path-to-your-archon-search.toml>` unless the config lives at `<data-dir>/archon-search.toml`, to regenerate the unit. Without `--config`, `install` points the unit at the default config path: `ARCHON_SEARCH_CONFIG` if set, else `<data-dir>/archon-search.toml` (see the default-config-path entry above). Default-data-dir installs: no change.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — S631: `GET /ready` stays `503` while the background model validation is pending (2026-10-12)
 
 **Surface**: `GET /ready` → `ready` and the HTTP status.

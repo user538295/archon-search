@@ -1,19 +1,18 @@
 """Regression: `collection add` inside the Docker container 500s (S30/S40/S31).
 
-Root cause: in the container image ``HOME=/data`` and ``ARCHON_SEARCH_DATA_DIR=/data``
-but ``ARCHON_SEARCH_CONFIG`` is unset, so ``get_default_config_path()`` resolves to
-``/data/.archon-search/archon-search.toml`` — a path whose parent directory
-(``/data/.archon-search/``) is never created (the runtime data dir is ``/data``
-itself).  ``POST /collections/`` calls ``_maybe_save_config`` → ``save_config``,
-which ``write_text``s without creating the parent, raising ``FileNotFoundError``.
-The exception is unhandled in ``add_collection`` (line ~196, before the ingest job
-is enqueued), so the route returns a bare Starlette 500 "Internal Server Error".
-Every downstream S30/S31/S40 search then 404s because the collection was never
-registered.
+Original root cause: in the container image ``HOME=/data`` and
+``ARCHON_SEARCH_DATA_DIR=/data`` but ``ARCHON_SEARCH_CONFIG`` was unset, and
+``get_default_config_path()`` then resolved to ``/data/.archon-search/archon-search.toml``
+— a path whose parent directory was never created. ``POST /collections/`` calls
+``_maybe_save_config`` → ``save_config``, which wrote without creating the parent,
+raising ``FileNotFoundError``; the route returned a 500 and every downstream
+S30/S31/S40 search 404'd because the collection was never registered.
 
-This test reproduces the server-side 500 at the code level (no Docker required)
-by pointing ``app.state.config_path`` at a config file whose parent directory
-does not yet exist, exactly as it is in the shipped container.
+The default now follows the data dir (``<data dir>/archon-search.toml``), but an
+``ARCHON_SEARCH_CONFIG`` / ``--config`` parent is still not guaranteed to exist, so
+``save_config`` must keep creating it. This test reproduces the scenario at the code
+level (no Docker required) by pointing ``app.state.config_path`` at a config file
+whose parent directory does not yet exist.
 """
 from __future__ import annotations
 
@@ -33,8 +32,7 @@ def test_collection_add_creates_missing_config_parent_dir(
     (corpus / "alpha.md").write_text("# Alpha\nThe quick brown fox.\n", encoding="utf-8")
     (corpus / "beta.md").write_text("# Beta\nPython language.\n", encoding="utf-8")
 
-    # Mirror the container: config path lives under a `.archon-search/` subdir of
-    # the data dir that nothing has created yet.
+    # A config path whose parent directory nothing has created yet.
     missing_parent_config = tmp_path / ".archon-search" / "archon-search.toml"
     assert not missing_parent_config.parent.exists()
 

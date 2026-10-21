@@ -447,6 +447,7 @@ class TestRenderSummaryQueryExpansion:
         out = _render_summary(
             "minimal", profile, multilingual=False, providers=[],
             features=WizardFeatures(enable_hyde=True, hyde_provider="anthropic"),
+            config_path="archon-search.toml",
         )
         assert "Optional features" in out
         assert "HyDE: enabled (provider: anthropic)" in out
@@ -457,6 +458,7 @@ class TestRenderSummaryQueryExpansion:
         out = _render_summary(
             "minimal", profile, multilingual=False, providers=[],
             features=WizardFeatures(enable_rag_fusion=True, rag_fusion_provider="ollama"),
+            config_path="archon-search.toml",
         )
         assert "RAG Fusion: enabled (provider: ollama)" in out
 
@@ -464,6 +466,7 @@ class TestRenderSummaryQueryExpansion:
         profile = get_profile("minimal", multilingual=False)
         out = _render_summary(
             "minimal", profile, multilingual=False, providers=[], features=WizardFeatures(),
+            config_path="archon-search.toml",
         )
         assert "HyDE" not in out
         assert "RAG Fusion" not in out

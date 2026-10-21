@@ -6,7 +6,8 @@ from pathlib import Path
 import click
 import tomlkit
 
-from archon_search.config import SearchConfig, get_default_config_path
+from archon_search.cli._helpers import _exit_on_config_error
+from archon_search.config import SearchConfig, get_default_config_path, warn_if_legacy_config_ignored
 
 
 def _default_toml() -> str:
@@ -55,6 +56,18 @@ def _default_toml() -> str:
     return tomlkit.dumps(doc)
 
 
+def _resolve_config_path(config_path: Path | None) -> Path:
+    """Return ``config_path`` or the default, exiting cleanly on a misconfigured data dir.
+
+    Without ``--config``, first warns when an upgrade left the config at the legacy
+    ``~/.archon-search`` location — otherwise ``config set`` would silently start a
+    fresh, divergent config in the data dir.
+    """
+    with _exit_on_config_error():
+        warn_if_legacy_config_ignored(config_path)
+        return config_path or get_default_config_path()
+
+
 def _effective_toml(path: Path) -> str:
     """Return the file's TOML with every missing default section/key filled in.
 
@@ -84,7 +97,7 @@ def config() -> None:
 @click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
 def show(config_path: Path | None) -> None:
     """Show current configuration."""
-    path = config_path or get_default_config_path()
+    path = _resolve_config_path(config_path)
     click.echo(_effective_toml(path))
 
 
@@ -93,7 +106,7 @@ def show(config_path: Path | None) -> None:
 @click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
 def get(key: str, config_path: Path | None) -> None:
     """Get a configuration value by dotted key (e.g. server.port)."""
-    path = config_path or get_default_config_path()
+    path = _resolve_config_path(config_path)
     doc = tomlkit.parse(_effective_toml(path))
 
     parts = key.split(".")
@@ -116,7 +129,7 @@ def get(key: str, config_path: Path | None) -> None:
 @click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
 def set_cmd(key: str, value: str, config_path: Path | None) -> None:
     """Set a configuration value by dotted key (e.g. server.port 9000)."""
-    path = config_path or get_default_config_path()
+    path = _resolve_config_path(config_path)
 
     if path.exists():
         doc = tomlkit.parse(path.read_text(encoding="utf-8"))

@@ -1,11 +1,21 @@
 """Tests for archon_search.config ( — Standalone config loader)."""
 
+import logging
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from archon_search.config import ConfigError, ObservabilityConfig, SearchConfig, get_default_config_path, load_config, save_config
+from archon_search.config import (
+    ConfigError,
+    ObservabilityConfig,
+    SearchConfig,
+    get_default_config_path,
+    load_config,
+    save_config,
+    warn_if_legacy_config_ignored,
+)
 
 
 def test_load_config_defaults_when_no_file(tmp_path: Path) -> None:
@@ -87,9 +97,35 @@ def test_load_config_logging_section(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert config.log_file == "/tmp/search.log"
 
 
-def test_get_default_config_path() -> None:
-    path = get_default_config_path()
-    assert path == Path.home() / ".archon-search" / "archon-search.toml"
+def test_get_default_config_path_falls_back_to_home_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Neither env var set → get_data_dir()'s ~/.archon-search fallback."""
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert get_default_config_path() == tmp_path / ".archon-search" / "archon-search.toml"
+
+
+@pytest.mark.parametrize("data_dir", ["", "relative/data"])
+def test_get_default_config_path_invalid_data_dir_raises_config_error(
+    data_dir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A misconfigured ARCHON_SEARCH_DATA_DIR surfaces as ConfigError, not ValueError."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", data_dir)
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    with pytest.raises(ConfigError, match="ARCHON_SEARCH_DATA_DIR"):
+        get_default_config_path()
+
+
+def test_load_config_default_path_invalid_data_dir_raises_config_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """load_config() with no path keeps its ConfigError-only contract on a bad data dir."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "relative/data")
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    with pytest.raises(ConfigError, match="absolute path"):
+        load_config()
 
 
 def test_config_error_is_exception() -> None:
@@ -580,17 +616,147 @@ def test_env_var_expands_tilde(monkeypatch: pytest.MonkeyPatch) -> None:
     assert str(result).startswith(str(Path.home()))
 
 
-def test_env_var_empty_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ARCHON_SEARCH_CONFIG="" → returns the ~/.archon-search/archon-search.toml default."""
-    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", "")
-    assert get_default_config_path() == Path.home() / ".archon-search" / "archon-search.toml"
-
-
 def test_env_var_relative_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """ARCHON_SEARCH_CONFIG=relative/path.toml → resolved against cwd."""
     monkeypatch.setenv("ARCHON_SEARCH_CONFIG", "relative/path.toml")
     result = get_default_config_path()
     assert result == (Path.cwd() / "relative/path.toml").resolve()
+
+
+@pytest.mark.parametrize("config_env", [None, "", "   "])
+def test_default_config_path_follows_data_dir_when_config_env_blank(
+    config_env: str | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ARCHON_SEARCH_CONFIG unset, empty or whitespace-only → default lives under ARCHON_SEARCH_DATA_DIR.
+
+    The service units default to get_data_dir()/archon-search.toml, so the
+    installer (which writes get_default_config_path()) must agree on it.
+    """
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    if config_env is None:
+        monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    else:
+        monkeypatch.setenv("ARCHON_SEARCH_CONFIG", config_env)
+    assert get_default_config_path() == data_dir / "archon-search.toml"
+
+
+def test_config_env_wins_over_invalid_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ARCHON_SEARCH_CONFIG set → returned as-is; a bad ARCHON_SEARCH_DATA_DIR is never consulted."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", "/etc/archon/archon-search.toml")
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "relative/data")
+    assert get_default_config_path() == Path("/etc/archon/archon-search.toml")
+
+
+def test_default_config_path_home_unset_raises_config_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neither env var set and HOME unresolvable → ConfigError, not RuntimeError/ValueError."""
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    with (
+        patch.object(Path, "home", side_effect=RuntimeError("Could not determine home directory.")),
+        pytest.raises(ConfigError, match="HOME is not set"),
+    ):
+        get_default_config_path()
+
+
+# ---------------------------------------------------------------------------
+# warn_if_legacy_config_ignored — upgrade aid for the pre-data-dir default
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def legacy_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """HOME=tmp_path holding a legacy config; custom data dir with no config. Returns (legacy, default)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    legacy = tmp_path / ".archon-search" / "archon-search.toml"
+    legacy.parent.mkdir()
+    legacy.write_text("[server]\n", encoding="utf-8")
+    return legacy, tmp_path / "data" / "archon-search.toml"
+
+
+def _legacy_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and r.name == "archon_search.config"]
+
+
+def test_legacy_config_warning_names_both_paths(
+    legacy_layout: tuple[Path, Path], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Default config missing + legacy file present → one WARNING naming both paths and the fixes."""
+    legacy, default = legacy_layout
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        warn_if_legacy_config_ignored(None)
+    [message] = _legacy_warnings(caplog)
+    assert str(legacy) in message
+    assert str(default) in message
+    assert "ARCHON_SEARCH_CONFIG" in message
+
+
+@pytest.mark.parametrize("scenario", ["default_exists", "legacy_missing", "config_env_set", "explicit_config"])
+def test_legacy_config_warning_silent_when_not_applicable(
+    scenario: str,
+    legacy_layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No warning when the default exists, no legacy file exists, or a config path was given."""
+    legacy, default = legacy_layout
+    explicit: Path | None = None
+    if scenario == "default_exists":
+        default.parent.mkdir()
+        default.write_text("", encoding="utf-8")
+    elif scenario == "legacy_missing":
+        legacy.unlink()
+    elif scenario == "config_env_set":
+        monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(default))
+    else:
+        explicit = default
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        warn_if_legacy_config_ignored(explicit)
+    assert not _legacy_warnings(caplog)
+
+
+def test_legacy_config_warning_fires_when_config_env_is_blank(
+    legacy_layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A whitespace-only ARCHON_SEARCH_CONFIG counts as unset, so the legacy warning still fires."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", "   ")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        warn_if_legacy_config_ignored(None)
+    assert len(_legacy_warnings(caplog)) == 1
+
+
+@pytest.mark.parametrize("data_dir_env", [None, "legacy"], ids=["data-dir-unset", "data-dir-is-legacy"])
+def test_legacy_config_warning_silent_when_default_is_the_legacy_location(
+    data_dir_env: str | None,
+    legacy_layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """DATA_DIR unset or equal to ~/.archon-search → the default IS the legacy file, nothing is ignored."""
+    legacy, _ = legacy_layout
+    if data_dir_env is None:
+        monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
+    else:
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(legacy.parent))
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        warn_if_legacy_config_ignored(None)
+    assert not _legacy_warnings(caplog)
+
+
+def test_legacy_config_warning_silent_when_home_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """HOME unresolvable (container with a data dir set) → no legacy location to probe, no error."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    with (
+        patch.object(Path, "home", side_effect=RuntimeError("Could not determine home directory.")),
+        caplog.at_level(logging.WARNING, logger="archon_search.config"),
+    ):
+        warn_if_legacy_config_ignored(None)
+    assert not _legacy_warnings(caplog)
 
 
 # ---------------------------------------------------------------------------

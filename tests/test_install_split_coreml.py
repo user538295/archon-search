@@ -318,5 +318,5 @@ class TestWizardCoreMlSplitLogic:
         )
         # the provider labels _probe_and_configure_coreml returns for the split config
         providers = ["CoreML — text search; CPU — result ranking"]
-        summary = _render_summary("minimal", prof, False, providers)
+        summary = _render_summary("minimal", prof, False, providers, config_path="archon-search.toml")
         assert "CoreML — text search; CPU — result ranking" in summary

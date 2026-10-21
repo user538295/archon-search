@@ -6,8 +6,8 @@ from pathlib import Path
 
 import click
 
-from archon_search.cli._helpers import _get_service, _CONTAINER_MSG
-from archon_search.config import ConfigError, load_config
+from archon_search.cli._helpers import _CONTAINER_MSG, _exit_on_config_error, _get_service
+from archon_search.config import load_config
 
 
 @click.command()
@@ -17,14 +17,11 @@ def start(config_path: Path | None) -> None:
     if os.environ.get("ARCHON_SEARCH_CONTAINER") == "1":
         click.echo(_CONTAINER_MSG, err=True)
         raise SystemExit(1)
-    try:
+    with _exit_on_config_error():
         # Validate config now; service reads it independently via ARCHON_SEARCH_CONFIG env var
         # baked into the plist/unit at register() time. Config injection into the service
         # constructor is deferred to Phase 5 when the HTTP server is wired up.
         load_config(config_path)
-    except ConfigError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
     try:
         service = _get_service()
         service.start()

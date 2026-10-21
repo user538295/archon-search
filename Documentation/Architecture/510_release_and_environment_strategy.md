@@ -187,7 +187,7 @@ See `150_security_and_privacy_architecture.md` for the full auth model, includin
 
 ### Configuration
 
-`config.py` loads `~/.archon-search/archon-search.toml` and validates it against the `SearchConfig` schema. A starter file ships as `archon-search.toml.example` at the repository root. Selected fields:
+`config.py` loads `<data-dir>/archon-search.toml` (default `~/.archon-search/archon-search.toml`; `ARCHON_SEARCH_CONFIG` overrides) and validates it against the `SearchConfig` schema. A starter file ships as `archon-search.toml.example` at the repository root. Selected fields:
 
 - `[search].top_k_retrieve`, `[search].top_k_return` — pipeline shortlist and final cut-off.
 - `[server].host`, `[server].port` — defaults bind to `127.0.0.1`.

@@ -74,27 +74,27 @@ The companion runtime guarantees are enforced in `archon_search/config.py` (the 
 
 All modules in `archon_search/` must use `logging.getLogger(__name__)` — except `archon_search/logging_setup.py`, which intentionally uses the literal `"archon_search"` to target the root hierarchy logger. The guard in `tests/test_logger_names.py` allows any string starting with `archon_search` followed by `.` or end of string, and flags all other hardcoded names.
 
-`configure_logging()` (`archon_search/logging_setup.py`) is idempotent — calling it multiple times does not add duplicate handlers. The function is invoked once, as the first action in `run_server()`.
+`configure_logging()` (`archon_search/logging_setup.py`) is idempotent — calling it multiple times does not add duplicate handlers. The function is invoked once in `run_server()`, right after the config path is resolved and before anything there logs.
 
 **`[logging]` TOML / Python field name mismatch**: the TOML key `format` maps to the `SearchConfig` dataclass field `log_format`. This is the only `[logging]` key where the TOML name differs from the Python attribute name.
 
 ### Auth: every data-plane endpoint is bearer-gated
 
-The middleware exempts only `/health`, `/docs`, `/openapi.json`, `/redoc` (`server/middleware_auth.py::_EXEMPT_PATHS`); the latter three expose schema, not data. The API key is resolved by `key_manager.py` in priority order: `ARCHON_SEARCH_API_KEY` env var, then a key file at `ARCHON_SEARCH_KEY_FILE` (or default `~/.archon-search/.search.env`), then auto-generated with file mode `600` on POSIX.
+The middleware exempts only `/health`, `/docs`, `/openapi.json`, `/redoc` (`server/middleware_auth.py::_EXEMPT_PATHS`); the latter three expose schema, not data. The API key is resolved by `key_manager.py` in priority order: `ARCHON_SEARCH_API_KEY` env var, then a key file at `ARCHON_SEARCH_KEY_FILE` (or default `<data-dir>/.search.env`), then auto-generated with file mode `600` on POSIX.
 
 The REST middleware and the MCP endpoint share the same auth layer (`server/middleware_auth.py`).
 
 ### Runtime state directory
 
-All on-disk state lives under `~/.archon-search/`:
+All on-disk state lives under the data dir, `<data-dir>` = `ARCHON_SEARCH_DATA_DIR` (default `~/.archon-search/`; `paths.get_data_dir()`):
 
 | Path | Owner | Purpose |
 |---|---|---|
-| `~/.archon-search/archon-search.toml` | operator / API | server config (override via `ARCHON_SEARCH_CONFIG`) |
-| `~/.archon-search/.search.env` | `key_manager.py` | bootstrapped API key (mode `600`) |
-| `~/.archon-search/search/` | `store.py` | LanceDB vector + FTS data (`db_path` default) |
-| `~/.archon-search/logs/archon-search.log` | server logging | operational log |
-| `~/.archon-search/search-logs/` | `telemetry/writer.py` | opt-in daily JSONL telemetry |
+| `<data-dir>/archon-search.toml` | operator / API | server config (override via `ARCHON_SEARCH_CONFIG`) |
+| `<data-dir>/.search.env` | `key_manager.py` | bootstrapped API key (mode `600`) |
+| `<data-dir>/search/` | `store.py` | LanceDB vector + FTS data (`db_path` default) |
+| `<data-dir>/logs/archon-search.log` | server logging | operational log |
+| `<data-dir>/search-logs/` | `telemetry/writer.py` | opt-in daily JSONL telemetry |
 
 ## Contracts
 
