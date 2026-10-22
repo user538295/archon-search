@@ -68,6 +68,16 @@ def test_sync_job_kind_emitted_in_job_to_dict(tmp_path):
     assert d2["kind"] == JobKind.metadata_reindex.value  # "metadata_reindex"
 
 
+def test_job_to_dict_does_not_expose_metadata_reindex_dry_run(tmp_path):
+    """``dry_run`` is internal (it only exempts the job from blocking DELETE): the wire job shape is unchanged."""
+    meta_job = _make_job_store(tmp_path).create_metadata_reindex(collection="col", namespace="default", dry_run=True)
+
+    d = job_to_dict(meta_job)
+
+    assert d["job_id"] == meta_job.job_id
+    assert "dry_run" not in d
+
+
 def test_sync_and_metadata_reindex_jobs_round_trip_through_store(tmp_path):
     """Write via _write_atomic, read via _load; correct concrete types and enum kind."""
     store = _make_job_store(tmp_path)

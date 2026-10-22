@@ -1734,6 +1734,31 @@ def test_delete_collection_503_when_collection_mutating_job_active(
     assert app.state.config.collections == [str(src)]
 
 
+@pytest.mark.parametrize("active_status", [JobStatus.RUNNING, JobStatus.CANCELLING], ids=lambda s: s.value)
+@pytest.mark.parametrize(
+    ("dry_run", "expected_status"),
+    [
+        # A dry run only reads the table (SearchStore.reindex_metadata) and records no meta pointer, so it never
+        # writes the collection and DELETE need not refuse for it.
+        pytest.param(True, 200, id="dry-run"),
+        pytest.param(False, 503, id="not-dry-run"),
+    ],
+)
+def test_delete_collection_refuses_an_active_metadata_reindex_only_when_it_writes(
+    tmp_path: Path, tmp_store: JobStore, active_status: JobStatus, dry_run: bool, expected_status: int
+) -> None:
+    """DELETE answers 503 while a non-dry-run metadata reindex is active but drops the collection while a dry run is."""
+    app, client, mock_search_store, name, _ = _ingest_guard_app(tmp_path, tmp_store)
+    job = tmp_store.create_metadata_reindex(collection=name, namespace="default", dry_run=dry_run)
+    tmp_store.update(job.job_id, status=active_status)
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == expected_status, response.text
+    assert (mock_search_store.drop_collection.await_count == 1) is (expected_status == 200)
+    assert (app.state.config.collections == []) is (expected_status == 200)
+
+
 @dataclasses.dataclass
 class _UnclassifiedJob(IngestJob):
     """A job kind in neither COLLECTION_WRITING_JOB_STATUSES nor NEVER_BLOCKING_JOB_KINDS."""
@@ -7021,6 +7046,24 @@ def test_reindex_metadata_task_done_path_and_flag_forwarding(
         dry_run=True,
         normalize_timestamps=False,
     )
+
+
+@pytest.mark.parametrize(("body", "expected_dry_run"), [({}, False), ({"dry_run": False}, False), ({"dry_run": True}, True)])
+def test_reindex_metadata_records_dry_run_on_its_job(
+    tmp_path: Path, tmp_store: JobStore, body: dict[str, bool], expected_dry_run: bool
+) -> None:
+    """The job the route creates carries the request's ``dry_run`` (DELETE /collections/{name} reads it from the job
+    store, never from the request): off unless asked."""
+    c, name, _meta, mock_store = _make_reindex_metadata_app(tmp_path, tmp_store)
+    mock_store.reindex_metadata = AsyncMock(return_value=MagicMock(
+        processed=0, updated=0, skipped=0, ts_normalized=0, warnings=[]
+    ))
+
+    response = c.post(f"/collections/{name}/reindex-metadata", json=body)
+
+    assert response.status_code == 202, response.text
+    job = _poll_reindex_job_until_terminal(tmp_store, response.json()["job_id"])
+    assert job.dry_run is expected_dry_run
 
 
 def test_reindex_metadata_task_failed_path(

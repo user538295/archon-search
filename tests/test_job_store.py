@@ -1032,6 +1032,47 @@ def test_may_write_collection_matches_the_expected_blocking_table(kind: type[Ing
     assert may_write_collection(_job_on("job", status, job_class=kind)) is (status in _EXPECTED_BLOCKING_STATUSES[kind])
 
 
+@pytest.mark.parametrize("status", [JobStatus.RUNNING, JobStatus.CANCELLING], ids=lambda status: status.value)
+def test_may_write_collection_exempts_only_a_dry_run_metadata_reindex(
+    tmp_path: Path, status: JobStatus
+) -> None:
+    """A dry-run metadata reindex only reads its collection, so it never blocks DELETE; the same kind not dry-run
+    still does (the presence anchor: the exemption cannot be a kind-wide one)."""
+    from archon_search.jobs.store import may_write_collection
+
+    store = JobStore(path=tmp_path / "jobs.json")
+    dry_run = store.create_metadata_reindex("docs", dry_run=True)
+    writing = store.create_metadata_reindex("docs")
+    store.update(dry_run.job_id, status=status)
+    store.update(writing.job_id, status=status)
+
+    assert may_write_collection(dry_run) is False
+    assert may_write_collection(writing) is True
+    active = store.find_active_collection_job("docs", "default")
+    assert active is not None and active.job_id == writing.job_id
+
+
+def test_metadata_reindex_dry_run_survives_a_reload_and_defaults_false_for_older_rows(tmp_path: Path) -> None:
+    """``dry_run`` is persisted in the jobs file, so a reloaded job keeps it; a row saved before the field existed
+    loads as not dry-run (the fail-safe side: it still blocks DELETE)."""
+    jobs_path = tmp_path / "jobs.json"
+    store = JobStore(path=jobs_path)
+    dry_run = store.create_metadata_reindex("docs", dry_run=True)
+    writing = store.create_metadata_reindex("docs")
+    store.update(dry_run.job_id, status=JobStatus.DONE)
+    store.update(writing.job_id, status=JobStatus.DONE)
+    reloaded = JobStore(path=jobs_path)
+    assert [reloaded.get(job.job_id).dry_run for job in (dry_run, writing)] == [True, False]
+    rows = json.loads(jobs_path.read_text())
+    assert {row["job_id"]: row["dry_run"] for row in rows} == {dry_run.job_id: True, writing.job_id: False}
+
+    for row in rows:
+        del row["dry_run"]
+    jobs_path.write_text(json.dumps(rows))
+    older = JobStore(path=jobs_path)
+    assert [older.get(job.job_id).dry_run for job in (dry_run, writing)] == [False, False]
+
+
 @pytest.mark.parametrize(
     ("status", "may_write"),
     [

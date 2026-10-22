@@ -172,3 +172,22 @@ def test_reindex_metadata_job_write_failure_returns_sanitized_500_and_never_runs
         meta = asyncio.run(client.app.state.search_store.get_collection_meta(col, namespace="default"))
         assert meta is not None
         assert meta.metadata_reindex_job_id is None
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("dry_run", "expected_status"), [(True, 200), (False, 503)])
+def test_delete_collection_refuses_an_active_metadata_reindex_only_when_it_writes(
+    tmp_path: Path, monkeypatch, dry_run: bool, expected_status: int
+) -> None:
+    """Real app and store: a RUNNING non-dry-run metadata reindex makes DELETE answer the store-busy 503 and keeps the
+    collection; a RUNNING dry run (read-only) does not — the collection and its meta row are dropped."""
+    with _reindex_metadata_app(tmp_path, monkeypatch) as (client, col, headers):
+        job = client.app.state.job_store.create_metadata_reindex(collection=col, dry_run=dry_run)
+
+        response = client.delete(f"/collections/{col}", headers=headers)
+
+        assert response.status_code == expected_status, response.text
+        if expected_status == 503:
+            assert job.job_id in response.json()["detail"]
+        meta = asyncio.run(client.app.state.search_store.get_collection_meta(col, namespace="default"))
+        assert (meta is None) is (expected_status == 200)

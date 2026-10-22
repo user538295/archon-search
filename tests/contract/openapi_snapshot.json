@@ -4430,7 +4430,7 @@
                 }
               }
             },
-            "description": "Store busy (code store_busy): the collection lock was not acquired in time, or a job may still be writing to the collection (an ingest, reindex, import, migration, metadata reindex or community rebuild)"
+            "description": "Store busy (code store_busy): the collection lock was not acquired in time, or a job may still be writing to the collection (an ingest, reindex, import, migration, community rebuild, or a metadata reindex that is not a dry run)"
           }
         },
         "security": [

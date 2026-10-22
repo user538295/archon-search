@@ -465,7 +465,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
             "description": (
                 f"{STORE_BUSY_503_DESCRIPTION}, "
                 "or a job may still be writing to the collection (an ingest, reindex, import, migration, "
-                "metadata reindex or community rebuild)"
+                "community rebuild, or a metadata reindex that is not a dry run)"
             ),
         },
         **_ERROR_500_REMOVE_COLLECTION,
@@ -1449,7 +1449,7 @@ async def reindex_metadata(
         ),
         # Created RUNNING in one write: the route runs the task itself, so the response never
         # reports QUEUED (mirrors rebuild_communities).
-        create_job=lambda _meta: job_store.create_metadata_reindex(collection=name, namespace=ns),
+        create_job=lambda _meta: job_store.create_metadata_reindex(collection=name, namespace=ns, dry_run=body.dry_run),
         pointer_field=None if body.dry_run else "metadata_reindex_job_id",
     )
     if isinstance(running_job, JSONResponse):

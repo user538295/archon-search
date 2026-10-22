@@ -94,7 +94,8 @@ _RUNNING_OR_CANCELLING = frozenset({JobStatus.RUNNING, JobStatus.CANCELLING})
 #:   any meta write.
 #: - ``MetadataReindexJob``: created RUNNING (under the lock, by its route) before ``reindex_metadata`` takes the
 #:   lock (and holds it for its whole run); once that call returns, the task clears its meta pointer from a read made
-#:   outside the lock.
+#:   outside the lock. A ``dry_run`` one is exempt in every status (``may_write_collection``): it only reads the
+#:   table, records no meta pointer, and so has none to clear.
 #: - ``CommunityRebuildJob``: created RUNNING (under the lock, by its route); writes the collection's graph tables,
 #:   then clears its meta pointer from a read made outside the lock.
 COLLECTION_WRITING_JOB_STATUSES: dict[type[IngestJob], frozenset[JobStatus]] = {
@@ -117,12 +118,13 @@ NEVER_BLOCKING_JOB_KINDS: frozenset[type[IngestJob]] = frozenset({ExportJob, Del
 def may_write_collection(job: IngestJob) -> bool:
     """Whether *job*'s kind and status mean it may still write its collection (``COLLECTION_WRITING_JOB_STATUSES``).
 
-    The kind is matched by exact type (as ``is_base_ingest`` does). A kind in neither that table nor
+    A dry-run ``MetadataReindexJob`` never does (a read-only preview), whatever its status. The kind is matched by
+    exact type (as ``is_base_ingest`` does). A kind in neither that table nor
     ``NEVER_BLOCKING_JOB_KINDS`` fails closed: it may write while not terminal, and each such check is logged at
     ERROR so the kind gets classified — DELETE refuses rather than drop a collection it may write.
     """
     kind = type(job)
-    if kind in NEVER_BLOCKING_JOB_KINDS:
+    if kind in NEVER_BLOCKING_JOB_KINDS or (isinstance(job, MetadataReindexJob) and job.dry_run):
         return False
     statuses = COLLECTION_WRITING_JOB_STATUSES.get(kind)
     if statuses is not None:
@@ -503,8 +505,9 @@ class JobStore:
         self,
         collection: str,
         namespace: str = DEFAULT_NAMESPACE,
+        dry_run: bool = False,
     ) -> MetadataReindexJob:
-        """Create a MetadataReindexJob directly RUNNING (one write) and persist it.
+        """Create a MetadataReindexJob directly RUNNING (one write) and persist it. *dry_run*: a read-only preview.
 
         Its route runs the task itself and nothing schedules this kind, so a QUEUED one would never run.
         """
@@ -516,6 +519,7 @@ class JobStore:
             updated_at=now,
             namespace=namespace,
             collection=collection,
+            dry_run=dry_run,
         )
         return self.create_job(job)
 

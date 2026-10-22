@@ -155,6 +155,9 @@ class SyncJob(IngestJob):
 class MetadataReindexJob(IngestJob):
     collection: str = ""
     kind: JobKind = JobKind.metadata_reindex
+    # A read-only preview (POST /collections/{name}/reindex-metadata ``dry_run``): it never writes the collection, so it
+    # never blocks DELETE /collections/{name}. Persisted in jobs.json only; job_to_dict does not expose it.
+    dry_run: bool = False
 
 
 @dataclass
