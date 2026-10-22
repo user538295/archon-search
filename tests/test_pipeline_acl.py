@@ -437,7 +437,7 @@ async def test_search_pipeline_search_acl_filter_applied(tmp_path):
     from archon_search._types import ChunkRecord
     from archon_search.pipeline import SearchPipeline
 
-    # Arrange — stub pipeline with controlled hybrid_search output
+    # Arrange — stub pipeline with controlled hybrid_search_with_trace output
     store = MagicMock()
     embedder = MagicMock()
     reranker = MagicMock()

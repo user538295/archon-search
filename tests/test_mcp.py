@@ -11,6 +11,7 @@ import archon_search.server.mcp as mcp_module
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.progress import CollectionProgress, IndexingState, IndexingStatus, IndexingStateStore
 from archon_search.server.mcp import _needs_install_trigger
+from tests._collection_lock_stub import with_locked_collection_meta
 from tests._fastmcp_stub import stub_mcp_tool, stub_mcp_tools
 
 
@@ -1948,6 +1949,7 @@ def test_update_collection_no_op_same_model() -> None:
     store.get_collection_meta = AsyncMock(return_value=meta)
     store.get_stored_vector_dimension = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(store)
 
     pipeline = MagicMock()
     pipeline.store = store
@@ -1999,6 +2001,7 @@ def test_update_collection_pending_model_path() -> None:
     store.get_stored_vector_dimension = AsyncMock(return_value=None)
     store.count_chunks = AsyncMock(return_value=10)  # has chunks -> pending path
     store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(store)
 
     pipeline = MagicMock()
     pipeline.store = store

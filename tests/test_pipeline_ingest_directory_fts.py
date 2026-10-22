@@ -253,7 +253,7 @@ async def test_ingest_directory_all_files_searchable_after_optimize(
     all_doc_ids = {r.doc_id for r in results}
 
     for word in unique_words:
-        hits = await connected_store.hybrid_search(col_name, query_vec, word, 10)
+        hits = await connected_store.hybrid_search_with_trace(col_name, query_vec, word, 10)
         returned_ids = {h.doc_id for h in hits}
         overlap = all_doc_ids & returned_ids
         assert overlap, (

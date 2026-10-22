@@ -21,12 +21,18 @@ from archon_search.config import SearchConfig
 from archon_search.constants import INGEST_LOCK_TIMEOUT_S
 from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
-from archon_search.server._ingest_lock import STORE_BUSY_CODE
+from archon_search.server._ingest_lock import (
+    COLLECTION_JOB_IN_PROGRESS_DETAIL,
+    COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE,
+    COLLECTION_WRITER_IN_PROGRESS_DETAIL,
+    STORE_BUSY_CODE,
+    STORE_BUSY_DETAIL,
+)
 from archon_search.server.app import create_app
-from archon_search.server.routes_collections import COLLECTION_JOB_IN_PROGRESS_DETAIL, COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE
 from archon_search.store import CollectionLockNotHeldError, StoreBusyError
 from archon_search.sync import path_to_collection_name
 from archon_search.types import CommunityRebuildJob, DeleteJob, ExportJob, ImportJob, IngestJob, IngestOptions, MetadataReindexJob, MigrationJob, MigrationKind, ReindexJob, SyncJob
+from tests._collection_lock_stub import with_locked_collection_meta
 from tests._parked_lock import parked_waiters, reaping, until_parked
 
 
@@ -407,6 +413,7 @@ def test_remove_collection_deletes_config_and_data(
     mock_search_store.drop_collection = AsyncMock()
     mock_search_store.delete_collection_meta = AsyncMock()
     mock_search_store.lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_search_store.has_active_writer = MagicMock(return_value=False)
     app.state.search_store = mock_search_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -1244,6 +1251,7 @@ def test_remove_collection_deletes_meta_row(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.has_active_writer = MagicMock(return_value=False)
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -1292,6 +1300,7 @@ def test_remove_collection_success_drops_table_and_meta(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.has_active_writer = MagicMock(return_value=False)
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -1342,6 +1351,7 @@ def test_delete_collection_503_when_lock_held(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.lock_for = MagicMock(return_value=held_lock)
+    mock_store.has_active_writer = MagicMock(return_value=False)
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -1373,7 +1383,7 @@ def test_delete_collection_503_when_lock_held(
     holder.join()
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "reindex in progress; retry after Retry-After seconds", "code": STORE_BUSY_CODE}
+    assert response.json() == {"detail": STORE_BUSY_DETAIL, "code": STORE_BUSY_CODE}
     assert response.headers.get("Retry-After") == str(math.ceil(lock_timeout_s))
     # drop_collection must NOT have been called
     mock_store.drop_collection.assert_not_called()
@@ -1416,6 +1426,7 @@ def test_delete_acquires_lock_before_drop(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.has_active_writer = MagicMock(return_value=False)
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -1462,6 +1473,7 @@ def test_delete_collection_lock_released_on_exception(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.lock_for = MagicMock(return_value=real_lock)
+    mock_store.has_active_writer = MagicMock(return_value=False)
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -1493,6 +1505,7 @@ def _make_mock_search_store_for_delete(collection_name: str, ns: str = "default"
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.lock_for = MagicMock(return_value=asyncio.Lock())  # free lock
+    mock_store.has_active_writer = MagicMock(return_value=False)  # no MCP ingest / watcher sync is writing
     return mock_store
 
 
@@ -1842,6 +1855,72 @@ def test_delete_collection_503_hides_a_foreign_non_ingest_job_id(tmp_path: Path,
     mock_search_store.drop_collection.assert_not_called()
 
 
+@pytest.mark.parametrize("with_meta", [True, False], ids=["collection", "config-only"])
+def test_delete_collection_503_while_a_writer_that_creates_no_job_is_active(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture, with_meta: bool
+) -> None:
+    """An MCP ingest or a watcher sync writes the collection without a job (CON-12): DELETE finds it in the store's
+    writer registry, refuses with the store-busy 503 — a config-only collection included, whose first write would
+    create the table and meta row — and touches nothing. The check runs under the collection lock."""
+    app, client, mock_search_store, name, src = _ingest_guard_app(tmp_path, tmp_store)
+    if not with_meta:
+        mock_search_store.get_collection_meta = AsyncMock(return_value=None)
+        mock_search_store.get_all_collections_meta = AsyncMock(return_value=[])
+    lock = mock_search_store.lock_for.return_value
+    held_when_checked: list[bool] = []
+
+    def _active_writer(collection: str) -> bool:
+        assert collection == name
+        held_when_checked.append(lock.locked())
+        return True
+
+    mock_search_store.has_active_writer = MagicMock(side_effect=_active_writer)
+
+    with caplog.at_level("WARNING", logger="archon_search.server.routes_collections"):
+        response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {"detail": COLLECTION_WRITER_IN_PROGRESS_DETAIL, "code": STORE_BUSY_CODE}
+    assert response.headers.get("Retry-After") == str(math.ceil(INGEST_LOCK_TIMEOUT_S))
+    assert held_when_checked == [True]
+    assert any(
+        r.levelname == "WARNING" and r.getMessage().startswith(f"DELETE /collections/{name} refused")
+        for r in caplog.records
+    ), [r.getMessage() for r in caplog.records]
+    mock_search_store.drop_collection.assert_not_called()
+    mock_search_store.delete_collection_meta.assert_not_called()
+    mock_search_store.discard_lock.assert_not_called()
+    assert not lock.locked()
+    assert app.state.config.collections == [str(src)]
+
+
+def test_delete_collection_names_an_active_job_rather_than_a_jobless_writer(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """With both a job and a jobless writer on the collection, the refusal names the job (its id is actionable)."""
+    app, client, mock_search_store, name, src = _ingest_guard_app(tmp_path, tmp_store)
+    mock_search_store.has_active_writer = MagicMock(return_value=True)
+    tmp_store.create_job(_ingest_job("both-writers-job", JobStatus.RUNNING, name))
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"] == COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id="both-writers-job")
+    mock_search_store.drop_collection.assert_not_called()
+
+
+def test_delete_collection_200_when_no_writer_is_registered(tmp_path: Path, tmp_store: JobStore) -> None:
+    app, client, mock_search_store, name, src = _ingest_guard_app(tmp_path, tmp_store)
+
+    response = client.delete(f"/collections/{name}")
+
+    assert response.status_code == 200, response.text
+    mock_search_store.has_active_writer.assert_called_once_with(name)
+    mock_search_store.drop_collection.assert_awaited_once()
+    assert app.state.config.collections == []
+
+
+
 @pytest.mark.parametrize("with_store", [True, False], ids=["store", "no-store"])
 def test_delete_config_only_collection_503_while_a_job_writes_it(
     tmp_path: Path, tmp_store: JobStore, with_store: bool
@@ -1915,7 +1994,7 @@ async def test_delete_config_only_collection_503_while_another_write_holds_the_l
         lock.release()
 
     assert response.status_code == 503, response.text
-    assert response.json() == {"detail": "reindex in progress; retry after Retry-After seconds", "code": STORE_BUSY_CODE}
+    assert response.json() == {"detail": STORE_BUSY_DETAIL, "code": STORE_BUSY_CODE}
     assert response.headers.get("Retry-After") == str(math.ceil(lock_timeout_s))
     assert app.state.config.collections == [str(src)]
     mock_search_store.drop_collection.assert_not_called()
@@ -2400,7 +2479,7 @@ async def test_job_route_lock_timeout_answers_store_busy_and_creates_nothing(
         lock.release()
 
     assert response.status_code == 503, response.text
-    assert response.json() == {"detail": "reindex in progress; retry after Retry-After seconds", "code": STORE_BUSY_CODE}
+    assert response.json() == {"detail": STORE_BUSY_DETAIL, "code": STORE_BUSY_CODE}
     assert response.headers.get("Retry-After") == str(math.ceil(lock_timeout_s))
     assert tmp_store.list() == []
     mock_store.update_collection_meta.assert_not_awaited()
@@ -2759,6 +2838,7 @@ async def test_delete_collection_503_when_ingest_turns_running_while_delete_wait
     mock_store, meta_rows = _stateful_meta_store([CollectionMeta(name=name, namespace=ns)])
     lock = _WaiterSignallingLock()
     mock_store.lock_for = MagicMock(return_value=lock)
+    mock_store.has_active_writer = MagicMock(return_value=False)
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
 
@@ -3176,6 +3256,7 @@ def _remove_app(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
+    mock_store.has_active_writer = MagicMock(return_value=False)
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     app.state.config_path = str(tmp_path / "archon-search.toml")
@@ -3358,6 +3439,8 @@ def _stateful_meta_store(initial: list[CollectionMeta]) -> tuple[MagicMock, dict
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
+    mock_store.has_active_writer = MagicMock(return_value=False)
+    with_locked_collection_meta(mock_store)
     return mock_store, rows
 
 
@@ -4273,7 +4356,7 @@ def test_create_collection_returns_503_on_ingest_lock_timeout(
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     busy_response = JSONResponse(
-        {"error": "store_busy", "detail": "reindex in progress; retry after Retry-After seconds"},
+        {"error": "store_busy", "detail": STORE_BUSY_DETAIL},
         status_code=503,
         headers={"Retry-After": "30"},
     )
@@ -4317,6 +4400,7 @@ def _make_patch_app(
     mock_store.get_collection_meta = AsyncMock(return_value=meta)
     mock_store.count_chunks = AsyncMock(return_value=count_chunks)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -4362,6 +4446,7 @@ def test_patch_returns_200_on_model_change(
     mock_store.count_chunks = AsyncMock(return_value=5)
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=None)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -4420,6 +4505,7 @@ def test_patch_returns_409_on_active_reindex(
     mock_store.count_chunks = AsyncMock(return_value=5)
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=None)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -4466,6 +4552,7 @@ def test_patch_returns_422_on_unknown_model(
     mock_store.count_chunks = AsyncMock(return_value=0)
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=None)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
@@ -4508,6 +4595,7 @@ def test_patch_different_dimension_sets_pending_model(
     mock_store.get_collection_meta = AsyncMock(return_value=meta)
     mock_store.count_chunks = AsyncMock(return_value=5)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=1)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -4554,6 +4642,7 @@ def test_patch_idempotent_same_active_model(
     mock_store.count_chunks = AsyncMock(return_value=5)
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=384)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -4639,6 +4728,7 @@ def test_patch_state_c_revert(
     mock_store.count_chunks = AsyncMock(return_value=5)
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=384)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -4692,6 +4782,7 @@ def test_patch_state_d_replace_pending(
     mock_store.count_chunks = AsyncMock(return_value=5)
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=None)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -4736,6 +4827,7 @@ def test_patch_empty_collection_sets_active_directly(
     mock_store.count_chunks = AsyncMock(return_value=0)  # empty collection
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=None)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -4795,6 +4887,7 @@ def test_patch_stale_reindex_job_id_auto_cleared(
     mock_store.count_chunks = AsyncMock(return_value=5)
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=None)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -4856,6 +4949,7 @@ def test_patch_stale_cancelled_reindex_job_id_auto_cleared(
     mock_store.count_chunks = AsyncMock(return_value=5)
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=None)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -4916,6 +5010,7 @@ def test_patch_stale_failed_reindex_job_id_auto_cleared(
     mock_store.count_chunks = AsyncMock(return_value=5)
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=None)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -4970,6 +5065,7 @@ def test_patch_state_a_prime_same_pending(
     mock_store.count_chunks = AsyncMock(return_value=5)
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=None)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
@@ -6758,6 +6854,7 @@ def _app_with_meta_store(
     mock_store.count_chunks = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()

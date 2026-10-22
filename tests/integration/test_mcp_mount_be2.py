@@ -18,8 +18,6 @@ import pytest
 
 from tests.integration.conftest import make_real_app
 
-pytestmark = pytest.mark.xdist_group("mcp")
-
 
 # ---------------------------------------------------------------------------
 # Unit — enable gate (no real FastMCP needed; create_mcp_http_app is mocked)

@@ -63,7 +63,7 @@ In order of likelihood:
 Symptoms: `archon-search collection list` shows no growth in `chunks=`, `GET /status` shows `IN_PROGRESS` indefinitely.
 
 1. `GET /jobs/{job_id}` — for a REST-triggered reindex, this shows current status and any error.
-2. `GET /indexing-state` — per-collection `processed_files`, `total_files`, `error_count`, and the last `error` message. A failed sync reads `sync of collection '<name>' failed; see the server log for details`; the cause is in the server log under `Sync of collection '<name>' failed`.
+2. `GET /indexing-state` — per-collection `processed_files`, `total_files`, `error_count`, and the last `error` message. A failed sync reads `sync of collection '<name>' failed; see the server log for details`; the cause is in the server log under `Sync of collection '<name>' failed`. A sync that skipped a collection because another write held its lock reads `sync of collection '<name>' skipped: the collection is busy with another write; the next sync retries it` in the `POST /sync` job's `result["errors"]` (nothing was written; `POST /sync` again), and one that did not remove a collection gone from the config because a job or an MCP ingest may still write it reads `collection '<name>' is no longer configured but was not removed: it is busy; the next sync retries` (the server log, at WARNING, names the job or writer; the next sync removes it once that has ended).
 3. A stale `IN_PROGRESS` on startup is treated as a crash on the next restart and will trigger a reindex. If you suspect a wedged run, restart the server.
 4. Last resort: `archon-search collection reindex <name>` clears the state and rebuilds from scratch. See [`50_ingestion_and_collections.md`](./50_ingestion_and_collections.md).
 
@@ -216,7 +216,7 @@ A background probe (`model_validation.py`) loads the embedder and reranker and r
 `archon-search import <collection> <path>` (proxying `POST /collections/{name}/import`) ends the job `FAILED`, or the CLI prints an error before submitting.
 
 1. **`schema_version mismatch: archive has X, server expects Y; use ignore_schema_version=true to bypass`** — the archive was produced by a different schema version. Retry with `--ignore-schema-version` **only if** you accept the risk of a format drift.
-2. **`collection '<name>' already exists. Use --force-overwrite to overwrite.`** (HTTP `409`) — pass `--force-overwrite` to drop-and-recreate the target.
+2. **`collection '<name>' already exists. Use --force-overwrite to overwrite.`** (HTTP `409`) — pass `--force-overwrite` to drop-and-recreate the target. If the job then ends `FAILED` with `force_overwrite refused: …`, another job (an ingest, reindex, import, migration, metadata reindex or community rebuild) was still writing the collection, or another write held its lock too long: nothing was dropped. Wait until that job is terminal (`archon-search jobs status <job_id>`), then resume the failed import or run it again.
 3. **Corrupt / unparseable lines in the archive** (`Corrupt line N: not valid UTF-8 JSON`, `Corrupt line N: not a JSON object`, `corrupt doc (vector) at line N: …`, `malformed doc at line N: …`) — by default `--on-error=fail` aborts the whole import on the first bad line. Use `--on-error=skip` to skip corrupt lines and import the rest.
 4. Add `--wait` to poll the import job and see progress and the terminal status.
 

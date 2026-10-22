@@ -269,7 +269,6 @@ def test_e2e_status_community_fields(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("mcp")
 def test_e2e_mcp_search_global_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -341,7 +340,6 @@ def test_e2e_mcp_search_global_mode(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("mcp")
 def test_e2e_mcp_search_local_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

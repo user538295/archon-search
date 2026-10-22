@@ -128,7 +128,7 @@ def wait_for_job(job_id: str, timeout: float = 300.0) -> dict:
         time.sleep(1.0)
 ```
 
-`DELETE /jobs/{job_id}` is idempotent: terminal jobs return `200` with the unchanged record; active jobs transition to `CANCELLING` and return `202`. A non-terminal sync job (`kind: "sync"`) cannot be cancelled and returns `409` `{"detail": "a sync cannot be cancelled"}` — wait for it with `wait_for_job` instead (a legacy `QUEUED`/`PENDING` sync row never runs: the next `POST /sync` marks it `FAILED`).
+`DELETE /jobs/{job_id}` is idempotent: terminal jobs return `200` with the unchanged record; active jobs transition to `CANCELLING` and return `202`. A non-terminal sync job (`kind: "sync"`) cannot be cancelled and returns `409` `{"detail": "a sync cannot be cancelled"}` — wait for it with `wait_for_job` instead (a sync row an older server left `QUEUED` is marked `FAILED` when the server starts, a legacy `PENDING` one by the next `POST /sync`).
 
 ## Standalone ingest (existing collection)
 

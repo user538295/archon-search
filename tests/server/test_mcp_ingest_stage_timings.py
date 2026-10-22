@@ -3,41 +3,16 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from archon_search._types import IngestResult
 from archon_search.config import SearchConfig
 from archon_search.observability import _stage_recorder, record_stage
-
-pytestmark = pytest.mark.xdist_group("mcp")
-
-
-# ---------------------------------------------------------------------------
-# FastMCP stub (mirrors test_mcp_ingest_503.py)
-# ---------------------------------------------------------------------------
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
 
 
 # ---------------------------------------------------------------------------
@@ -45,13 +20,13 @@ class _FakeFastMCP:
 # ---------------------------------------------------------------------------
 
 
-def _make_app(pipeline: MagicMock, config: SearchConfig | None = None) -> _FakeApp:
+def _make_app(pipeline: MagicMock, config: SearchConfig | None = None) -> StubFastMCP:
     if config is None:
         cfg = SearchConfig()
         cfg.observability.stage_timings_enabled = True
     else:
         cfg = config
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         return mcp_module.create_app(pipeline, "default", writer=None, config=cfg)  # type: ignore[call-arg]
 

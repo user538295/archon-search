@@ -53,16 +53,24 @@ _REINDEX_JOB_TYPE = "reindex"
 # originally populated.
 _INGEST_FAMILY_JOB_TYPES = {_INGEST_JOB_TYPE, JobKind.sync.value}
 #: Wire-facing ``error`` (served by GET /jobs) of a job loaded ``RUNNING`` / ``CANCELLING``: the previous process died
-#: while it ran. For an ingest-family job it arms the crash-loop guard, and ``MaintenanceLoop`` never retries such an
-#: ingest — re-running it could re-enter the workload that killed the process.
+#: while it ran — except a ``CANCELLING`` job whose cancel landed while it was still ``PENDING``
+#: (``IngestJob.cancelled_before_start``), which never ran and loads ``CANCELLED``. For an ingest-family job it arms
+#: the crash-loop guard, and ``MaintenanceLoop`` never retries such an ingest — re-running it could re-enter the
+#: workload that killed the process.
 PROCESS_RESTART_ERROR = "process_restart"
-#: Wire-facing ``error`` (served by GET /jobs) of a base ingest or reindex job loaded still ``PENDING``: it never
-#: started, and its task died with the previous process, so nothing would ever run it (a PENDING reindex would also
-#: block DELETE /collections/{name} forever). Nothing ran, so unlike ``process_restart`` it does not arm the crash-loop
-#: guard; as a ``FAILED`` path ingest, ``MaintenanceLoop`` may retry an ingest job (never a reindex job).
+#: Wire-facing ``error`` (served by GET /jobs) of a job loaded still ``PENDING`` (a base ingest or reindex job) or
+#: ``QUEUED`` (a community-rebuild, metadata-reindex or sync job): it never started, and nothing would ever run it —
+#: its task died with the previous process, or an older server's route died before claiming it (a PENDING reindex
+#: would also block DELETE /collections/{name} forever). Nothing ran, so unlike ``process_restart`` it does not arm the
+#: crash-loop guard; as a ``FAILED`` path ingest, ``MaintenanceLoop`` may retry an ingest job (never any other kind).
 NOT_STARTED_BEFORE_RESTART_DETAIL = "never started; the server restarted before it ran"
 #: ``job_type`` values whose job loaded ``PENDING`` is rewritten FAILED with ``NOT_STARTED_BEFORE_RESTART_DETAIL``.
 _NOT_STARTED_ON_LOAD_JOB_TYPES = frozenset({_INGEST_JOB_TYPE, _REINDEX_JOB_TYPE})
+#: ``job_type`` values whose job loaded ``QUEUED`` is rewritten FAILED with ``NOT_STARTED_BEFORE_RESTART_DETAIL``. An
+#: older server created these kinds QUEUED and their route claimed them RUNNING itself; ``JobScheduler`` promotes
+#: export, import and migration jobs only (``list_queued_bulk``), so a row left QUEUED by a crash before the claim
+#: never runs, and — non-terminal — is never cancelled by DELETE /jobs/{id} nor evicted.
+_NEVER_SCHEDULED_ON_LOAD_JOB_TYPES = frozenset({"community_rebuild", JobKind.metadata_reindex.value, JobKind.sync.value})
 #: Statuses of a base ingest job a ``MaintenanceLoop`` retry may still act on: FAILED (a retry candidate) and
 #: PENDING (a retry not yet claimed RUNNING). ``cancel_ingest_retries`` ends them.
 _RETRY_CANDIDATE_STATUSES = frozenset({JobStatus.FAILED, JobStatus.PENDING})
@@ -111,7 +119,8 @@ COLLECTION_WRITING_JOB_STATUSES: dict[type[IngestJob], frozenset[JobStatus]] = {
 #: - ``ExportJob``: reads the collection only.
 #: - ``DeleteJob``: legacy; nothing creates or runs one any more.
 #: - ``SyncJob``: names no collection (``collection`` is always ""), though a RUNNING sync writes (and may drop)
-#:   collections — a known, pre-existing gap: ``530_technical_debt_refactoring_roadmap.md`` CON-7.
+#:   collections: it registers in ``SearchStore.collection_writer`` around each collection's write instead
+#:   (``SearchCollectionSync._write_collection``), and consults ``find_active_collection_job`` before it drops one.
 NEVER_BLOCKING_JOB_KINDS: frozenset[type[IngestJob]] = frozenset({ExportJob, DeleteJob, SyncJob})
 
 
@@ -169,12 +178,14 @@ def _ingest_options_from_json(job_id: object, raw: object) -> IngestOptions | No
         return None
 
 
-def _cancel_requested_from_json(job_id: object, raw: object) -> bool:
-    """Job *job_id*'s ``cancel_requested`` as loaded from the jobs file; a value that is not a JSON boolean is no
-    client's cancel — logged at WARNING and loaded False, so a truthy ``"false"`` cannot end a retry chain."""
+def _flag_from_json(job_id: object, key: str, raw: object) -> bool:
+    """Job *job_id*'s boolean marker *key* (``cancel_requested``, ``cancelled_before_start``) as loaded from the jobs
+    file; a value that is not a JSON boolean sets nothing — logged at WARNING and loaded False, so a truthy
+    ``"false"`` can neither end a retry chain (``cancel_requested``) nor excuse a job that ran from the crash-loop
+    guard (``cancelled_before_start``)."""
     if isinstance(raw, bool):
         return raw
-    logger.warning("JobStore: job %s has a non-boolean cancel_requested (%r); loading it as False", job_id, raw)
+    logger.warning("JobStore: job %s has a non-boolean %s (%r); loading it as False", job_id, key, raw)
     return False
 
 
@@ -375,10 +386,14 @@ class JobStore:
                 collection, ", ".join(old_jobs), exc_info=True,
             )
 
-    def find_active_collection_job(self, collection: str, namespace: str) -> IngestJob | None:
+    def find_active_collection_job(
+        self, collection: str, namespace: str, *, excluding_job_id: str | None = None,
+    ) -> IngestJob | None:
         """Return a job that may still write *collection* (``may_write_collection``), in ANY namespace, else ``None``.
 
-        A match in the caller's *namespace* is preferred, so the caller sees its own job id when it has one.
+        A match in the caller's *namespace* is preferred, so the caller sees its own job id when it has one. The job
+        *excluding_job_id* is never returned: an import's own job is ``RUNNING`` while its task checks, and must not
+        refuse itself.
 
         Any namespace: the search store keeps one LanceDB table per collection name (``drop_collection`` drops the
         table by name alone) and ``lock_for`` keys the collection lock by name only, so a job submitted from any
@@ -389,7 +404,10 @@ class JobStore:
         PENDING -> RUNNING claim (``routes_jobs._run_maintenance_retry``) — a DELETE that holds the lock cancels
         such a retry instead (``cancel_ingest_retries``).
         """
-        active = [job for job in self._jobs.values() if job.collection == collection and may_write_collection(job)]
+        active = [
+            job for job in self._jobs.values()
+            if job.collection == collection and job.job_id != excluding_job_id and may_write_collection(job)
+        ]
         return next((job for job in active if job.namespace == namespace), next(iter(active), None))
 
     def create_export(
@@ -583,9 +601,8 @@ class JobStore:
                 item.setdefault("collection", "")
                 item.setdefault("retry_count", 0)
                 item["ingest_options"] = _ingest_options_from_json(item.get("job_id"), item.get("ingest_options"))
-                item["cancel_requested"] = _cancel_requested_from_json(
-                    item.get("job_id"), item.get("cancel_requested", False)
-                )
+                for flag in ("cancel_requested", "cancelled_before_start"):
+                    item[flag] = _flag_from_json(item.get("job_id"), flag, item.get(flag, False))
                 job_type = item.pop("job_type", _INGEST_JOB_TYPE)
                 if job_type == "export":
                     job: IngestJob = ExportJob(**item)
@@ -608,7 +625,13 @@ class JobStore:
                     job = MetadataReindexJob(**item)
                 else:
                     job = IngestJob(**item)
-                if job.status in _CRASH_STATUSES:
+                if job.status == JobStatus.CANCELLING and job.cancelled_before_start:
+                    # A cancel requested while the job was PENDING: its task never claimed it RUNNING, so nothing ran
+                    # and the previous process died before the task could write CANCELLED. Complete the cancel as that
+                    # task would have — no crash marker, no guard (a job still PENDING at load arms none either).
+                    job = dataclasses.replace(job, status=JobStatus.CANCELLED, updated_at=_now_iso())
+                    modified = True
+                elif job.status in _CRASH_STATUSES:
                     job = dataclasses.replace(
                         job,
                         status=JobStatus.FAILED,
@@ -618,10 +641,13 @@ class JobStore:
                     modified = True
                     if job_type in _INGEST_FAMILY_JOB_TYPES:
                         self._crashed_ingest_on_load = True
-                elif job.status == JobStatus.PENDING and job_type in _NOT_STARTED_ON_LOAD_JOB_TYPES:
+                elif (job.status == JobStatus.PENDING and job_type in _NOT_STARTED_ON_LOAD_JOB_TYPES) or (
+                    job.status == JobStatus.QUEUED and job_type in _NEVER_SCHEDULED_ON_LOAD_JOB_TYPES
+                ):
                     # Every base ingest and reindex job's task is spawned when the job is created (a shutdown cancels
                     # a reindex task while it loads its embedder, still PENDING), so one still PENDING lost its task
-                    # with the previous process; other kinds keep their PENDING semantics.
+                    # with the previous process; a community-rebuild, metadata-reindex or sync job is run by its
+                    # route, never the scheduler, so one still QUEUED lost its route; other kinds keep their status.
                     job = dataclasses.replace(
                         job,
                         status=JobStatus.FAILED,
@@ -658,8 +684,9 @@ class JobStore:
                 # A row without options / a cancel request keeps the shape it had before those fields existed.
                 if item["ingest_options"] is None:
                     del item["ingest_options"]
-                if not item["cancel_requested"]:
-                    del item["cancel_requested"]
+                for flag in ("cancel_requested", "cancelled_before_start"):
+                    if not item[flag]:
+                        del item[flag]
                 if isinstance(job, MigrationJob):
                     item["job_type"] = "migration"
                 elif isinstance(job, ExportJob):

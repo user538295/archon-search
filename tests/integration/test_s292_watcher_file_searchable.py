@@ -148,11 +148,11 @@ async def test_new_file_becomes_searchable_via_sync_collection(
 
     # Search for the new file's unique content
     query_vector = [0.1, 0.2, 0.3, 0.4]
-    results = await store.hybrid_search(
+    results = await store.hybrid_search_with_trace(
         col_name,
         query_vector=query_vector,
         query_text="plugh_watcher_e2e_5678",
-        top_k=10,
+        candidate_depth=10,
     )
 
     # Find the result that references the new file
@@ -173,7 +173,7 @@ async def test_new_file_becomes_searchable_via_sync_collection(
     assert match.doc_id is not None, "doc_id must not be None"
     assert match.chunk_id is not None, "chunk_id must not be None"
     assert match.text is not None, "text must not be None"
-    assert match.score is not None, "score must not be None"
+    assert match.score_breakdown.rrf_score is not None, "rrf_score must not be None"
     assert match.source_path is not None, "source_path must not be None"
     assert match.collection == col_name, (
         f"Expected collection={col_name!r}, got {match.collection!r}"

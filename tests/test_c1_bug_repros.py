@@ -2550,6 +2550,53 @@ async def test_sync_suppression_persists_across_second_reboot(tmp_path: Path) ->
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cancelled_before_start", "suppressed"),
+    [(True, False), (False, True)],
+    ids=["cancelled-while-pending", "cancelled-while-running"],
+)
+async def test_startup_sync_after_a_cancelled_ingest_is_suppressed_only_if_it_had_started(
+    tmp_path: Path, cancelled_before_start: bool, suppressed: bool
+) -> None:
+    """The process died with an ingest a client had cancelled (``DELETE /jobs/{id}``) still CANCELLING.
+
+    Cancelled while RUNNING, it kept writing (a cancel does not interrupt the task), so the death is a crash of the
+    ingest workload and the next boot suppresses the startup sync. Cancelled while still PENDING, it never ran: the
+    restart completes the cancel and the startup sync runs as it would after any clean stop, writing no sticky
+    sentinel that would keep every later boot suppressed until an operator runs ``POST /sync``.
+    """
+    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.sync_suppression import get_sync_suppressed_file  # noqa: PLC0415
+
+    jobs_path = tmp_path / "jobs.json"
+    seeder = JobStore(path=jobs_path)
+    job = seeder.create(path="/corpus/docs", collection="docs")
+    if not cancelled_before_start:
+        seeder.update(job.job_id, status=JobStatus.RUNNING)
+    seeder.transition(
+        job.job_id,
+        {JobStatus.PENDING, JobStatus.RUNNING},
+        JobStatus.CANCELLING,
+        cancel_requested=True,
+        cancelled_before_start=cancelled_before_start,
+    )
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = ["docs"]
+
+    sync_calls, recording_sync = _make_recording_sync()
+    with ExitStack() as stack:
+        _enter_startup_sync_lifespan_patches(stack, recording_sync)
+        app = create_app(cfg, JobStore(path=jobs_path))
+        sync_task = await _run_lifespan_and_capture_sync_task(app, sync_calls)
+
+    assert (sync_task is None) is suppressed, f"startup sync task: {sync_task!r}"
+    assert (sync_calls == []) is suppressed, f"collection_sync.sync calls: {sync_calls!r}"
+    assert get_sync_suppressed_file().exists() is suppressed
+
+
 # --------------------------------------------------------------------------- #
 # fix-brief-C item 2 — guard the WATCHER. _watch_callback re-entered ingest on
 # file events while suppressed; the brief's own repro specifies watch=true, so

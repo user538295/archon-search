@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pyarrow as pa
 import pytest
 
-from archon_search._types import ChunkRecord, SearchResult
+from archon_search._types import ChunkRecord
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.store import (
     SearchStore,
@@ -60,12 +60,12 @@ def test_store_methods_raise_before_connect_ingest_chunks(tmp_path: Path) -> Non
         asyncio.run(store.ingest_chunks("col", []))
 
 
-def test_store_methods_raise_before_connect_hybrid_search(tmp_path: Path) -> None:
+def test_store_methods_raise_before_connect_hybrid_search_with_trace(tmp_path: Path) -> None:
     store = SearchStore(tmp_path / "db")
     with pytest.raises(RuntimeError, match="not connected"):
         import asyncio
 
-        asyncio.run(store.hybrid_search("col", [], "q", 5))
+        asyncio.run(store.hybrid_search_with_trace("col", [], "q", 5))
 
 
 def test_store_methods_raise_before_connect_delete_document(tmp_path: Path) -> None:
@@ -263,23 +263,23 @@ async def test_store_ingest_and_list_documents(
 
 
 @pytest.mark.asyncio
-async def test_store_hybrid_search_returns_results(
+async def test_store_hybrid_search_with_trace_returns_results(
     connected_store: SearchStore, col_name: str
 ) -> None:
     await _ingest_doc(connected_store, col_name, text_prefix="searchable")
     await connected_store.rebuild_fts_index(col_name)
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, "searchable", top_k=5
+    results = await connected_store.hybrid_search_with_trace(
+        col_name, [0.0] * _DIM, "searchable", 5
     )
     assert len(results) > 0
 
 
 @pytest.mark.asyncio
-async def test_store_hybrid_search_unknown_collection_returns_empty(
+async def test_store_hybrid_search_with_trace_unknown_collection_returns_empty(
     connected_store: SearchStore,
 ) -> None:
-    results = await connected_store.hybrid_search(
-        "nonexistent-xyz", [0.0] * _DIM, "q", top_k=5
+    results = await connected_store.hybrid_search_with_trace(
+        "nonexistent-xyz", [0.0] * _DIM, "q", 5
     )
     assert results == []
 
@@ -418,14 +418,14 @@ async def test_store_list_documents_respects_limit(
 
 
 @pytest.mark.asyncio
-async def test_store_hybrid_search_degrades_gracefully_without_fts_index(
+async def test_store_hybrid_search_with_trace_degrades_gracefully_without_fts_index(
     connected_store: SearchStore, col_name: str
 ) -> None:
     """No FTS index → returns vector-only results, no exception raised."""
     await _ingest_doc(connected_store, col_name, text_prefix="keyword")
     # deliberately NOT calling rebuild_fts_index
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, "keyword", top_k=5
+    results = await connected_store.hybrid_search_with_trace(
+        col_name, [0.0] * _DIM, "keyword", 5
     )
     assert isinstance(results, list)  # no crash; may be empty or have results
 
@@ -441,8 +441,8 @@ async def test_store_rebuild_fts_index_makes_text_searchable(
     await connected_store.ingest_chunks(col_name, chunks)
     await connected_store.rebuild_fts_index(col_name)
 
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, unique_word, top_k=5
+    results = await connected_store.hybrid_search_with_trace(
+        col_name, [0.0] * _DIM, unique_word, 5
     )
     texts = [r.text for r in results]
     assert any(unique_word in t for t in texts)
@@ -476,7 +476,7 @@ async def test_store_list_collections_returns_correct_counts(
 
 
 @pytest.mark.asyncio
-async def test_store_hybrid_search_rrf_ranking_correct(
+async def test_store_hybrid_search_with_trace_rrf_ranking_correct(
     connected_store: SearchStore, col_name: str
 ) -> None:
     """Doc matching both vector + keyword should outscore doc matching only vector."""
@@ -496,8 +496,8 @@ async def test_store_hybrid_search_rrf_ranking_correct(
     await connected_store.rebuild_fts_index(col_name)
 
     # Query with vector [0.0]*4 (favors vec-only) and keyword (favors dual)
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, unique, top_k=5
+    results = await connected_store.hybrid_search_with_trace(
+        col_name, [0.0] * _DIM, unique, 5
     )
     assert len(results) >= 1, f"Expected at least 1 result, got {len(results)}"
 
@@ -506,8 +506,9 @@ async def test_store_hybrid_search_rrf_ranking_correct(
 
     vec_result = next((r for r in results if r.doc_id == vec_only_id), None)
     if vec_result is not None:
-        assert dual_result.score >= vec_result.score, (
-            f"Dual-match score {dual_result.score} should be >= vec-only score {vec_result.score}"
+        assert dual_result.score_breakdown.rrf_score >= vec_result.score_breakdown.rrf_score, (
+            f"Dual-match score {dual_result.score_breakdown.rrf_score} should be >= "
+            f"vec-only score {vec_result.score_breakdown.rrf_score}"
         )
 
 
@@ -751,7 +752,7 @@ async def test_rename_collection_integration(connected_store: SearchStore, col_n
 
 
 def test_fts_exception_filter_reraises_non_fts_errors() -> None:
-    """The FTS exception filter in hybrid_search only catches FTS-related errors."""
+    """The FTS exception filter in _hybrid_search_with_trace only catches FTS-related errors."""
     # Errors containing "index" or "fts" should be caught (degraded to vector-only)
     for msg in ["FTS index not found", "No index on column", "fts search failed"]:
         exc_str = msg.lower()
@@ -2271,16 +2272,6 @@ async def test_P14_11_store_rebuild_fts_on_empty_collection_does_not_raise(
 
 
 @pytest.mark.asyncio
-async def test_P14_12_store_hybrid_search_top_k_zero_returns_empty(
-    connected_store: SearchStore, col_name: str
-) -> None:
-    """ hybrid_search with top_k=0 returns empty list (not an error)."""
-    await _ingest_doc(connected_store, col_name)
-    results = await connected_store.hybrid_search(col_name, [0.0] * _DIM, "any", top_k=0)
-    assert results == []
-
-
-@pytest.mark.asyncio
 async def test_P14_13_store_list_documents_limit_zero_returns_empty(
     connected_store: SearchStore, col_name: str
 ) -> None:
@@ -2402,57 +2393,6 @@ async def test_search_store_connect_does_not_create_tilde_dir_in_cwd(
 # ===========================================================================
 # Hybrid-search trace provenance
 # ===========================================================================
-
-
-def test_hybrid_search_keeps_public_result_contract(tmp_path: Path) -> None:
-    """Normal hybrid_search results expose only SearchResult fields — no eval-only score fields."""
-    import asyncio
-    from unittest.mock import AsyncMock, MagicMock
-
-    store = SearchStore(tmp_path / "db")
-    mock_db = MagicMock()
-    mock_table = MagicMock()
-
-    doc_id = _doc_id()
-    chunk_id = f"{doc_id}-000000"
-
-    vec_row = {
-        "doc_id": doc_id,
-        "chunk_id": chunk_id,
-        "text": "hello world",
-        "source_path": "/tmp/foo.md",
-        "_distance": 0.1,
-    }
-
-    mock_table.vector_search = MagicMock(
-        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[vec_row]))))
-    )
-    mock_table.search = AsyncMock(
-        side_effect=Exception("fts index not found")
-    )
-
-    list_tables_resp = MagicMock()
-    list_tables_resp.tables = ["my-col"]
-    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
-    mock_db.open_table = AsyncMock(return_value=mock_table)
-    store._db = mock_db
-
-    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", top_k=5))
-
-    assert len(results) == 1
-    result = results[0]
-    # Only public SearchResult fields exist
-    assert hasattr(result, "doc_id")
-    assert hasattr(result, "chunk_id")
-    assert hasattr(result, "text")
-    assert hasattr(result, "score")
-    assert hasattr(result, "source_path")
-    # No eval-only fields
-    assert not hasattr(result, "vector_score")
-    assert not hasattr(result, "fts_score")
-    assert not hasattr(result, "vector_rank")
-    assert not hasattr(result, "fts_rank")
-    assert not hasattr(result, "score_breakdown")
 
 
 def test_hybrid_search_trace_exposes_score_breakdown(tmp_path: Path) -> None:
@@ -2761,43 +2701,22 @@ def _tie_break_mock_store(tmp_path: Path) -> tuple[SearchStore, str]:
     return store, doc_id
 
 
-def test_hybrid_search_sort_is_deterministic_on_score_ties(tmp_path: Path) -> None:
-    """Production hybrid_search breaks RRF-score ties by ascending chunk_id."""
+def test_hybrid_search_trace_sort_is_deterministic_on_score_ties(tmp_path: Path) -> None:
+    """Production hybrid_search_with_trace breaks RRF-score ties by ascending chunk_id."""
     import asyncio
 
     store, doc_id = _tie_break_mock_store(tmp_path)
     chunk_lo = f"{doc_id}-000000"
     chunk_hi = f"{doc_id}-000001"
 
-    results_1 = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "x", top_k=20))
-    results_2 = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "x", top_k=20))
+    results_1 = asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "x", 20))
+    results_2 = asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "x", 20))
 
     ids_1 = [r.chunk_id for r in results_1]
     ids_2 = [r.chunk_id for r in results_2]
     # Equal RRF scores → ascending chunk_id tie-break (not insertion order).
     assert ids_1 == [chunk_lo, chunk_hi], ids_1
     assert ids_1 == ids_2, f"Non-deterministic ordering: {ids_1} vs {ids_2}"
-
-
-def test_hybrid_search_with_trace_sort_matches_production_sort(tmp_path: Path) -> None:
-    """Trace and production retrieval paths produce the same chunk_id ordering on ties."""
-    import asyncio
-
-    from archon_search.store import _hybrid_search_with_trace
-
-    store_prod, doc_id = _tie_break_mock_store(tmp_path)
-    store_trace, _ = _tie_break_mock_store(tmp_path)
-    chunk_lo = f"{doc_id}-000000"
-    chunk_hi = f"{doc_id}-000001"
-
-    prod = asyncio.run(store_prod.hybrid_search("my-col", [0.0] * _DIM, "x", top_k=20))
-    trace = asyncio.run(_hybrid_search_with_trace(store_trace, "my-col", [0.0] * _DIM, "x", 20))
-
-    prod_ids = [r.chunk_id for r in prod]
-    trace_ids = [c.chunk_id for c in trace]
-    # Pin the expected order so this fails if BOTH paths regress identically.
-    assert prod_ids == [chunk_lo, chunk_hi], prod_ids
-    assert prod_ids == trace_ids
 
 
 def test_mcp_search_response_schema_matches_public_contract_without_eval_provenance() -> None:
@@ -3240,8 +3159,8 @@ def test_list_collections_orphan_table_defaults(tmp_path: Path) -> None:
     )
 
 
-def test_hybrid_search_row_projection_populates_language(tmp_path: Path) -> None:
-    """Unit: row with language='en' produces SearchResult.language == 'en'."""
+def test_hybrid_search_trace_row_projection_populates_language(tmp_path: Path) -> None:
+    """Unit: row with language='en' produces ScoredSearchCandidate.language == 'en'."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
@@ -3272,13 +3191,13 @@ def test_hybrid_search_row_projection_populates_language(tmp_path: Path) -> None
     mock_db.open_table = AsyncMock(return_value=mock_table)
     store._db = mock_db
 
-    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", 5))
+    results = asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "hello", 5))
     assert len(results) == 1
     assert results[0].language == "en"
 
 
-def test_hybrid_search_row_projection_language_empty_string_yields_none(tmp_path: Path) -> None:
-    """Unit: row with language='' (current A1/A2 stored value) produces SearchResult.language == ''."""
+def test_hybrid_search_trace_row_projection_language_empty_string_stays_empty(tmp_path: Path) -> None:
+    """Unit: row with language='' (current A1/A2 stored value) produces ScoredSearchCandidate.language == ''."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
@@ -3309,13 +3228,13 @@ def test_hybrid_search_row_projection_language_empty_string_yields_none(tmp_path
     mock_db.open_table = AsyncMock(return_value=mock_table)
     store._db = mock_db
 
-    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", 5))
+    results = asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "hello", 5))
     assert len(results) == 1
     assert results[0].language == ""
 
 
-def test_hybrid_search_row_projection_language_missing_yields_none(tmp_path: Path) -> None:
-    """Unit: row without language column produces SearchResult.language == ''."""
+def test_hybrid_search_trace_row_projection_language_missing_stays_empty(tmp_path: Path) -> None:
+    """Unit: row without language column produces ScoredSearchCandidate.language == ''."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
@@ -3346,17 +3265,17 @@ def test_hybrid_search_row_projection_language_missing_yields_none(tmp_path: Pat
     mock_db.open_table = AsyncMock(return_value=mock_table)
     store._db = mock_db
 
-    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", 5))
+    results = asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "hello", 5))
     assert len(results) == 1
     assert results[0].language == ""
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_hybrid_search_returns_language_field(
+async def test_hybrid_search_trace_returns_language_field(
     connected_store: SearchStore, col_name: str
 ) -> None:
-    """Integration: ingest chunk with language='en'; SearchResult.language carries it."""
+    """Integration: ingest chunk with language='en'; ScoredSearchCandidate.language carries it."""
     doc_id = _doc_id()
     chunk = ChunkRecord(
         doc_id=doc_id,
@@ -3369,7 +3288,7 @@ async def test_hybrid_search_returns_language_field(
     )
     await connected_store.ensure_collection(col_name, _DIM)
     await connected_store.ingest_chunks(col_name, [chunk])
-    results = await connected_store.hybrid_search(col_name, [1.0] * _DIM, "language", 5)
+    results = await connected_store.hybrid_search_with_trace(col_name, [1.0] * _DIM, "language", 5)
     assert results, "expected at least one result"
     assert results[0].language == "en"
 
@@ -3429,7 +3348,7 @@ def test_hybrid_search_trace_score_kind_values_match_backend_polarity(tmp_path: 
 
 
 # ---------------------------------------------------------------------------
-# Task 3.1 — filters parameter on hybrid_search (unit tests)
+# Task 3.1 — filters parameter on hybrid_search_with_trace (unit tests)
 # ---------------------------------------------------------------------------
 
 
@@ -3482,7 +3401,7 @@ def _make_vec_row(doc_id: str, idx: int = 0) -> dict:
     }
 
 
-def test_hybrid_search_filter_calls_where_on_both_branches(tmp_path: Path) -> None:
+def test_hybrid_search_with_trace_filter_calls_where_on_both_branches(tmp_path: Path) -> None:
     """With file_type filter, .where(pred) called once on vec builder and once on FTS builder."""
     import asyncio
 
@@ -3493,7 +3412,7 @@ def test_hybrid_search_filter_calls_where_on_both_branches(tmp_path: Path) -> No
     store, _, mock_table = _make_mock_store_for_filter_tests(tmp_path, [row], [row])
 
     filters = SearchFilters(file_type="md")
-    asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=filters))
+    asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "q", 5, filters=filters))
 
     # Retrieve the builders that were returned by vector_search and search
     vec_builder = mock_table.vector_search.return_value
@@ -3509,7 +3428,7 @@ def test_hybrid_search_filter_calls_where_on_both_branches(tmp_path: Path) -> No
     assert "md" in vec_pred
 
 
-def test_hybrid_search_no_filters_no_where_called(tmp_path: Path) -> None:
+def test_hybrid_search_with_trace_no_filters_no_where_called(tmp_path: Path) -> None:
     """filters=None → .where() is never called on either builder."""
     import asyncio
 
@@ -3517,7 +3436,7 @@ def test_hybrid_search_no_filters_no_where_called(tmp_path: Path) -> None:
     row = _make_vec_row(doc_id)
     store, _, mock_table = _make_mock_store_for_filter_tests(tmp_path, [row], [row])
 
-    asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=None))
+    asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "q", 5, filters=None))
 
     vec_builder = mock_table.vector_search.return_value
     fts_builder = mock_table.search.return_value
@@ -3526,7 +3445,7 @@ def test_hybrid_search_no_filters_no_where_called(tmp_path: Path) -> None:
     assert not fts_builder.where.called, "FTS builder .where() should not be called with no filters"
 
 
-def test_hybrid_search_empty_filters_no_where_called(tmp_path: Path) -> None:
+def test_hybrid_search_with_trace_empty_filters_no_where_called(tmp_path: Path) -> None:
     """filters=SearchFilters() (all fields None) → .where() is never called on either builder."""
     import asyncio
 
@@ -3536,7 +3455,7 @@ def test_hybrid_search_empty_filters_no_where_called(tmp_path: Path) -> None:
     row = _make_vec_row(doc_id)
     store, _, mock_table = _make_mock_store_for_filter_tests(tmp_path, [row], [row])
 
-    asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=SearchFilters()))
+    asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "q", 5, filters=SearchFilters()))
 
     vec_builder = mock_table.vector_search.return_value
     fts_builder = mock_table.search.return_value
@@ -3545,7 +3464,7 @@ def test_hybrid_search_empty_filters_no_where_called(tmp_path: Path) -> None:
     assert not fts_builder.where.called, "FTS builder .where() should not be called with empty SearchFilters"
 
 
-def test_hybrid_search_combined_filters_predicate(tmp_path: Path) -> None:
+def test_hybrid_search_with_trace_combined_filters_predicate(tmp_path: Path) -> None:
     """Combined filters produce a predicate with all three clauses joined by ' AND '."""
     import asyncio
     from datetime import datetime, timezone
@@ -3561,7 +3480,7 @@ def test_hybrid_search_combined_filters_predicate(tmp_path: Path) -> None:
         source_path_prefix="/docs/",
         indexed_after=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
-    asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=filters))
+    asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "q", 5, filters=filters))
 
     vec_builder = mock_table.vector_search.return_value
     fts_builder = mock_table.search.return_value
@@ -3577,8 +3496,8 @@ def test_hybrid_search_combined_filters_predicate(tmp_path: Path) -> None:
     assert pred.count(" AND ") == 2, f"expected 2 AND joins for 3 clauses, got: {pred!r}"
 
 
-def test_hybrid_search_never_calls_postfilter(tmp_path: Path) -> None:
-    """.postfilter must never be called in any branch (no filter, with filter, with glob, FTS failure)."""
+def test_hybrid_search_with_trace_never_calls_postfilter(tmp_path: Path) -> None:
+    """.postfilter must never be called in any branch (no filter, with filter, FTS failure)."""
     import asyncio
     from unittest.mock import AsyncMock
 
@@ -3590,10 +3509,9 @@ def test_hybrid_search_never_calls_postfilter(tmp_path: Path) -> None:
     for label, filters_arg in [
         ("no_filter", None),
         ("with_filter", SearchFilters(file_type="py")),
-        ("with_glob", SearchFilters(source_path_glob="*.py")),
     ]:
         store, _, mock_table = _make_mock_store_for_filter_tests(tmp_path, [row], [row])
-        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=filters_arg))
+        asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "q", 5, filters=filters_arg))
         vec_builder = mock_table.vector_search.return_value
         fts_builder = mock_table.search.return_value
         assert not vec_builder.postfilter.called, f"[{label}] vector builder .postfilter() must not be called"
@@ -3603,7 +3521,7 @@ def test_hybrid_search_never_calls_postfilter(tmp_path: Path) -> None:
     store, _, mock_table = _make_mock_store_for_filter_tests(tmp_path, [row], [row])
     # Make FTS raise an "index not available" error
     mock_table.search = AsyncMock(side_effect=RuntimeError("FTS index not available"))
-    asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=None))
+    asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "q", 5, filters=None))
     vec_builder = mock_table.vector_search.return_value
     assert not vec_builder.postfilter.called, "[fts_failure] vector builder .postfilter() must not be called"
 
@@ -3611,38 +3529,15 @@ def test_hybrid_search_never_calls_postfilter(tmp_path: Path) -> None:
     store, _, mock_table = _make_mock_store_for_filter_tests(tmp_path, [row], [row])
     mock_table.search = AsyncMock(side_effect=RuntimeError("FTS index not available"))
     asyncio.run(
-        store.hybrid_search(
-            "my-col", [0.0] * _DIM, "q", top_k=5, filters=SearchFilters(file_type="py")
+        store.hybrid_search_with_trace(
+            "my-col", [0.0] * _DIM, "q", 5, filters=SearchFilters(file_type="py")
         )
     )
     vec_builder = mock_table.vector_search.return_value
     assert not vec_builder.postfilter.called, "[fts_failure_with_filter] vector builder .postfilter() must not be called"
 
 
-def test_hybrid_search_fetch_uses_compute_fetch_helper(tmp_path: Path) -> None:
-    """_compute_fetch is called with (top_k, has_glob=...) instead of inline max(top_k*3,20)."""
-    import asyncio
-    from unittest.mock import patch
-
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    row = _make_vec_row(doc_id)
-
-    # No filters: has_glob=False
-    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, [row], [row])
-    with patch("archon_search.store._compute_fetch", wraps=lambda top_k, has_glob: max(top_k * 3, 20)) as mock_cf:
-        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=7, filters=None))
-    mock_cf.assert_called_once_with(7, has_glob=False)
-
-    # With glob filter: has_glob=True
-    store2, _, _ = _make_mock_store_for_filter_tests(tmp_path, [row], [row])
-    with patch("archon_search.store._compute_fetch", wraps=lambda top_k, has_glob: max(top_k * 3, 20)) as mock_cf2:
-        asyncio.run(store2.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=SearchFilters(source_path_glob="*.py")))
-    mock_cf2.assert_called_once_with(5, has_glob=True)
-
-
-def test_hybrid_search_fts_failure_with_filter_falls_back_to_vector_only(tmp_path: Path) -> None:
+def test_hybrid_search_with_trace_fts_failure_with_filter_falls_back_to_vector_only(tmp_path: Path) -> None:
     """FTS raises 'index not available'; vector branch still gets .where(); test does not fail."""
     import asyncio
     from unittest.mock import AsyncMock
@@ -3656,7 +3551,7 @@ def test_hybrid_search_fts_failure_with_filter_falls_back_to_vector_only(tmp_pat
     mock_table.search = AsyncMock(side_effect=RuntimeError("FTS index not available"))
 
     filters = SearchFilters(file_type="md")
-    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=filters))
+    results = asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "q", 5, filters=filters))
 
     # Vector branch should have received .where()
     vec_builder = mock_table.vector_search.return_value
@@ -3666,7 +3561,7 @@ def test_hybrid_search_fts_failure_with_filter_falls_back_to_vector_only(tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# Task 3.1 — filters parameter on hybrid_search (integration tests)
+# Task 3.1 — filters parameter on hybrid_search_with_trace (integration tests)
 # ---------------------------------------------------------------------------
 
 
@@ -3710,8 +3605,8 @@ async def test_hybrid_search_file_type_filter(
     await connected_store.ingest_chunks(col_name, md_chunks + py_chunks)
     await connected_store.rebuild_fts_index(col_name)
 
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, "content", top_k=10,
+    results = await connected_store.hybrid_search_with_trace(
+        col_name, [0.0] * _DIM, "content", 10,
         filters=SearchFilters(file_type="md"),
     )
 
@@ -3759,8 +3654,8 @@ async def test_hybrid_search_source_path_prefix_filter(
     await connected_store.ensure_collection(col_name, _DIM)
     await connected_store.ingest_chunks(col_name, chunks_a + chunks_b)
 
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, "doc", top_k=10,
+    results = await connected_store.hybrid_search_with_trace(
+        col_name, [0.0] * _DIM, "doc", 10,
         filters=SearchFilters(source_path_prefix="/project/100%/"),
     )
 
@@ -3811,8 +3706,8 @@ async def test_hybrid_search_indexed_after_filter(
     await connected_store.rebuild_fts_index(col_name)
 
     # Boundary: exactly new_at should be included
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, "document", top_k=10,
+    results = await connected_store.hybrid_search_with_trace(
+        col_name, [0.0] * _DIM, "document", 10,
         filters=SearchFilters(indexed_after=date(2026, 6, 1)),
     )
 
@@ -3848,8 +3743,8 @@ async def test_hybrid_search_prefilter_returns_full_top_k_from_matching_subset(
     await connected_store.ensure_collection(col_name, _DIM)
     await connected_store.ingest_chunks(col_name, md_chunks)
 
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, "matching", top_k=5,
+    results = await connected_store.hybrid_search_with_trace(
+        col_name, [0.0] * _DIM, "matching", 5,
         filters=SearchFilters(file_type="md"),
     )
 
@@ -3898,8 +3793,8 @@ async def test_hybrid_search_filter_applies_to_fts_branch_via_where(
     await connected_store.ingest_chunks(col_name, md_chunks + py_chunks)
     await connected_store.rebuild_fts_index(col_name)
 
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, unique_word, top_k=10,
+    results = await connected_store.hybrid_search_with_trace(
+        col_name, [0.0] * _DIM, unique_word, 10,
         filters=SearchFilters(file_type="md"),
     )
 
@@ -3910,93 +3805,8 @@ async def test_hybrid_search_filter_applies_to_fts_branch_via_where(
 
 
 # ---------------------------------------------------------------------------
-# Task 3.2 — glob post-filter and mixed-format timestamp warning (unit tests)
+# fnmatch semantics relied on by the pipeline's source_path_glob post-filter
 # ---------------------------------------------------------------------------
-
-
-def _make_search_result(source_path: str, indexed_at: str = "2026-01-01T00:00:00.000000Z") -> "SearchResult":
-    """Build a minimal SearchResult for filter tests."""
-    from archon_search._types import SearchResult
-
-    doc_id = _doc_id()
-    return SearchResult(
-        doc_id=doc_id,
-        chunk_id=f"{doc_id}-000000",
-        text="test text",
-        score=0.5,
-        source_path=source_path,
-        indexed_at=indexed_at,
-    )
-
-
-def test_glob_post_filter_keeps_matching_rows(tmp_path: Path) -> None:
-    """Glob filter keeps only rows whose source_path matches the pattern."""
-    import asyncio
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    rows = [
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-{i:06d}",
-            "text": f"chunk {i}",
-            "source_path": path,
-            "indexed_at": "2026-01-01T00:00:00.000000Z",
-        }
-        for i, path in enumerate([
-            "/docs/api/foo.md",
-            "/docs/api/bar.md",
-            "/src/main.py",
-            "/README.md",
-        ])
-    ]
-
-    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
-
-    filters = SearchFilters(source_path_glob="*.md")
-    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
-
-    # All results must match *.md (fnmatch, * crosses slashes)
-    assert len(results) > 0, "expected at least one .md result"
-    assert all(r.source_path.endswith(".md") for r in results), (
-        f"non-.md paths returned: {[r.source_path for r in results]}"
-    )
-    # 3 of 4 rows are .md files — verify all are returned
-    assert len(results) == 3, f"Expected 3 .md results, got {len(results)}: {[r.source_path for r in results]}"
-    # .py file must be excluded
-    py_paths = [r.source_path for r in results if r.source_path.endswith(".py")]
-    assert py_paths == [], f"Python file should have been filtered out: {py_paths}"
-
-
-def test_glob_under_delivery_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """Glob filtering fewer than top_k results emits 'glob post-filter shrank pool' warning."""
-    import asyncio
-    import logging
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    # Only one row matches "*.md" but we ask for top_k=5
-    rows = [
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-{i:06d}",
-            "text": f"chunk {i}",
-            "source_path": path,
-            "indexed_at": "2026-01-01T00:00:00.000000Z",
-        }
-        for i, path in enumerate(["/only/one.md", "/src/a.py", "/src/b.py", "/src/c.py"])
-    ]
-
-    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
-
-    filters = SearchFilters(source_path_glob="*.md")
-    with caplog.at_level(logging.WARNING, logger="archon"):
-        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=filters))
-
-    assert any(
-        "glob post-filter shrank pool below top_k" in record.message
-        for record in caplog.records
-    ), f"Expected under-delivery warning. Got: {[r.message for r in caplog.records]}"
 
 
 def test_star_matches_across_slashes(tmp_path: Path) -> None:
@@ -4037,443 +3847,6 @@ def test_double_star_equivalent_to_single_star(tmp_path: Path) -> None:
         assert fnmatch.fnmatchcase(path, "*") == fnmatch.fnmatchcase(path, "**"), (
             f"fnmatch: * and ** differ for {path!r}"
         )
-
-
-def test_mixed_format_indexed_at_triggers_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Rows with legacy indexed_at format (no microseconds) trigger the mixed-format warning."""
-    import asyncio
-    import logging
-    from datetime import date
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    # Mix of: fixed-width (good), legacy no-microseconds, legacy +00:00 suffix
-    rows = [
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-000000",
-            "text": "good row",
-            "source_path": "/docs/a.md",
-            "indexed_at": "2026-05-21T10:00:00.000000Z",  # fixed-width — OK
-        },
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-000001",
-            "text": "legacy no microseconds",
-            "source_path": "/docs/b.md",
-            "indexed_at": "2026-05-21T10:00:00Z",  # legacy — no microseconds
-        },
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-000002",
-            "text": "legacy plus offset",
-            "source_path": "/docs/c.md",
-            "indexed_at": "2026-05-21T10:00:00+00:00",  # legacy — +00:00 suffix
-        },
-    ]
-
-    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
-
-    filters = SearchFilters(indexed_after=date(2026, 1, 1))
-    with caplog.at_level(logging.WARNING, logger="archon"):
-        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
-
-    warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-    matching = [msg for msg in warning_msgs if "legacy-format rows" in msg]
-    assert matching, f"Expected legacy-format warning. Got warnings: {warning_msgs}"
-    # 2 of 3 rows are legacy format — verify count is reflected in the message
-    assert any("2 legacy-format" in msg for msg in matching), (
-        f"Expected '2 legacy-format' in warning message. Got: {matching}"
-    )
-
-
-def test_normalized_indexed_at_does_not_trigger_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """All rows with fixed-width indexed_at emit no mixed-format warning."""
-    import asyncio
-    import logging
-    from datetime import date
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    rows = [
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-{i:06d}",
-            "text": f"row {i}",
-            "source_path": f"/docs/{i}.md",
-            "indexed_at": f"2026-05-21T10:00:00.00000{i}Z",  # fixed-width
-        }
-        for i in range(3)
-    ]
-
-    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
-
-    filters = SearchFilters(indexed_after=date(2026, 1, 1))
-    with caplog.at_level(logging.WARNING, logger="archon"):
-        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
-
-    legacy_warnings = [
-        r.message for r in caplog.records
-        if r.levelno == logging.WARNING and "legacy-format rows" in r.message
-    ]
-    assert legacy_warnings == [], (
-        f"No legacy-format warning expected for fixed-width timestamps, got: {legacy_warnings}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Task 3.2 — glob post-filter (integration tests)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_hybrid_search_source_path_glob_matches(
-    connected_store: SearchStore, col_name: str
-) -> None:
-    """Integration: glob filter returns only matching paths."""
-    from archon_search.filters import SearchFilters
-
-    doc_md = _doc_id()
-    doc_py = _doc_id()
-
-    chunks = [
-        ChunkRecord(
-            doc_id=doc_md,
-            chunk_id=f"{doc_md}-000000",
-            text="markdown content",
-            vector=[1.0] * _DIM,
-            source_path="/docs/guide.md",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
-            file_type="md",
-        ),
-        ChunkRecord(
-            doc_id=doc_py,
-            chunk_id=f"{doc_py}-000000",
-            text="python content",
-            vector=[2.0] * _DIM,
-            source_path="/src/module.py",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
-            file_type="py",
-        ),
-    ]
-
-    await connected_store.ensure_collection(col_name, _DIM)
-    await connected_store.ingest_chunks(col_name, chunks)
-
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, "content", top_k=10,
-        filters=SearchFilters(source_path_glob="*.md"),
-    )
-
-    assert len(results) > 0, "expected at least one .md result"
-    assert all(r.source_path.endswith(".md") for r in results), (
-        f"non-md paths found: {[r.source_path for r in results]}"
-    )
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_hybrid_search_source_path_glob_character_class(
-    connected_store: SearchStore, col_name: str
-) -> None:
-    """Integration: character class glob 'docs/[ab]/*' matches only a/ and b/ subdirs."""
-    from archon_search.filters import SearchFilters
-
-    docs = {
-        "a": ("/docs/a/file.md", _doc_id()),
-        "b": ("/docs/b/file.md", _doc_id()),
-        "c": ("/docs/c/file.md", _doc_id()),
-    }
-    chunks = [
-        ChunkRecord(
-            doc_id=doc_id,
-            chunk_id=f"{doc_id}-000000",
-            text=f"content {label}",
-            vector=[float(i)] * _DIM,
-            source_path=path,
-            indexed_at=datetime.now(timezone.utc).isoformat(),
-        )
-        for i, (label, (path, doc_id)) in enumerate(docs.items())
-    ]
-
-    await connected_store.ensure_collection(col_name, _DIM)
-    await connected_store.ingest_chunks(col_name, chunks)
-
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, "content", top_k=10,
-        filters=SearchFilters(source_path_glob="*/docs/[ab]/*"),
-    )
-
-    assert len(results) > 0, "expected at least one matching result"
-    for r in results:
-        assert "/docs/a/" in r.source_path or "/docs/b/" in r.source_path, (
-            f"Result path {r.source_path!r} should be under docs/a/ or docs/b/"
-        )
-    matched_paths = {r.source_path for r in results}
-    assert "/docs/c/file.md" not in matched_paths, "docs/c/ should be excluded by glob"
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_hybrid_search_glob_overfetch_replaces_default_multiplier(
-    connected_store: SearchStore, col_name: str
-) -> None:
-    """Integration: _compute_fetch is called with has_glob=True when source_path_glob is set."""
-    from unittest.mock import patch
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    chunk = ChunkRecord(
-        doc_id=doc_id,
-        chunk_id=f"{doc_id}-000000",
-        text="overfetch test",
-        vector=[1.0] * _DIM,
-        source_path="/docs/test.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
-    )
-    await connected_store.ensure_collection(col_name, _DIM)
-    await connected_store.ingest_chunks(col_name, [chunk])
-
-    with patch("archon_search.store._compute_fetch", wraps=lambda top_k, has_glob: max(top_k * (5 if has_glob else 3), 20)) as mock_cf:
-        await connected_store.hybrid_search(
-            col_name, [0.0] * _DIM, "overfetch", top_k=5,
-            filters=SearchFilters(source_path_glob="*.md"),
-        )
-
-    mock_cf.assert_called_once_with(5, has_glob=True)
-
-
-# ---------------------------------------------------------------------------
-# Task 3.2 — additional unit tests (TEST-2 through TEST-6, TEST-9)
-# ---------------------------------------------------------------------------
-
-
-def test_glob_zero_matches_returns_empty_and_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """Glob that matches nothing returns [] and emits the under-delivery warning."""
-    import asyncio
-    import logging
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    rows = [
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-{i:06d}",
-            "text": f"chunk {i}",
-            "source_path": f"/src/file{i}.py",
-            "indexed_at": "2026-01-01T00:00:00.000000Z",
-        }
-        for i in range(3)
-    ]
-
-    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
-
-    filters = SearchFilters(source_path_glob="*.md")  # no .py files match
-    with caplog.at_level(logging.WARNING, logger="archon"):
-        results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=filters))
-
-    assert results == [], f"Expected empty results when glob matches nothing, got: {results}"
-    assert any(
-        "glob post-filter shrank pool below top_k" in r.message
-        for r in caplog.records
-    ), f"Expected under-delivery warning. Got: {[r.message for r in caplog.records]}"
-
-
-def test_indexed_before_only_triggers_legacy_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """indexed_before alone (no indexed_after) still triggers legacy-format warning."""
-    import asyncio
-    import logging
-    from datetime import date
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    rows = [
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-000000",
-            "text": "legacy row",
-            "source_path": "/docs/a.md",
-            "indexed_at": "2026-05-21T10:00:00Z",  # legacy — no microseconds
-        },
-    ]
-
-    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
-
-    filters = SearchFilters(indexed_before=date(2027, 1, 1))  # indexed_before only
-    with caplog.at_level(logging.WARNING, logger="archon"):
-        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
-
-    assert any(
-        "legacy-format rows" in r.message
-        for r in caplog.records
-    ), f"Expected legacy-format warning for indexed_before-only. Got: {[r.message for r in caplog.records]}"
-
-
-def test_null_indexed_at_counts_as_legacy_format(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Row with indexed_at=None is treated as legacy and triggers the warning."""
-    import asyncio
-    import logging
-    from datetime import date
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    rows = [
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-000000",
-            "text": "null indexed_at row",
-            "source_path": "/docs/a.md",
-            "indexed_at": None,  # null in DB
-        },
-    ]
-
-    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
-
-    filters = SearchFilters(indexed_after=date(2026, 1, 1))
-    with caplog.at_level(logging.WARNING, logger="archon"):
-        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
-
-    assert any(
-        "legacy-format rows" in r.message
-        for r in caplog.records
-    ), f"Expected legacy-format warning for null indexed_at. Got: {[r.message for r in caplog.records]}"
-
-
-def test_glob_exact_top_k_matches_no_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Glob matching exactly top_k results does NOT emit the under-delivery warning."""
-    import asyncio
-    import logging
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    rows = [
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-{i:06d}",
-            "text": f"chunk {i}",
-            "source_path": f"/docs/file{i}.md",  # all match *.md
-            "indexed_at": "2026-01-01T00:00:00.000000Z",
-        }
-        for i in range(3)
-    ]
-
-    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
-
-    # top_k=3, exactly 3 rows match *.md — boundary: len(scored) == top_k, no warning
-    filters = SearchFilters(source_path_glob="*.md")
-    with caplog.at_level(logging.WARNING, logger="archon"):
-        results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=3, filters=filters))
-
-    assert len(results) == 3
-    assert not any(
-        "glob post-filter shrank pool below top_k" in r.message
-        for r in caplog.records
-    ), f"No under-delivery warning expected for exact top_k match. Got: {[r.message for r in caplog.records]}"
-
-
-def test_source_path_prefix_and_glob_combined(tmp_path: Path) -> None:
-    """Combining source_path_prefix (SQL WHERE) and source_path_glob (post-filter) narrows correctly.
-
-    The prefix filter is a SQL WHERE clause applied by LanceDB before results reach Python.
-    In this unit test the mock simulates LanceDB having already applied the prefix pre-filter,
-    so the mock returns only /docs/ rows.  The glob post-filter then keeps only .md files.
-    """
-    import asyncio
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    # Simulate LanceDB having applied source_path_prefix="/docs/" — only /docs/ rows returned
-    rows = [
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-000000",
-            "text": "docs md",
-            "source_path": "/docs/readme.md",
-            "indexed_at": "2026-01-01T00:00:00.000000Z",
-        },
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-000001",
-            "text": "docs py",
-            "source_path": "/docs/script.py",
-            "indexed_at": "2026-01-01T00:00:00.000000Z",
-        },
-    ]
-
-    store, _, mock_table = _make_mock_store_for_filter_tests(tmp_path, rows, [])
-
-    # glob post-filter keeps only .md — should return /docs/readme.md, not /docs/script.py
-    filters = SearchFilters(source_path_prefix="/docs/", source_path_glob="*.md")
-    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
-
-    paths = [r.source_path for r in results]
-    assert "/docs/readme.md" in paths, f"Expected /docs/readme.md in results, got: {paths}"
-    assert "/docs/script.py" not in paths, f".py should be excluded by glob: {paths}"
-
-    # Verify the SQL prefix predicate was generated and passed to LanceDB via .where()
-    vec_builder = mock_table.vector_search.return_value
-    assert vec_builder.where.called, "vector builder .where() must be called for source_path_prefix"
-    prefix_pred = vec_builder.where.call_args[0][0]
-    assert "source_path" in prefix_pred and "LIKE" in prefix_pred and "/docs/" in prefix_pred, (
-        f"Expected source_path LIKE predicate for prefix '/docs/', got: {prefix_pred!r}"
-    )
-
-
-def test_glob_filter_applied_before_top_k_truncation(tmp_path: Path) -> None:
-    """Glob filter must run on the full scored list before top_k truncation.
-
-    Scenario: top_k=2, 5 rows, top-2 RRF don't match glob, rows 3-5 do.
-    Correct behavior: rows 3-5 (matching glob) are returned.
-    Wrong behavior (filter after truncation): empty or wrong results.
-    """
-    import asyncio
-    from archon_search.filters import SearchFilters
-
-    doc_id = _doc_id()
-    # All rows have source paths; only .md ones pass the glob
-    # We want the .md rows to NOT be the top-scored RRF rows
-    # Row insertion order (index 0-4) maps directly to vec scores (descending).
-    # With fts_rows=[], only the vector leg contributes, so .py rows (idx 0-1)
-    # always outscore .md rows (idx 2-4). If glob ran after [:top_k], it would
-    # see only .py rows, eliminate both, and return 0 results — contradicting the assertion.
-    rows = [
-        {
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-{i:06d}",
-            "text": f"chunk {i}",
-            "source_path": path,
-            "indexed_at": "2026-01-01T00:00:00.000000Z",
-        }
-        for i, path in enumerate([
-            "/src/a.py",     # high score (vec rank 0) — excluded by glob
-            "/src/b.py",     # high score (vec rank 1) — excluded by glob
-            "/docs/c.md",    # lower score (vec rank 2) — passes glob
-            "/docs/d.md",    # lower score (vec rank 3) — passes glob
-            "/docs/e.md",    # lowest score (vec rank 4) — passes glob
-        ])
-    ]
-
-    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
-
-    filters = SearchFilters(source_path_glob="*.md")
-    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=2, filters=filters))
-
-    # With glob before truncation: top 2 of the 3 .md rows are returned
-    assert len(results) == 2, f"Expected 2 results after glob+truncation, got {len(results)}"
-    assert all(r.source_path.endswith(".md") for r in results), (
-        f"All results should be .md: {[r.source_path for r in results]}"
-    )
 
 
 # A5b Task 2.2 — _where_eq / _where_in SQL fragment helper unit tests
@@ -5113,7 +4486,7 @@ async def test_a5b_end_to_end_flow_unchanged(connected_store: SearchStore, col_n
     await connected_store.rebuild_fts_index(col_name)
 
     # Search returns the document
-    results = await connected_store.hybrid_search(col_name, [0.0] * _DIM, "e2e", top_k=5)
+    results = await connected_store.hybrid_search_with_trace(col_name, [0.0] * _DIM, "e2e", 5)
     found_ids = {r.doc_id for r in results}
     assert doc_id in found_ids, "search must find the ingested document"
 
@@ -7386,7 +6759,7 @@ async def test_apply_in_place_calls_add_columns_for_each_spec() -> None:
     from archon_search.types import MigrationKind, MigrationSpec
 
     store = SearchStore.__new__(SearchStore)
-    store._locks = {}
+    store._collection_locks = {}
 
     real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
 
@@ -7423,7 +6796,7 @@ async def test_apply_in_place_is_idempotent() -> None:
     from archon_search.types import MigrationKind, MigrationSpec
 
     store = SearchStore.__new__(SearchStore)
-    store._locks = {}
+    store._collection_locks = {}
 
     real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
 
@@ -7466,14 +6839,14 @@ async def test_apply_in_place_empty_specs_is_noop() -> None:
 
 @pytest.mark.asyncio
 async def test_apply_in_place_unknown_collection_no_version_update() -> None:
-    """apply_in_place_migrations returns silently when the collection has no meta row."""
+    """apply_in_place_migrations records no schema_version, and reports it, when the collection has no meta row."""
     from unittest.mock import AsyncMock
 
     from archon_search.store import SearchStore
     from archon_search.types import MigrationKind, MigrationSpec
 
     store = SearchStore.__new__(SearchStore)
-    store._locks = {}
+    store._collection_locks = {}
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
 
@@ -7485,10 +6858,12 @@ async def test_apply_in_place_unknown_collection_no_version_update() -> None:
     ]
 
     # Must not raise, must not call update_collection_meta
-    await store.apply_in_place_migrations("no-such-col", "default", specs)
+    applied = await store.apply_in_place_migrations("no-such-col", "default", specs)
 
+    assert applied is False
     migrate_fn.assert_called_once()  # migration still runs
     store.update_collection_meta.assert_not_called()  # but version is not updated
+    assert not store.lock_for("no-such-col").locked()
 
 
 @pytest.mark.asyncio
@@ -7501,7 +6876,7 @@ async def test_apply_in_place_updates_schema_version() -> None:
     from archon_search.types import MigrationKind, MigrationSpec
 
     store = SearchStore.__new__(SearchStore)
-    store._locks = {}
+    store._collection_locks = {}
 
     real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
 
@@ -7509,7 +6884,8 @@ async def test_apply_in_place_updates_schema_version() -> None:
 
     store.get_collection_meta = AsyncMock(return_value=real_meta)
 
-    async def _capture_update(m: CollectionMeta) -> None:
+    async def _capture_update(m: CollectionMeta, *, _locked_by_caller: bool = False) -> None:
+        assert _locked_by_caller, "the schema_version write must run under the caller-held collection lock"
         captured_metas.append(m)
 
     store.update_collection_meta = _capture_update

@@ -375,7 +375,7 @@ the SHA-256 hash embedder is agnostic to LLM-generated hypothesis text.
 
 `tests/test_search_filtered_benchmark.py::test_hyde_false_search_p95_under_threshold`
 (`@pytest.mark.benchmark`) measures the end-to-end latency of a `hyde=False`
-request (`RequestHyDE.resolve` + `hybrid_search`) and asserts p95 ≤
+request (`RequestHyDE.resolve` + `hybrid_search_with_trace`) and asserts p95 ≤
 `[search_hyde_false].p95_ms` from `thresholds.toml` (currently **25 ms** — same
 ceiling as `[search_filtered].p95_ms_glob_filtered`).  This guards against the
 HyDE fast-path accidentally adding measurable overhead over an unfiltered search.

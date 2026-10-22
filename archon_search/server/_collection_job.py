@@ -39,7 +39,8 @@ SERVICE_NOT_READY_DETAIL = "service not ready"
 #: The ``CollectionMeta`` field pointing at a collection's active job of one kind (its routes' 409 guard reads it).
 MetaJobPointer = Literal["reindex_job_id", "metadata_reindex_job_id", "community_rebuild_job_id"]
 #: Statuses of a legacy metadata-reindex or community-rebuild row: an older server created these jobs QUEUED first,
-#: and nothing schedules either kind, so such a row never runs.
+#: and nothing schedules either kind, so such a row never runs. ``JobStore._load`` already fails a QUEUED one at
+#: startup, so QUEUED here is a defensive leftover.
 _LEGACY_NEVER_RUN_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.PENDING})
 
 

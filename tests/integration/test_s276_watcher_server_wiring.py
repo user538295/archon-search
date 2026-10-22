@@ -168,11 +168,11 @@ async def test_watcher_ingested_new_file_is_tagged_watcher(tmp_path: Path) -> No
         match = None
         deadline = asyncio.get_running_loop().time() + 60.0
         while asyncio.get_running_loop().time() < deadline:
-            results = await store.hybrid_search(
+            results = await store.hybrid_search_with_trace(
                 col_name,
                 query_vector=[0.1, 0.2, 0.3, 0.4],
                 query_text="xyzzy_watcher_canary_1234",
-                top_k=10,
+                candidate_depth=10,
             )
             match = next((r for r in results if "canary.md" in r.source_path), None)
             if match is not None:
@@ -277,11 +277,11 @@ async def test_sync_collection_genuine_chunk_size_change_is_tagged_reindex(
 
     await col_sync.sync_collection(col_name, corpus)
 
-    results = await store.hybrid_search(
+    results = await store.hybrid_search_with_trace(
         col_name,
         query_vector=[0.1, 0.2, 0.3, 0.4],
         query_text="xyzzy_watcher_canary_s276",
-        top_k=10,
+        candidate_depth=10,
     )
     canary_results = [r for r in results if "new_xyzzy_canary_s276" in r.source_path]
     assert canary_results, (

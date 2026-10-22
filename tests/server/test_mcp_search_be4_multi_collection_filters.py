@@ -15,34 +15,12 @@ Tests:
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("mcp")
-
 from archon_search.pipeline import SearchPipelineResult
-
-
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
+from tests._fastmcp_stub import stubbed_fastmcp
 
 
 def _make_pipeline(*, result: SearchPipelineResult | None = None) -> Any:
@@ -74,7 +52,7 @@ async def test_mcp_search_multi_collection_language_filter_no_longer_rejected() 
 
     pipeline = _make_pipeline()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
         fn = app.tools["search"]
         result = await fn(query="hello", collections=["col1", "col2"], language="fr")
@@ -102,7 +80,7 @@ async def test_mcp_search_multi_collection_file_type_filter_passed_to_pipeline()
 
     pipeline = _make_pipeline()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
         fn = app.tools["search"]
         await fn(query="hello", collections=["col1", "col2"], file_type=".py")
@@ -134,7 +112,7 @@ async def test_mcp_search_multi_collection_no_filters_passes_none() -> None:
 
     pipeline = _make_pipeline()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
         fn = app.tools["search"]
         await fn(query="hello", collections=["col1", "col2"])
@@ -165,7 +143,7 @@ async def test_mcp_search_multi_collection_all_filter_params_forwarded() -> None
 
     pipeline = _make_pipeline()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
         fn = app.tools["search"]
         await fn(
@@ -216,7 +194,7 @@ async def test_mcp_search_multi_collection_invalid_filter_returns_validation_err
 
     pipeline = _make_pipeline()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
         fn = app.tools["search"]
         # file_type="" is rejected by SearchFilters validator
@@ -248,7 +226,7 @@ async def test_mcp_search_multi_collection_explicit_none_filters_passes_none() -
 
     pipeline = _make_pipeline()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
         fn = app.tools["search"]
         await fn(
@@ -289,7 +267,7 @@ async def test_mcp_search_multi_collection_include_metadata_not_in_filters() -> 
 
     pipeline = _make_pipeline()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
         fn = app.tools["search"]
         # Pass include_metadata=True alongside a real filter to trigger _multi_filters construction

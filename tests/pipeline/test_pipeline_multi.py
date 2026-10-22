@@ -650,7 +650,6 @@ async def test_search_rag_fusion_calls_generate_variants() -> None:
         )
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[_cand("chunk-001")])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
@@ -696,7 +695,6 @@ async def test_search_rag_fusion_empty_variants_still_searches() -> None:
     from archon_search.pipeline import SearchPipeline
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
@@ -743,7 +741,6 @@ async def test_search_rag_fusion_disabled_config_skips() -> None:
     from archon_search.pipeline import SearchPipeline
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
@@ -788,7 +785,6 @@ async def test_search_rag_fusion_no_generator_skips() -> None:
     from archon_search.pipeline import SearchPipeline
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
 
     rag_config = RAGFusionConfig(enabled=True)
@@ -827,7 +823,6 @@ async def test_search_rag_fusion_fts_only_guard() -> None:
     from archon_search.pipeline import SearchPipeline
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=False)
 
@@ -877,7 +872,6 @@ async def test_search_rag_fusion_fts_only_guard_reports_attempted() -> None:
     from archon_search.pipeline import SearchPipeline
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=False)
 
@@ -921,7 +915,6 @@ async def test_search_rag_fusion_false_no_overhead() -> None:
     from archon_search.pipeline import SearchPipeline
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
 
     mock_generator = MagicMock()
@@ -982,7 +975,6 @@ async def test_search_with_context_rag_fusion_forwarded() -> None:
         )
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[_cand("chunk-001")])
     mock_store.has_vector_index = AsyncMock(return_value=True)
     mock_store.fetch_adjacent_chunks = AsyncMock(return_value=[])
@@ -1042,7 +1034,6 @@ async def test_search_rag_fusion_reranker_uses_original_query() -> None:
         )
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[_cand("chunk-001")])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
@@ -1090,7 +1081,6 @@ async def test_search_rag_fusion_config_none_skips() -> None:
     from archon_search.pipeline import SearchPipeline
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
 
     mock_generator = MagicMock()
@@ -1150,7 +1140,6 @@ async def test_search_rag_fusion_acl_filter_applied_to_fused_results() -> None:
     restricted_cand = _cand("chunk-restricted", acl=["restricted-namespace"])
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     # All variant searches return both candidates
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[open_cand, restricted_cand])
     mock_store.has_vector_index = AsyncMock(return_value=True)
@@ -1221,7 +1210,6 @@ async def test_search_rag_fusion_partial_search_failure() -> None:
         return [_cand(f"chunk-{call_count:03d}")]
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = _mock_search_with_trace
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
@@ -1277,7 +1265,6 @@ async def test_search_rag_fusion_all_searches_fail() -> None:
         return []
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = _fail_then_succeed
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
@@ -1351,7 +1338,6 @@ async def test_search_rag_fusion_ignores_caller_query_vector() -> None:
     await tracking_embedder.embed(["warmup"])
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[_cand("chunk-001")])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
@@ -1400,7 +1386,6 @@ async def test_search_rag_fusion_dependency_error_reraises() -> None:
     from archon_search.rag_fusion import RAGFusionDependencyError
 
     mock_store = MagicMock()
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
     mock_generator = MagicMock()
@@ -1466,7 +1451,6 @@ def _make_rag_fusion_search_many_pipeline(
         return has_vector_index_map.get(collection, True)
 
     store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid)
-    store.hybrid_search = AsyncMock(return_value=[])
     store.has_vector_index = AsyncMock(side_effect=_has_vector_index)
 
     embedder = make_embedder()
@@ -1695,7 +1679,6 @@ async def test_search_many_rag_fusion_partial_collection_search_failure() -> Non
 
     store = MagicMock()
     store.hybrid_search_with_trace = AsyncMock(side_effect=_failing_hybrid)
-    store.hybrid_search = AsyncMock(return_value=[])
     store.has_vector_index = AsyncMock(return_value=True)
 
     embedder = make_embedder()
@@ -1780,7 +1763,6 @@ async def test_explain_rag_fusion_sub_query_results_populated() -> None:
         return [_cand(f"chunk-{call_count[0]:03d}", f"doc-{call_count[0]:03d}")]
 
     mock_store.hybrid_search_with_trace = AsyncMock(side_effect=_trace)
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
     mock_generator = MagicMock()
@@ -1832,7 +1814,6 @@ async def test_explain_rag_fusion_failure_sets_attempted_and_reason() -> None:
 
     mock_store = MagicMock()
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
     # Generator raises TimeoutError internally (the RAGFusionGenerator catches it and returns []
@@ -1878,7 +1859,6 @@ async def test_explain_rag_fusion_exception_sets_failure_reason() -> None:
 
     mock_store = MagicMock()
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
     # Generator raises an exception (unexpected path)
@@ -1928,7 +1908,6 @@ async def test_explain_rag_fusion_fts_only_guard_reports_attempted() -> None:
 
     mock_store = MagicMock()
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=False)
 
     mock_generator = MagicMock()
@@ -1981,7 +1960,6 @@ async def test_explain_rag_fusion_false_unchanged() -> None:
 
     mock_store = MagicMock()
     mock_store.hybrid_search_with_trace = AsyncMock(return_value=[_cand("chunk-001")])
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
     mock_generator = MagicMock()
@@ -2045,7 +2023,6 @@ async def test_explain_rag_fusion_partial_search_failure() -> None:
 
     mock_store = MagicMock()
     mock_store.hybrid_search_with_trace = AsyncMock(side_effect=_failing_trace)
-    mock_store.hybrid_search = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
     mock_generator = MagicMock()

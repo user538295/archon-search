@@ -77,7 +77,9 @@ from archon_search.server.mcp_schemas import (
 )
 from archon_search.server.routes_explain import EXPLAIN_FAILED_DETAIL, ExplainResponse
 from archon_search.store import StoreBusyError
+from tests._collection_lock_stub import with_locked_collection_meta
 from tests._docling_stubs import reset_parser_worker_globals  # noqa: F401 — autouse fixture
+from tests._fastmcp_stub import stub_mcp_tools, stubbed_fastmcp
 from tests._install_hint_leak import (
     assert_install_hint_logged_not_sent,
     patch_install_hint,
@@ -98,8 +100,6 @@ from tests._internal_error_leak import (
     permission_error,
     write_defref_source,
 )
-
-pytestmark = pytest.mark.xdist_group("mcp")
 
 _SCHEMA_ERROR_CODE = "schema_validation_error"
 _INTERNAL_ERROR_CODE = "internal_error"
@@ -123,43 +123,14 @@ def _schema_validation_error() -> ValidationError:
     raise AssertionError("precondition: _ResponseProbe must reject a string source_path")
 
 
-# ---------------------------------------------------------------------------
-# FastMCP stub — collects the tool closures so they can be awaited directly.
-# ---------------------------------------------------------------------------
-
-
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
-
-
 def _mcp_module() -> Any:
     """The live ``archon_search.server.mcp`` (sibling modules pop and reload it)."""
     return importlib.import_module("archon_search.server.mcp")
 
 
 def _tools(pipeline: MagicMock, **kwargs: Any) -> dict[str, Any]:
-    module = _mcp_module()
     kwargs.setdefault("writer", None)
-    with patch.object(module, "FastMCP", _FakeFastMCP):
-        app = module.create_app(pipeline, "default", **kwargs)
-    return app.tools
+    return stub_mcp_tools(pipeline, "default", **kwargs)
 
 
 async def _wire(tools: dict[str, Any], tool_name: str, /, **kwargs: Any) -> tuple[Any, str]:
@@ -398,6 +369,7 @@ def _setup_update_collection(pipeline: MagicMock) -> None:
         return_value=CollectionMeta(name="col", namespace="default", active_embedding_model="m")
     )
     pipeline.store.get_stored_vector_dimension = AsyncMock(return_value=None)
+    with_locked_collection_meta(pipeline.store)
 
 
 class _SchemaCase(NamedTuple):
@@ -895,18 +867,11 @@ async def test_fastmcp_masks_an_exception_escaping_a_tool(tmp_path: Path, monkey
 
 
 def test_create_app_turns_fastmcp_error_masking_on() -> None:
-    captured: dict[str, Any] = {}
-
-    class _CapturingFastMCP:
-        def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-            captured.update(kwargs)
-            return _FakeApp(name)
-
     module = _mcp_module()
-    with patch.object(module, "FastMCP", _CapturingFastMCP):
-        module.create_app(mock_pipeline(), "default", writer=None)
+    with stubbed_fastmcp():
+        app = module.create_app(mock_pipeline(), "default", writer=None)
 
-    assert captured.get("mask_error_details") is True, captured
+    assert app.init_kwargs.get("mask_error_details") is True, app.init_kwargs
 
 
 # ---------------------------------------------------------------------------

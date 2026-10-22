@@ -20,7 +20,7 @@ from archon_search.key_manager import ENV_VAR, ROTATE_WRITE_FAILED_DETAIL, KeySt
 from archon_search.paths import get_data_dir
 from tests.integration.conftest import make_real_app, mcp_headers, mcp_initialize, mcp_tool_call
 
-pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
+pytestmark = pytest.mark.integration
 
 _UNAUTHORIZED = 401
 _OK = 200

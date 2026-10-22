@@ -234,8 +234,8 @@ export class ArchonClient {
   // non-terminal sync job (kind "sync") cannot be cancelled: the server
   // answers 409 {"detail": "a sync cannot be cancelled"}, which request()
   // throws as an ArchonError — wait for the sync with waitForJob() instead
-  // (a legacy QUEUED/PENDING sync row never runs: the next POST /sync
-  // marks it FAILED).
+  // (a sync row an older server left QUEUED is marked FAILED when the
+  // server starts, a legacy PENDING one by the next POST /sync).
   cancelJob(jobId: string): Promise<JobResponse> {
     return this.request(`/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
   }

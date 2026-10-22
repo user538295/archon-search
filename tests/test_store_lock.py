@@ -150,7 +150,7 @@ async def test_ingest_succeeds_after_holder_releases(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_hybrid_search_does_not_acquire_store_lock(
+async def test_hybrid_search_with_trace_does_not_acquire_store_lock(
     connected_store: SearchStore, col_name: str
 ) -> None:
     """Read path must not touch the per-collection lock map at all."""
@@ -159,7 +159,7 @@ async def test_hybrid_search_does_not_acquire_store_lock(
     # materialize the lock entry
     lock = connected_store.lock_for(col_name)
     assert not lock.locked()
-    await connected_store.hybrid_search(col_name, [0.0] * _DIM, "hello", top_k=5)
+    await connected_store.hybrid_search_with_trace(col_name, [0.0] * _DIM, "hello", 5)
     assert not lock.locked()
 
 

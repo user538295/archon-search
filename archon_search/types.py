@@ -57,6 +57,11 @@ class IngestJob:
     # True once a DELETE /jobs/{id} asked to cancel the job — a client's cancel, unlike a CANCELLED written when the
     # server shut down; a MaintenanceLoop retry chain ends there. Persisted in the jobs file only (off the wire).
     cancel_requested: bool = False
+    # True when the DELETE /jobs/{id} that set ``cancel_requested`` landed while the job was still PENDING: its task
+    # had not claimed it RUNNING (and, once the job is CANCELLING, never will), so nothing of the job ran. A restart
+    # that finds the job still CANCELLING completes the cancel instead of reading it as a crash
+    # (``JobStore._load``). Persisted in the jobs file only (off the wire).
+    cancelled_before_start: bool = False
 
     def __post_init__(self) -> None:
         if self.source not in _VALID_INGEST_SOURCES:

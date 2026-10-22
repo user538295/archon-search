@@ -206,7 +206,7 @@ class TestSyncFtsPlanB:
 class TestSyncFtsIntegration:
     @pytest.mark.asyncio
     async def test_sync_cycle_adds_searchable_after_optimize(self, tmp_path):
-        """After a sync add cycle, new content is returned by hybrid_search."""
+        """After a sync add cycle, new content is returned by hybrid_search_with_trace."""
         import numpy as np
 
         from archon_search._types import ChunkRecord
@@ -289,13 +289,13 @@ class TestSyncFtsIntegration:
 
         # FTS search should find the new content
         query_vector = [0.0] * 4
-        results = await store.hybrid_search(col, query_vector, "quick brown fox", top_k=5)
+        results = await store.hybrid_search_with_trace(col, query_vector, "quick brown fox", 5)
         doc_ids = [r.doc_id for r in results]
         assert len(doc_ids) > 0, "No results returned after sync add cycle"
 
     @pytest.mark.asyncio
     async def test_sync_cycle_delete_no_phantom_hits(self, tmp_path):
-        """After a sync delete cycle, deleted content no longer returned by hybrid_search."""
+        """After a sync delete cycle, deleted content no longer returned by hybrid_search_with_trace."""
         import numpy as np
 
         from archon_search._types import ChunkRecord
@@ -389,5 +389,5 @@ class TestSyncFtsIntegration:
 
         # FTS search must return zero results for the deleted text
         query_vector = [0.0] * 4
-        results = await store.hybrid_search(col, query_vector, "unique phantom text", top_k=5)
+        results = await store.hybrid_search_with_trace(col, query_vector, "unique phantom text", 5)
         assert results == [], "Phantom hits detected after sync delete + optimize"

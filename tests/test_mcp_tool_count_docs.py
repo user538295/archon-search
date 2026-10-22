@@ -26,8 +26,6 @@ from fastmcp.tools import Tool
 from archon_search.key_manager import KeyStore
 from tests._mcp_tools import registered_tools
 
-pytestmark = pytest.mark.xdist_group("mcp")
-
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEV_GUIDE = _REPO_ROOT / "Documentation" / "DeveloperGuide" / "05_mcp_integration.md"
 _API_REF = _REPO_ROOT / "Documentation" / "Architecture" / "600_api_reference_or_public_interface.md"

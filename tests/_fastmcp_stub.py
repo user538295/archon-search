@@ -18,10 +18,14 @@ _MCP_MODULE = "archon_search.server.mcp"
 
 
 class StubFastMCP:
-    """Captures ``@app.tool()`` functions in ``tools``; ``custom_route`` is a no-op."""
+    """Captures ``@app.tool()`` functions in ``tools`` and constructor keywords in ``init_kwargs``.
+
+    ``custom_route`` is a no-op.
+    """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.tools: dict[str, Callable[..., Any]] = {}
+        self.init_kwargs: dict[str, Any] = kwargs
 
     def tool(self, *args: Any, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register under ``name=`` when given (as real ``FastMCP.tool`` does), else ``fn.__name__``.

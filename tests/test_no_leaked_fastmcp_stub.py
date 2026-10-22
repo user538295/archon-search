@@ -69,6 +69,10 @@ Accepted blind spots:
   it needs data flow from the patcher to a ``stop()`` / ``addCleanup`` / ``patch.stopall`` that
   may live in another function or fixture; a syntactic check would both miss the stored-patcher
   form and false-positive on correctly-paired ``start()`` calls. Use a ``with`` block instead.
+
+A second, separate guard at the end of this module forbids local FastMCP stand-in classes (any class
+defining ``custom_route`` outside ``tests/_fastmcp_stub.py``): a copy installed through a sanctioned
+scoped patch cannot leak, but it drifts from the shared stub.
 """
 from __future__ import annotations
 
@@ -781,4 +785,62 @@ def test_no_test_module_leaks_a_fastmcp_stub() -> None:
         f"patch.object / monkeypatch.setattr on {_MCP_MODULE}.FastMCP. Each pattern id and why it "
         f"leaks is documented in the module docstring of {Path(__file__).relative_to(_REPO_ROOT)}. "
         "There is no allowlist: rewrite the install, do not exempt it.\n" + "\n".join(offenders)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Second guard: no local FastMCP stand-in. A leak-safe local copy is still a copy that drifts from
+# the shared stub (a ``tool()`` without ``name=`` broke 26 of them at once).
+# ---------------------------------------------------------------------------
+
+_SHARED_STUB_MODULE = _TESTS_ROOT / "_fastmcp_stub.py"
+_STAND_IN_MARKER_METHOD = "custom_route"
+
+
+def _local_stand_in_lines(source: str) -> list[int]:
+    """Line numbers of classes defining ``custom_route``, the method only a FastMCP stand-in carries."""
+    return sorted(
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ClassDef)
+        and any(
+            isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) and member.name == _STAND_IN_MARKER_METHOD
+            for member in node.body
+        )
+    )
+
+
+_LOCAL_STAND_INS = [
+    "class _FakeApp:\n    def custom_route(self, path, methods=None):\n        return lambda f: f\n",
+    "def t():\n    class _Inner:\n        def custom_route(self, *a, **k):\n            return None\n",
+    "class _Fake:\n    async def custom_route(self):\n        return None\n",
+]
+_NOT_STAND_INS = [
+    "class _FakeApp:\n    def tool(self):\n        return None\n",
+    "def custom_route():\n    return None\n",
+    "class _Wrapper:\n    custom_route = None\n",
+]
+
+
+@pytest.mark.parametrize("source", _LOCAL_STAND_INS)
+def test_local_stand_in_scan_flags_a_class_with_custom_route(source: str) -> None:
+    assert len(_local_stand_in_lines(source)) == 1
+
+
+@pytest.mark.parametrize("source", _NOT_STAND_INS)
+def test_local_stand_in_scan_ignores_other_shapes(source: str) -> None:
+    assert _local_stand_in_lines(source) == []
+
+
+def test_no_test_module_defines_a_local_fastmcp_stand_in() -> None:
+    offenders = [
+        f"{path.relative_to(_REPO_ROOT)}:{lineno}"
+        for path in _test_files()
+        if path != _SHARED_STUB_MODULE
+        for lineno in _local_stand_in_lines(path.read_text(encoding="utf-8"))
+    ]
+    assert not offenders, (
+        "Local FastMCP stand-in classes duplicate the shared stub — use `StubFastMCP` / "
+        "`stubbed_fastmcp()` / `stub_mcp_tools()` (tests/_fastmcp_stub.py), extending it if it lacks "
+        "something.\n" + "\n".join(offenders)
     )

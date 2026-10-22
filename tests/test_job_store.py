@@ -62,7 +62,8 @@ def test_atomic_write(tmp_path: Path) -> None:
     with patch("archon_search.jobs.store.atomic_write_json") as mock_write:
         job = s.create()
     fields = dataclasses.asdict(job)
-    del fields["ingest_options"], fields["cancel_requested"]  # unset: written without the keys
+    # unset: written without the keys
+    del fields["ingest_options"], fields["cancel_requested"], fields["cancelled_before_start"]
     expected = [{**fields, "status": job.status.value, "job_type": "ingest"}]
     mock_write.assert_called_once_with(jobs_path, expected)
 
@@ -75,8 +76,10 @@ def _seed_job_file(
     updated_at: str,
     job_id: str | None = None,
     job_type: str | None = None,
+    **extra_keys: object,
 ) -> str:
-    """Write a one-job jobs file and return that job's id (no ``job_type`` key unless *job_type* is given)."""
+    """Write a one-job jobs file and return that job's id (no ``job_type`` key unless *job_type* is given;
+    *extra_keys* are further row keys, e.g. ``cancel_requested=True``)."""
     job_id = job_id or str(uuid.uuid4())
     row = {
         "job_id": job_id,
@@ -85,6 +88,7 @@ def _seed_job_file(
         "updated_at": updated_at,
         "result": None,
         "error": None,
+        **extra_keys,
     }
     if job_type is not None:
         row["job_type"] = job_type
@@ -849,6 +853,59 @@ def test_load_recovers_pending_job_as_failed_not_started(tmp_path: Path, job_typ
     assert persisted_statuses(jobs_path)[job_id] == JobStatus.FAILED.value
 
 
+#: Kinds an older server created QUEUED and then claimed RUNNING itself, and which nothing schedules.
+_NEVER_SCHEDULED_KINDS = [CommunityRebuildJob, MetadataReindexJob, SyncJob]
+
+
+def _legacy_queued_file(jobs_path: Path, job_cls: type[IngestJob], *, age: timedelta = timedelta()) -> str:
+    """Write a jobs file holding one *job_cls* row left ``QUEUED`` *age* ago, as a pre-upgrade server did when it
+    died between creating the job and claiming it RUNNING; return the job's id."""
+    stamp = (datetime.now(timezone.utc) - age).isoformat()
+    job = job_cls(job_id=str(uuid.uuid4()), status=JobStatus.QUEUED, created_at=stamp, updated_at=stamp, collection="c")
+    JobStore(path=jobs_path).create_job(job)
+    return job.job_id
+
+
+@pytest.mark.parametrize("job_cls", _NEVER_SCHEDULED_KINDS, ids=lambda cls: cls.__name__)
+def test_load_fails_queued_job_of_a_kind_nothing_schedules(tmp_path: Path, job_cls: type[IngestJob]) -> None:
+    """Only the route that created a community-rebuild, metadata-reindex or sync job ever ran it (``JobScheduler``
+    promotes export/import/migration jobs only), so one saved ``QUEUED`` by a server that died before its claim can
+    never run: it is rewritten FAILED with the not-started text — without arming the crash-loop guard (nothing ran)
+    — and, being terminal, DELETE /jobs/{id} answers it and eviction reclaims it."""
+    from archon_search.jobs.store import NOT_STARTED_BEFORE_RESTART_DETAIL
+
+    jobs_path = tmp_path / "jobs.json"
+    job_id = _legacy_queued_file(jobs_path, job_cls, age=timedelta(days=2))
+
+    load_start_time = datetime.now(timezone.utc)
+    store = JobStore(path=jobs_path)
+
+    job = store.get(job_id)
+    assert job is not None
+    assert type(job) is job_cls
+    assert (job.status, job.error) == (JobStatus.FAILED, NOT_STARTED_BEFORE_RESTART_DETAIL)
+    assert datetime.fromisoformat(job.updated_at) >= load_start_time
+    assert store.crashed_ingest_on_load is False, "a never-started job must not arm the crash-loop guard"
+    assert persisted_statuses(jobs_path)[job_id] == JobStatus.FAILED.value
+
+
+@pytest.mark.parametrize("job_cls", [ExportJob, ImportJob, MigrationJob], ids=lambda cls: cls.__name__)
+def test_load_keeps_queued_job_the_scheduler_runs(tmp_path: Path, job_cls: type[IngestJob]) -> None:
+    """A QUEUED export, import or migration job survives a restart and ``JobScheduler`` re-dispatches it, so
+    loading leaves it QUEUED, its error unset and the file as it was."""
+    jobs_path = tmp_path / "jobs.json"
+    job_id = _legacy_queued_file(jobs_path, job_cls)
+    before = jobs_path.read_text()
+
+    store = JobStore(path=jobs_path)
+
+    job = store.get(job_id)
+    assert job is not None
+    assert (job.status, job.error) == (JobStatus.QUEUED, None)
+    assert [queued.job_id for queued in store.list_queued_bulk()] == [job_id]
+    assert jobs_path.read_text() == before
+
+
 def test_load_keeps_pending_job_of_other_kinds(tmp_path: Path) -> None:
     """Only base ingest and reindex jobs are recovered: other kinds (the legacy delete job) keep their saved
     PENDING status."""
@@ -1125,6 +1182,18 @@ def test_find_active_collection_job_ignores_other_collections_and_jobs_that_cann
     assert store.find_active_collection_job("docs", "default") is None
 
 
+def test_find_active_collection_job_never_returns_the_excluded_job(tmp_path: Path) -> None:
+    """An import's own RUNNING job is excluded from its force_overwrite check; every other writer still counts."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    own = store.create_job(_job_on("own", JobStatus.RUNNING, job_class=ImportJob))
+
+    assert store.find_active_collection_job("docs", "default") == own
+    assert store.find_active_collection_job("docs", "default", excluding_job_id="own") is None
+
+    other = store.create_job(_job_on("other", JobStatus.RUNNING, namespace="other-team", job_class=ReindexJob))
+    assert store.find_active_collection_job("docs", "default", excluding_job_id="own") == other
+
+
 # ===========================================================================
 # Per-row tolerance of a stored ingest_options value, and the off-wire cancel marker
 # ===========================================================================
@@ -1215,4 +1284,95 @@ def test_load_treats_a_non_bool_cancel_requested_as_unset(
     bad, good = store.get("bad"), store.get("good")
     assert bad is not None and good is not None
     assert (bad.cancel_requested, good.cancel_requested) == (False, True)
+    assert any(r.levelno == logging.WARNING and "job bad" in r.getMessage() for r in caplog.records)
+
+
+def test_cancelled_before_start_persists_only_when_set(tmp_path: Path) -> None:
+    """``cancelled_before_start`` (set by DELETE /jobs/{id} on a still-PENDING job) is written with the row; a job
+    without it keeps the row shape it had before the marker existed."""
+    jobs_path = tmp_path / "jobs.json"
+    store = JobStore(path=jobs_path)
+    cancelled = store.create(collection="docs")
+    plain = store.create(collection="docs")
+    store.transition(
+        cancelled.job_id, {JobStatus.PENDING}, JobStatus.CANCELLING, cancel_requested=True, cancelled_before_start=True
+    )
+
+    rows = {row["job_id"]: row for row in json.loads(jobs_path.read_text())}
+
+    assert rows[cancelled.job_id]["cancelled_before_start"] is True
+    assert "cancelled_before_start" not in rows[plain.job_id]
+
+
+@pytest.mark.parametrize("job_type", [None, "reindex"], ids=["ingest", "reindex"])
+def test_load_completes_a_cancel_requested_before_the_job_started(tmp_path: Path, job_type: str | None) -> None:
+    """A job a client cancelled while it was still PENDING never ran: its task has not claimed it RUNNING, and the
+    claim is refused once the job is CANCELLING. A restart that finds it CANCELLING — its task died with the previous
+    process — completes the cancel as that task would have (CANCELLED, no error) rather than reading it as a crash:
+    it arms no crash-loop guard, as a job loaded still PENDING (never started) does not either."""
+    jobs_path = tmp_path / "jobs.json"
+    stale = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    job_id = _seed_job_file(
+        jobs_path,
+        status="CANCELLING",
+        created_at=stale,
+        updated_at=stale,
+        job_type=job_type,
+        cancel_requested=True,
+        cancelled_before_start=True,
+    )
+
+    load_start_time = datetime.now(timezone.utc)
+    store = JobStore(path=jobs_path)
+
+    job = store.get(job_id)
+    assert job is not None
+    assert (job.status, job.error, job.cancel_requested) == (JobStatus.CANCELLED, None, True)
+    assert datetime.fromisoformat(job.updated_at) >= load_start_time
+    assert store.crashed_ingest_on_load is False, "a job that never started must not arm the crash-loop guard"
+    assert persisted_statuses(jobs_path)[job_id] == JobStatus.CANCELLED.value
+
+
+@pytest.mark.parametrize("job_type", [None, "reindex"], ids=["ingest", "reindex"])
+def test_load_still_reads_a_cancel_of_a_started_job_as_a_crash(tmp_path: Path, job_type: str | None) -> None:
+    """A job cancelled while RUNNING keeps running (DELETE /jobs/{id} does not interrupt its task), so one found
+    CANCELLING at load was running when the process died: ``process_restart``, arming the crash-loop guard when it is
+    an ingest (a reindex arms none)."""
+    jobs_path = tmp_path / "jobs.json"
+    now = datetime.now(timezone.utc).isoformat()
+    job_id = _seed_job_file(
+        jobs_path, status="CANCELLING", created_at=now, updated_at=now, job_type=job_type, cancel_requested=True
+    )
+
+    store = JobStore(path=jobs_path)
+
+    job = store.get(job_id)
+    assert job is not None
+    assert (job.status, job.error) == (JobStatus.FAILED, "process_restart")
+    assert store.crashed_ingest_on_load is (job_type is None)
+
+
+@pytest.mark.parametrize("bad_marker", ["false", 1, None], ids=["string", "int", "null"])
+def test_load_treats_a_non_bool_cancelled_before_start_as_unset(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, bad_marker: object
+) -> None:
+    """A ``cancelled_before_start`` that is not a JSON boolean excuses nothing: the row loads with it False, so a
+    CANCELLING job it sits on is still read as a crash (a truthy ``"false"`` would otherwise disarm the crash-loop
+    guard for a job that ran), logged at WARNING; the rest of the file loads unharmed."""
+    jobs_path = tmp_path / "jobs.json"
+    now = datetime.now(timezone.utc).isoformat()
+    row = {"status": "CANCELLING", "created_at": now, "updated_at": now, "result": None, "error": None}
+    jobs_path.write_text(json.dumps([
+        {**row, "job_id": "bad", "cancel_requested": True, "cancelled_before_start": bad_marker},
+        {**row, "job_id": "good", "cancel_requested": True, "cancelled_before_start": True},
+    ]))
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.jobs.store"):
+        store = JobStore(path=jobs_path)
+
+    bad, good = store.get("bad"), store.get("good")
+    assert bad is not None and good is not None
+    assert (bad.status, bad.error, bad.cancelled_before_start) == (JobStatus.FAILED, "process_restart", False)
+    assert (good.status, good.error) == (JobStatus.CANCELLED, None)
+    assert store.crashed_ingest_on_load is True
     assert any(r.levelno == logging.WARNING and "job bad" in r.getMessage() for r in caplog.records)

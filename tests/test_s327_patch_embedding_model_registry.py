@@ -31,6 +31,8 @@ from archon_search.model_validation import validate_embedding_model
 from archon_search.server.app import create_app
 from archon_search.sync import path_to_collection_name
 
+from tests._collection_lock_stub import with_locked_collection_meta
+
 ACTIVE_MODEL = "BAAI/bge-small-en-v1.5"
 REQUESTED_MODEL = "BAAI/bge-base-en-v1.5"
 REQUESTED_MODEL_DIM = 768
@@ -86,6 +88,7 @@ def test_patch_indexed_collection_to_shipped_model_sets_pending(
     mock_store.count_documents = AsyncMock(return_value=1)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()

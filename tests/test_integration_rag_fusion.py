@@ -34,7 +34,7 @@ from archon_search.store import SearchStore
 from tests._fastmcp_stub import stub_mcp_tool
 from tests._hyde_stubs import rest_hyde_generating
 
-pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(autouse=True)

@@ -169,7 +169,7 @@ archon-search collection reindex-metadata docs --wait
 
 ### `archon-search collection migrate <name>`
 
-Proxies `POST /collections/{name}/migrate`. Without flags (or with `--dry-run`) it prints pending schema migrations and changes nothing. Use `--apply` for in-place migrations (synchronous) or `--apply --backup-first` for rewrite migrations (async job; add `--wait` to poll). This is the operator step required after certain upgrades — see [`../MigrationGuide/05_data_migration.md`](../MigrationGuide/05_data_migration.md).
+Proxies `POST /collections/{name}/migrate`. Without flags (or with `--dry-run`) it prints pending schema migrations and changes nothing. Use `--apply` for in-place migrations (synchronous; answers `404` if a concurrent `DELETE` removed the collection meanwhile, and `503` `store_busy` if another write holds the collection lock too long) or `--apply --backup-first` for rewrite migrations (async job; add `--wait` to poll). This is the operator step required after certain upgrades — see [`../MigrationGuide/05_data_migration.md`](../MigrationGuide/05_data_migration.md).
 
 ### Export / import
 
@@ -194,18 +194,18 @@ See `archon_search/server/routes_collections.py` and `routes_jobs.py`, and [`../
 
 ## MCP tools
 
-The MCP surface (`POST /mcp`, streamable HTTP transport) exposes two ingest tools. Both are **synchronous** — they block until done and return the result directly, unlike REST which returns a job.
+The MCP surface (`POST /mcp`, streamable HTTP transport) exposes two ingest tools. Both are **synchronous** — they block until done and return the result directly, unlike REST which returns a job. Because they create no job, they do not appear in `GET /jobs`; while one runs, `DELETE /collections/{name}` of its collection answers `503` `store_busy` (retry after it returns — an `ingest_directory` of a large directory can take minutes).
 
 | Tool | Parameters | Output |
 | --- | --- | --- |
-| `ingest_file` | `path: str` (required), `collection?: str`, `chunk_ttl_seconds?: int \| null`, `chunk_scopes?: list[str] \| null` | `IngestResultSchema dict` — fields: `doc_id`, `chunks_created`, `status`, `error`, `warnings: list[str]`, `code: str \| null`. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`; when file exceeds `max_file_mb`: `{status: "error", code: "file_too_large"}`. |
+| `ingest_file` | `path: str` (required), `collection?: str`, `chunk_ttl_seconds?: int \| null`, `chunk_scopes?: list[str] \| null` | `IngestResultSchema dict` — fields: `doc_id`, `chunks_created`, `status`, `error`, `warnings: list[str]`, `code: str \| null`. On unsafe `path`: `{error, code: "path_unsafe"}`; when another write holds the lock past the timeout: `{error, code: "store_busy"}`; when file exceeds `max_file_mb`: `{status: "error", code: "file_too_large"}`. |
 | `ingest_directory` | `path: str` (required), `glob_pattern: str = "**/*"`, `collection?: str`, `chunk_ttl_seconds?: int \| null`, `chunk_scopes?: list[str] \| null` | `list[IngestResultSchema dict]`; progress reported via MCP progress notifications. |
 
 For MCP client setup and the complete tool reference, see [`../DeveloperGuide/05_mcp_integration.md`](../DeveloperGuide/05_mcp_integration.md).
 
 ## Watcher behavior
 
-When `[collections].watch = true`, the server starts a watchdog observer (`archon_search/watcher.py`) on each collection's source directory. Create/modify/delete events trigger an incremental ingest through `pipeline.ingest_file()` (so the `max_file_mb` guard applies automatically). The watcher does **not** delete a collection when its source directory is deleted — use `collection remove` for that.
+When `[collections].watch = true`, the server starts a watchdog observer (`archon_search/watcher.py`) on each collection's source directory. Create/modify/delete events trigger an incremental ingest through `pipeline.ingest_file()` (so the `max_file_mb` guard applies automatically). The watcher does **not** delete a collection when its source directory is deleted — use `collection remove` for that. While a watcher sync runs — or a startup sync or `POST /sync` is writing that collection — `DELETE /collections/{name}` (and `collection remove`) answers `503` `store_busy` — retry after it completes; once the collection is removed from the config, the watcher ignores later changes under its path instead of re-creating it (restart the server to stop its observer, and re-adding the path with `POST /collections/` resumes the sync).
 
 Chunks written by the watcher carry `ingested_by = "watcher"`. The one exception is a **genuine** collection-wide reindex triggered from inside a watcher-driven sync — a chunk-size or embedding-model change against a collection that already has a recorded `indexed_chunk_size` — where the rewritten chunks carry `ingested_by = "reindex"` instead. A collection with no completed sync-state entry yet (for example a file created during the boot window, before the startup sync finishes) is **not** a reindex: those chunks stay `"watcher"`.
 
@@ -234,6 +234,8 @@ curl -X POST http://localhost:8765/collections/ \
 - Same model as active → clears any pending change; no reindex.
 - Indexed data + different model → sets `pending_embedding_model` and `needs_reindex = true`. The current index keeps serving until you reindex.
 - No indexed data yet → updates `active_embedding_model` directly; no reindex.
+
+The change runs under the collection lock. `PATCH` answers `404` also when a concurrent `DELETE` removed the collection meanwhile (its meta row is not re-created), and `503` `store_busy` (with `Retry-After`) when another write holds the lock too long; the MCP `update_collection` tool answers `not_found` / `store_busy` likewise.
 
 `GET /collections/{name}` reports `active_embedding_model`, `pending_embedding_model`, `needs_reindex`, and `reindex_job_id`; `GET /collections/` and `GET /status` surface `needs_reindex` per collection. Commit the change with `POST /collections/{name}/reindex` — on success `active_embedding_model` is updated and `needs_reindex` cleared. The MCP `update_collection` tool exposes the same state machine.
 

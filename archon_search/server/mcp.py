@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
-from contextlib import ExitStack
+from contextlib import AsyncExitStack, ExitStack
 from time import monotonic
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
@@ -1302,7 +1302,8 @@ def create_app(
         try:
             _ingest_col = collection or default_collection
             _ingest_embedder = await _resolve_embedder(pipeline, embedder_cache, _ingest_col, config, namespace=_ingest_ns)
-            with ExitStack() as stack:
+            async with AsyncExitStack() as stack:
+                await stack.enter_async_context(pipeline.store.collection_writer(_ingest_col))
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 result = await pipeline.ingest_file(
@@ -1364,7 +1365,8 @@ def create_app(
                 if ctx is not None:
                     await ctx.report_progress(done, total)
 
-            with ExitStack() as stack:
+            async with AsyncExitStack() as stack:
+                await stack.enter_async_context(pipeline.store.collection_writer(_dir_col))
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 results = await pipeline.ingest_directory(
@@ -1512,9 +1514,11 @@ def create_app(
 
         Returns the updated collection metadata dict (same shape as PATCH /collections/{name}).
         Error cases:
-        - Collection not found in config or for caller's namespace → error dict (not_found).
+        - Collection not found in config or for caller's namespace, or dropped while the call ran → error dict
+          (not_found).
         - Invalid embedding model → error dict (validation_error, 422-equivalent).
         - Active reindex job in progress → error dict (conflict, 409-equivalent).
+        - Collection lock not acquired in time → error dict (store_busy).
         """
         try:
             ns: str = _get_request_namespace()
@@ -1527,9 +1531,8 @@ def create_app(
                 if collection_name not in path_to_name:
                     return McpErrorResponse(error=f"Collection {collection_name!r} not found", code="not_found")
 
-            # 404 if meta not found for this namespace
-            meta = await store.get_collection_meta(collection_name, namespace=ns)
-            if meta is None:
+            # 404 if meta not found for this namespace (read again under the lock below, where it is authoritative)
+            if await store.get_collection_meta(collection_name, namespace=ns) is None:
                 return McpErrorResponse(error=f"Collection {collection_name!r} not found", code="not_found")
 
             # Validate embedding model — 422-equivalent on ModelValidationError
@@ -1547,56 +1550,65 @@ def create_app(
                     code=_ERR_VALIDATION,
                 )
 
-            # 409 guard: check if reindex job is still active (after validation, before state machine)
-            stale_cleared = False
-            if meta.reindex_job_id is not None and job_store is not None:
-                job = job_store.get(meta.reindex_job_id)
-                if job is not None and job.status in (JobStatus.RUNNING, JobStatus.PENDING):
-                    return McpErrorResponse(
-                        error="reindex in progress; wait for job to complete before changing embedding model",
-                        code="conflict",
-                    )
-                # Stale (DONE/FAILED/CANCELLED) — clear it
-                meta.reindex_job_id = None
-                stale_cleared = True
+            # Read-modify-write under the collection lock, on a row read under it: update_collection_meta upserts, so
+            # a write from a row read before a concurrent DELETE dropped the collection would re-insert its row.
+            async with store.locked_collection_meta(collection_name, ns) as meta:
+                if meta is None:
+                    return McpErrorResponse(error=f"Collection {collection_name!r} not found", code="not_found")
 
-            # State machine (mirrors patch_collection logic)
-            active = meta.active_embedding_model
-            pending = meta.pending_embedding_model
-            requested = embedding_model
+                # 409 guard: check if reindex job is still active (after validation, before state machine)
+                stale_cleared = False
+                if meta.reindex_job_id is not None and job_store is not None:
+                    job = job_store.get(meta.reindex_job_id)
+                    if job is not None and job.status in (JobStatus.RUNNING, JobStatus.PENDING):
+                        return McpErrorResponse(
+                            error="reindex in progress; wait for job to complete before changing embedding model",
+                            code="conflict",
+                        )
+                    # Stale (DONE/FAILED/CANCELLED) — clear it
+                    meta.reindex_job_id = None
+                    stale_cleared = True
 
-            if active == requested and pending is None:
-                # (a) no-op — persist only if stale reindex_job_id was cleared
-                if stale_cleared:
-                    await store.update_collection_meta(meta)
-            elif pending == requested:
-                # (a') no-op — persist only if stale reindex_job_id was cleared
-                if stale_cleared:
-                    await store.update_collection_meta(meta)
-            elif pending is not None and active == requested:
-                # (c) revert: clear pending and any stale reindex_job_id
-                meta.pending_embedding_model = None
-                meta.needs_reindex = False
-                meta.reindex_job_id = None
-                await store.update_collection_meta(meta)
-            else:
-                # (b) or (d): new model requested
-                chunk_count = await store.count_chunks(collection_name, namespace=ns)
-                if chunk_count > 0:
-                    meta.pending_embedding_model = requested
-                    meta.needs_reindex = True
-                else:
-                    meta.active_embedding_model = requested
+                # State machine (mirrors patch_collection logic)
+                active = meta.active_embedding_model
+                pending = meta.pending_embedding_model
+                requested = embedding_model
+
+                if active == requested and pending is None:
+                    # (a) no-op — persist only if stale reindex_job_id was cleared
+                    if stale_cleared:
+                        await store.update_collection_meta(meta, _locked_by_caller=True)
+                elif pending == requested:
+                    # (a') no-op — persist only if stale reindex_job_id was cleared
+                    if stale_cleared:
+                        await store.update_collection_meta(meta, _locked_by_caller=True)
+                elif pending is not None and active == requested:
+                    # (c) revert: clear pending and any stale reindex_job_id
                     meta.pending_embedding_model = None
                     meta.needs_reindex = False
                     meta.reindex_job_id = None
-                await store.update_collection_meta(meta)
+                    await store.update_collection_meta(meta, _locked_by_caller=True)
+                else:
+                    # (b) or (d): new model requested
+                    chunk_count = await store.count_chunks(collection_name, namespace=ns)
+                    if chunk_count > 0:
+                        meta.pending_embedding_model = requested
+                        meta.needs_reindex = True
+                    else:
+                        meta.active_embedding_model = requested
+                        meta.pending_embedding_model = None
+                        meta.needs_reindex = False
+                        meta.reindex_job_id = None
+                    await store.update_collection_meta(meta, _locked_by_caller=True)
 
             try:
                 schema = CollectionDetailSchema.from_result(meta)
                 return schema.model_dump(mode="json")
             except ValidationError:
                 return _schema_error("update_collection")
+        except StoreBusyError as exc:
+            logger.warning("update_collection store busy: %s", exc)
+            return McpErrorResponse(error=str(exc), code="store_busy")
         except Exception:
             return _internal_error("update_collection failed")
 

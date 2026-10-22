@@ -33,9 +33,9 @@ def test_x_ingested_by_header_flows_through_to_lancedb_row(
     Verifies the header is parsed at the HTTP boundary, propagated through
     the pipeline, and lands in the LanceDB row with ingested_by == 'watcher'.
 
-    Verification is via POST /search (not store.hybrid_search as the plan specifies)
+    Verification is via POST /search (not store.hybrid_search_with_trace as the plan specifies)
     because the stub embedder produces 384-dim zero vectors and calling
-    hybrid_search directly with a 4-dim query vector raises a LanceDB dimension
+    hybrid_search_with_trace directly with a 4-dim query vector raises a LanceDB dimension
     mismatch error. POST /search exercises the same read path and validates
     SearchResultSchema.from_result() in addition to the stored value.
     """

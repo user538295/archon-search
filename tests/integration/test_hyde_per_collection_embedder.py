@@ -32,7 +32,7 @@ from tests.integration.conftest import (
     mcp_tool_call,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
+pytestmark = pytest.mark.integration
 
 _GLOBAL_MODEL = SearchConfig().embedding_model
 _GLOBAL_DIM = 384

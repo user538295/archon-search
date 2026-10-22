@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import hashlib
 import json
 import logging
@@ -12,15 +11,16 @@ import random
 import re
 import time
 from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, TypedDict, cast
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
-from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestedBy, SearchResult, normalize_iso_utc
+from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestedBy, normalize_iso_utc
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, PING_TIMEOUT_SECONDS, PING_TTL_SECONDS, _validate_namespace
 from archon_search.observability import record_stage, _stage_recorder
-from archon_search.store_filters import build_where, _compute_fetch, _sql_quote_str
+from archon_search.store_filters import build_where, _sql_quote_str
 from archon_search.types import MigrationKind, MigrationSpec
 
 
@@ -51,11 +51,11 @@ class ChunkIngestResult:
 
 
 class StoreBusyError(Exception):
-    """Raised when ``SearchStore.ingest_chunks`` cannot acquire the per-collection
-    lock within ``INGEST_LOCK_TIMEOUT_S`` seconds (typically because
-    ``reindex_metadata`` holds the lock).
+    """Raised when ``update_collection_meta``, ``locked_collection_meta``, ``locked_collection``,
+    ``collection_writer``, ``ingest_chunks`` or ``delete_document`` cannot acquire the per-collection lock within
+    ``INGEST_LOCK_TIMEOUT_S`` seconds (any other write may hold it: an ingest, a delete, a metadata reindex, ...).
 
-    Callers (REST `/ingest`) translate this into HTTP 503 + ``Retry-After``.
+    REST callers translate this into HTTP 503 + ``Retry-After``; the MCP tools into ``code="store_busy"``.
     """
 
     def __init__(self, timeout_s: float) -> None:
@@ -129,10 +129,6 @@ _LANCEDB_TOKENIZER_MAP: dict[str, str] = {
     "ta": "Tamil",
     "tr": "Turkish",
 }
-
-# Matches the fixed-width UTC format produced by normalize_iso_utc (_types.py).
-# Must stay in sync with: dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-_FIXED_WIDTH_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 
 META_MAX_FIELDS = 50
 _META_MAX_KEY_LEN = 256
@@ -223,11 +219,6 @@ def _has_missing_acl_provenance(chunks: list[ChunkRecord], has_acl_provenance_co
         c.acl_source is not None or c.acl_sidecar_path is not None or c.acl_warning
         for c in chunks
     )
-
-
-def _has_date_filter(filters: "SearchFilters | None") -> bool:
-    """True if *filters* restricts results by ``indexed_after``/``indexed_before``."""
-    return bool(filters and (filters.indexed_after or filters.indexed_before))
 
 
 def elementwise_sum(vectors: list[list[float]]) -> list[float]:
@@ -345,8 +336,8 @@ def normalize_ingested_by(value: "str | None") -> IngestedBy:
 
 
 class RowCommonFields(TypedDict):
-    """Non-ACL fields decoded from a raw chunk row, ready to ``**``-splat into ``ScoredSearchCandidate``,
-    ``SearchResult`` or ``ChunkRecord``."""
+    """Non-ACL fields decoded from a raw chunk row, ready to ``**``-splat into ``ScoredSearchCandidate``
+    or ``ChunkRecord``."""
 
     file_type: str
     language: str
@@ -387,7 +378,7 @@ class RowAclFields(TypedDict):
 def decode_row_acl_fields(row: dict[str, Any]) -> RowAclFields:
     """Decode a raw chunk row's ACL, scope tags and ACL provenance at the read boundary.
 
-    The read paths that build ``ScoredSearchCandidate`` / ``SearchResult`` / ``ChunkRecord``
+    The read paths that build ``ScoredSearchCandidate`` / ``ChunkRecord``
     or export rows decode them here, so one stored row reads the same on each of them
     (aggregations such as ``list_documents`` read the raw columns). Missing or null columns (tables predating the ACL /
     TTL / G15 provenance migrations) decode to ``None``, except ``acl_warning``,
@@ -442,6 +433,9 @@ class SearchStore:
         # ``SearchCollectionSync._collection_locks`` (same key space, different
         # call paths).
         self._collection_locks: dict[str, asyncio.Lock] = {}
+        # Collections an MCP ingest or a sync (startup, POST /sync, watcher) is writing, with the number of writers each
+        # (``collection_writer``).
+        self._active_writers: dict[str, int] = {}
         self._ping_cache: tuple[float, bool] | None = None
         from archon_search.config import SearchConfig as _SearchConfig  # noqa: PLC0415
         self._config: _SearchConfig = config if config is not None else _SearchConfig()
@@ -468,6 +462,66 @@ class SearchStore:
         lock = self._collection_locks.get(collection)
         if lock is not None and not lock.locked() and not lock._waiters:
             del self._collection_locks[collection]
+
+    def has_active_writer(self, collection: str) -> bool:
+        """Whether a :meth:`collection_writer` block for *collection* is running (a plain read, any namespace)."""
+        return collection in self._active_writers
+
+    @asynccontextmanager
+    async def locked_collection(self, collection: str) -> "AsyncIterator[None]":
+        """Hold ``lock_for(collection)`` for the block, so no other write of the collection interleaves.
+
+        For a check-then-act on the collection (the sync's drop of a collection gone from the config, as
+        ``DELETE /collections/{name}`` makes its own): a store call made inside the block must be told the lock is held
+        (``_locked_by_caller=True``) — the lock is not reentrant. The lock is released however the block ends; a caller
+        that dropped the collection then calls ``discard_lock`` (it keeps a lock a queued waiter still needs).
+
+        Raises:
+            ValueError: if *collection* is not a valid collection name (no lock entry is created).
+            StoreBusyError: if the lock cannot be acquired within ``INGEST_LOCK_TIMEOUT_S``.
+        """
+        self._validate_collection(collection)
+        lock = self.lock_for(collection)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+        except asyncio.TimeoutError as e:
+            raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
+        try:
+            yield
+        finally:
+            lock.release()
+
+    @asynccontextmanager
+    async def collection_writer(self, collection: str) -> "AsyncIterator[None]":
+        """Register the caller as a writer of *collection* for the whole block, so ``has_active_writer`` reports it.
+
+        For a write that creates no job — an MCP ``ingest_file`` / ``ingest_directory``, a sync's write of the
+        collection (startup, ``POST /sync``, filesystem watcher) — and so is invisible to
+        ``JobStore.find_active_collection_job``. Such a write takes ``lock_for(collection)``
+        only per store call, and ``DELETE /collections/{name}`` consults ``has_active_writer`` under that lock to
+        refuse while one runs: it would otherwise drop the table and meta row, and the writer's next
+        ``ensure_collection`` or meta upsert would re-create them.
+
+        The registration is made under ``lock_for(collection)`` and the lock is released before the block runs (the
+        pipeline locks per write and the lock is not reentrant), so a DELETE holding the lock either finished before
+        the registration — the writer then creates its collection anew, as a first ingest does — or sees it. The
+        registration is released however the block ends, a cancellation included. Writers of one collection are
+        counted, not merged.
+
+        Raises:
+            ValueError: if *collection* is not a valid collection name (no lock entry is created).
+            StoreBusyError: if the lock cannot be acquired within ``INGEST_LOCK_TIMEOUT_S``.
+        """
+        async with self.locked_collection(collection):
+            self._active_writers[collection] = self._active_writers.get(collection, 0) + 1
+        try:
+            yield
+        finally:
+            remaining = self._active_writers[collection] - 1
+            if remaining:
+                self._active_writers[collection] = remaining
+            else:
+                del self._active_writers[collection]
 
     @property
     def supports_incremental_fts_delete(self) -> bool:
@@ -1255,28 +1309,39 @@ class SearchStore:
 
     async def apply_in_place_migrations(
         self, collection: str, namespace: str, specs: "list[MigrationSpec]"
-    ) -> None:
+    ) -> bool:
         """Apply a list of in-place migration specs to *collection* and update its schema_version.
 
         Each spec's ``name`` must correspond to a callable async method on ``SearchStore``.
         The methods are called in order; each is idempotent so double-application is safe.
         After all specs are applied, ``schema_version`` in ``_archon_collection_meta`` is
-        set to ``STORE_SCHEMA_VERSION`` via ``update_collection_meta``.
+        set to ``STORE_SCHEMA_VERSION`` via ``update_collection_meta``, on the row read again
+        under ``lock_for(collection)`` (:meth:`locked_collection_meta`): a concurrent drop of the
+        collection meanwhile leaves no row to re-insert.
 
-        If ``specs`` is empty, returns immediately without touching the store.
+        If ``specs`` is empty, returns ``True`` immediately without touching the store.
+
+        Returns:
+            ``False`` when *collection* has no meta row in *namespace* once the specs ran
+            (it was dropped meanwhile; no ``schema_version`` is written), else ``True``.
+
+        Raises:
+            StoreBusyError: if the per-collection lock cannot be acquired within
+                ``INGEST_LOCK_TIMEOUT_S``; the specs have then been applied.
         """
         if not specs:
-            return
+            return True
 
         for spec in specs:
             method = getattr(self, spec.name)
             await method()
 
         # Update schema_version to reflect all applied migrations.
-        meta = await self.get_collection_meta(collection, namespace)
-        if meta is None:
-            return
-        await self.update_collection_meta(replace(meta, schema_version=STORE_SCHEMA_VERSION))
+        async with self.locked_collection_meta(collection, namespace) as meta:
+            if meta is None:
+                return False
+            await self.update_collection_meta(replace(meta, schema_version=STORE_SCHEMA_VERSION), _locked_by_caller=True)
+        return True
 
     async def _run_startup_migrations(self) -> None:
         """Run all idempotent startup migrations in order.
@@ -1474,6 +1539,40 @@ class SearchStore:
                 await self.update_collection_meta(replace(meta, schema_version=STORE_SCHEMA_VERSION))
 
         return processed
+
+    @asynccontextmanager
+    async def locked_collection_meta(
+        self, collection: str, namespace: str = DEFAULT_NAMESPACE
+    ) -> "AsyncIterator[CollectionMeta | None]":
+        """Hold ``lock_for(collection)`` and yield the meta row of (*collection*, *namespace*) read under it.
+
+        For a read-modify-write of the row: it is read after the lock is acquired, so a ``DELETE`` that dropped the
+        collection meanwhile yields ``None`` instead of a stale row to write back (``update_collection_meta``
+        upserts, so a write from a stale row re-inserts the dropped collection's row). Write the changed row with
+        ``update_collection_meta(meta, _locked_by_caller=True)`` — the lock is not reentrant.
+
+        The lock is released on exit, however the block ends. When the row is gone the lock entry is then discarded
+        (``discard_lock`` keeps one a queued waiter still needs), as the dropping DELETE kept it while this call
+        waited on it.
+
+        Raises:
+            RuntimeError: if the store is not connected.
+            ValueError: if *collection* or *namespace* is invalid.
+            StoreBusyError: if the lock cannot be acquired within ``INGEST_LOCK_TIMEOUT_S``.
+        """
+        lock = self.lock_for(collection)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+        except asyncio.TimeoutError as e:
+            raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
+        meta: CollectionMeta | None = None
+        try:
+            meta = await self.get_collection_meta(collection, namespace)
+            yield meta
+        finally:
+            lock.release()
+            if meta is None:
+                self.discard_lock(collection)
 
     async def update_collection_meta(self, meta: "CollectionMeta", *, _locked_by_caller: bool = False) -> None:
         """Upsert *meta* into the shared metadata table, by ``meta.name``.
@@ -2352,129 +2451,6 @@ class SearchStore:
     # Search
     # ------------------------------------------------------------------
 
-    async def hybrid_search(
-        self,
-        collection: str,
-        query_vector: list[float],
-        query_text: str,
-        top_k: int,
-        filters: "SearchFilters | None" = None,
-    ) -> list[SearchResult]:
-        """Run vector + full-text hybrid search over *collection*, RRF-fused.
-
-        Returns an empty list if *collection* does not exist. Does not
-        support ``filters.scope_filter`` — callers needing scope filtering
-        (production code) use ``hybrid_search_with_trace`` instead, which
-        threads ``scope_filter`` through ``build_where``.
-
-        Raises:
-            RuntimeError: if the store is not connected.
-            ValueError: if *collection* is not a valid collection name.
-        """
-        self._validate_collection(collection)
-        db = self._require_connected()
-        try:
-            table = await db.open_table(collection)
-        except ValueError:
-            return []
-
-        has_glob = bool(filters and filters.source_path_glob)
-        fetch = _compute_fetch(top_k, has_glob=has_glob)
-        # NOTE: hybrid_search does not support scope_filter; production code uses
-        # hybrid_search_with_trace which threads scope_filter through build_where (BE-9).
-        pred = build_where(filters) if filters else ""
-
-        with record_stage("vector"):
-            vec_q = table.vector_search(query_vector)
-            if pred:
-                vec_q = vec_q.where(pred)
-            vec_rows = await vec_q.limit(fetch).to_list()
-            vec_rank: dict[str, int] = {r["chunk_id"]: i for i, r in enumerate(vec_rows)}
-
-        # FTS search (may fail if no index); record only on success
-        fts_rows: list[dict[str, Any]] = []
-        fts_rank: dict[str, int] = {}
-        _fts_t0 = time.perf_counter()
-        try:
-            fts_q = await table.search(query_text, query_type="fts")
-            if pred:
-                fts_q = fts_q.where(pred)
-            fts_rows = await fts_q.limit(fetch).to_list()
-            fts_rank = {r["chunk_id"]: i for i, r in enumerate(fts_rows)}
-            _fts_recorder = _stage_recorder.get()
-            if _fts_recorder is not None:
-                _fts_recorder.record("fts", (time.perf_counter() - _fts_t0) * 1000.0)
-        except Exception as exc:
-            exc_str = str(exc).lower()
-            if "index" in exc_str or "fts" in exc_str:
-                logger.warning("FTS index not available for collection %r, using vector-only results", collection)
-            else:
-                raise
-
-        with record_stage("fuse"):
-            all_rows: dict[str, dict[str, Any]] = {r["chunk_id"]: r for r in vec_rows}
-            for r in fts_rows:
-                all_rows.setdefault(r["chunk_id"], r)
-
-            scored: list[tuple[float, dict[str, Any]]] = []
-            for chunk_id, row in all_rows.items():
-                score = 0.0
-                if chunk_id in vec_rank:
-                    score += _rrf_score(vec_rank[chunk_id])
-                if chunk_id in fts_rank:
-                    score += _rrf_score(fts_rank[chunk_id])
-                scored.append((score, row))
-
-            # Tie-break on chunk_id (ascending) to match the trace path's
-            # (-rrf_score, chunk_id) order; deterministic on exact score ties.
-            scored.sort(key=lambda x: (-x[0], x[1]["chunk_id"]))
-
-        # fnmatch has no path semantics: * matches / and ** is identical to *;
-        # source_path_glob matches the full source_path; combine with source_path_prefix for
-        # prefix-anchored narrowing before this post-filter runs.
-        if filters and filters.source_path_glob:
-            glob_pattern = filters.source_path_glob
-            scored = [
-                (score, row) for score, row in scored
-                if fnmatch.fnmatchcase(row["source_path"], glob_pattern)
-            ]
-            if len(scored) < top_k:
-                logger.warning(
-                    "glob post-filter shrank pool below top_k: %d/%d",
-                    len(scored), top_k,
-                )
-
-        results = []
-        for score, row in scored[:top_k]:
-            results.append(
-                SearchResult(
-                    doc_id=row["doc_id"],
-                    chunk_id=row["chunk_id"],
-                    text=row["text"],
-                    score=score,
-                    source_path=row["source_path"],
-                    collection=collection,
-                    **decode_row_common_fields(row),
-                    # SearchResult has no ``scopes`` field; every other decoded ACL field passes through.
-                    **{k: v for k, v in decode_row_acl_fields(row).items() if k != "scopes"},
-                )
-            )
-
-        if _has_date_filter(filters):
-            legacy_count = sum(
-                1 for r in results
-                if not _FIXED_WIDTH_PATTERN.match(r.indexed_at or "")
-            )
-            if legacy_count:
-                logger.warning(
-                    "date filter applied to %d legacy-format rows in collection %s; "
-                    "re-ingest these documents to normalize indexed_at format "
-                    "and avoid silent boundary errors",
-                    legacy_count, collection,
-                )
-
-        return results
-
     async def hybrid_search_with_trace(
         self,
         collection: str,
@@ -2487,8 +2463,8 @@ class SearchStore:
         """Thin instance-method delegate to module-level _hybrid_search_with_trace.
 
         Used both for eval/debug observability and as the production search backend
-        for the RAG Fusion path (Task 2.2, C5).  The *filters* parameter applies
-        the same field-predicate logic as :meth:`hybrid_search`.  A ``None``
+        for the RAG Fusion path (Task 2.2, C5).  The *filters* parameter is compiled
+        by ``build_where`` into a predicate applied to both search legs.  A ``None``
         *query_vector* skips the vector leg and fuses the FTS leg alone (S290).
         The optional *scope_filter* restricts results to chunks whose ``scopes`` list contains
         the given value (exact match); unscoped chunks (``scopes IS NULL``) always
@@ -3288,7 +3264,7 @@ async def _hybrid_search_with_trace(
 
     Used both for eval/debug observability and as the production search backend
     for the RAG Fusion path (Task 2.2, C5).  The optional *filters* parameter
-    applies the same field-predicate logic as :meth:`SearchStore.hybrid_search`.
+    applies the same field-predicate logic as ``build_where``.
     The optional *scope_filter* restricts results to chunks whose ``scopes`` list
     contains the given value (exact match); unscoped chunks (``scopes IS NULL``)
     always pass through as shared/global.  Wildcard suffixes are not applied at
@@ -3302,7 +3278,7 @@ async def _hybrid_search_with_trace(
             caller falls back to when no query vector can be produced in time — S290).
         query_text: Text query for FTS search.
         candidate_depth: Maximum number of raw candidates to fetch from each
-            search leg (analogous to ``fetch`` in :meth:`SearchStore.hybrid_search`).
+            search leg.
         filters: Optional field filters applied to both the vector and FTS legs.
         scope_filter: Optional scope tag for exact-match pre-retrieval filtering.
             Unscoped chunks (``scopes IS NULL``) always pass through.

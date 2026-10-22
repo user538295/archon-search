@@ -14,50 +14,23 @@ Scenario: BE-11 graph inspection MCP tools
 """
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-
-pytestmark = pytest.mark.xdist_group("mcp")
-
-# ---------------------------------------------------------------------------
-# FastMCP stub
-# ---------------------------------------------------------------------------
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
 
 
 def _make_app(
     pipeline: MagicMock,
     graph_store: MagicMock | None = None,
     config: MagicMock | None = None,
-) -> _FakeApp:
+) -> StubFastMCP:
     """Create an MCP app with mocked dependencies."""
     if config is None:
         config = MagicMock()
         config.graph = MagicMock()
         config.graph.enabled = False
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         return mcp_module.create_app(
             pipeline,

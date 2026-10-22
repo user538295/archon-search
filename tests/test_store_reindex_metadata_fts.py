@@ -135,11 +135,11 @@ async def test_reindex_metadata_fts_still_valid_after_metadata_update(
     assert result.updated >= 1, "Expected at least one row to be updated by reindex_metadata"
 
     # FTS must still find the chunk by its unique text after real row mutations
-    results = await store.hybrid_search(
+    results = await store.hybrid_search_with_trace(
         "col",
         query_vector=[0.1] * _DIM,
         query_text=unique_text,
-        top_k=5,
+        candidate_depth=5,
     )
     doc_ids = [r.doc_id for r in results]
     assert chunk.doc_id in doc_ids, (

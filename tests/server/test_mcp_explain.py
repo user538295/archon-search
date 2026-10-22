@@ -7,7 +7,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -20,38 +20,13 @@ from archon_search.jobs.store import JobStore
 from archon_search.pipeline import METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL, SearchPipeline
 from archon_search.reranker import Reranker
 from archon_search.server.app import create_app as create_rest_app
-
-pytestmark = pytest.mark.xdist_group("mcp")
-
-
-# ---------------------------------------------------------------------------
-# FastMCP stub (captures registered tools in a dict)
-# ---------------------------------------------------------------------------
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-        return decorator
 
 
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
-
-
-def _make_mcp_app(pipeline: Any, *, config: SearchConfig | None = None, writer: Any = None) -> _FakeApp:
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+def _make_mcp_app(pipeline: Any, *, config: SearchConfig | None = None, writer: Any = None) -> StubFastMCP:
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         return mcp_module.create_app(pipeline, "default", writer=writer, config=config)
 

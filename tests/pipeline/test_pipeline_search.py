@@ -1171,7 +1171,7 @@ def _make_search_result(n: int, acl: list[str] | None = None) -> "ScoredSearchCa
 
 @pytest.mark.asyncio
 async def test_pipeline_search_forwards_filters_to_store() -> None:
-    """filters kwarg is forwarded to store.hybrid_search."""
+    """filters kwarg is forwarded to store.hybrid_search_with_trace."""
     from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.chunker import DocumentChunker
@@ -1325,7 +1325,7 @@ async def test_pipeline_no_warning_when_pool_above_top_k(caplog) -> None:
 
 @pytest.mark.asyncio
 async def test_pipeline_search_with_context_forwards_filters_to_store() -> None:
-    """search_with_context forwards filters kwarg to the inner search -> store.hybrid_search call."""
+    """search_with_context forwards filters kwarg to the inner search -> store.hybrid_search_with_trace call."""
     from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.chunker import DocumentChunker

@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import secrets
 
-import pytest
 from fastapi.testclient import TestClient
 
 from archon_search.key_manager import KeyStore
@@ -166,7 +165,6 @@ def test_toml_and_managed_key_coexist(tmp_path, monkeypatch):
         )
 
 
-@pytest.mark.xdist_group("mcp")
 def test_create_mcp_http_app_accepts_managed_key(tmp_path, monkeypatch):
     """create_mcp_http_app() key_store param wires managed-key auth correctly.
 

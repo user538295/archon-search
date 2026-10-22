@@ -3632,7 +3632,7 @@ async def test_ingest_pdf_with_language_detection_uses_cleaned_text(tmp_path) ->
 
 @pytest.mark.asyncio
 async def test_ingest_pdf_metadata_survives_store_roundtrip(connected_store, col_name, tmp_path) -> None:
-    """Full ingest → hybrid_search round-trip: _page_start is present in search result metadata."""
+    """Full ingest → hybrid_search_with_trace round-trip: _page_start is present in search result metadata."""
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
@@ -3667,13 +3667,13 @@ async def test_ingest_pdf_metadata_survives_store_roundtrip(connected_store, col
     assert ingest_result.status == "ok"
     assert ingest_result.chunks_created > 0
 
-    # Retrieve via hybrid_search using a zero vector (mock embedder returns [0.1]*4)
+    # Retrieve via hybrid_search_with_trace using a zero vector (mock embedder returns [0.1]*4)
     query_vector = [0.1] * 4
-    results = await connected_store.hybrid_search(
+    results = await connected_store.hybrid_search_with_trace(
         col_name,
         query_vector=query_vector,
         query_text="beta content",
-        top_k=10,
+        candidate_depth=10,
     )
 
     assert results, "Expected at least one search result after ingest"

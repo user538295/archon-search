@@ -36,7 +36,7 @@ from archon_search.graph_types import (
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
 
-pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
+pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------

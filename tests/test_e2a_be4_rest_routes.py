@@ -26,6 +26,7 @@ from archon_search.server.schemas import (
 )
 from archon_search.sync import path_to_collection_name
 
+from tests._collection_lock_stub import with_locked_collection_meta
 from tests.integration.conftest import make_real_app
 
 UTC = timezone.utc
@@ -70,6 +71,7 @@ def _make_be4_patch_app(
     mock_store.count_chunks = AsyncMock(return_value=count_chunks)
     mock_store.get_stored_vector_dimension = AsyncMock(return_value=stored_dim)
     mock_store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(mock_store)
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()

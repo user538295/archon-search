@@ -83,6 +83,23 @@ def test_post_ingest_returns_503_when_lock_held(
     assert body.get("code") == "store_busy"
 
 
+def test_lock_timeout_detail_names_no_reindex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lock holder may be any write, so the shared lock-timeout detail must not blame a reindex (API-6)."""
+    _app, client, _mock_store, _jobs = _make_app_and_client(tmp_path)
+
+    async def _raise_timeout(coro: object, timeout: object = None) -> None:
+        import inspect
+        if inspect.iscoroutine(coro):
+            coro.close()  # prevent ResourceWarning
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr("archon_search.server._ingest_lock.asyncio.wait_for", _raise_timeout)
+
+    body = client.post("/ingest", json={"collection": "test-col"}).json()
+
+    assert body == {"detail": "collection is busy with another write; retry after Retry-After seconds", "code": "store_busy"}
+
+
 def test_post_ingest_succeeds_when_lock_free(tmp_path: Path) -> None:
     """Happy path: POST /ingest returns 202 when the lock is free."""
     app, client, mock_store, jobs = _make_app_and_client(tmp_path)

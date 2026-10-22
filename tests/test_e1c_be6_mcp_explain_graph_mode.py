@@ -23,33 +23,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from tests._hyde_stubs import stub_hyde_generator
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
-pytestmark = pytest.mark.xdist_group("mcp")
-
-# ---------------------------------------------------------------------------
-# FastMCP stub (captures registered tools in a dict)
-# ---------------------------------------------------------------------------
-
-
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
 
 
 def _make_pipeline(*, graph_mode_applied: str | None = None) -> Any:
@@ -87,16 +62,15 @@ def _make_pipeline(*, graph_mode_applied: str | None = None) -> Any:
     return pipeline
 
 
-def _make_mcp_app(pipeline: Any, *, graph_enabled: bool = True, hyde_generator: Any = None) -> _FakeApp:
+def _make_mcp_app(pipeline: Any, *, graph_enabled: bool = True, hyde_generator: Any = None) -> StubFastMCP:
     """Create an MCP app with optional graph_enabled flag; a *hyde_generator* also enables HyDE."""
-    from unittest.mock import patch
     from archon_search.config import GraphConfig, SearchConfig
 
     config = SearchConfig()
     config.graph = GraphConfig(enabled=graph_enabled)
     config.hyde.enabled = hyde_generator is not None
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         app = mcp_module.create_app(pipeline, "default", config=config, hyde_generator=hyde_generator)
     return app  # type: ignore[return-value]
@@ -109,9 +83,8 @@ def _make_mcp_app(pipeline: Any, *, graph_enabled: bool = True, hyde_generator: 
 
 def test_mcp_explain_tool_graph_mode_parameter_accepted() -> None:
     """MCP explain tool signature includes graph_mode parameter with None default."""
-    from unittest.mock import patch
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         pipeline = _make_pipeline()
         app = mcp_module.create_app(pipeline, "default")

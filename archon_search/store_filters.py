@@ -102,16 +102,3 @@ def build_where(filters: "SearchFilters | None", scope_filter: str | None = None
         clauses.append(_where_list_has_or_null("scopes", scope_filter))
 
     return " AND ".join(clauses)
-
-
-def _compute_fetch(top_k: int, *, has_glob: bool) -> int:
-    """Compute how many rows to fetch from LanceDB before post-processing.
-
-    - ``has_glob=False``: ``max(top_k * 3, 20)`` — standard over-fetch for RRF.
-    - ``has_glob=True``: ``max(top_k * GLOB_OVERFETCH_FACTOR, 60)`` — extra
-      headroom because glob filtering happens after retrieval and ACL gating
-      can further reduce the candidate set.
-    """
-    if has_glob:
-        return max(top_k * GLOB_OVERFETCH_FACTOR, 60)
-    return max(top_k * 3, 20)

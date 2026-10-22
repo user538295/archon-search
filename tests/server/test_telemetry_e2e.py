@@ -26,8 +26,7 @@ from archon_search.server.app import create_app
 from archon_search.telemetry.entry import DOCUMENTED_SCHEMA_FIELDS, TelemetryEntry
 from archon_search.telemetry.pruner import Pruner
 from archon_search.telemetry.writer import TelemetryWriter
-
-pytestmark = pytest.mark.xdist_group("mcp")
+from tests._fastmcp_stub import stubbed_fastmcp
 
 # ---------------------------------------------------------------------------
 # Privacy sentinel — hyphens ensure it cannot collide with hex query_id or
@@ -35,34 +34,6 @@ pytestmark = pytest.mark.xdist_group("mcp")
 # ---------------------------------------------------------------------------
 SENTINEL = "PRIVACY-LEAK-SENTINEL-7f3a-feat-039b"
 
-# ---------------------------------------------------------------------------
-# FastMCP stub — same pattern as test_mcp_telemetry.py.
-# ---------------------------------------------------------------------------
-
-
-class _FakeApp:
-    """Minimal FastMCP substitute that registers @app.tool() decorated functions."""
-
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +156,7 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
     err_pipeline = _make_error_pipeline(RuntimeError("search error"))
 
     async def _call_mcp_tools(writer: TelemetryWriter) -> None:
-        with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        with stubbed_fastmcp():
             from archon_search.server import mcp as mcp_module
 
             ok_mcp = mcp_module.create_app(ok_pipeline, "col1", writer=writer)
@@ -345,7 +316,7 @@ def test_handler_does_not_leak_query_text_into_log(
 
     async def _mcp_search_with_sentinel(writer: TelemetryWriter) -> None:
         """Call MCP search and search_with_context with SENTINEL as query."""
-        with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        with stubbed_fastmcp():
             from archon_search.server import mcp as mcp_module
 
             mcp_app = mcp_module.create_app(ok_pipeline, "col1", writer=writer)
@@ -430,7 +401,7 @@ def test_handler_does_not_leak_query_text_via_exception_message(
         writer = TelemetryWriter(log_dir)
         await writer.start()
 
-        with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        with stubbed_fastmcp():
             from archon_search.server import mcp as mcp_module
 
             mcp_app = mcp_module.create_app(err_pipeline, "col1", writer=writer)

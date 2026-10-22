@@ -16,31 +16,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
-pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
-
-
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
+pytestmark = pytest.mark.integration
 
 
 def _make_mcp_app(
@@ -48,8 +26,8 @@ def _make_mcp_app(
     *,
     config: Any = None,
     job_store: Any = None,
-) -> _FakeApp:
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+) -> StubFastMCP:
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         return mcp_module.create_app(
             pipeline, "default", config=config, job_store=job_store

@@ -6,41 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("mcp")
-
 from archon_search._types import SearchResult
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.pipeline import SearchPipelineResult
 from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
+from tests._fastmcp_stub import stubbed_fastmcp
 
 
-# ---------------------------------------------------------------------------
-# FastMCP stub — makes @app.tool() registration and direct invocation work
-# ---------------------------------------------------------------------------
-
-
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +52,7 @@ async def test_search_tool_logs_entry_on_success() -> None:
     pipeline = _make_pipeline(results=results)
     writer = MagicMock(spec=TelemetryWriter)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
@@ -101,7 +74,7 @@ async def test_search_tool_logs_error_entry_on_exception(caplog: pytest.LogCaptu
 
     import logging
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
@@ -135,7 +108,7 @@ async def test_fan_out_failure_enqueues_an_internal_error_entry(
     setattr(pipeline, pipeline_method, AsyncMock(side_effect=RuntimeError("boom")))
     writer = MagicMock(spec=TelemetryWriter)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
@@ -163,7 +136,7 @@ async def test_search_tool_query_text_never_in_factory_args() -> None:
         recorded_kwargs.update(kwargs)
         return TelemetryEntry.from_search_tool_result(**kwargs)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         with patch.object(TelemetryEntry, "from_search_tool_result", side_effect=recording_factory):
             from archon_search.server import mcp as mcp_module
 
@@ -183,7 +156,7 @@ async def test_search_tool_does_not_log_when_writer_none() -> None:
     ]
     pipeline = _make_pipeline(results=results)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
@@ -232,7 +205,7 @@ async def test_search_with_context_tool_logs_entry_on_success() -> None:
     pipeline = _make_swc_pipeline(results=swc_results)
     writer = MagicMock(spec=TelemetryWriter)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
@@ -258,7 +231,7 @@ async def test_search_with_context_tool_logs_error_entry_on_exception(
 
     import logging
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
@@ -291,7 +264,7 @@ async def test_search_with_context_tool_query_text_never_in_factory_args() -> No
         recorded_kwargs.update(kwargs)
         return TelemetryEntry.from_search_tool_result(**kwargs)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         with patch.object(TelemetryEntry, "from_search_tool_result", side_effect=recording_factory):
             from archon_search.server import mcp as mcp_module
 
@@ -316,7 +289,7 @@ async def test_mcp_search_returns_results_and_acl_filtered() -> None:
     ]
     pipeline = _make_pipeline(results=results, raises=None)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
@@ -341,7 +314,7 @@ async def test_mcp_search_acl_filtered_propagated() -> None:
     )
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
@@ -356,7 +329,7 @@ async def test_mcp_search_error_returns_dict_not_list() -> None:
     """Error response from search tool is a dict, not a list."""
     pipeline = _make_pipeline(raises=RuntimeError("something went wrong"))
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
@@ -376,7 +349,7 @@ async def test_search_with_context_tool_does_not_log_when_writer_none() -> None:
     swc_results = [{"result": r1, "context_before": [], "context_after": []}]
     pipeline = _make_swc_pipeline(results=swc_results)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
@@ -405,7 +378,7 @@ async def test_mcp_search_telemetry_has_correlation_id() -> None:
     writer = MagicMock(spec=TelemetryWriter)
     cid = "mcp-test-corr-id-abc"
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
@@ -429,7 +402,7 @@ async def test_mcp_search_telemetry_correlation_id_none_when_unset() -> None:
     pipeline = _make_pipeline(results=results)
     writer = MagicMock(spec=TelemetryWriter)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]

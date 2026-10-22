@@ -356,13 +356,13 @@ def test_chunk_record_offset_fields_not_in_schema():
 
 
 def test_fixed_width_pattern_matches_normalize_iso_utc_output():
-    """_FIXED_WIDTH_PATTERN in store.py must always match normalize_iso_utc output.
+    """_FIXED_WIDTH_TS_RE in store.py must always match normalize_iso_utc output.
 
     This test is the machine-verified sync contract between the two modules.
     If either changes its format, this test fails immediately.
     """
     from datetime import timezone
-    from archon_search.store import _FIXED_WIDTH_PATTERN
+    from archon_search.store import _FIXED_WIDTH_TS_RE
 
     samples = [
         datetime(2026, 1, 1, 0, 0, 0, 0, tzinfo=timezone.utc),
@@ -372,8 +372,8 @@ def test_fixed_width_pattern_matches_normalize_iso_utc_output():
     ]
     for dt in samples:
         result = normalize_iso_utc(dt)
-        assert _FIXED_WIDTH_PATTERN.match(result), (
-            f"_FIXED_WIDTH_PATTERN does not match normalize_iso_utc output: {result!r}"
+        assert _FIXED_WIDTH_TS_RE.match(result), (
+            f"_FIXED_WIDTH_TS_RE does not match normalize_iso_utc output: {result!r}"
         )
 
 

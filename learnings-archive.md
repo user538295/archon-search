@@ -44,7 +44,7 @@
 
 ## Compacted 2026-10-12 (S391 cycle 3)
 - **[2026-08-20] (×58) pytest OOM/memory RCA**: rules: `tests/CLAUDE.md`. A DIFFERENT timing test failing per run = contention; raise a failure-path-only budget 5s→30s. Native leaks need a guarded repro (RSS cap+alarm); count BOTH embedder copies.
-- **[2026-10-12] (×19) xdist/asyncio**: `async def`→`AsyncMock`; `asyncio.run()` not `get_event_loop()`; MCP tests need `xdist_group("mcp")`. Rebind `*TIMEOUT*` to 0.1, don't shrink an outer `wait_for`. Poll `warmup_result` before asserting `/ready`.
+- **[2026-10-12] (×19) xdist/asyncio**: `async def`→`AsyncMock`; `asyncio.run()` not `get_event_loop()`; MCP tests need no xdist group (TEST-7). Rebind `*TIMEOUT*` to 0.1, don't shrink an outer `wait_for`. Poll `warmup_result` before asserting `/ready`.
 
 - **[2026-10-13] smoke/container (compacted from learnings.md)**: never force `FASTEMBED_CACHE_PATH` in smoke servers (guarded by `tests/smoke/test_conftest.py`, S493). REST `/import` allowlists `get_data_dir()` + `backup.output_dir` (S291); MCP import allows only `get_data_dir()`.
 

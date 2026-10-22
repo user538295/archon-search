@@ -584,7 +584,6 @@ def test_explain_naive_mixed_results_e2e(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("mcp")
 def test_mcp_explain_naive_provenance_e2e(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

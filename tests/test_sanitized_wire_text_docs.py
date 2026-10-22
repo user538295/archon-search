@@ -18,8 +18,8 @@ from archon_search import defref_extractor, model_validation, pipeline
 from archon_search import parser as archon_parser
 from archon_search.jobs import maintenance_loop
 from archon_search.jobs import store as job_store
-from archon_search.server import routes_collections, routes_explain
-from archon_search.sync import collection_sync_failed_detail
+from archon_search.server import _ingest_lock, routes_explain, routes_export
+from archon_search.sync import collection_drop_deferred_detail, collection_sync_busy_detail, collection_sync_failed_detail
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _BREAKING_MD = _REPO_ROOT / "BREAKING.md"
@@ -36,6 +36,7 @@ _BREAKING_INDEX = "Documentation/MigrationGuide/03_breaking_changes_index.md"
 _MONITORING = "Documentation/OperatorGuide/20_monitoring_and_alerts.md"
 _JOBS_MANUAL = "Documentation/UserManual/100_jobs_and_async_operations.md"
 _MAINTENANCE_GUIDE = "Documentation/OperatorGuide/50_maintenance_and_jobs.md"
+_EXPORT_IMPORT_MANUAL = "Documentation/UserManual/90_export_import.md"
 
 # ``in_breaking``: whether ``BREAKING.md`` quotes the literal back-quoted — True for every text a
 # change introduced or reworded. Asserted both ways, so the flag cannot drift from the file.
@@ -46,6 +47,20 @@ _CASES = [
         (_API_REFERENCE, _COMPONENT_CATALOG, _ERROR_STRATEGY, _TROUBLESHOOTING, _BREAKING_INDEX),
         True,
         id="collection-sync",
+    ),
+    pytest.param(
+        lambda: collection_sync_busy_detail("<name>"),
+        "sync of collection '<name>' skipped: the collection is busy with another write; the next sync retries it",
+        (_API_REFERENCE, _COMPONENT_CATALOG, _ERROR_STRATEGY, _TROUBLESHOOTING, _BREAKING_INDEX),
+        True,
+        id="collection-sync-busy",
+    ),
+    pytest.param(
+        lambda: collection_drop_deferred_detail("<name>"),
+        "collection '<name>' is no longer configured but was not removed: it is busy; the next sync retries",
+        (_API_REFERENCE, _COMPONENT_CATALOG, _ERROR_STRATEGY, _TROUBLESHOOTING, _BREAKING_INDEX),
+        True,
+        id="collection-drop-deferred",
     ),
     pytest.param(
         lambda: archon_parser.PARSE_FAILED_TEMPLATE.format(
@@ -223,18 +238,47 @@ _CASES = [
         id="ingest-not-started-before-restart",
     ),
     pytest.param(
-        lambda: routes_collections.COLLECTION_JOB_IN_PROGRESS_DETAIL,
+        lambda: _ingest_lock.COLLECTION_JOB_IN_PROGRESS_DETAIL,
         "a job is in progress on this collection; retry after it completes",
         (_API_REFERENCE, _COMPONENT_CATALOG, _ERROR_STRATEGY, _DEV_ERROR_HANDLING, _INCIDENT_RUNBOOK, _BREAKING_INDEX),
         True,
         id="delete-collection-job-in-progress",
     ),
     pytest.param(
-        lambda: routes_collections.COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id="<id>"),
+        lambda: _ingest_lock.COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id="<id>"),
         "job <id> is in progress; retry after it completes",
         (_API_REFERENCE, _COMPONENT_CATALOG, _ERROR_STRATEGY, _DEV_ERROR_HANDLING, _INCIDENT_RUNBOOK, _BREAKING_INDEX),
         True,
         id="delete-collection-own-job-in-progress",
+    ),
+    pytest.param(
+        lambda: _ingest_lock.COLLECTION_WRITER_IN_PROGRESS_DETAIL,
+        "an MCP ingest or a collection sync is in progress on this collection; retry after it completes",
+        (_API_REFERENCE, _COMPONENT_CATALOG, _ERROR_STRATEGY, _DEV_ERROR_HANDLING, _INCIDENT_RUNBOOK, _BREAKING_INDEX),
+        True,
+        id="delete-collection-jobless-writer-in-progress",
+    ),
+    pytest.param(
+        lambda: routes_export.OVERWRITE_REFUSED_PREFIX
+        + _ingest_lock.COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id="<id>"),
+        "force_overwrite refused: job <id> is in progress; retry after it completes",
+        (_API_REFERENCE, _SERVICES, _EXPORT_IMPORT_MANUAL, _DEV_ERROR_HANDLING, _INCIDENT_RUNBOOK, _BREAKING_INDEX),
+        True,
+        id="import-overwrite-own-namespace-job-in-progress",
+    ),
+    pytest.param(
+        lambda: routes_export.OVERWRITE_REFUSED_PREFIX + _ingest_lock.COLLECTION_JOB_IN_PROGRESS_DETAIL,
+        "force_overwrite refused: a job is in progress on this collection; retry after it completes",
+        (_API_REFERENCE, _SERVICES, _EXPORT_IMPORT_MANUAL, _DEV_ERROR_HANDLING),
+        True,
+        id="import-overwrite-job-in-progress",
+    ),
+    pytest.param(
+        lambda: routes_export.IMPORT_OVERWRITE_LOCK_BUSY_DETAIL,
+        "force_overwrite refused: collection is busy with another write; retry after it completes",
+        (_API_REFERENCE, _SERVICES, _EXPORT_IMPORT_MANUAL, _DEV_ERROR_HANDLING),
+        True,
+        id="import-overwrite-lock-busy",
     ),
     # Quoted by no doc verbatim (they paraphrase it); pinned so the OpenAPI wording is deliberate.
     pytest.param(

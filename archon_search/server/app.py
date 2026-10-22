@@ -159,6 +159,47 @@ def _finish_startup_sync_job(job_store: JobStore, job_id: str | None, **fields: 
         )
 
 
+async def _sync_watched_collection(app: FastAPI, col_name: str, source_path: str) -> None:
+    """Run the watcher-triggered sync of collection *col_name* over *source_path* (the lifespan's watcher callback).
+
+    Skipped while the startup sync is suppressed: the corpus may be stale for a reason an operator has not yet
+    addressed, and re-entering ingest here would defeat the crash-loop guard through a side door. Keys on the SAME live
+    state a manual POST /sync clears (``app.state.sync_result``), not ``job_store.crashed_ingest_on_load`` (boot-time
+    only) — otherwise a successful manual sync would clear GET /status while the watcher stayed blocked forever.
+
+    The sync creates no job, so it registers as a writer of the collection (``SearchStore.collection_writer``) for its
+    whole run: ``DELETE /collections/{name}`` refuses meanwhile instead of dropping a collection the sync would
+    re-create. The watcher's ``{collection: path}`` snapshot is taken at startup and a DELETE leaves it alone, so the
+    path is checked against the live config after the registration (made under the collection lock the DELETE holds
+    while it edits the config): a collection deleted meanwhile — or earlier — is ignored, not re-created from changes
+    its stale indexing state still reports.
+
+    Raises:
+        StoreBusyError: if the collection lock is not acquired within ``INGEST_LOCK_TIMEOUT_S``; the change is
+            not synced (the watcher logs it), and the next change triggers a sync again.
+    """
+    if app.state.sync_result == StartupSyncResult.SUPPRESSED:
+        logger.warning(
+            "watcher: ingest for collection %r SKIPPED — the "
+            "startup sync is suppressed (the previous run died "
+            "mid-ingest). Resume manually with POST /sync or "
+            "`archon-search sync` once the cause is addressed.",
+            col_name,
+        )
+        return
+    async with app.state.search_store.collection_writer(col_name):
+        config: SearchConfig = app.state.config
+        configured_paths = {
+            str(Path(path).expanduser().resolve()) for path in (*config.pinned_collections, *config.collections)
+        }
+        if source_path not in configured_paths:
+            logger.info(
+                "watcher: change in %r ignored — collection %r is no longer configured (deleted)", source_path, col_name
+            )
+            return
+        await app.state.collection_sync.sync_collection(col_name, Path(source_path))
+
+
 async def _run_startup_sync(
     job_store: JobStore,
     app_state: "State",
@@ -842,27 +883,9 @@ def create_app(
                                         col_name,
                                     )
                                     return
-                                # Crash-loop guard, watcher half: while the startup
-                                # sync is suppressed the corpus may be stale for a
-                                # reason an operator has not yet addressed — letting
-                                # the watcher re-enter ingest here would defeat the
-                                # guard through a side door. Keys on the SAME live
-                                # state a manual POST /sync clears (app.state.sync_result),
-                                # not job_store.crashed_ingest_on_load (boot-time only) —
-                                # otherwise a successful manual sync would clear
-                                # GET /status while the watcher stayed blocked forever.
-                                if app.state.sync_result == StartupSyncResult.SUPPRESSED:
-                                    logger.warning(
-                                        "watcher: ingest for collection %r SKIPPED — the "
-                                        "startup sync is suppressed (the previous run died "
-                                        "mid-ingest). Resume manually with POST /sync or "
-                                        "`archon-search sync` once the cause is addressed.",
-                                        col_name,
-                                    )
-                                    return
-                                await app.state.collection_sync.sync_collection(
-                                    col_name, Path(path_str)
-                                )
+                                # Crash-loop guard, watcher half, and the collection-writer registration: see
+                                # _sync_watched_collection.
+                                await _sync_watched_collection(app, col_name, path_str)
 
                             wm = WatcherManager(
                                 on_change=_watch_callback,
@@ -1119,6 +1142,8 @@ def create_app(
         chunk_size=config.chunk_size,
         auto_reindex_on_chunk_size_change=config.auto_reindex_on_chunk_size_change,
         providers=config.providers or None,
+        job_store=job_store,
+        configured_paths=lambda: (*config.pinned_collections, *config.collections),
     )
 
     from archon_search.hyde import HyDEGenerator  # noqa: PLC0415

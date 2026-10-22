@@ -268,7 +268,7 @@ def test_delete_document_exception_before_count_does_not_raise_unbound(tmp_path:
 
 @pytest.mark.integration
 def test_delete_document_removes_from_fts(tmp_path: Any) -> None:
-    """After delete_document(), hybrid_search must not return the deleted document."""
+    """After delete_document(), hybrid_search_with_trace must not return the deleted document."""
     store = SearchStore(tmp_path / "db")
 
     async def _run() -> None:
@@ -287,7 +287,7 @@ def test_delete_document_removes_from_fts(tmp_path: Any) -> None:
 
             # Verify the document is searchable before delete
             query_vec = [1.0] * _DIM
-            results_before = await store.hybrid_search(col, query_vec, unique_word, 10)
+            results_before = await store.hybrid_search_with_trace(col, query_vec, unique_word, 10)
             assert any(r.doc_id == doc_id for r in results_before), (
                 "Document should be searchable before delete"
             )
@@ -297,7 +297,7 @@ def test_delete_document_removes_from_fts(tmp_path: Any) -> None:
             assert count == 3
 
             # After delete + optimize, FTS should not return the deleted document
-            results_after = await store.hybrid_search(col, query_vec, unique_word, 10)
+            results_after = await store.hybrid_search_with_trace(col, query_vec, unique_word, 10)
             assert not any(r.doc_id == doc_id for r in results_after), (
                 f"Phantom hit after delete_document: doc_id {doc_id!r} still in FTS results"
             )
@@ -332,7 +332,7 @@ def test_delete_by_source_path_also_removes_from_fts(tmp_path: Any) -> None:
             await store.rebuild_fts_index(col)
 
             query_vec = [1.0] * _DIM
-            results_before = await store.hybrid_search(col, query_vec, unique_word, 10)
+            results_before = await store.hybrid_search_with_trace(col, query_vec, unique_word, 10)
             assert any(r.doc_id == doc_id for r in results_before), (
                 "Document should be searchable before delete_by_source_path"
             )
@@ -340,7 +340,7 @@ def test_delete_by_source_path_also_removes_from_fts(tmp_path: Any) -> None:
             count = await store.delete_by_source_path(col, source_path)
             assert count == 2
 
-            results_after = await store.hybrid_search(col, query_vec, unique_word, 10)
+            results_after = await store.hybrid_search_with_trace(col, query_vec, unique_word, 10)
             assert not any(r.doc_id == doc_id for r in results_after), (
                 f"Phantom hit after delete_by_source_path: doc_id {doc_id!r} still in FTS results"
             )

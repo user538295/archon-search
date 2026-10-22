@@ -397,7 +397,6 @@ def _get_tool_payload(result: dict, tool_name: str) -> list | dict:
     return json.loads(text)
 
 
-@pytest.mark.xdist_group("mcp")
 def test_list_documents_mcp_cursor_backward_compat(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -425,7 +424,6 @@ def test_list_documents_mcp_cursor_backward_compat(
         )
 
 
-@pytest.mark.xdist_group("mcp")
 def test_list_documents_mcp_cursor_returns_next_page(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

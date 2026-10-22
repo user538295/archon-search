@@ -7,6 +7,7 @@ Task 5.2: POST /collections/{name}/import REST endpoint.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import importlib.metadata
@@ -45,6 +46,7 @@ from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.paths import get_data_dir
 from archon_search.pipeline import SearchPipeline
+from archon_search.server._ingest_lock import acquire_collection_lock_or_503, collection_job_in_progress_detail
 from archon_search.server._job_warmup import await_models_warm
 from archon_search.server.schemas import ErrorDetail, JobResponse
 from archon_search.store import META_MAX_FIELDS, SearchStore, normalize_ingested_by, validate_chunk_record
@@ -57,6 +59,13 @@ logger = logging.getLogger(__name__)
 # original exception is logged server-side.
 EXPORT_FAILED_DETAIL = "export failed; see the server log for details"
 IMPORT_FAILED_DETAIL = "import failed; see the server log for details"
+# Job ``error`` of a ``force_overwrite`` import that did not drop an existing collection because it could not be
+# done safely: the cause (``_ensure_collection_absent``) follows the prefix. The job is FAILED and unclaimed, the
+# collection untouched; ``POST /jobs/{id}/resume`` (or a new import) retries it.
+OVERWRITE_REFUSED_PREFIX = "force_overwrite refused: "
+IMPORT_OVERWRITE_LOCK_BUSY_DETAIL = (
+    OVERWRITE_REFUSED_PREFIX + "collection is busy with another write; retry after it completes"
+)
 
 router = APIRouter()
 
@@ -462,25 +471,55 @@ async def _owns_collection(
 
 
 async def _ensure_collection_absent(
-    job: ImportJob, search_store: SearchStore, *, refusal: str, may_drop: bool,
+    job: ImportJob, store: JobStore, search_store: SearchStore, *, refusal: str, may_drop: bool,
 ) -> None:
     """Refuse *job*'s collection when it exists, or drop it when *may_drop*.
 
+    A drop runs under ``lock_for(collection)`` — held across the existence check, the table drop and the meta-row
+    delete — and only while no other job may still write the collection (``JobStore.find_active_collection_job``,
+    the check ``DELETE /collections/{name}`` makes): such a job holds no lock for its whole run, and would write
+    into the dropped table or re-insert its meta row. Nothing exists to drop for an absent collection, so a job
+    never blocks that: an import creates its target by design.
+
     Raises:
-        ArchiveRejectedError: with *refusal* as its message, when the collection exists and *may_drop* is false.
+        ArchiveRejectedError: with *refusal* as its message, when the collection exists and *may_drop* is false;
+            with ``OVERWRITE_REFUSED_PREFIX`` + the cause, when *may_drop* but the collection lock is not acquired
+            within ``INGEST_LOCK_TIMEOUT_S`` or another job may still write the collection (nothing is dropped).
     """
-    # Check both the meta table and the underlying LanceDB table for existence.
-    existing_meta = await search_store.get_collection_meta(job.collection, job.namespace)
-    if existing_meta is None and await search_store.count_chunks(job.collection, job.namespace) == 0:
-        return
-    if not may_drop:
-        raise ArchiveRejectedError(refusal)
+    lock = await acquire_collection_lock_or_503(search_store, job.collection) if may_drop else None
+    if isinstance(lock, JSONResponse):
+        raise ArchiveRejectedError(IMPORT_OVERWRITE_LOCK_BUSY_DETAIL)
+    dropped = False
     try:
-        await search_store.drop_collection(job.collection)
-    except (KeyError, RuntimeError):
-        pass  # table may not exist in LanceDB; that's fine
-    if existing_meta is not None:
-        await search_store.delete_collection_meta(job.collection, job.namespace)
+        # Check both the meta table and the underlying LanceDB table for existence.
+        existing_meta = await search_store.get_collection_meta(job.collection, job.namespace)
+        if existing_meta is None and await search_store.count_chunks(job.collection, job.namespace) == 0:
+            return
+        if not may_drop:
+            raise ArchiveRejectedError(refusal)
+        active_job = store.find_active_collection_job(job.collection, job.namespace, excluding_job_id=job.job_id)
+        if active_job is not None:
+            logger.warning(
+                "_import_task: force_overwrite of collection %r refused for job %s: %s %s is %s (job namespace=%s)",
+                job.collection, job.job_id, type(active_job).__name__, active_job.job_id, active_job.status.value,
+                active_job.namespace,
+            )
+            raise ArchiveRejectedError(
+                OVERWRITE_REFUSED_PREFIX + collection_job_in_progress_detail(active_job, job.namespace)
+            )
+        dropped = True
+        try:
+            await search_store.drop_collection(job.collection, _locked_by_caller=True)
+        except (KeyError, RuntimeError):
+            pass  # table may not exist in LanceDB; that's fine
+        if existing_meta is not None:
+            await search_store.delete_collection_meta(job.collection, job.namespace)
+    finally:
+        if isinstance(lock, asyncio.Lock) and lock.locked():
+            lock.release()
+        if dropped:
+            # Only after the release: discard_lock keeps an entry a queued waiter still needs.
+            search_store.discard_lock(job.collection)
 
 
 def _claim_collection(job: ImportJob, store: JobStore, resume: _ResumePoint, doc_count: int) -> None:
@@ -635,7 +674,7 @@ async def _import_task(
         # A fresh run refuses or drops an existing collection before reading the archive's docs.
         if not resume.is_resume:
             await _ensure_collection_absent(
-                job, search_store,
+                job, store, search_store,
                 refusal=f"collection {job.collection!r} already exists; use force_overwrite=true to overwrite",
                 may_drop=job.force_overwrite,
             )
@@ -649,7 +688,7 @@ async def _import_task(
                 job_id, job.collection,
             )
             await _ensure_collection_absent(
-                job, search_store,
+                job, store, search_store,
                 refusal=(
                     f"collection {job.collection!r} already exists and was not written by this import; "
                     "start a new import with force_overwrite=true"

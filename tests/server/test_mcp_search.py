@@ -14,39 +14,15 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-pytestmark = pytest.mark.xdist_group("mcp")
 
 from archon_search._types import SearchResult
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.pipeline import METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL, SearchPipelineResult
 from tests._hyde_stubs import hyde_enabled_config, stub_hyde_generator
-
-
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
+from tests._fastmcp_stub import stubbed_fastmcp
 
 
 def _make_result(metadata: dict[str, str] | None = None, language: str = "") -> SearchResult:
@@ -69,7 +45,7 @@ async def _call_mcp_search(pipeline_result: SearchPipelineResult, include_metada
     pipeline.search = AsyncMock(return_value=pipeline_result)
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with __import__("unittest.mock", fromlist=["patch"]).patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
@@ -141,7 +117,7 @@ async def test_mcp_search_forwards_filters_to_pipeline() -> None:
     pipeline.search = AsyncMock(return_value=pipeline_result)
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = fake_app.tools["search"]
         await fn(
@@ -180,7 +156,7 @@ async def test_mcp_search_with_context_forwards_filters_to_pipeline() -> None:
     from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
     pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = fake_app.tools["search_with_context"]
         await fn(
@@ -210,7 +186,7 @@ async def test_mcp_search_invalid_filter_surfaces_validator_error() -> None:
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = fake_app.tools["search"]
         # empty file_type is rejected by the validator
@@ -233,7 +209,7 @@ async def test_mcp_search_with_context_invalid_filter_surfaces_validator_error()
     from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
     pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = fake_app.tools["search_with_context"]
         # indexed_after > indexed_before is rejected
@@ -335,7 +311,7 @@ async def _call_mcp_search_multi(
     pipeline.warmup_models = AsyncMock(return_value=rerank_available)
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=None)
@@ -440,7 +416,7 @@ async def _call_mcp_search_hyde(*, embedder_is_warm: bool):
     generator = MagicMock(spec=HyDEGenerator)
     generator.generate = AsyncMock(return_value=[0.1, 0.2, 0.3])
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(
@@ -496,7 +472,7 @@ async def test_mcp_search_hyde_is_skipped_when_the_collection_embedder_is_cold_b
     generator = MagicMock(spec=HyDEGenerator)
     generator.generate = AsyncMock(return_value=[0.1, 0.2, 0.3])
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(
@@ -541,7 +517,7 @@ async def test_mcp_search_bounds_hyde_by_the_search_budget(
     pipeline.warmup_models = AsyncMock(return_value=True)
 
     monkeypatch.setattr(mcp_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(
             pipeline, "default", writer=None, config=hyde_enabled_config(),
             hyde_generator=stub_hyde_generator(side_effect=_never_answers),
@@ -647,7 +623,7 @@ async def test_mcp_search_multi_emits_search_multi_telemetry() -> None:
     pipeline.warmup_models = AsyncMock(return_value=True)
     writer = MagicMock()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=writer)
@@ -720,7 +696,7 @@ async def test_mcp_search_invalid_language_returns_error() -> None:
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = fake_app.tools["search"]
         # "english" is 7 chars — fails ^[a-z]{2,3}$ validator
@@ -745,7 +721,7 @@ async def test_mcp_search_language_with_collections_is_now_accepted() -> None:
     pipeline.search_many = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = fake_app.tools["search"]
         result = await fn(query="hello", collections=["col1", "col2"], language="fr")
@@ -778,7 +754,7 @@ async def test_mcp_search_tool_returns_expansion_fields_on_hyde_failure() -> Non
     pipeline.warmup_models = AsyncMock(return_value=True)
 
     generator = stub_hyde_generator(return_value=None)
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(
             pipeline, "default", writer=None, config=hyde_enabled_config(),
             hyde_generator=generator,
@@ -806,7 +782,7 @@ async def test_mcp_search_tool_expansion_used_true_on_hyde_success() -> None:
     pipeline.warmup_models = AsyncMock(return_value=True)
 
     fake_vector = np.ones(384, dtype=np.float32)
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(
             pipeline, "default", writer=None, config=hyde_enabled_config(),
             hyde_generator=stub_hyde_generator(return_value=fake_vector),
@@ -831,7 +807,7 @@ async def test_mcp_search_tool_no_expansion_by_default() -> None:
     )
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = fake_app.tools["search"]
         result = await fn(query="hello", collection="col")
@@ -853,7 +829,7 @@ async def test_mcp_search_multi_collection_expansion_warning_on_hyde_failure() -
     pipeline.warmup_models = AsyncMock(return_value=True)
 
     generator = stub_hyde_generator(return_value=None)
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(
             pipeline, "default", writer=None, config=hyde_enabled_config(),
             hyde_generator=generator,
@@ -880,7 +856,7 @@ async def test_mcp_search_multi_collection_expansion_used_true_on_rag_fusion_suc
     )
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = fake_app.tools["search"]
         result = await fn(query="hello", collections=["col1", "col2"], rag_fusion=True)

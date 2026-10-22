@@ -18,7 +18,7 @@ import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
-pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
+pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
 # MCP JSON-RPC helpers (self-contained — no cross-test coupling)

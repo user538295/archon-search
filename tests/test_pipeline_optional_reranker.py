@@ -64,10 +64,9 @@ def make_pipeline_no_reranker(store: Any) -> SearchPipeline:
 
 
 def _make_mock_store(candidates: list[ScoredSearchCandidate]) -> Any:
-    """Return a minimal mock store that supports hybrid_search and hybrid_search_with_trace."""
+    """Return a minimal mock store that supports hybrid_search_with_trace."""
     store = MagicMock()
     store._config = SearchConfig()
-    store.hybrid_search = AsyncMock(return_value=candidates)
     store.hybrid_search_with_trace = AsyncMock(return_value=candidates)
     store.get_all_collections_meta = AsyncMock(return_value=[])
     return store

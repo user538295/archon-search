@@ -19,35 +19,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from tests._collection_lock_stub import with_locked_collection_meta
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
-pytestmark = pytest.mark.xdist_group("mcp")
-
-# ---------------------------------------------------------------------------
-# FastMCP stub — _make_mcp_app patches archon_search.server.mcp.FastMCP with it
-# ---------------------------------------------------------------------------
-
-
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
 
 
 def _make_mcp_app(
@@ -56,8 +30,8 @@ def _make_mcp_app(
     config: Any = None,
     embedder_cache: Any = None,
     job_store: Any = None,
-) -> _FakeApp:
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+) -> StubFastMCP:
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         return mcp_module.create_app(
             pipeline, "default", config=config, embedder_cache=embedder_cache, job_store=job_store
@@ -133,6 +107,7 @@ async def test_update_collection_returns_updated_meta() -> None:
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(store)
     store.get_stored_vector_dimension = AsyncMock(return_value=None)
     store.count_chunks = AsyncMock(return_value=5)  # > 0 → needs_reindex path
     store.update_collection_meta = AsyncMock()
@@ -219,6 +194,7 @@ async def test_update_collection_running_reindex_returns_error() -> None:
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(store)
     store.get_stored_vector_dimension = AsyncMock(return_value=None)
 
     pipeline = MagicMock()
@@ -286,6 +262,7 @@ async def test_update_collection_noop_active_equals_requested() -> None:
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(store)
     store.get_stored_vector_dimension = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
 
@@ -324,6 +301,7 @@ async def test_update_collection_noop_pending_equals_requested() -> None:
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(store)
     store.get_stored_vector_dimension = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
 
@@ -362,6 +340,7 @@ async def test_update_collection_revert_clears_pending() -> None:
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(store)
     store.get_stored_vector_dimension = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
 
@@ -403,6 +382,7 @@ async def test_update_collection_empty_collection_sets_active_model() -> None:
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(store)
     store.get_stored_vector_dimension = AsyncMock(return_value=None)
     store.count_chunks = AsyncMock(return_value=0)  # empty collection
     store.update_collection_meta = AsyncMock()
@@ -487,6 +467,7 @@ async def test_update_collection_pending_reindex_returns_error() -> None:
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(store)
     store.get_stored_vector_dimension = AsyncMock(return_value=None)
 
     pipeline = MagicMock()
@@ -533,6 +514,7 @@ async def test_update_collection_stale_job_noop_writes_store() -> None:
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(store)
     store.get_stored_vector_dimension = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
 

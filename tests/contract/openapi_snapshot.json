@@ -4335,7 +4335,7 @@
                 }
               }
             },
-            "description": "Store busy \u2014 reindex in progress"
+            "description": "Store busy \u2014 another write holds the collection"
           }
         },
         "security": [
@@ -4430,7 +4430,7 @@
                 }
               }
             },
-            "description": "Store busy (code store_busy): the collection lock was not acquired in time, or a job may still be writing to the collection (an ingest, reindex, import, migration, community rebuild, or a metadata reindex that is not a dry run)"
+            "description": "Store busy (code store_busy): the collection lock was not acquired in time, or a job may still be writing to the collection (an ingest, reindex, import, migration, community rebuild, or a metadata reindex that is not a dry run), or a write that creates no job is (an MCP ingest_file / ingest_directory, a collection sync: startup, POST /sync or filesystem watcher)"
           }
         },
         "security": [
@@ -4504,7 +4504,7 @@
         "summary": "Get Collection Info"
       },
       "patch": {
-        "description": "Update a collection's embedding model and/or default TTL. Triggers reindex when the model changes.",
+        "description": "Update a collection's embedding model and/or default TTL. Triggers reindex when the model changes.\n\nThe row is changed under the collection lock, on a row read under it: 404 when a concurrent DELETE dropped the\ncollection meanwhile (no row is re-inserted), 503 ``store_busy`` when the lock is not acquired in time.",
         "operationId": "patch_collection_collections__name__patch",
         "parameters": [
           {
@@ -4577,6 +4577,16 @@
               }
             },
             "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Store busy (code store_busy): the collection lock was not acquired in time"
           }
         },
         "security": [
@@ -4966,7 +4976,7 @@
     },
     "/collections/{name}/migrate": {
       "post": {
-        "description": "Apply pending migrations or report pending list (dry-run).\n\n**dry_run=true:** returns the same ``MigrationPendingResponse`` body as\n``GET /migrations/pending`` without applying anything.\n\n**In-place-only migrations:** applies synchronously, returns 200 with\n``{migrations_applied: [...]}``.  No ``MigrationJob`` is created.\n\n**Rewrite migrations:** requires ``backup_confirmed: true``; creates a\n``MigrationJob`` directly as RUNNING in one write, spawns its task, and\nreturns 202 with ``{job_id, status: \"RUNNING\"}``.  The job is never QUEUED,\nso the scheduler never runs it.\n\n**export_rebuild migrations:** always returns 422 \u2014 D3 does not execute\nexport_rebuild; operators must re-ingest manually.\n\nReturns 404 if the collection is not found in the caller's namespace.\nReturns 409 if a ReindexJob is active for the same collection.\nReturns 422 if rewrite/export_rebuild migrations are pending without\n``backup_confirmed: true``, or if export_rebuild migrations are present.\nReturns 500 (sanitized ``{\"detail\": \"internal error\"}``) if the rewrite's\njob could not be saved.",
+        "description": "Apply pending migrations or report pending list (dry-run).\n\n**dry_run=true:** returns the same ``MigrationPendingResponse`` body as\n``GET /migrations/pending`` without applying anything.\n\n**In-place-only migrations:** applies synchronously, returns 200 with\n``{migrations_applied: [...]}``.  No ``MigrationJob`` is created.\n\n**Rewrite migrations:** requires ``backup_confirmed: true``; creates a\n``MigrationJob`` directly as RUNNING in one write, spawns its task, and\nreturns 202 with ``{job_id, status: \"RUNNING\"}``.  The job is never QUEUED,\nso the scheduler never runs it.\n\n**export_rebuild migrations:** always returns 422 \u2014 D3 does not execute\nexport_rebuild; operators must re-ingest manually.\n\nReturns 404 if the collection is not found in the caller's namespace, also when a concurrent ``DELETE`` dropped\nit while its in-place migrations ran (no ``schema_version`` is written then).\nReturns 409 if a ReindexJob is active for the same collection.\nReturns 422 if rewrite/export_rebuild migrations are pending without\n``backup_confirmed: true``, or if export_rebuild migrations are present.\nReturns 500 (sanitized ``{\"detail\": \"internal error\"}``) if the rewrite's\njob could not be saved.\nReturns 503 ``store_busy`` if the in-place migrations' ``schema_version`` write could not take the collection\nlock in time.",
         "operationId": "migrate_collection_collections__name__migrate_post",
         "parameters": [
           {
@@ -5060,6 +5070,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Store busy (code store_busy): the collection lock was not acquired in time"
           }
         },
         "security": [
@@ -6007,7 +6027,7 @@
                 }
               }
             },
-            "description": "Store busy \u2014 reindex in progress"
+            "description": "Store busy (code store_busy): the collection lock was not acquired in time"
           }
         },
         "security": [

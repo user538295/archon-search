@@ -14,35 +14,13 @@ from __future__ import annotations
 
 import inspect
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("mcp")
-
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.pipeline import SearchPipelineResult
-
-
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 
 def _make_pipeline(
@@ -74,13 +52,13 @@ def _make_mcp_app(
     pipeline: Any,
     *,
     graph_enabled: bool = True,
-) -> _FakeApp:
+) -> StubFastMCP:
     from archon_search.config import GraphConfig, SearchConfig
 
     config = SearchConfig()
     config.graph = GraphConfig(enabled=graph_enabled)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         app = mcp_module.create_app(pipeline, "default", config=config)
     return app  # type: ignore[return-value]
@@ -111,7 +89,7 @@ def test_mcp_search_response_includes_graph_expansion_applied_field() -> None:
 
 def test_mcp_search_graph_mode_param_accepted() -> None:
     """MCP search tool signature includes graph_mode parameter."""
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         pipeline = _make_pipeline()
         app = mcp_module.create_app(pipeline, "default")
@@ -126,7 +104,7 @@ def test_mcp_search_graph_mode_param_accepted() -> None:
 
 def test_mcp_search_with_context_graph_mode_param_accepted() -> None:
     """MCP search_with_context tool signature includes graph_mode parameter."""
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         pipeline = _make_pipeline()
         app = mcp_module.create_app(pipeline, "default")

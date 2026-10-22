@@ -74,6 +74,7 @@ def _make_client(
     mock_store.disconnect = AsyncMock()
     mock_store.ping = AsyncMock(return_value=True)
     mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
+    mock_store.has_active_writer = MagicMock(return_value=False)
     mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")

@@ -6,12 +6,9 @@ import warnings
 from collections.abc import Callable
 
 import anyio
-import pytest
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 from tests.server.test_mcp_auth import _MCP_HEADERS, _MCP_INIT, VALID_KEY, _make_starlette_client
-
-pytestmark = pytest.mark.xdist_group("mcp")
 
 _SSE_POST_COUNT = 3
 

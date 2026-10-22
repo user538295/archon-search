@@ -187,24 +187,6 @@ def test_build_where_handles_every_search_filters_field():
 
 
 # ---------------------------------------------------------------------------
-# Tests for _compute_fetch
-# ---------------------------------------------------------------------------
-
-def test_compute_fetch_branches():
-    from archon_search.store_filters import _compute_fetch, GLOB_OVERFETCH_FACTOR
-
-    # No glob: max(top_k * 3, 20)
-    assert _compute_fetch(1, has_glob=False) == 20   # min floor
-    assert _compute_fetch(10, has_glob=False) == 30  # 10*3
-    assert _compute_fetch(7, has_glob=False) == 21   # 7*3 > 20
-
-    # With glob: max(top_k * GLOB_OVERFETCH_FACTOR, 60)
-    assert _compute_fetch(1, has_glob=True) == 60                                # floor
-    assert _compute_fetch(20, has_glob=True) == 20 * GLOB_OVERFETCH_FACTOR      # 100
-    assert _compute_fetch(13, has_glob=True) == max(13 * GLOB_OVERFETCH_FACTOR, 60)
-
-
-# ---------------------------------------------------------------------------
 # Additional tests (Fix 6, 8)
 # ---------------------------------------------------------------------------
 

@@ -143,7 +143,7 @@ def test_optimize_fts_opens_correct_table(tmp_path: Any) -> None:
 
 @pytest.mark.integration
 def test_optimize_fts_makes_new_chunks_searchable(tmp_path: Any) -> None:
-    """After ingest_chunks (no FTS rebuild) + optimize_fts(), hybrid_search must find the new content."""
+    """After ingest_chunks (no FTS rebuild) + optimize_fts(), hybrid_search_with_trace must find the new content."""
     store = SearchStore(tmp_path / "db")
 
     async def _run() -> None:
@@ -165,9 +165,9 @@ def test_optimize_fts_makes_new_chunks_searchable(tmp_path: Any) -> None:
             # Optimize to incorporate new rows into FTS
             await store.optimize_fts(col)
 
-            # Now hybrid_search should find the new content
+            # Now hybrid_search_with_trace should find the new content
             query_vec = [1.0] * _DIM
-            results = await store.hybrid_search(col, query_vec, "incremental fts test content", 10)
+            results = await store.hybrid_search_with_trace(col, query_vec, "incremental fts test content", 10)
             returned_doc_ids = {r.doc_id for r in results}
             assert doc_id in returned_doc_ids, (
                 f"Expected doc_id {doc_id!r} in FTS results after optimize_fts; got {returned_doc_ids!r}"

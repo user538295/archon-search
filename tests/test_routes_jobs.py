@@ -7,6 +7,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -38,7 +39,15 @@ from archon_search.server.routes_jobs import (
     _run_pipeline,
     make_retry_dispatcher,
 )
-from archon_search.types import IngestJob, IngestOptions, MigrationKind, ReindexJob
+from archon_search.types import (
+    CommunityRebuildJob,
+    IngestJob,
+    IngestOptions,
+    MetadataReindexJob,
+    MigrationKind,
+    ReindexJob,
+    SyncJob,
+)
 from tests._internal_error_leak import LEAK_NEEDLE, assert_logged_with_traceback, permission_error
 from tests._parked_lock import parked_waiters, reaping, until_parked
 
@@ -720,6 +729,30 @@ def test_delete_job_in_unhandled_status_names_the_status_value(client: TestClien
     assert response.json() == {"detail": f"Unknown job status: {JobStatus.QUEUED.value}"}
 
 
+@pytest.mark.parametrize("job_cls", [CommunityRebuildJob, MetadataReindexJob, SyncJob], ids=lambda cls: cls.__name__)
+def test_delete_job_on_legacy_queued_row_of_a_kind_nothing_schedules_is_the_idempotent_200(
+    tmp_path: Path, auth_headers: dict[str, str], job_cls: type[IngestJob]
+) -> None:
+    """A community-rebuild, metadata-reindex or sync job an older server left ``QUEUED`` (it died before claiming it)
+    can never run. The restart fails it at load, so GET /jobs lists it FAILED and DELETE /jobs/{id} answers the
+    terminal row's idempotent 200 — not the ``500`` ``Unknown job status: QUEUED`` (``409`` for a sync) it answered
+    while the row stayed QUEUED."""
+    jobs_path = tmp_path / "jobs.json"
+    now = datetime.now(timezone.utc).isoformat()
+    legacy = job_cls(job_id="legacy-queued", status=JobStatus.QUEUED, created_at=now, updated_at=now, collection="c")
+    JobStore(path=jobs_path).create_job(legacy)
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    client = TestClient(create_app(config, JobStore(path=jobs_path)), headers=auth_headers)
+
+    listed = {job["job_id"]: job for job in client.get("/jobs").json()["items"]}
+    response = client.delete(f"/jobs/{legacy.job_id}")
+
+    assert (listed[legacy.job_id]["status"], listed[legacy.job_id]["error"]) == ("FAILED", NOT_STARTED_BEFORE_RESTART_DETAIL)
+    assert response.status_code == 200
+    assert (response.json()["status"], response.json()["error"]) == ("FAILED", NOT_STARTED_BEFORE_RESTART_DETAIL)
+
+
 def test_ingest_accepts_legitimate_absolute_path(client: TestClient) -> None:
     """POST /ingest with a valid absolute path still returns 202 (regression guard)."""
     response = client.post("/ingest", json={"collection": "c", "path": "/tmp/legit"})
@@ -1265,7 +1298,7 @@ def test_ingest_lock_timeout_503_creates_no_job(
     response = client.post("/ingest", json={"collection": "docs"})
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "reindex in progress; retry after Retry-After seconds", "code": "store_busy"}
+    assert response.json() == {"detail": "collection is busy with another write; retry after Retry-After seconds", "code": "store_busy"}
     assert response.headers["Retry-After"] == "1"
     assert tmp_store.list() == []
 
@@ -3314,12 +3347,13 @@ async def test_running_retry_cancelled_by_shutdown_stays_retryable_unlike_a_user
 
 
 @pytest.mark.anyio
-async def test_delete_job_on_parked_retry_then_crash_loads_as_process_restart(
+async def test_delete_job_on_parked_retry_then_crash_completes_the_cancel(
     tmp_path: Path, auth_headers: dict[str, str]
 ) -> None:
-    """Pins a known limit: a retry a client cancelled while it was parked is still CANCELLING if the process then
-    dies, and the restart cannot tell it never ran — it loads FAILED ``process_restart`` and arms the crash-loop
-    guard. The chain still ends (the client's intent) and nothing is retried."""
+    """A retry a client cancelled while it was parked is still CANCELLING if the process then dies. It never ran, so
+    the restart completes the cancel as its task would have — CANCELLED — and arms no crash-loop guard (the same
+    parked retry the client did not cancel loads FAILED "never started" and arms none either). The client's cancel
+    still ends the chain, so nothing is retried."""
     jobs_path = tmp_path / "jobs.json"
     store = JobStore(path=jobs_path)
     _failed_original(store)
@@ -3337,11 +3371,53 @@ async def test_delete_job_on_parked_retry_then_crash_loads_as_process_restart(
         restarted = JobStore(path=jobs_path)
         recovered = restarted.get(retry.job_id)
         assert recovered is not None
-        assert (recovered.status, recovered.error) == (JobStatus.FAILED, PROCESS_RESTART_ERROR)
-        assert restarted.crashed_ingest_on_load
+        assert (recovered.status, recovered.error) == (JobStatus.CANCELLED, None)
+        assert not restarted.crashed_ingest_on_load
         dispatch = MagicMock()
         await _retry_loop(restarted, tmp_path, dispatch)._run_failed_ingest_retry({})
         dispatch.assert_not_called()
+
+
+def test_delete_running_ingest_then_crash_still_arms_the_crash_loop_guard(
+    tmp_path: Path, client: TestClient, tmp_store: JobStore
+) -> None:
+    """A cancel does not stop a RUNNING ingest (its task keeps writing until it ends), so one still CANCELLING when
+    the process dies was running: the restart reads it as the crash it is and arms the guard."""
+    job = tmp_store.create(path="/data/file.md", collection="docs")
+    tmp_store.update(job.job_id, status=JobStatus.RUNNING)
+
+    response = client.delete(f"/jobs/{job.job_id}")
+
+    assert response.status_code == 202
+    restarted = JobStore(path=tmp_path / "jobs.json")
+    recovered = restarted.get(job.job_id)
+    assert recovered is not None
+    assert (recovered.status, recovered.error) == (JobStatus.FAILED, PROCESS_RESTART_ERROR)
+    assert restarted.crashed_ingest_on_load
+
+
+@pytest.mark.parametrize(
+    ("started", "before_start"), [(False, True), (True, False)], ids=["pending", "running"]
+)
+def test_delete_job_records_whether_the_job_had_started(
+    tmp_path: Path, client: TestClient, tmp_store: JobStore, started: bool, before_start: bool
+) -> None:
+    """DELETE /jobs/{id} marks a job it cancels while PENDING as ``cancelled_before_start`` (kept in the jobs file
+    only, off the wire): its task has not claimed it RUNNING, so a restart finding it CANCELLING knows nothing ran."""
+    job = tmp_store.create(path="/data/file.md", collection="docs")
+    if started:
+        tmp_store.update(job.job_id, status=JobStatus.RUNNING)
+
+    response = client.delete(f"/jobs/{job.job_id}")
+
+    assert response.status_code == 202
+    assert "cancelled_before_start" not in response.json()
+    assert "cancelled_before_start" not in client.get(f"/jobs/{job.job_id}").json()
+    cancelled = tmp_store.get(job.job_id)
+    assert cancelled is not None
+    assert cancelled.cancelled_before_start is before_start
+    rows = {row["job_id"]: row for row in json.loads((tmp_path / "jobs.json").read_text())}
+    assert ("cancelled_before_start" in rows[job.job_id]) is before_start
 
 
 def test_delete_job_records_the_cancel_request_off_the_wire(

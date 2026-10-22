@@ -25,6 +25,11 @@ Exemption: ``app.state.sync_lock`` only serialises this route and the lifespan's
 startup sync (``app.py``) — a watcher-driven sync (``app.py``'s ``_watch_callback``
 -> ``collection_sync.sync_collection()``) does not take the lock and can run
 concurrently with either.
+
+A sync creates no collection-scoped job, so it guards ``DELETE /collections/{name}`` itself: ``sync()`` registers in
+``SearchStore.collection_writer`` around each collection's write and skips a collection the live config no longer
+holds (``SearchCollectionSync._write_collection``); it also refuses to drop a collection gone from the config while a
+job or writer may still write it (``SearchCollectionSync._drop_if_idle``).
 """
 from __future__ import annotations
 
@@ -70,6 +75,7 @@ _SYNC_FAILED_DETAIL = "sync failed"
 _SYNC_TASK_LOG_CONTEXT = "_sync_task"
 _TRIGGER_SYNC_LOG_CONTEXT = "trigger_sync"
 #: SyncJob statuses only an older server wrote (it created SyncJobs QUEUED first); nothing runs such a job.
+#: ``JobStore._load`` already fails a QUEUED one at startup, so QUEUED here is a defensive leftover.
 _LEGACY_SYNC_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.PENDING})
 
 

@@ -9,6 +9,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search._types import CollectionInfo
+from archon_search.store import SearchStore
 from archon_search.sync import collection_sync_failed_detail, path_to_collection_name
 
 
@@ -62,6 +63,11 @@ class TestPathToCollectionName:
 def make_mock_pipeline(tmp_path, existing_collections=None, manifest=None):
     pipeline = MagicMock()
     pipeline.store._db_path = tmp_path / "db"
+    # The collection lock and writer registry are the real ones: a bare MagicMock would report an active writer for
+    # every collection (``has_active_writer`` is truthy) and so refuse every drop.
+    registry = SearchStore(tmp_path / "db")
+    for attribute in ("lock_for", "discard_lock", "locked_collection", "collection_writer", "has_active_writer"):
+        setattr(pipeline.store, attribute, getattr(registry, attribute))
     pipeline.store.list_collections = AsyncMock(return_value=[
         CollectionInfo(name=n, doc_count=0, chunk_count=0) for n in (existing_collections or [])
     ])
@@ -115,7 +121,7 @@ class TestSearchCollectionSync:
         syncer = SearchCollectionSync(pipeline)
         result = await syncer.sync([])  # empty desired
 
-        pipeline.store.drop_collection.assert_called_once_with("oldcol")
+        pipeline.store.drop_collection.assert_called_once_with("oldcol", _locked_by_caller=True)
         assert "oldcol" in result.removed
         assert result.errors == []
 
@@ -328,7 +334,7 @@ class TestSearchCollectionSync:
         syncer = SearchCollectionSync(pipeline)
         result = await syncer.sync([])
 
-        pipeline.store.drop_collection.assert_called_once_with("managed")
+        pipeline.store.drop_collection.assert_called_once_with("managed", _locked_by_caller=True)
         assert "managed" in result.removed
         assert "unmanaged" in result.skipped
 

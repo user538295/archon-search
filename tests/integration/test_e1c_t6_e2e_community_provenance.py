@@ -439,7 +439,6 @@ def test_explain_global_community_provenance_e2e(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group("mcp")
 def test_mcp_explain_local_community_provenance_e2e(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

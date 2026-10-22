@@ -22,39 +22,16 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
-pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
-
-
-# ---------------------------------------------------------------------------
-# FastMCP stub for unit tests
-# ---------------------------------------------------------------------------
+pytestmark = pytest.mark.integration
 
 
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
 
 
 # ---------------------------------------------------------------------------
@@ -111,9 +88,9 @@ def _make_search_pipeline() -> Any:
     return pipeline
 
 
-def _make_mcp_app(pipeline: Any) -> _FakeApp:
+def _make_mcp_app(pipeline: Any) -> StubFastMCP:
     """Build a stub-backed MCP app and return it."""
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_mod
         app = mcp_mod.create_app(pipeline, "col1")
     return app  # type: ignore[return-value]
@@ -433,7 +410,7 @@ def test_mcp_search_scope_filter_with_graph_mode_returns_error() -> None:
     config = SearchConfig()
     config.graph = GraphConfig(enabled=True)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_mod
         app = mcp_mod.create_app(pipeline, "col1", config=config)
 
@@ -463,7 +440,7 @@ def test_mcp_explain_scope_filter_with_graph_mode_returns_error() -> None:
     config = SearchConfig()
     config.graph = GraphConfig(enabled=True)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_mod
         app = mcp_mod.create_app(pipeline, "col1", config=config)
 

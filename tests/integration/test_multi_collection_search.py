@@ -231,9 +231,8 @@ async def test_single_item_collections_matches_single_collection_field_subset(tm
       updated_at, ingested_by, metadata, acl) is IDENTICAL between the two paths,
       and each shared result carries collection == "x". We also assert the
       intersection is non-empty. We deliberately do NOT assert set/order equality
-      of the two result lists, because single() uses hybrid_search (top_k_retrieve
-      candidates) while search_many() uses hybrid_search_with_trace + per-leg trim,
-      so the candidate pools and final ordering can legitimately differ.
+      of the two result lists, because search() and search_many() both call hybrid_search_with_trace, but search_many()
+      applies a per-leg trim and its own fusion, so the candidate pools and final ordering can legitimately differ.
     """
     from archon_search.store import SearchStore
 

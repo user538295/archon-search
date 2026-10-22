@@ -21,7 +21,7 @@ from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderCache, EmbedderNotReadyError
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
-from archon_search.server._ingest_lock import acquire_collection_lock_or_503
+from archon_search.server._ingest_lock import STORE_BUSY_503_DESCRIPTION, acquire_collection_lock_or_503
 from archon_search.server._job_warmup import await_models_warm
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.schemas import CodedErrorDetail, ErrorDetail, JobListResponse, JobResponse
@@ -40,12 +40,11 @@ _TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED
 _ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.PENDING}
 
 # Sanitized, wire-facing ``detail`` for DELETE /jobs/{id} on any non-terminal
-# SyncJob — the startup sync, a manual POST /sync, or a legacy QUEUED/PENDING
+# SyncJob — the startup sync, a manual POST /sync, or a legacy PENDING
 # row (CLAUDE.md hard invariant: no str(exc)/internals in a wire-facing detail
 # field). A sync is non-cancellable: nothing interrupts the task that runs it,
 # so transitioning the row to CANCELLING would be silently ignored by the sync
-# itself AND would arm the (sticky, since fix-brief-C item 1) crash-loop guard
-# on the next boot — CANCELLING is one of jobs/store.py's _CRASH_STATUSES.
+# itself, which would run on and overwrite the status when it ends.
 _SYNC_JOB_NOT_CANCELLABLE_DETAIL = "a sync cannot be cancelled"
 
 #: Wire-facing job ``error`` (served by GET /jobs) for an unexpected ingest / reindex failure; the
@@ -697,7 +696,7 @@ _INGEST_ERRORS: dict[int | str, dict[str, Any]] = {
         "description": "A single-file path or an inline document exceeds the configured max_file_mb limit",
     },
     500: {"model": ErrorDetail, "description": f'Creating the ingest job failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})'},
-    503: {"model": ErrorDetail, "description": "Store busy — reindex in progress"},
+    503: {"model": ErrorDetail, "description": STORE_BUSY_503_DESCRIPTION},
 }
 
 
@@ -1058,8 +1057,16 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
     if job.status in _ACTIVE_STATUSES:
         # Use transition() to avoid TOCTOU race: only updates if still active
         try:
-            # cancel_requested (off the wire) tells this client's cancel from a CANCELLED a shutdown writes.
-            updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING, cancel_requested=True)
+            # cancel_requested (off the wire) tells this client's cancel from a CANCELLED a shutdown writes;
+            # cancelled_before_start tells a cancel that landed before the job's task claimed it RUNNING (nothing ran)
+            # from one that did not (the task keeps running), for a restart that finds the job still CANCELLING.
+            updated = store.transition(
+                job.job_id,
+                _ACTIVE_STATUSES,
+                JobStatus.CANCELLING,
+                cancel_requested=True,
+                cancelled_before_start=job.status == JobStatus.PENDING,
+            )
         except Exception:  # noqa: BLE001 — the job keeps its status; any failure maps to one sanitized 500
             logger.exception("Failed to persist the cancel of job %s", job_id)
             return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)

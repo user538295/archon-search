@@ -26,7 +26,14 @@ from archon_search.server._collection_job import (
     create_collection_job,
     refuse_active_job_or_fail_legacy,
 )
-from archon_search.server._ingest_lock import STORE_BUSY_503_DESCRIPTION, acquire_collection_lock_or_503, store_busy_503
+from archon_search.server._ingest_lock import (
+    COLLECTION_WRITER_IN_PROGRESS_DETAIL,
+    STORE_BUSY_503_DESCRIPTION,
+    STORE_BUSY_DETAIL,
+    acquire_collection_lock_or_503,
+    collection_job_in_progress_detail,
+    store_busy_503,
+)
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.routes_jobs import _REINDEX_COLLECTION_LOG_CONTEXT, INTERNAL_ERROR_DETAIL, REINDEX_FAILED_DETAIL, IngestRequest, _ingest_task, _persist_job_status, _reindex_task, _track_background_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, ExpiringChunkItem, ExpiringChunksResponse, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
@@ -211,12 +218,6 @@ async def _visible_meta_or_404(
     return meta
 
 
-#: Wire-facing 503 detail when the active job belongs to another namespace: its job id is not disclosed.
-COLLECTION_JOB_IN_PROGRESS_DETAIL = "a job is in progress on this collection; retry after it completes"
-#: Wire-facing 503 detail when the active job belongs to the caller's namespace (``str.format`` with ``job_id``).
-COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE = "job {job_id} is in progress; retry after it completes"
-
-
 def _collection_job_in_progress_503(job: IngestJob, name: str, ns: str) -> JSONResponse:
     """Log and build the 503 ``store_busy`` refusing DELETE of *name* while *job* may write to it.
 
@@ -231,9 +232,15 @@ def _collection_job_in_progress_503(job: IngestJob, name: str, ns: str) -> JSONR
         job.namespace,
         ns,
     )
-    if job.namespace == ns:
-        return store_busy_503(COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id=job.job_id))
-    return store_busy_503(COLLECTION_JOB_IN_PROGRESS_DETAIL)
+    return store_busy_503(collection_job_in_progress_detail(job, ns))
+
+
+def _collection_writer_in_progress_503(name: str) -> JSONResponse:
+    """Log and build the 503 ``store_busy`` refusing DELETE of *name* while a write that creates no job may write it."""
+    logger.warning(
+        "DELETE /collections/%s refused: an MCP ingest or a collection sync is writing the collection", name
+    )
+    return store_busy_503(COLLECTION_WRITER_IN_PROGRESS_DETAIL)
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +320,7 @@ _ERROR_400_401_409_503 = {
     400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
     401: {"model": ErrorDetail},
     409: {"model": ErrorDetail},
-    503: {"model": ErrorDetail, "description": "Store busy — reindex in progress"},
+    503: {"model": ErrorDetail, "description": "Store busy — another write holds the collection"},
 }
 _CONFIG_PERSIST_500_DESCRIPTION = "Config file could not be saved (code config_persist_failed); change rolled back"
 _ERROR_500_REMOVE_COLLECTION = {
@@ -465,7 +472,9 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
             "description": (
                 f"{STORE_BUSY_503_DESCRIPTION}, "
                 "or a job may still be writing to the collection (an ingest, reindex, import, migration, "
-                "community rebuild, or a metadata reindex that is not a dry run)"
+                "community rebuild, or a metadata reindex that is not a dry run), "
+                "or a write that creates no job is (an MCP ingest_file / ingest_directory, a collection sync: startup, "
+                "POST /sync or filesystem watcher)"
             ),
         },
         **_ERROR_500_REMOVE_COLLECTION,
@@ -537,13 +546,21 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
         # POST /collections/ pre-acquire this lock before creating their ingest job, a maintenance retry waits for it
         # before its claim, POST /collections/{name}/reindex, /reindex-metadata and /graph/{name}/rebuild-communities
         # create their job and meta pointer under it from a meta row re-read under it (create_collection_job), and a
-        # rewrite migration created meanwhile opens the dropped table under this lock and fails cleanly. Known,
-        # pre-existing gaps outside this check (sync, import force_overwrite, jobless writers, unlocked meta
-        # read-modify-writes): Documentation/Architecture/530_technical_debt_refactoring_roadmap.md, CON-7..CON-12.
+        # rewrite migration created meanwhile opens the dropped table under this lock and fails cleanly. An import's
+        # force_overwrite drop makes the same lock + job check (routes_export._ensure_collection_absent), and PATCH, the
+        # in-place migrate and MCP update_collection re-read their meta row under this lock
+        # (SearchStore.locked_collection_meta), so none writes it back after this drop. Writers that create no job — an
+        # MCP ingest_file / ingest_directory and a collection sync (startup, POST /sync, filesystem watcher) — register
+        # in SearchStore.collection_writer (under this lock) for their whole run — a sync for each collection's write
+        # only — which this check reads (has_active_writer); a sync also skips a collection no longer in the live
+        # config (SearchCollectionSync._write_collection, app._sync_watched_collection), so it cannot re-create one
+        # deleted here.
         job_store = getattr(request.app.state, "job_store", None)
         active_job = job_store.find_active_collection_job(name, ns) if job_store is not None else None
         if active_job is not None:
             return _collection_job_in_progress_503(active_job, name, ns)
+        if search_store is not None and search_store.has_active_writer(name):
+            return _collection_writer_in_progress_503(name)
 
         # Mutate the config only now, under the lock. The returned rollback re-inserts just
         # the entries it removed, so it never discards config changes made by others meanwhile.
@@ -751,17 +768,22 @@ async def get_expiring_chunks(
     return ExpiringChunksResponse(items=items, next_cursor=next_cursor, page_count=len(items))
 
 
-_ERROR_401_404_409_422 = {
+_ERROR_401_404_409_422_503 = {
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
     409: {"model": ErrorDetail},
     422: {"model": ErrorDetail},
+    503: {"model": ErrorDetail, "description": STORE_BUSY_503_DESCRIPTION},
 }
 
 
-@router.patch("/{name}", response_model=CollectionDetail, responses=_ERROR_401_404_409_422)
+@router.patch("/{name}", response_model=CollectionDetail, responses=_ERROR_401_404_409_422_503)
 async def patch_collection(name: str, body: PatchCollectionBody, request: Request) -> CollectionDetail | JSONResponse:
-    """Update a collection's embedding model and/or default TTL. Triggers reindex when the model changes."""
+    """Update a collection's embedding model and/or default TTL. Triggers reindex when the model changes.
+
+    The row is changed under the collection lock, on a row read under it: 404 when a concurrent DELETE dropped the
+    collection meanwhile (no row is re-inserted), 503 ``store_busy`` when the lock is not acquired in time.
+    """
     config: SearchConfig = request.app.state.config
     search_store = request.app.state.search_store
     job_store: JobStore = request.app.state.job_store
@@ -772,81 +794,92 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
     if name not in path_to_name:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
-    # 404 if meta not found for this namespace
-    meta = await search_store.get_collection_meta(name, namespace=ns)
-    if meta is None:
+    # 404 if meta not found for this namespace (read again under the lock below, where it is authoritative)
+    if await search_store.get_collection_meta(name, namespace=ns) is None:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
     # Determine which fields were explicitly provided in the request body.
     payload = body.model_dump(exclude_unset=True)
 
-    # --- Embedding model logic (only when field is explicitly set AND non-null) ---
-    stale_cleared = False
-    if "embedding_model" in payload and body.embedding_model is not None:
-        # Validate embedding model — 422 on ModelValidationError
+    # Validate embedding model (only when field is explicitly set AND non-null) — 422 on ModelValidationError.
+    # Before the lock: loading a model can take long, and the lock blocks every write to the collection.
+    changes_embedding_model = "embedding_model" in payload and body.embedding_model is not None
+    if changes_embedding_model:
         try:
             await validate_embedding_model(body.embedding_model)
         except ModelValidationError as e:
             raise HTTPException(status_code=422, detail=str(e))
 
-        # 409 guard: check if reindex job is still active
-        if meta.reindex_job_id is not None:
-            job = job_store.get(meta.reindex_job_id)
-            if job is not None and job.status in (JobStatus.RUNNING, JobStatus.PENDING):
-                return JSONResponse(
-                    {"detail": "reindex in progress; wait for job to complete before changing embedding model"},
-                    status_code=409,
-                )
-            # Stale (DONE/FAILED/CANCELLED) — clear it (must persist below)
-            meta.reindex_job_id = None
-            stale_cleared = True
+    # Read-modify-write under the collection lock, on a row read under it: update_collection_meta upserts, so a write
+    # from a row read before a concurrent DELETE dropped the collection would re-insert the dropped collection's row.
+    try:
+        async with search_store.locked_collection_meta(name, ns) as meta:
+            if meta is None:
+                raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
-        requested = body.embedding_model
-        active = meta.active_embedding_model
-        pending = meta.pending_embedding_model
+            # --- Embedding model logic ---
+            stale_cleared = False
+            if changes_embedding_model:
+                # 409 guard: check if reindex job is still active
+                if meta.reindex_job_id is not None:
+                    job = job_store.get(meta.reindex_job_id)
+                    if job is not None and job.status in (JobStatus.RUNNING, JobStatus.PENDING):
+                        return JSONResponse(
+                            {"detail": "reindex in progress; wait for job to complete before changing embedding model"},
+                            status_code=409,
+                        )
+                    # Stale (DONE/FAILED/CANCELLED) — clear it (must persist below)
+                    meta.reindex_job_id = None
+                    stale_cleared = True
 
-        # State machine
-        if active == requested and pending is None:
-            # (a) no-op — persist only if stale reindex_job_id was cleared
-            if stale_cleared:
-                await search_store.update_collection_meta(meta)
-        elif pending == requested:
-            # (a') no-op — persist only if stale reindex_job_id was cleared
-            if stale_cleared:
-                await search_store.update_collection_meta(meta)
-        elif pending is not None and active == requested:
-            # (c) revert: clear pending and any stale reindex_job_id
-            meta.pending_embedding_model = None
-            meta.needs_reindex = False
-            meta.reindex_job_id = None
-            await search_store.update_collection_meta(meta)
-        else:
-            # (b) or (d): new model requested
-            chunk_count = await search_store.count_chunks(name, namespace=ns)
-            if chunk_count > 0:
-                meta.pending_embedding_model = requested
-                meta.needs_reindex = True
-            else:
-                meta.active_embedding_model = requested
-                meta.pending_embedding_model = None
-                meta.needs_reindex = False
-                meta.reindex_job_id = None
-            await search_store.update_collection_meta(meta)
-    elif "embedding_model" not in payload:
-        # No embedding_model field at all — check for stale reindex_job_id (for TTL-only path)
-        if meta.reindex_job_id is not None:
-            job = job_store.get(meta.reindex_job_id)
-            if job is None or job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
-                meta.reindex_job_id = None
-                stale_cleared = True
+                requested = body.embedding_model
+                active = meta.active_embedding_model
+                pending = meta.pending_embedding_model
 
-    # --- default_ttl_seconds (explicit null = clear; absent = no change) ---
-    if "default_ttl_seconds" in payload:
-        meta = dataclasses.replace(meta, default_ttl_seconds=body.default_ttl_seconds)
-        await search_store.update_collection_meta(meta)
-    elif stale_cleared and "embedding_model" not in payload:
-        # Persist stale-cleared reindex_job_id even when no other field changed
-        await search_store.update_collection_meta(meta)
+                # State machine
+                if active == requested and pending is None:
+                    # (a) no-op — persist only if stale reindex_job_id was cleared
+                    if stale_cleared:
+                        await search_store.update_collection_meta(meta, _locked_by_caller=True)
+                elif pending == requested:
+                    # (a') no-op — persist only if stale reindex_job_id was cleared
+                    if stale_cleared:
+                        await search_store.update_collection_meta(meta, _locked_by_caller=True)
+                elif pending is not None and active == requested:
+                    # (c) revert: clear pending and any stale reindex_job_id
+                    meta.pending_embedding_model = None
+                    meta.needs_reindex = False
+                    meta.reindex_job_id = None
+                    await search_store.update_collection_meta(meta, _locked_by_caller=True)
+                else:
+                    # (b) or (d): new model requested
+                    chunk_count = await search_store.count_chunks(name, namespace=ns)
+                    if chunk_count > 0:
+                        meta.pending_embedding_model = requested
+                        meta.needs_reindex = True
+                    else:
+                        meta.active_embedding_model = requested
+                        meta.pending_embedding_model = None
+                        meta.needs_reindex = False
+                        meta.reindex_job_id = None
+                    await search_store.update_collection_meta(meta, _locked_by_caller=True)
+            elif "embedding_model" not in payload:
+                # No embedding_model field at all — check for stale reindex_job_id (for TTL-only path)
+                if meta.reindex_job_id is not None:
+                    job = job_store.get(meta.reindex_job_id)
+                    if job is None or job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
+                        meta.reindex_job_id = None
+                        stale_cleared = True
+
+            # --- default_ttl_seconds (explicit null = clear; absent = no change) ---
+            if "default_ttl_seconds" in payload:
+                meta = dataclasses.replace(meta, default_ttl_seconds=body.default_ttl_seconds)
+                await search_store.update_collection_meta(meta, _locked_by_caller=True)
+            elif stale_cleared and "embedding_model" not in payload:
+                # Persist stale-cleared reindex_job_id even when no other field changed
+                await search_store.update_collection_meta(meta, _locked_by_caller=True)
+    except StoreBusyError:
+        return store_busy_503(STORE_BUSY_DETAIL)
 
     # Build CollectionDetail response
     state_store = request.app.state.state_store
@@ -1112,7 +1145,29 @@ _MIGRATE_ERROR_RESPONSES = {
     409: {"model": ErrorDetail},
     422: {"model": ErrorDetail},
     500: {"model": ErrorDetail},
+    503: {"model": ErrorDetail, "description": STORE_BUSY_503_DESCRIPTION},
 }
+
+
+async def _apply_in_place_or_refusal(
+    search_store: SearchStore, name: str, ns: str, specs: list[MigrationSpec]
+) -> JSONResponse | None:
+    """Apply the in-place *specs* to collection *name*; the response refusing the request, or ``None`` once applied.
+
+    404 when a concurrent DELETE dropped the collection meanwhile (``apply_in_place_migrations`` finds no row to
+    record ``schema_version`` on), 503 ``store_busy`` when the collection lock is not acquired in time, else the
+    sanitized 500 (the failure is logged, never sent).
+    """
+    try:
+        applied = await search_store.apply_in_place_migrations(name, ns, specs)
+    except StoreBusyError:
+        return store_busy_503(STORE_BUSY_DETAIL)
+    except Exception:
+        logger.exception("apply_in_place_migrations failed for collection %r", name)
+        return JSONResponse({"detail": "migration failed: internal error"}, status_code=500)
+    if not applied:
+        return JSONResponse({"detail": f"Collection {name!r} not found"}, status_code=404)
+    return None
 
 
 @router.post(
@@ -1139,12 +1194,15 @@ async def migrate_collection(
     **export_rebuild migrations:** always returns 422 — D3 does not execute
     export_rebuild; operators must re-ingest manually.
 
-    Returns 404 if the collection is not found in the caller's namespace.
+    Returns 404 if the collection is not found in the caller's namespace, also when a concurrent ``DELETE`` dropped
+    it while its in-place migrations ran (no ``schema_version`` is written then).
     Returns 409 if a ReindexJob is active for the same collection.
     Returns 422 if rewrite/export_rebuild migrations are pending without
     ``backup_confirmed: true``, or if export_rebuild migrations are present.
     Returns 500 (sanitized ``{"detail": "internal error"}``) if the rewrite's
     job could not be saved.
+    Returns 503 ``store_busy`` if the in-place migrations' ``schema_version`` write could not take the collection
+    lock in time.
     """
     config: SearchConfig = request.app.state.config
     search_store = request.app.state.search_store
@@ -1220,11 +1278,9 @@ async def migrate_collection(
 
         # Apply in-place migrations before queuing the rewrite job.
         if in_place_specs:
-            try:
-                await search_store.apply_in_place_migrations(name, ns, in_place_specs)
-            except Exception:
-                logger.exception("apply_in_place_migrations failed before rewrite dispatch for collection %r", name)
-                return JSONResponse({"detail": "migration failed: internal error"}, status_code=500)
+            refusal = await _apply_in_place_or_refusal(search_store, name, ns, in_place_specs)
+            if refusal is not None:
+                return refusal
 
         # Create the MigrationJob directly as RUNNING in one write. The route dispatches
         # the task itself (not via the scheduler), so the job must never be QUEUED —
@@ -1262,11 +1318,9 @@ async def migrate_collection(
         )
 
     # In-place-only path: apply synchronously.
-    try:
-        await search_store.apply_in_place_migrations(name, ns, in_place_specs)
-    except Exception:
-        logger.exception("apply_in_place_migrations failed for collection %r", name)
-        return JSONResponse({"detail": "migration failed: internal error"}, status_code=500)
+    refusal = await _apply_in_place_or_refusal(search_store, name, ns, in_place_specs)
+    if refusal is not None:
+        return refusal
 
     return MigrateInPlaceResponse(
         migrations_applied=[s.name for s in in_place_specs],

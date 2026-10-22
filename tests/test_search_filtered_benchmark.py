@@ -32,6 +32,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -41,8 +43,15 @@ _THRESHOLDS_PATH = Path(__file__).parent / "eval" / "thresholds.toml"
 _DIM = 32          # small but non-trivial embedding dimension
 _N_CHUNKS = 500    # corpus size — keeps ingest fast in CI while giving stable p95
 _N_ITERS = 100     # measurement iterations
-_TOP_K = 10
 _WARMUP = 5        # warm-up iterations (not measured)
+_TOP_K = 10
+# Per-leg fetch depth: the standard RRF over-fetch of max(top_k * 3, 20).
+_CANDIDATE_DEPTH_FACTOR = 3
+_MIN_CANDIDATE_DEPTH = 20
+_CANDIDATE_DEPTH = max(_TOP_K * _CANDIDATE_DEPTH_FACTOR, _MIN_CANDIDATE_DEPTH)
+# Glob queries over-fetch more because the glob post-filter runs after retrieval.
+_MIN_GLOB_CANDIDATE_DEPTH = 60
+_GLOB_CANDIDATE_DEPTH = max(_TOP_K * GLOB_OVERFETCH_FACTOR, _MIN_GLOB_CANDIDATE_DEPTH)
 
 # 20 % of chunks share prefix /bench/group-0/ (indices 0..99)
 _GLOB_PATTERN = "/bench/group-0/*"
@@ -118,7 +127,7 @@ def bench_store(tmp_path_factory):  # type: ignore[no-untyped-def]
         table = await db.open_table("bench")
         rows = [_make_chunk(i) for i in range(_N_CHUNKS)]
         await table.add(rows)
-        # Build FTS index so hybrid_search can use both legs
+        # Build FTS index so hybrid_search_with_trace can use both legs
         from lancedb.index import FTS
         await table.create_index("text", config=FTS(), replace=True)
 
@@ -138,9 +147,9 @@ async def _measure(
     filters,
     n_iters: int,
     warmup: int,
-    top_k: int = _TOP_K,
+    candidate_depth: int = _CANDIDATE_DEPTH,
 ) -> list[float]:
-    """Run hybrid_search and return CPU-time latencies in milliseconds.
+    """Run hybrid_search_with_trace and return CPU-time latencies in milliseconds.
 
     Uses ``time.process_time()`` (CLOCK_PROCESS_CPUTIME_ID) rather than wall-clock
     ``time.perf_counter()``. The work measured is CPU-bound (in-process LanceDB +
@@ -157,13 +166,13 @@ async def _measure(
     warmup_rng = np.random.default_rng(9999)
     for _ in range(warmup):
         qv = warmup_rng.random(_DIM, dtype=np.float32).tolist()
-        await store.hybrid_search("bench", qv, query_text, top_k, filters)
+        await store.hybrid_search_with_trace("bench", qv, query_text, candidate_depth, filters)
 
     latencies: list[float] = []
     for i in range(n_iters):
         qv = np.random.default_rng(i).random(_DIM, dtype=np.float32).tolist()
         t0 = time.process_time()
-        await store.hybrid_search("bench", qv, query_text, top_k, filters)
+        await store.hybrid_search_with_trace("bench", qv, query_text, candidate_depth, filters)
         latencies.append((time.process_time() - t0) * 1000)
 
     return latencies
@@ -180,13 +189,21 @@ def test_glob_filtered_search_p95_under_threshold(bench_store) -> None:  # type:
     """Glob-filtered hybrid search p95 must stay under the configured ceiling.
 
     Filter: source_path_glob = '/bench/group-0/*' (matches ~20 % of corpus).
+    The glob is a pipeline post-filter, not applied by ``hybrid_search_with_trace``,
+    so this measures the store leg at the glob over-fetch depth (``_GLOB_CANDIDATE_DEPTH``).
     Threshold: [search_filtered].p95_ms_glob_filtered in tests/eval/thresholds.toml.
     """
     from archon_search.filters import SearchFilters
 
     filters = SearchFilters(source_path_glob=_GLOB_PATTERN)
     latencies = asyncio.run(
-        _measure(bench_store, filters=filters, n_iters=_N_ITERS, warmup=_WARMUP)
+        _measure(
+            bench_store,
+            filters=filters,
+            n_iters=_N_ITERS,
+            warmup=_WARMUP,
+            candidate_depth=_GLOB_CANDIDATE_DEPTH,
+        )
     )
 
     p50 = _percentile(latencies, 50)
@@ -284,7 +301,7 @@ def test_hyde_false_search_p95_under_threshold(bench_store) -> None:  # type: ig
     embedder = MagicMock()
 
     async def _measure_with_hyde_false(store, n_iters: int, warmup: int) -> list[float]:
-        """Run hybrid_search after a hyde=False RequestHyDE.resolve and return latencies."""
+        """Run hybrid_search_with_trace after a hyde=False RequestHyDE.resolve and return latencies."""
 
         warmup_rng = np.random.default_rng(8888)
         for _ in range(warmup):
@@ -292,15 +309,15 @@ def test_hyde_false_search_p95_under_threshold(bench_store) -> None:  # type: ig
             # Resolve HyDE — fast path, returns the not-requested outcome immediately
             await request_hyde.resolve(embedder, embedder_warm=True)
             # Use query embedding (None vector → normal search)
-            await store.hybrid_search("bench", qv, query_text, _TOP_K, None)
+            await store.hybrid_search_with_trace("bench", qv, query_text, _CANDIDATE_DEPTH, None)
 
         latencies: list[float] = []
         for i in range(n_iters):
             qv = np.random.default_rng(i + 10000).random(_DIM, dtype=np.float32).tolist()
             t0 = time.process_time()
-            # Full round-trip: RequestHyDE.resolve + hybrid_search (as the route handler does)
+            # Full round-trip: RequestHyDE.resolve + hybrid_search_with_trace (as the route handler does)
             await request_hyde.resolve(embedder, embedder_warm=True)
-            await store.hybrid_search("bench", qv, query_text, _TOP_K, None)
+            await store.hybrid_search_with_trace("bench", qv, query_text, _CANDIDATE_DEPTH, None)
             latencies.append((time.process_time() - t0) * 1000)
 
         return latencies

@@ -19,7 +19,6 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
@@ -29,41 +28,16 @@ from tests.integration.conftest import (
     make_real_pipeline,
     search,
 )
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 pytestmark = pytest.mark.integration
 
 
-# ---------------------------------------------------------------------------
-# Helper — build a minimal MCP app wired to a real pipeline
-# ---------------------------------------------------------------------------
 
 
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
-
-
-def _make_mcp_app(pipeline: Any) -> _FakeApp:
+def _make_mcp_app(pipeline: Any) -> StubFastMCP:
     """Wire a real pipeline into a stub FastMCP app."""
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         return mcp_module.create_app(  # type: ignore[call-arg]
@@ -180,7 +154,7 @@ async def test_ingest_directory_optimize_fts_called_not_rebuild_when_index_exist
 async def test_mcp_delete_document_no_phantom_hits_in_subsequent_search(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """MCP delete_document followed by store.hybrid_search returns zero results.
+    """MCP delete_document followed by store.hybrid_search_with_trace returns zero results.
 
     Verifies that optimize_fts (called by delete_document) actually removes the
     deleted doc's text from the FTS index so subsequent searches find nothing.
@@ -223,10 +197,10 @@ async def test_mcp_delete_document_no_phantom_hits_in_subsequent_search(
             )
 
         # Confirm the FTS index has the unique term before deletion.
-        # hybrid_search uses both vector and FTS — we already confirmed FTS index exists above,
+        # hybrid_search_with_trace uses both vector and FTS — we already confirmed FTS index exists above,
         # so a hit here could be from either path; after deletion the check catches FTS phantoms.
         query_vec = [0.1, 0.2, 0.3, 0.4]
-        hits_before = await store.hybrid_search(collection, query_vec, unique_term, 10)
+        hits_before = await store.hybrid_search_with_trace(collection, query_vec, unique_term, 10)
         assert any(unique_term in (h.text or "") for h in hits_before), (
             f"Expected to find {unique_term!r} before delete; hits: {[h.text for h in hits_before]!r}"
         )
@@ -247,7 +221,7 @@ async def test_mcp_delete_document_no_phantom_hits_in_subsequent_search(
         )
 
         # After deletion, FTS search must return zero hits for the unique term
-        hits_after = await store.hybrid_search(collection, query_vec, unique_term, 10)
+        hits_after = await store.hybrid_search_with_trace(collection, query_vec, unique_term, 10)
         phantom_hits = [h for h in hits_after if unique_term in (h.text or "")]
         assert not phantom_hits, (
             f"Phantom FTS hits found after delete for term {unique_term!r}: "

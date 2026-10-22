@@ -239,38 +239,7 @@ def _store_without_fts(tmp_path: Path, name: str, row: dict) -> SearchStore:
     return store
 
 
-def _run_hybrid_search(store: SearchStore) -> list:
-    return asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", 5))
-
-
-def test_hybrid_search_records_vector_fuse_stages(tmp_path: Path) -> None:
-    """hybrid_search records 'vector' and 'fuse' stages when a recorder is bound."""
-    store = _store_with_fts(tmp_path, "hs1", _row("s1"))
-    with bind_stage_recorder() as recorder:
-        _run_hybrid_search(store)
-    assert {"vector", "fuse"} <= recorder.stage_timings_ms.keys()
-
-
-def test_hybrid_search_records_fts_when_index_exists(tmp_path: Path) -> None:
-    """hybrid_search records 'fts' stage when FTS search succeeds."""
-    store = _store_with_fts(tmp_path, "hs2", _row("s2"))
-    with bind_stage_recorder() as recorder:
-        _run_hybrid_search(store)
-    assert "fts" in recorder.stage_timings_ms
-
-
-def test_hybrid_search_omits_fts_when_no_index(tmp_path: Path) -> None:
-    """hybrid_search omits 'fts' key when FTS raises (degraded path)."""
-    store = _store_without_fts(tmp_path, "hs3", _row("s3"))
-    with bind_stage_recorder() as recorder:
-        _run_hybrid_search(store)
-    timings = recorder.stage_timings_ms
-    assert "fts" not in timings
-    assert "vector" in timings
-    assert "fuse" in timings
-
-
-def test_hybrid_search_trace_records_same_stages(tmp_path: Path) -> None:
+def test_hybrid_search_with_trace_records_vector_fts_fuse_stages(tmp_path: Path) -> None:
     """_hybrid_search_with_trace records 'vector', 'fts', and 'fuse' stages."""
     store = _store_with_fts(tmp_path, "hs4", _row("s4"))
     with bind_stage_recorder() as recorder:

@@ -212,7 +212,6 @@ def _get_tool_payload(result: dict, tool_name: str) -> dict:
     return json.loads(content[0].get("text", "{}"))
 
 
-@pytest.mark.xdist_group("mcp")
 def test_mcp_search_fanout_exceeded_returns_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -228,7 +227,6 @@ def test_mcp_search_fanout_exceeded_returns_error(
         assert "3" in payload["error"]  # max_fanout value in message
 
 
-@pytest.mark.xdist_group("mcp")
 def test_mcp_explain_top_k_exceeded_returns_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -245,7 +243,6 @@ def test_mcp_explain_top_k_exceeded_returns_error(
         assert "200" in payload["error"]
 
 
-@pytest.mark.xdist_group("mcp")
 def test_mcp_explain_fanout_exceeded_returns_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

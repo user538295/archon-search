@@ -35,10 +35,30 @@ from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderNotR
 from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION, ArchiveRejectedError, quote_archive_value
 from archon_search.jobs.store import JobStore
 from archon_search.server import _job_warmup
-from archon_search.server.routes_export import IMPORT_FAILED_DETAIL, _decode_chunk, _export_task, _import_task
+from archon_search.server._ingest_lock import (
+    COLLECTION_JOB_IN_PROGRESS_DETAIL,
+    COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE,
+)
+from archon_search.server.routes_export import (
+    IMPORT_FAILED_DETAIL,
+    IMPORT_OVERWRITE_LOCK_BUSY_DETAIL,
+    OVERWRITE_REFUSED_PREFIX,
+    _decode_chunk,
+    _export_task,
+    _import_task,
+)
 from archon_search.server.routes_jobs import _ACTIVE_STATUSES
 from archon_search.store import _META_MAX_VAL_LEN, META_MAX_FIELDS, SearchStore
-from archon_search.types import ImportJob, JobStatus
+from archon_search.types import (
+    CommunityRebuildJob,
+    ExportJob,
+    ImportJob,
+    IngestJob,
+    JobStatus,
+    MetadataReindexJob,
+    MigrationJob,
+    ReindexJob,
+)
 from tests.test_store import _EXPIRES_AT_BEFORE_UTC_YEAR_1, _FLOAT_OVERFLOW_DIGITS
 
 # ---------------------------------------------------------------------------
@@ -2263,6 +2283,226 @@ async def test_import_force_overwrite_drop_failure_does_not_claim_collection(
 
     assert (failed.status, failed.error) == (JobStatus.FAILED, IMPORT_FAILED_DETAIL)
     assert failed.collection_claimed is False, "the claim must follow the drop, so a failed drop leaves it unset"
+
+
+# ---------------------------------------------------------------------------
+# force_overwrite's drop: refused while another job may write the collection, done under its lock (CON-8)
+# ---------------------------------------------------------------------------
+
+_OTHER_NAMESPACE = "other-team"
+#: Job kinds and statuses in which a job may write its collection (``COLLECTION_WRITING_JOB_STATUSES``).
+_WRITING_JOBS = [
+    pytest.param(IngestJob, JobStatus.RUNNING, id="ingest-running"),
+    pytest.param(IngestJob, JobStatus.CANCELLING, id="ingest-cancelling"),
+    pytest.param(ReindexJob, JobStatus.PENDING, id="reindex-pending"),
+    pytest.param(ReindexJob, JobStatus.RUNNING, id="reindex-running"),
+    pytest.param(MigrationJob, JobStatus.RUNNING, id="migration-running"),
+    pytest.param(MetadataReindexJob, JobStatus.RUNNING, id="metadata-reindex-running"),
+    pytest.param(CommunityRebuildJob, JobStatus.RUNNING, id="community-rebuild-running"),
+    pytest.param(ImportJob, JobStatus.RUNNING, id="other-import-running"),
+]
+
+
+def _add_job(
+    job_store: JobStore,
+    job_class: type[IngestJob],
+    status: JobStatus,
+    collection: str,
+    namespace: str = DEFAULT_NAMESPACE,
+) -> IngestJob:
+    now = datetime.now(timezone.utc).isoformat()
+    return job_store.create_job(job_class(
+        job_id=str(uuid.uuid4()), status=status, created_at=now, updated_at=now, namespace=namespace,
+        collection=collection,
+    ))
+
+
+async def _seeded_overwrite_job(
+    runner: _ImportRunner, tmp_path: Path, collection: str,
+) -> tuple[ImportJob, list[str]]:
+    """A force_overwrite import of *collection*, which holds 3 seeded chunks and a meta row (the chunk ids, sorted,
+    are returned)."""
+    chunks = await _seed_collection(runner.search_store, collection, 3)
+    await runner.search_store.update_collection_meta(CollectionMeta(name=collection))
+    archive_path = tmp_path / f"{collection}.tar.gz"
+    _make_archive(archive_path, collection, [_chunk(_doc_id(), 0)])
+    job = _make_import_job(collection, str(archive_path), runner.job_store, force_overwrite=True)
+    return job, sorted(chunk.chunk_id for chunk in chunks)
+
+
+async def _assert_collection_untouched(runner: _ImportRunner, collection: str, chunk_ids: list[str]) -> None:
+    assert await runner.all_stored_chunk_ids(collection) == chunk_ids
+    assert await runner.search_store.get_collection_meta(collection, DEFAULT_NAMESPACE) is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("job_class", "status"), _WRITING_JOBS)
+async def test_import_force_overwrite_is_refused_while_another_job_may_write_the_collection(
+    tmp_path: Path, import_runner: _ImportRunner, job_class: type[IngestJob], status: JobStatus,
+) -> None:
+    """The drop would race a writer that holds no lock for its whole run: the import fails, unclaimed, and the
+    collection keeps its rows and meta row — the refusal ``DELETE /collections/{name}`` gives for the same job."""
+    col = "overwrite-busy"
+    job, chunk_ids = await _seeded_overwrite_job(import_runner, tmp_path, col)
+    writer = _add_job(import_runner.job_store, job_class, status, col)
+    drop = AsyncMock()
+
+    failed = await import_runner.run(job, drop_collection=drop)
+
+    assert (failed.status, failed.error) == (
+        JobStatus.FAILED,
+        OVERWRITE_REFUSED_PREFIX + COLLECTION_JOB_IN_PROGRESS_DETAIL_TEMPLATE.format(job_id=writer.job_id),
+    )
+    assert failed.collection_claimed is False
+    drop.assert_not_awaited()
+    await _assert_collection_untouched(import_runner, col, chunk_ids)
+    assert not import_runner.search_store.lock_for(col).locked(), "the refusal must release the collection lock"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_force_overwrite_refusal_hides_the_job_id_of_another_namespace(
+    tmp_path: Path, import_runner: _ImportRunner,
+) -> None:
+    """The table is shared by name, so another namespace's job blocks too — without its id on the wire."""
+    col = "overwrite-busy-foreign"
+    job, chunk_ids = await _seeded_overwrite_job(import_runner, tmp_path, col)
+    _add_job(import_runner.job_store, ReindexJob, JobStatus.RUNNING, col, namespace=_OTHER_NAMESPACE)
+
+    failed = await import_runner.run(job)
+
+    assert (failed.status, failed.error) == (
+        JobStatus.FAILED, OVERWRITE_REFUSED_PREFIX + COLLECTION_JOB_IN_PROGRESS_DETAIL,
+    )
+    await _assert_collection_untouched(import_runner, col, chunk_ids)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_force_overwrite_is_not_blocked_by_its_own_running_job(
+    tmp_path: Path, import_runner: _ImportRunner,
+) -> None:
+    """The scheduler marks the import RUNNING before its task starts; that job must not refuse itself."""
+    col = "overwrite-own-job"
+    job, _ = await _seeded_overwrite_job(import_runner, tmp_path, col)
+    import_runner.job_store.update(job.job_id, status=JobStatus.RUNNING)
+
+    done = await import_runner.run(job)
+
+    assert (done.status, done.error) == (JobStatus.DONE, None)
+    assert done.result is not None and done.result["imported"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("job_class", "status", "collection"),
+    [
+        pytest.param(ImportJob, JobStatus.QUEUED, "overwrite-col", id="queued-import"),
+        pytest.param(ReindexJob, JobStatus.DONE, "overwrite-col", id="finished-reindex"),
+        pytest.param(ReindexJob, JobStatus.RUNNING, "other-col", id="other-collection"),
+        pytest.param(ExportJob, JobStatus.RUNNING, "overwrite-col", id="export-only-reads"),
+    ],
+)
+async def test_import_force_overwrite_ignores_jobs_that_cannot_write_the_collection(
+    tmp_path: Path, import_runner: _ImportRunner, job_class: type[IngestJob], status: JobStatus, collection: str,
+) -> None:
+    job, _ = await _seeded_overwrite_job(import_runner, tmp_path, "overwrite-col")
+    _add_job(import_runner.job_store, job_class, status, collection)
+
+    done = await import_runner.run(job)
+
+    assert (done.status, done.error) == (JobStatus.DONE, None)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_force_overwrite_of_an_absent_collection_is_not_blocked_by_a_job(
+    tmp_path: Path, import_runner: _ImportRunner,
+) -> None:
+    """Nothing is dropped, so there is nothing to race: an import creates its target by design."""
+    col = "overwrite-absent"
+    archive_path = tmp_path / f"{col}.tar.gz"
+    _make_archive(archive_path, col, [_chunk(_doc_id(), 0)])
+    job = _make_import_job(col, str(archive_path), import_runner.job_store, force_overwrite=True)
+    _add_job(import_runner.job_store, ReindexJob, JobStatus.RUNNING, col)
+
+    done = await import_runner.run(job)
+
+    assert (done.status, done.error) == (JobStatus.DONE, None)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_without_force_overwrite_keeps_its_exists_refusal_while_a_job_writes(
+    tmp_path: Path, import_runner: _ImportRunner,
+) -> None:
+    """Without force_overwrite nothing is dropped: the existing-collection refusal is unchanged and takes no lock."""
+    col = "no-overwrite-busy"
+    chunks = await _seed_collection(import_runner.search_store, col, 2)
+    archive_path = tmp_path / f"{col}.tar.gz"
+    _make_archive(archive_path, col, chunks)
+    job = _make_import_job(col, str(archive_path), import_runner.job_store)
+    _add_job(import_runner.job_store, ReindexJob, JobStatus.RUNNING, col)
+
+    async with import_runner.search_store.lock_for(col):
+        failed = await import_runner.run(job)
+
+    assert (failed.status, failed.error) == (
+        JobStatus.FAILED, f"collection {col!r} already exists; use force_overwrite=true to overwrite",
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_force_overwrite_drops_the_table_and_meta_row_under_the_collection_lock(
+    tmp_path: Path, import_runner: _ImportRunner,
+) -> None:
+    """Both steps run with ``lock_for(name)`` held (so no writer interleaves between them), the drop without
+    re-acquiring it (the lock is not reentrant), and the lock is free once the drop is done."""
+    col = "overwrite-locked"
+    job, _ = await _seeded_overwrite_job(import_runner, tmp_path, col)
+    search_store = import_runner.search_store
+    held: dict[str, bool] = {}
+
+    async def drop(name: str, *, _locked_by_caller: bool = False) -> None:
+        held["drop"] = search_store.lock_for(name).locked() and _locked_by_caller
+        await SearchStore.drop_collection(search_store, name, _locked_by_caller=_locked_by_caller)
+
+    async def delete_meta(name: str, namespace: str) -> None:
+        held["delete_meta"] = search_store.lock_for(name).locked()
+        await SearchStore.delete_collection_meta(search_store, name, namespace)
+
+    done = await import_runner.run(job, drop_collection=drop, delete_collection_meta=delete_meta)
+
+    assert (done.status, done.error) == (JobStatus.DONE, None)
+    assert held == {"drop": True, "delete_meta": True}
+    assert not search_store.lock_for(col).locked()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_force_overwrite_fails_when_the_collection_lock_is_not_acquired_in_time(
+    tmp_path: Path, import_runner: _ImportRunner, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A write holding the lock past ``INGEST_LOCK_TIMEOUT_S`` fails the import before anything is dropped."""
+    col = "overwrite-lock-timeout"
+    job, chunk_ids = await _seeded_overwrite_job(import_runner, tmp_path, col)
+    monkeypatch.setattr("archon_search.constants.INGEST_LOCK_TIMEOUT_S", _SHORT_LOCK_TIMEOUT_S)
+    drop = AsyncMock()
+
+    async with import_runner.search_store.lock_for(col):
+        failed = await import_runner.run(job, drop_collection=drop)
+
+    assert (failed.status, failed.error) == (JobStatus.FAILED, IMPORT_OVERWRITE_LOCK_BUSY_DETAIL)
+    assert failed.collection_claimed is False
+    drop.assert_not_awaited()
+    await _assert_collection_untouched(import_runner, col, chunk_ids)
+
+
+#: A lock wait short enough for a test, long enough for the event loop to run the waiter.
+_SHORT_LOCK_TIMEOUT_S = 0.05
 
 
 @pytest.mark.integration

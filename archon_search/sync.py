@@ -7,17 +7,21 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from functools import partial
 from datetime import UTC, datetime
 from pathlib import Path
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Iterable
+from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Callable
 
 from archon_search._durable_io import atomic_write_json
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder import make_embedder
+from archon_search.store import StoreBusyError
 
 if TYPE_CHECKING:
     from archon_search.collection_meta import CollectionMeta
+    from archon_search.jobs.store import JobStore
     from archon_search.pipeline import SearchPipeline
     from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore
 
@@ -37,6 +41,24 @@ def collection_sync_failed_detail(name: str) -> str:
     to the server log only; the collection name is already public on ``GET /collections``.
     """
     return f"sync of collection {name!r} failed; see the server log for details"
+
+
+def collection_sync_busy_detail(name: str) -> str:
+    """Wire-facing error for a collection the sync did not write because its collection lock was not acquired in time.
+
+    It is ``SyncResult.errors`` (``POST /sync`` job ``result["errors"]``) only: another write held the lock, and the
+    collection stays as it was until the next sync.
+    """
+    return f"sync of collection {name!r} skipped: the collection is busy with another write; the next sync retries it"
+
+
+def collection_drop_deferred_detail(name: str) -> str:
+    """Wire-facing error for a collection gone from the config that the sync did not drop.
+
+    A job or a registered writer (an MCP ingest, another sync) may still write it, or its lock was not acquired in
+    time; it stays in the manifest, so the next sync retries the drop.
+    """
+    return f"collection {name!r} is no longer configured but was not removed: it is busy; the next sync retries"
 
 
 def path_to_collection_name(path: str) -> str:
@@ -109,7 +131,16 @@ class SearchCollectionSync:
         chunk_size: int = 0,
         auto_reindex_on_chunk_size_change: bool = False,
         providers: list[str] | None = None,
+        job_store: JobStore | None = None,
+        configured_paths: Callable[[], Iterable[str]] | None = None,
     ) -> None:
+        """
+        *job_store* is consulted before the sync drops a collection gone from the config
+        (``JobStore.find_active_collection_job``, as ``DELETE /collections/{name}`` does); without it only registered
+        writers refuse the drop. *configured_paths* returns the paths the live config holds now: a collection whose
+        path is no longer among them — ``DELETE /collections/{name}`` removed it after the sync's list was taken — is
+        not written. Without it the sync's own list is trusted.
+        """
         self._pipeline = pipeline
         self._state_store = state_store
         self._pinned_collections = pinned_collections or []
@@ -119,6 +150,8 @@ class SearchCollectionSync:
         # ONNX Runtime execution providers ([database] providers) for the per-collection
         # embedders built below — without them the re-embed path would silently run on CPU.
         self._providers = providers or None
+        self._job_store = job_store
+        self._configured_paths = configured_paths
 
     async def sync(
         self,
@@ -132,11 +165,17 @@ class SearchCollectionSync:
         1. Build desired: {collection_name: resolved_path}.
         2. Get existing collections from store.
         3. Load manifest → managed_names.
-        4. Drop undesired managed collections.
+        4. Drop undesired managed collections (not one a job or writer may still write: it stays managed and the next
+           sync retries).
         5. Record skipped (unmanaged, not in desired).
         6. Ingest new collections.
         7. Unchanged = existing ∩ desired.
         8. Update manifest atomically.
+
+        Each collection's write runs as a registered writer of that collection (``SearchStore.collection_writer``),
+        for that write only, and is skipped when the live config no longer holds its path — see
+        :meth:`_write_collection`. ``DELETE /collections/{name}`` therefore refuses while the collection is being
+        written, and a collection it removed before the sync reached it is not re-created.
         """
         from archon_search.progress import CollectionProgress, IndexingStatus
 
@@ -165,16 +204,15 @@ class SearchCollectionSync:
         desired = self.build_desired(collections)
 
         # Step 3: load manifest
-        managed_names = self._load_manifest_names(manifest_path)
+        manifest = self._load_manifest(manifest_path)
+        managed_names = set(manifest)
 
         # Step 4: drop (existing ∩ managed) - desired
         to_remove = (existing & managed_names) - desired.keys()
+        deferred_drops: set[str] = set()
         for name in to_remove:
             try:
-                await store.drop_collection(name)
-                result.removed.append(name)
-                # Clean removed collection from state
-                self._safe_state_remove(name)
+                dropped = await self._drop_if_idle(name, name_to_ns.get(name, DEFAULT_NAMESPACE))
             except KeyError:
                 logger.warning(
                     "Collection %r in manifest but not in LanceDB; skipping drop", name
@@ -182,6 +220,14 @@ class SearchCollectionSync:
                 result.errors.append(
                     f"Collection {name!r} in manifest but not in LanceDB; skipping drop"
                 )
+                continue
+            if dropped:
+                result.removed.append(name)
+                # Clean removed collection from state
+                self._safe_state_remove(name)
+            else:
+                result.errors.append(collection_drop_deferred_detail(name))
+                deferred_drops.add(name)
 
         # Step 5: skipped = existing - managed_names - desired
         skipped = existing - managed_names - desired.keys()
@@ -197,10 +243,17 @@ class SearchCollectionSync:
             if not p.exists():
                 result.errors.append(f"path does not exist: {path_str}")
                 continue
-            error = await self._ingest_collection(
-                name, p, progress_cb, CollectionProgress, IndexingStatus,
-                namespace=name_to_ns.get(name, DEFAULT_NAMESPACE),
+            still_configured, error = await self._write_collection(
+                name,
+                path_str,
+                partial(
+                    self._ingest_collection,
+                    name, p, progress_cb, CollectionProgress, IndexingStatus,
+                    namespace=name_to_ns.get(name, DEFAULT_NAMESPACE),
+                ),
             )
+            if not still_configured:
+                continue
             if error is None:
                 result.added.append(name)
                 successfully_added.add(name)
@@ -230,10 +283,17 @@ class SearchCollectionSync:
                 resume_meta = await self._pipeline.store.get_collection_meta(name, _ns)
             except Exception:  # noqa: BLE001
                 resume_meta = None
-            error = await self._ingest_collection(
-                name, p, progress_cb, CollectionProgress, IndexingStatus,
-                meta=resume_meta, namespace=_ns,
+            still_configured, error = await self._write_collection(
+                name,
+                path_str,
+                partial(
+                    self._ingest_collection,
+                    name, p, progress_cb, CollectionProgress, IndexingStatus,
+                    meta=resume_meta, namespace=_ns,
+                ),
             )
+            if not still_configured:
+                continue
             if error is None:
                 result.added.append(name)
                 successfully_added.add(name)
@@ -272,14 +332,21 @@ class SearchCollectionSync:
                 )
                 if new_f or changed_f or deleted_p:
                     to_update.add(name)
-                    error = await self._apply_collection_changes(
-                        name, p, new_f, changed_f, deleted_p, file_mtimes, progress_cb,
-                        meta=meta, namespace=_ns,
-                        ingested_by="reindex" if (
-                            force_reindex
-                            and (indexed_cs is not None or name_to_chunk_count.get(name, 0) > 0)
-                        ) else "watcher",
+                    still_configured, error = await self._write_collection(
+                        name,
+                        path_str,
+                        partial(
+                            self._apply_collection_changes,
+                            name, p, new_f, changed_f, deleted_p, file_mtimes, progress_cb,
+                            meta=meta, namespace=_ns,
+                            ingested_by="reindex" if (
+                                force_reindex
+                                and (indexed_cs is not None or name_to_chunk_count.get(name, 0) > 0)
+                            ) else "watcher",
+                        ),
                     )
+                    if not still_configured:
+                        continue  # in to_update, so neither unchanged nor managed
                     if error is None:
                         result.updated.append(name)
                         successfully_updated.add(name)
@@ -295,6 +362,8 @@ class SearchCollectionSync:
         for name, path_str in desired.items():
             if name in successfully_added or name in unchanged or name in successfully_updated:
                 new_manifest[name] = path_str
+        for name in deferred_drops:
+            new_manifest[name] = manifest[name]
         self._write_manifest(manifest_path, new_manifest)
 
         return result
@@ -890,6 +959,103 @@ class SearchCollectionSync:
                 return error
 
     # ------------------------------------------------------------------
+    # Guarding a collection's write against DELETE /collections/{name}
+    # ------------------------------------------------------------------
+
+    def _is_configured(self, path: str) -> bool:
+        """Whether the live config holds *path* (an absolute, resolved path); true when no config reader was given."""
+        if self._configured_paths is None:
+            return True
+        return path in {str(Path(configured).expanduser().resolve()) for configured in self._configured_paths()}
+
+    async def _write_collection(
+        self,
+        name: str,
+        path: str,
+        write: Callable[[], Awaitable[str | None]],
+    ) -> tuple[bool, str | None]:
+        """Run *write*, one collection's ingest or update, as a registered writer of *name*; skip a deleted collection.
+
+        A sync creates no job and names no collection to ``JobStore.find_active_collection_job``, yet it writes every
+        collection it started with, and the pipeline re-creates a missing table and meta row. It therefore registers
+        in ``SearchStore.collection_writer`` for *this* collection's write only — never for the whole sync, so a
+        ``DELETE`` of a collection the sync is not writing stays possible — and ``DELETE /collections/{name}`` then
+        refuses (503 ``store_busy``). The registration is made under the collection lock ``DELETE`` holds across its
+        config edit and drop, and *path* is checked against the live config after it: a collection ``DELETE``
+        removed before the sync reached it is skipped, not re-created from the list the sync started with.
+
+        Returns:
+            ``(still_configured, error)``: ``(False, None)`` when the collection is no longer configured (nothing
+            written, not an error); ``(True, <wire-facing error>)`` when its collection lock was not acquired within
+            ``INGEST_LOCK_TIMEOUT_S`` (nothing written; the next sync retries); otherwise ``(True, write()'s result)``.
+        """
+        async with AsyncExitStack() as stack:
+            try:
+                await stack.enter_async_context(self._pipeline.store.collection_writer(name))
+            except StoreBusyError:
+                logger.warning(
+                    "sync: collection %r skipped — its collection lock was not acquired in time; the next sync retries it",
+                    name,
+                )
+                return True, collection_sync_busy_detail(name)
+            except ValueError:
+                # Not a valid collection name (more than 64 characters, say): no such collection can exist for a
+                # DELETE to drop, so nothing needs registering, and the write fails and reports it as it always did.
+                logger.debug("sync: %r is no valid collection name; writing it unregistered", name)
+            if not self._is_configured(path):
+                logger.info("sync: collection %r skipped — it is no longer configured (deleted)", name)
+                return False, None
+            return True, await write()
+
+    async def _drop_if_idle(self, name: str, namespace: str) -> bool:
+        """Drop the table of *name*, a collection gone from the config, unless a job or a writer may still write it.
+
+        The check and the drop run under ``lock_for(name)`` — as ``DELETE /collections/{name}``'s do — and make the
+        checks it makes: ``JobStore.find_active_collection_job`` (any namespace) and
+        ``SearchStore.has_active_writer``. Dropping under either would race its writes (a reindex, an import or a
+        migration writes the table without holding the lock for its whole run; a registered writer re-creates what is
+        dropped). Not dropping is retried by the next sync, which is why the caller keeps the collection managed.
+
+        Returns:
+            Whether the table was dropped; ``False`` (logged at WARNING) when a job or writer may still write it, or
+            its lock was not acquired within ``INGEST_LOCK_TIMEOUT_S``.
+
+        Raises:
+            KeyError: if the table does not exist.
+        """
+        store = self._pipeline.store
+        try:
+            async with store.locked_collection(name):
+                active_job = (
+                    self._job_store.find_active_collection_job(name, namespace) if self._job_store is not None else None
+                )
+                if active_job is not None:
+                    logger.warning(
+                        "sync: collection %r is no longer configured but %s %s is %s; not dropped, the next sync retries",
+                        name, type(active_job).__name__, active_job.job_id, active_job.status.value,
+                    )
+                    return False
+                if store.has_active_writer(name):
+                    logger.warning(
+                        "sync: collection %r is no longer configured but a registered writer (an MCP ingest or a "
+                        "sync) is writing it; not dropped, the next sync retries",
+                        name,
+                    )
+                    return False
+                await store.drop_collection(name, _locked_by_caller=True)
+                return True
+        except StoreBusyError:
+            logger.warning(
+                "sync: collection %r is no longer configured but its collection lock was not acquired in time; "
+                "not dropped, the next sync retries",
+                name,
+            )
+            return False
+        finally:
+            # Only after the release (the block above): discard_lock keeps an entry a queued waiter still needs.
+            store.discard_lock(name)
+
+    # ------------------------------------------------------------------
     # Lock helpers
     # ------------------------------------------------------------------
 
@@ -1022,16 +1188,16 @@ class SearchCollectionSync:
         name = _sanitize(raw)
         return name or "collection"
 
-    def _load_manifest_names(self, manifest_path: Path) -> set[str]:
-        """Return set of collection names from the manifest file."""
+    def _load_manifest(self, manifest_path: Path) -> dict[str, str]:
+        """Return the manifest's ``{collection_name: path}``, or ``{}`` when it is absent or unreadable."""
         if not manifest_path.exists():
-            return set()
+            return {}
         try:
             data: dict[str, str] = json.loads(manifest_path.read_text())
-            return set(data.keys())
+            return data
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Could not read sync manifest %s: %s", manifest_path, exc)
-            return set()
+            return {}
 
     def _write_manifest(self, manifest_path: Path, manifest: dict[str, str]) -> None:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)

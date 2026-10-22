@@ -17,45 +17,19 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 pytestmark = pytest.mark.integration
 
-# ---------------------------------------------------------------------------
-# Fake FastMCP app — only needs tool registration and direct invocation.
-# ---------------------------------------------------------------------------
 
 
-class _FakeApp:
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
-
-
-def _make_mcp_app(pipeline: Any, config: Any = None) -> _FakeApp:
+def _make_mcp_app(pipeline: Any, config: Any = None) -> StubFastMCP:
     """Create an MCP app with a real pipeline and stub FastMCP."""
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
         return mcp_module.create_app(  # type: ignore[call-arg]

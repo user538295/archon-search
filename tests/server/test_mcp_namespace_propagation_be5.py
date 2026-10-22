@@ -21,41 +21,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
+from tests._collection_lock_stub import with_locked_collection_meta
+from tests._fastmcp_stub import stubbed_fastmcp
 
-pytestmark = pytest.mark.xdist_group("mcp")
-
-# ---------------------------------------------------------------------------
-# Local FastMCP stand-in: patched over archon_search.server.mcp.FastMCP per test
-# so create_app() registers its tool closures in _FakeApp.tools.
-# ---------------------------------------------------------------------------
-
-class _FakeApp:
-    """Minimal FastMCP-like registry used in unit tests to capture tool functions."""
-
-    def __init__(self, name: str) -> None:
-        self.tools: dict[str, Any] = {}
-
-    def tool(self) -> Any:
-        def decorator(func: Any) -> Any:
-            self.tools[func.__name__] = func
-            return func
-        return decorator
-
-    def custom_route(self, path: str, methods: list[str] | None = None) -> Any:
-        def decorator(func: Any) -> Any:
-            return func
-        return decorator
-
-
-class _FakeFastMCP:
-    def __new__(cls, name: str, **kwargs: Any) -> _FakeApp:  # type: ignore[misc]
-        return _FakeApp(name)
 
 
 # ---------------------------------------------------------------------------
 # Helpers: a fake Request for get_http_request(), and a patch of
 # _get_request_namespace() for tests that only check tool-closure wiring.
 # ---------------------------------------------------------------------------
+
 
 def _make_fake_request(namespace: str) -> MagicMock:
     """Return a mock Starlette Request whose .state.namespace is set."""
@@ -78,6 +53,7 @@ def _patch_namespace(ns: str):
 # ---------------------------------------------------------------------------
 # Minimal pipeline mocks shared by tests
 # ---------------------------------------------------------------------------
+
 
 def _make_search_result() -> Any:
     from archon_search._types import SearchResult
@@ -113,7 +89,7 @@ async def test_search_tool_uses_resolved_namespace() -> None:
     pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline._global_embedder = MagicMock()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["search"]
 
@@ -145,7 +121,7 @@ async def test_search_with_context_tool_uses_resolved_namespace() -> None:
     pipeline.search_with_context = AsyncMock(return_value=swc_result)
     pipeline._global_embedder = MagicMock()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["search_with_context"]
 
@@ -176,7 +152,7 @@ async def test_list_documents_uses_resolved_namespace() -> None:
     pipeline = MagicMock()
     pipeline.list_documents = AsyncMock(return_value=([], None, 0))
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["list_documents"]
 
@@ -223,7 +199,7 @@ async def test_explain_uses_resolved_namespace() -> None:
     from archon_search.config import SearchConfig
     cfg = SearchConfig()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None, config=cfg)
         fn = app.tools["explain"]
 
@@ -252,7 +228,7 @@ async def test_list_collections_uses_resolved_namespace() -> None:
     pipeline = MagicMock()
     pipeline.get_all_collections_meta = AsyncMock(return_value=[])
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["list_collections"]
 
@@ -280,7 +256,7 @@ async def test_get_collections_meta_uses_resolved_namespace() -> None:
     pipeline = MagicMock()
     pipeline.get_all_collections_meta = AsyncMock(return_value=[])
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["get_collections_meta"]
 
@@ -308,7 +284,7 @@ async def test_get_collection_meta_uses_resolved_namespace() -> None:
     pipeline = MagicMock()
     pipeline.get_collection_meta = AsyncMock(return_value=None)  # not found → McpErrorResponse
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["get_collection_meta"]
 
@@ -344,7 +320,7 @@ async def test_ingest_file_uses_resolved_namespace(tmp_path) -> None:
     test_file = tmp_path / "doc.txt"
     test_file.write_text("hello world")
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["ingest_file"]
 
@@ -374,7 +350,7 @@ async def test_ingest_directory_uses_resolved_namespace(tmp_path) -> None:
     pipeline._global_embedder = MagicMock()
     pipeline.get_collection_meta = AsyncMock(return_value=None)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["ingest_directory"]
 
@@ -424,7 +400,7 @@ async def test_export_collection_uses_resolved_namespace(tmp_path, monkeypatch) 
     )
     job_store.create_export = MagicMock(return_value=fake_job)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None, job_store=job_store)
         fn = app.tools["export_collection"]
 
@@ -510,7 +486,7 @@ async def test_import_collection_uses_resolved_namespace(tmp_path, monkeypatch) 
     job_store.create_import = MagicMock(return_value=fake_job)
 
     with (
-        patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP),
+        stubbed_fastmcp(),
         # Bypass archive member validation so we can focus on namespace threading
         patch("archon_search.server.mcp.validate_archive_members"),
         # Bypass ImportArchiveReader so we control the manifest returned
@@ -567,7 +543,7 @@ async def test_delete_document_uses_resolved_namespace() -> None:
     pipeline = MagicMock()
     pipeline.delete_document = AsyncMock(return_value=1)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["delete_document"]
 
@@ -596,7 +572,7 @@ async def test_delete_document_namespace_mismatch_returns_forbidden() -> None:
     pipeline = MagicMock()
     pipeline.delete_document = AsyncMock(return_value=1)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["delete_document"]
 
@@ -633,12 +609,13 @@ async def test_update_collection_uses_resolved_namespace() -> None:
     meta.pending_embedding_model = None
     meta.needs_reindex = False
     store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(store)
     store.count_chunks = AsyncMock(return_value=0)
     store.update_collection_meta = AsyncMock()
     store.get_stored_vector_dimension = AsyncMock(return_value=None)
 
     with (
-        patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP),
+        stubbed_fastmcp(),
         patch("archon_search.server.mcp.validate_embedding_model", AsyncMock(return_value=384)),
     ):
         app = mcp_module.create_app(pipeline, "default", writer=None)
@@ -650,14 +627,15 @@ async def test_update_collection_uses_resolved_namespace() -> None:
     with _patch_namespace("ns-update"):
         await fn(collection_name="col1", embedding_model="BAAI/bge-small-en-v1.5", ctx=ctx)
 
-    store.get_collection_meta.assert_called_once()
-    call_args = store.get_collection_meta.call_args
-    ns_passed = call_args.kwargs.get("namespace") or (
-        call_args.args[1] if len(call_args.args) > 1 else None
-    )
-    assert ns_passed == "ns-update", (
-        f"update_collection must use _get_request_namespace() → 'ns-update', got {call_args}"
-    )
+    # Both reads (the early 404 check and the one under the collection lock) use the resolved namespace.
+    assert store.get_collection_meta.await_count == 2
+    for call_args in store.get_collection_meta.call_args_list:
+        ns_passed = call_args.kwargs.get("namespace") or (
+            call_args.args[1] if len(call_args.args) > 1 else None
+        )
+        assert ns_passed == "ns-update", (
+            f"update_collection must use _get_request_namespace() → 'ns-update', got {call_args}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -768,7 +746,7 @@ def test_get_request_namespace_falls_back_to_default() -> None:
     pipeline = MagicMock()
     pipeline.get_all_collections_meta = AsyncMock(return_value=[])
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["list_collections"]
 
@@ -802,7 +780,7 @@ def test_get_request_namespace_returns_state_namespace() -> None:
     pipeline = MagicMock()
     pipeline.get_all_collections_meta = AsyncMock(return_value=[])
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["list_collections"]
 
@@ -917,7 +895,7 @@ async def test_search_tool_multi_collection_uses_resolved_namespace() -> None:
     pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline._global_embedder = MagicMock()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["search"]
 
@@ -964,7 +942,7 @@ async def test_explain_multi_collection_uses_resolved_namespace() -> None:
     from archon_search.config import SearchConfig
     cfg = SearchConfig()
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         app = mcp_module.create_app(pipeline, "default", writer=None, config=cfg)
         fn = app.tools["explain"]
 

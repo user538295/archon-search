@@ -99,7 +99,7 @@ def test_chunker_indexed_at_is_iso8601() -> None:
 
     chunker = DocumentChunker()
     records = chunker.chunk("Hello world.", "doc1", "/tmp/doc1.md", **_DEFAULT_KW)
-    # Must match the fixed-width Z format expected by store._FIXED_WIDTH_PATTERN:
+    # Must match the fixed-width Z format expected by store._FIXED_WIDTH_TS_RE:
     # YYYY-MM-DDTHH:MM:SS.ffffffZ  (no +00:00 suffix)
     fixed_width_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
     for r in records:

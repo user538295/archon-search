@@ -276,13 +276,13 @@ async def test_app_lifespan_calls_startup_migrations(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# hybrid_search returns acl field in SearchResult
+# hybrid_search_with_trace returns acl field in ScoredSearchCandidate
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_ingest_and_hybrid_search_returns_acl_field(tmp_path):
-    """hybrid_search() maps acl from stored row into SearchResult.acl."""
+async def test_ingest_and_hybrid_search_with_trace_returns_acl_field(tmp_path):
+    """hybrid_search_with_trace() maps acl from stored row into ScoredSearchCandidate.acl."""
     from archon_search.store import SearchStore
     from archon_search._types import ChunkRecord
 
@@ -302,11 +302,11 @@ async def test_ingest_and_hybrid_search_returns_acl_field(tmp_path):
         await store.ingest_chunks("hs_acl_test", [chunk])
         await store.rebuild_fts_index("hs_acl_test")
 
-        results = await store.hybrid_search(
+        results = await store.hybrid_search_with_trace(
             "hs_acl_test",
             query_vector=[0.1, 0.2, 0.3, 0.4],
             query_text="namespace restricted",
-            top_k=5,
+            candidate_depth=5,
         )
 
         assert len(results) == 1
@@ -316,8 +316,8 @@ async def test_ingest_and_hybrid_search_returns_acl_field(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_hybrid_search_null_acl_chunk(tmp_path):
-    """hybrid_search() returns acl=None for chunks ingested with acl=None."""
+async def test_hybrid_search_with_trace_null_acl_chunk(tmp_path):
+    """hybrid_search_with_trace() returns acl=None for chunks ingested with acl=None."""
     from archon_search.store import SearchStore
     from archon_search._types import ChunkRecord
 
@@ -337,11 +337,11 @@ async def test_hybrid_search_null_acl_chunk(tmp_path):
         await store.ingest_chunks("hs_null_acl", [chunk])
         await store.rebuild_fts_index("hs_null_acl")
 
-        results = await store.hybrid_search(
+        results = await store.hybrid_search_with_trace(
             "hs_null_acl",
             query_vector=[0.1, 0.2, 0.3, 0.4],
             query_text="public content",
-            top_k=5,
+            candidate_depth=5,
         )
 
         assert len(results) == 1
@@ -351,8 +351,8 @@ async def test_hybrid_search_null_acl_chunk(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_hybrid_search_row_missing_acl_column_defaults_none(tmp_path):
-    """hybrid_search() uses .get('acl') — missing acl column yields acl=None, no KeyError."""
+async def test_hybrid_search_with_trace_row_missing_acl_column_defaults_none(tmp_path):
+    """hybrid_search_with_trace() uses .get('acl') — missing acl column yields acl=None, no KeyError."""
     import lancedb
     import pyarrow as pa
     from archon_search.store import SearchStore
@@ -406,11 +406,11 @@ async def test_hybrid_search_row_missing_acl_column_defaults_none(tmp_path):
     await store.connect()
     try:
         # Should not raise KeyError — must use .get("acl")
-        results = await store.hybrid_search(
+        results = await store.hybrid_search_with_trace(
             "legacy_col",
             query_vector=[0.1, 0.2, 0.3, 0.4],
             query_text="legacy chunk",
-            top_k=5,
+            candidate_depth=5,
         )
 
         assert len(results) == 1
@@ -612,8 +612,8 @@ async def test_fetch_adjacent_chunks_carries_scopes_and_acl_provenance(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_hybrid_search_results_carry_acl_provenance(tmp_path):
-    """SearchStore.hybrid_search results keep the stored ACL provenance, not only the acl list."""
+async def test_hybrid_search_with_trace_results_carry_acl_provenance(tmp_path):
+    """SearchStore.hybrid_search_with_trace results keep the stored ACL provenance, not only the acl list."""
     from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
@@ -622,7 +622,7 @@ async def test_hybrid_search_results_carry_acl_provenance(tmp_path):
         await store.ensure_collection("hybrid_prov", embedding_dim=4)
         await store.ingest_chunks("hybrid_prov", _provenance_chunks(1))
 
-        results = await store.hybrid_search("hybrid_prov", [0.1, 0.2, 0.3, 0.4], "provenance", top_k=5)
+        results = await store.hybrid_search_with_trace("hybrid_prov", [0.1, 0.2, 0.3, 0.4], "provenance", 5)
 
         assert len(results) == 1
         r = results[0]

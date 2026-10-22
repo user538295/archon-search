@@ -284,7 +284,7 @@ async def test_ingest_file_new_content_searchable_after_optimize(
     assert result.chunks_created > 0
 
     query_vec = [0.1] * 4
-    results = await connected_store.hybrid_search(col_name, query_vec, unique_word, 10)
+    results = await connected_store.hybrid_search_with_trace(col_name, query_vec, unique_word, 10)
     returned_doc_ids = {r.doc_id for r in results}
     assert result.doc_id in returned_doc_ids, (
         f"Expected doc_id {result.doc_id!r} searchable after ingest_file; got {returned_doc_ids!r}"
@@ -306,7 +306,7 @@ async def test_reingest_file_old_content_not_searchable(
     We do this by inlining a direct FTS-aware assertion: query with an FTS-only word
     that is ONLY in old content. If FTS is correctly updated, the old entries will not appear.
 
-    Note: ``hybrid_search`` uses RRF to combine vector + FTS.  With identical mock
+    Note: ``hybrid_search_with_trace`` uses RRF to combine vector + FTS.  With identical mock
     vectors, the doc_id could still be returned from the vector component even if FTS
     returns 0 results.  We therefore verify the FTS update indirectly via
     ``optimize_fts`` being called and through store-level integration tests
@@ -336,7 +336,7 @@ async def test_reingest_file_old_content_not_searchable(
 
     # New content must be discoverable (via vector search at minimum)
     query_vec = [0.1] * 4
-    results_new = await connected_store.hybrid_search(col_name, query_vec, new_word, 10)
+    results_new = await connected_store.hybrid_search_with_trace(col_name, query_vec, new_word, 10)
     assert any(r.doc_id == result2.doc_id for r in results_new), (
         "New content must be searchable after re-ingest"
     )

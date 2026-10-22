@@ -154,7 +154,6 @@ def test_e2h_t3_explainPprMode_provenanceAndCount(
         assert ppr_steps, f"Expected steps with relationship='ppr', got: {first_prov['steps']}"
 
 
-@pytest.mark.xdist_group("mcp")
 def test_e2h_t3_mcpSearchWithContext_rejectsPprMode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

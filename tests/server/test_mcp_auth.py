@@ -3,12 +3,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from starlette.testclient import TestClient
 
 from archon_search.embedder_cache import EmbedderCache
-
-pytestmark = pytest.mark.xdist_group("mcp")
 
 VALID_KEY = "ab" * 32  # 64-char hex
 

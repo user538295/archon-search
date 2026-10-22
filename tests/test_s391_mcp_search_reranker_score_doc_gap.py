@@ -46,8 +46,6 @@ from archon_search.server.mcp_schemas import McpSearchResultSchema, SearchWithCo
 from archon_search.server.routes_search import SearchRequest, SearchResultSchema
 from tests._mcp_tools import input_properties, registered_tools
 
-pytestmark = pytest.mark.xdist_group("mcp")
-
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEV_GUIDE = _REPO_ROOT / "Documentation" / "DeveloperGuide" / "05_mcp_integration.md"
 _SEARCHING = _REPO_ROOT / "Documentation" / "UserManual" / "60_searching.md"

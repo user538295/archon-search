@@ -1,5 +1,5 @@
-"""Tests pinning that ``SearchStore.hybrid_search`` populates metadata
-fields on every returned ``SearchResult``, including legacy normalization
+"""Tests pinning that ``SearchStore.hybrid_search_with_trace`` populates metadata
+fields on every returned ``ScoredSearchCandidate``, including legacy normalization
 for ``ingested_by``.
 
 Implements Task 4.3 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
@@ -15,6 +15,7 @@ import pytest
 from archon_search._types import ChunkRecord
 
 _DIM = 4
+_CANDIDATE_DEPTH = 5
 
 
 def _doc_id() -> str:
@@ -38,12 +39,12 @@ async def _seed_and_search(store, col, chunk):
     await store.ensure_collection(col, _DIM)
     await store.ingest_chunks(col, [chunk])
     await store.rebuild_fts_index(col)
-    return await store.hybrid_search(col, [0.0] * _DIM, "searchable", top_k=5)
+    return await store.hybrid_search_with_trace(col, [0.0] * _DIM, "searchable", _CANDIDATE_DEPTH)
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_hybrid_search_returns_file_type(connected_store, col_name):
+async def test_search_returns_file_type(connected_store, col_name):
     chunk = _chunk(file_type="py", ingested_by="cli")
     results = await _seed_and_search(connected_store, col_name, chunk)
     assert results
@@ -52,7 +53,7 @@ async def test_hybrid_search_returns_file_type(connected_store, col_name):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_hybrid_search_metadata_is_dict_not_string(connected_store, col_name):
+async def test_search_metadata_is_dict_not_string(connected_store, col_name):
     chunk = _chunk(metadata={"k": "v"}, ingested_by="cli")
     results = await _seed_and_search(connected_store, col_name, chunk)
     assert results
@@ -62,7 +63,7 @@ async def test_hybrid_search_metadata_is_dict_not_string(connected_store, col_na
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_hybrid_search_updated_at_falls_back_to_indexed_at(
+async def test_search_updated_at_falls_back_to_indexed_at(
     connected_store, col_name
 ):
     indexed = "2026-05-21T05:00:00+00:00"
@@ -75,8 +76,8 @@ async def test_hybrid_search_updated_at_falls_back_to_indexed_at(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_hybrid_search_populates_collection(connected_store, col_name):
-    """Every returned SearchResult must carry the collection it was queried in."""
+async def test_search_populates_collection(connected_store, col_name):
+    """Every returned ScoredSearchCandidate must carry the collection it was queried in."""
     chunk = _chunk(ingested_by="cli")
     results = await _seed_and_search(connected_store, col_name, chunk)
     assert results
@@ -85,7 +86,7 @@ async def test_hybrid_search_populates_collection(connected_store, col_name):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_hybrid_search_normalizes_legacy_ingested_by_to_cli(
+async def test_search_normalizes_legacy_ingested_by_to_cli(
     connected_store, col_name
 ):
     """Write a row with the legacy value, then assert the search result
@@ -105,8 +106,8 @@ async def test_hybrid_search_normalizes_legacy_ingested_by_to_cli(
     )
     await connected_store.rebuild_fts_index(col_name)
 
-    results = await connected_store.hybrid_search(
-        col_name, [0.0] * _DIM, "searchable", top_k=5
+    results = await connected_store.hybrid_search_with_trace(
+        col_name, [0.0] * _DIM, "searchable", _CANDIDATE_DEPTH
     )
     assert results
     assert results[0].ingested_by == "cli"

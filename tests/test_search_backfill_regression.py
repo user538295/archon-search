@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import uuid
 
 import pytest
@@ -33,6 +32,7 @@ from archon_search.store import SearchStore
 # ---------------------------------------------------------------------------
 
 _DIM = 4
+_CANDIDATE_DEPTH = 10
 
 # Fixed-width timestamps (correct format).
 _T_JAN = "2026-01-15T00:00:00.000000Z"   # January — well before filter range
@@ -144,11 +144,11 @@ async def test_date_filter_returns_wrong_results_before_backfill_then_correct_af
     await backfill_store.rebuild_fts_index(col)
 
     # --- RED phase: pre-backfill search ---
-    pre_results = await backfill_store.hybrid_search(
+    pre_results = await backfill_store.hybrid_search_with_trace(
         col,
         query_vector=[0.25] * _DIM,
         query_text="document",
-        top_k=10,
+        candidate_depth=_CANDIDATE_DEPTH,
         filters=_FILTERS,
     )
     pre_chunk_ids = {r.chunk_id for r in pre_results}
@@ -182,11 +182,11 @@ async def test_date_filter_returns_wrong_results_before_backfill_then_correct_af
     )
 
     # --- GREEN phase: post-backfill search ---
-    post_results = await backfill_store.hybrid_search(
+    post_results = await backfill_store.hybrid_search_with_trace(
         col,
         query_vector=[0.25] * _DIM,
         query_text="document",
-        top_k=10,
+        candidate_depth=_CANDIDATE_DEPTH,
         filters=_FILTERS,
     )
     post_chunk_ids = {r.chunk_id for r in post_results}
@@ -201,98 +201,4 @@ async def test_date_filter_returns_wrong_results_before_backfill_then_correct_af
     assert not (_EXPECTED_OUT_OF_RANGE & post_chunk_ids), (
         f"Post-backfill: out-of-range rows appeared: "
         f"{_EXPECTED_OUT_OF_RANGE & post_chunk_ids}"
-    )
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_hybrid_search_date_filter_on_mixed_format_collection_warns(
-    backfill_store: SearchStore,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A date-range search on a collection with legacy-format rows emits a WARNING.
-
-    The WARNING fires in ``hybrid_search`` (``store.py``) when the result set
-    contains rows whose ``indexed_at`` does not match ``_FIXED_WIDTH_PATTERN``.
-    """
-    col = f"warn-mixed-{uuid.uuid4().hex[:8]}"
-    # Only the legacy row needs to be present; the filter must be broad enough
-    # to include it so that the WARNING fires on an actual result row.
-    corpus = [
-        _chunk("warn_jan",  _T_JAN,        "january open"),
-        _chunk("warn_legacy", _T_APR_LEGACY, "legacy april in range"),
-    ]
-    await backfill_store.ensure_collection(col, _DIM)
-    await backfill_store.ingest_chunks(col, corpus)
-    await backfill_store.rebuild_fts_index(col)
-
-    # Use a filter that would INCLUDE the legacy row temporally (Jan–May).
-    # The bug means the row may or may not appear in results, but the WARNING
-    # must fire whenever any result row has a legacy format AND a date filter
-    # is active.  We use indexed_after only so the legacy row is not cut by
-    # the indexed_before boundary.
-    f = SearchFilters(indexed_after="2026-01-01", indexed_before="2026-05-01")
-
-    with caplog.at_level(logging.WARNING, logger="archon"):
-        await backfill_store.hybrid_search(
-            col,
-            query_vector=[0.25] * _DIM,
-            query_text="open",
-            top_k=10,
-            filters=f,
-        )
-
-    warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-    assert any(
-        ("legacy-format" in msg or "legacy" in msg.lower()) and col in msg
-        for msg in warning_messages
-    ), (
-        f"Expected a WARNING about legacy-format timestamps, got: {warning_messages}"
-    )
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_hybrid_search_date_filter_on_normalized_collection_does_not_warn(
-    backfill_store: SearchStore,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """After backfill, the same date-range search emits NO legacy-format WARNING.
-
-    Verifies that ``reindex_metadata(normalize_timestamps=True)`` eliminates
-    the WARNING path entirely for a fully-normalized collection.
-    """
-    col = f"warn-norm-{uuid.uuid4().hex[:8]}"
-    corpus = [
-        _chunk("norm_jan",    _T_JAN,        "january normalized"),
-        _chunk("norm_apr",    _T_APR_LEGACY, "april legacy to be normalized"),
-        _chunk("norm_jun",    _T_JUN,        "june normalized"),
-    ]
-    await backfill_store.ensure_collection(col, _DIM)
-    await backfill_store.ingest_chunks(col, corpus)
-    await backfill_store.rebuild_fts_index(col)
-
-    # Normalize all timestamps.
-    result = await backfill_store.reindex_metadata(col, normalize_timestamps=True)
-    assert result.ts_normalized >= 1
-
-    f = SearchFilters(indexed_after="2026-01-01", indexed_before="2026-12-31")
-
-    with caplog.at_level(logging.WARNING, logger="archon"):
-        await backfill_store.hybrid_search(
-            col,
-            query_vector=[0.25] * _DIM,
-            query_text="normalized",
-            top_k=10,
-            filters=f,
-        )
-
-    legacy_warnings = [
-        r.message for r in caplog.records
-        if r.levelno == logging.WARNING
-        and ("legacy-format" in r.message or "legacy" in r.message.lower())
-        and col in r.message
-    ]
-    assert not legacy_warnings, (
-        f"Post-backfill: unexpected legacy-format WARNING(s): {legacy_warnings}"
     )

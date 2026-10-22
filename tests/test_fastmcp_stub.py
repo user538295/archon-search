@@ -122,6 +122,12 @@ def test_tool_falls_back_to_function_name() -> None:
     assert app.tools == {"search": search}
 
 
+def test_stub_records_constructor_keywords() -> None:
+    app = StubFastMCP("archon-search", mask_error_details=True)
+
+    assert app.init_kwargs == {"mask_error_details": True}
+
+
 def test_stub_mcp_tools_returns_every_registered_tool_and_restores_real_class() -> None:
     tools = stub_mcp_tools(MagicMock(), _COLLECTION)
 

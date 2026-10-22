@@ -31,8 +31,7 @@ from archon_search.server.app import create_app
 from archon_search.server.routes_explain import ROUTING_UNAVAILABLE_CODE, ROUTING_UNAVAILABLE_DETAIL
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord
-
-pytestmark = pytest.mark.xdist_group("mcp")
+from tests._fastmcp_stub import stubbed_fastmcp
 
 
 # ---------------------------------------------------------------------------
@@ -1802,8 +1801,6 @@ async def test_mcp_explain_emits_stage_timings_log_record(
 ) -> None:
     """MCP explain with valid request emits a log record with event_type=='stage_timings'
     containing 'total' in stage_timings_ms."""
-    from unittest.mock import patch
-
     from archon_search.store import SearchStore
 
     config = SearchConfig()
@@ -1834,26 +1831,7 @@ async def test_mcp_explain_emits_stage_timings_log_record(
         top_k_return=5,
     )
 
-    class _FakeApp:
-        def __init__(self, name: str) -> None:
-            self.tools: dict = {}
-
-        def tool(self):
-            def decorator(func):
-                self.tools[func.__name__] = func
-                return func
-            return decorator
-
-        def custom_route(self, path, methods=None):
-            def decorator(func):
-                return func
-            return decorator
-
-    class _FakeFastMCP:
-        def __new__(cls, name, **kwargs):
-            return _FakeApp(name)
-
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         mcp_app = mcp_module.create_app(pipeline, "default", writer=None, config=config)
 
@@ -1945,8 +1923,6 @@ async def test_explain_stage_timings_fts_absent_degradation(tmp_path: Path) -> N
 @pytest.mark.asyncio
 async def test_rest_mcp_explain_key_parity(tmp_path: Path) -> None:
     """For identical inputs, set(REST stage_timings_ms keys) == set(MCP stage_timings_ms keys)."""
-    from unittest.mock import patch
-
     from archon_search.store import SearchStore
 
     config = SearchConfig()
@@ -1995,26 +1971,7 @@ async def test_rest_mcp_explain_key_parity(tmp_path: Path) -> None:
     rest_data = rest_resp.json()
     assert "stage_timings_ms" in rest_data, "REST response must contain stage_timings_ms"
 
-    class _FakeApp:
-        def __init__(self, name: str) -> None:
-            self.tools: dict = {}
-
-        def tool(self):
-            def decorator(func):
-                self.tools[func.__name__] = func
-                return func
-            return decorator
-
-        def custom_route(self, path, methods=None):
-            def decorator(func):
-                return func
-            return decorator
-
-    class _FakeFastMCP:
-        def __new__(cls, name, **kwargs):
-            return _FakeApp(name)
-
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+    with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
         mcp_app = mcp_module.create_app(pipeline, "default", writer=None, config=config)
 

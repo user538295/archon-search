@@ -153,7 +153,7 @@ Route: `POST /graph/{collection}/rebuild-communities` (`server/routes_graph.py`)
 | `409` | A rebuild is already in progress for this collection (`community_rebuild_job_id` guard, answered at once and checked again under the collection lock — of two concurrent requests the second gets it). |
 | `422` | `graph.enabled=false`, graph store unavailable, or a `?namespace=` mismatch. |
 | `500` | The job could not be saved (internal error); body `{"detail": "internal error"}`, no rebuild started. |
-| `503` | Another write held the collection lock past `INGEST_LOCK_TIMEOUT_S` (30 s): body `{"detail": "reindex in progress; retry after Retry-After seconds", "code": "store_busy"}` with `Retry-After: 30`, no job created — retry after `Retry-After`. Or the app has no search store — a defensive check a served instance should not hit (the lifespan sets the store before the port opens): body `{"detail": "service not ready"}`, no job created — retry with backoff. |
+| `503` | Another write held the collection lock past `INGEST_LOCK_TIMEOUT_S` (30 s): body `{"detail": "collection is busy with another write; retry after Retry-After seconds", "code": "store_busy"}` with `Retry-After: 30`, no job created — retry after `Retry-After`. Or the app has no search store — a defensive check a served instance should not hit (the lifespan sets the store before the port opens): body `{"detail": "service not ready"}`, no job created — retry with backoff. |
 
 Concurrent rebuilds on the same `(namespace, collection)` — including a `MaintenanceLoop` GC-triggered rebuild — serialize through a module-level lock in `community_builder.py`, so a rebuild never blocks ingest.
 

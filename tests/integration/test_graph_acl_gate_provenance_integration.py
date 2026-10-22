@@ -101,7 +101,7 @@ def _app_with_global_communities(
         yield client, headers
 
 
-def test_hybrid_search_acl_context_gate_carries_sidecar_provenance(
+def test_search_acl_context_gate_carries_sidecar_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Control: POST /search without graph_mode reports the sidecar provenance for the same row."""

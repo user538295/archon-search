@@ -189,12 +189,12 @@ def test_fts_consistency_after_50_operations(tmp_path: Any) -> None:
             for qidx in query_indices:
                 doc_id, token, _ = base_docs[qidx]
 
-                ref_results = await store.hybrid_search(
+                ref_results = await store.hybrid_search_with_trace(
                     ref_col, query_vec, token, _SEARCH_K
                 )
                 ref_doc_ids = {r.doc_id for r in ref_results}
 
-                inc_results = await store.hybrid_search(
+                inc_results = await store.hybrid_search_with_trace(
                     col, query_vec, token, _SEARCH_K
                 )
                 inc_doc_ids = {r.doc_id for r in inc_results}
@@ -220,7 +220,7 @@ def test_fts_consistency_after_50_operations(tmp_path: Any) -> None:
             for pidx in phantom_sample:
                 doc_id, token, _ = base_docs[pidx]
 
-                inc_results = await store.hybrid_search(
+                inc_results = await store.hybrid_search_with_trace(
                     col, query_vec, token, _SEARCH_K
                 )
                 inc_doc_ids = {r.doc_id for r in inc_results}

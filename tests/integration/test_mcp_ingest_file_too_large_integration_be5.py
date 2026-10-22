@@ -13,7 +13,7 @@ import pytest
 
 from tests.integration.conftest import make_real_app
 
-pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
+pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
