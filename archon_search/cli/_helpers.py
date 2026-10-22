@@ -24,8 +24,8 @@ _TERMINAL_STATUSES = {
     JobStatus.FAILED_EXPIRED,
     JobStatus.CANCELLED,
 }
-# Process exit code for `export --wait` / `backup --now --wait` when a job ends in a
-# terminal status other than DONE. `import --wait` exits 1 instead (tech-debt CLI-2).
+# Process exit code for `export --wait` / `import --wait` / `backup --now --wait` when a job ends in a
+# terminal status other than DONE.
 _EXIT_JOB_UNSUCCESSFUL = 2
 # ConnectTimeout (bound-not-listening) and ConnectError (refused) both mean the port is
 # unreachable; _server_connect_fail_msg() decides whether that is "stopped" or "still starting".

@@ -169,7 +169,7 @@ For per-collection restore, cross-instance migration, or recovering one collecti
 archon-search import <collection> /mnt/nfs/archon-search/backups/default/<collection>.backup.<timestamp>.tar.gz --wait
 ```
 
-With `--wait`, import exits `0` on `DONE` and `1` on `FAILED`, `FAILED_EXPIRED` or `CANCELLED` (a cancelled import may leave a partial collection — re-run the same import command with `--force-overwrite`); see [Export & import](../UserManual/90_export_import.md#import).
+With `--wait`, import exits `0` on `DONE` or when `--timeout` (default 300 s) elapses with the job still running (check it with `archon-search jobs status <job_id>`), and `2` on `FAILED`, `FAILED_EXPIRED` or `CANCELLED` (a cancelled import may leave a partial collection — re-run the same import command with `--force-overwrite`); for a large archive pass a longer `--timeout`. See [Export & import](../UserManual/90_export_import.md#import).
 
 Import ingests with checkpointing (resumable via `POST /jobs/{id}/resume`). The full export/import workflow, archive layout, and manifest fields are documented in [Export & import](../UserManual/90_export_import.md).
 

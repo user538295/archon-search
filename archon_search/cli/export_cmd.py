@@ -19,9 +19,6 @@ from archon_search.types import JobStatus
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
 _DEFAULT_WAIT_TIMEOUT_SECONDS = 300
-# Process exit code when an import job ends in a terminal status other than DONE:
-# 1, not _EXIT_JOB_UNSUCCESSFUL (2) like export/backup — tech-debt CLI-2.
-_EXIT_IMPORT_UNSUCCESSFUL = 1
 _IMPORT_CANCELLED_MSG = (
     "Import CANCELLED: the collection may be partially or fully imported; "
     "re-run the same import command with --force-overwrite to restore a complete copy."
@@ -121,25 +118,25 @@ def export_cmd(
     _poll_job(job_id, api_url, headers, timeout_seconds)
 
 
-def _poll_job(
+def _wait_for_terminal_job(
     job_id: str,
     api_url: str,
     headers: dict,
-    timeout_seconds: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
-) -> None:
-    """Poll GET /jobs/{job_id} until terminal, printing progress.
+    timeout_seconds: int,
+    noun: str,
+) -> dict | None:
+    """Poll GET /jobs/{job_id} until terminal, printing progress; shared by export and import.
+
+    Returns the terminal job dict, or None after Ctrl-C (the job continues on the server).
 
     Exit codes:
-    - Exits 0 on success (DONE) or timeout — prints a recovery hint on timeout.
-    - Exits 2 on FAILED, FAILED_EXPIRED or CANCELLED — no archive was produced.
+    - Exits 0 on timeout — prints a recovery hint naming the ``noun`` job.
     - Exits 1 on fatal errors (network, auth, HTTP errors).
     """
     url = f"{api_url.rstrip('/')}/jobs/{job_id}"
     max_polls = max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)
 
     try:
-        status = "UNKNOWN"
-        job: dict = {}
         for _ in range(max_polls):
             try:
                 resp = httpx.get(url, headers=headers)
@@ -157,7 +154,6 @@ def _poll_job(
                 raise SystemExit(1)
 
             job = resp.json()
-            status = job["status"]
             progress = job.get("progress")
 
             if progress:
@@ -166,23 +162,40 @@ def _poll_job(
                 total = progress.get("total", 0)
                 click.echo(f"[{phase}] {processed}/{total}")
 
-            if status in _TERMINAL_STATUSES:
-                break
+            if job["status"] in _TERMINAL_STATUSES:
+                return job
 
             time.sleep(_POLL_INTERVAL_SECONDS)
-        else:
-            # Loop exhausted without hitting a terminal status → timeout
-            click.echo(
-                f"Timed out after {timeout_seconds}s waiting for export job to complete. "
-                f"{_jobs_status_hint(job_id)}.",
-                err=True,
-            )
-            raise SystemExit(0)
-
     except KeyboardInterrupt:
         click.echo("Polling stopped — job continues on server")
+        return None
+
+    click.echo(
+        f"Timed out after {timeout_seconds}s waiting for {noun} job to complete. "
+        f"{_jobs_status_hint(job_id)}.",
+        err=True,
+    )
+    raise SystemExit(0)
+
+
+def _poll_job(
+    job_id: str,
+    api_url: str,
+    headers: dict,
+    timeout_seconds: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+) -> None:
+    """Wait for an export job and report its outcome.
+
+    Exit codes:
+    - Exits 0 on success (DONE) or timeout — prints a recovery hint on timeout.
+    - Exits 2 on FAILED, FAILED_EXPIRED or CANCELLED — no archive was produced.
+    - Exits 1 on fatal errors (network, auth, HTTP errors).
+    """
+    job = _wait_for_terminal_job(job_id, api_url, headers, timeout_seconds, "export")
+    if job is None:
         return
 
+    status = job["status"]
     if status == JobStatus.DONE:
         result = job.get("result") or {}
         archive_path = result.get("archive_path", "")
@@ -222,6 +235,17 @@ def _poll_job(
     help="Poll until the job completes and print progress.",
 )
 @click.option(
+    "--timeout",
+    "timeout_seconds",
+    default=_DEFAULT_WAIT_TIMEOUT_SECONDS,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help=(
+        "Maximum seconds to wait for the import job to complete "
+        "(only used with --wait). On timeout: exits 0 and prints a recovery hint."
+    ),
+)
+@click.option(
     "--api-url",
     default=_DEFAULT_API_URL,
     show_default=True,
@@ -239,6 +263,7 @@ def import_cmd(
     ignore_schema_version: bool,
     on_error: str,
     wait: bool,
+    timeout_seconds: int,
     api_url: str,
     api_key: str | None,
 ) -> None:
@@ -284,58 +309,27 @@ def import_cmd(
     if not wait:
         return
 
-    _poll_import_job(job_id, api_url, headers)
+    _poll_import_job(job_id, api_url, headers, timeout_seconds)
 
 
-def _poll_import_job(job_id: str, api_url: str, headers: dict) -> None:
-    """Poll GET /jobs/{job_id} until terminal, printing progress and result.
+def _poll_import_job(
+    job_id: str,
+    api_url: str,
+    headers: dict,
+    timeout_seconds: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+) -> None:
+    """Wait for an import job and report its outcome.
 
     Exit codes:
-    - Exits 0 on success (DONE).
-    - Exits 1 on FAILED, FAILED_EXPIRED or CANCELLED, and on fatal errors
-      (network, auth, HTTP errors).
-
-    Tech debt CLI-2 (530_technical_debt_refactoring_roadmap.md): no --timeout, a
-    loop duplicated from _helpers._poll_job, and exit 1 where export/backup exit 2.
+    - Exits 0 on success (DONE) or timeout — prints a recovery hint on timeout.
+    - Exits 2 on FAILED, FAILED_EXPIRED or CANCELLED, as export and backup do.
+    - Exits 1 on fatal errors (network, auth, HTTP errors).
     """
-    url = f"{api_url.rstrip('/')}/jobs/{job_id}"
-
-    try:
-        while True:
-            try:
-                resp = httpx.get(url, headers=headers)
-            except _CONNECT_FAIL:
-                click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
-                raise SystemExit(1)
-            except httpx.HTTPError as exc:
-                click.echo(f"Error polling job: {exc}", err=True)
-                raise SystemExit(1) from exc
-            if resp.status_code != 200:
-                click.echo(
-                    f"Error polling job: server returned {resp.status_code}: {resp.text}",
-                    err=True,
-                )
-                raise SystemExit(1)
-
-            job = resp.json()
-            status: str = job["status"]
-            progress = job.get("progress")
-
-            if progress:
-                phase = progress.get("phase", "")
-                processed = progress.get("processed", 0)
-                total = progress.get("total", 0)
-                click.echo(f"[{phase}] {processed}/{total}")
-
-            if status in _TERMINAL_STATUSES:
-                break
-
-            time.sleep(_POLL_INTERVAL_SECONDS)
-
-    except KeyboardInterrupt:
-        click.echo("Polling stopped — job continues on server")
+    job = _wait_for_terminal_job(job_id, api_url, headers, timeout_seconds, "import")
+    if job is None:
         return
 
+    status = job["status"]
     if status == JobStatus.DONE:
         result = job.get("result") or {}
         imported = result.get("imported", 0)
@@ -351,8 +345,8 @@ def _poll_import_job(job_id: str, api_url: str, headers: dict) -> None:
             )
     elif status == JobStatus.CANCELLED:
         click.echo(_IMPORT_CANCELLED_MSG, err=True)
-        raise SystemExit(_EXIT_IMPORT_UNSUCCESSFUL)
+        raise SystemExit(_EXIT_JOB_UNSUCCESSFUL)
     else:
         error = job.get("error") or "unknown error"
         click.echo(f"Import FAILED: {error}", err=True)
-        raise SystemExit(_EXIT_IMPORT_UNSUCCESSFUL)
+        raise SystemExit(_EXIT_JOB_UNSUCCESSFUL)

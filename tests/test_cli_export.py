@@ -344,10 +344,10 @@ _IMPORT_CANCELLED_MSG = (
         ("CANCELLED", _IMPORT_CANCELLED_MSG),
     ],
 )
-def test_import_wait_exits_1_on_unsuccessful_terminal_status(
+def test_import_wait_exits_2_on_unsuccessful_terminal_status(
     status: str, expected_stderr: str
 ) -> None:
-    """--wait exits 1 when the import job ends FAILED, FAILED_EXPIRED or CANCELLED."""
+    """--wait exits 2 (as export/backup do) when the import job ends FAILED, FAILED_EXPIRED or CANCELLED."""
     runner = CliRunner()
     job_id = f"job-import-{status.lower()}"
     post_resp = _mock_post_response(202, _job_response(job_id, "QUEUED"))
@@ -363,7 +363,7 @@ def test_import_wait_exits_1_on_unsuccessful_terminal_status(
             ["my-collection", "/data/exports/archive.tar.gz", "--wait", "--api-key", "deadbeef"],
         )
 
-    assert result.exit_code == 1, f"output={result.output!r}"
+    assert result.exit_code == 2, f"output={result.output!r}"
     assert expected_stderr in result.stderr
     assert "Job ended with status" not in result.output
     assert "Done. imported=" not in result.output
@@ -389,9 +389,117 @@ def test_import_wait_keeps_polling_through_cancelling() -> None:
             ["my-collection", "/data/exports/archive.tar.gz", "--wait", "--api-key", "deadbeef"],
         )
 
-    assert result.exit_code == 1, f"output={result.output!r}"
+    assert result.exit_code == 2, f"output={result.output!r}"
     assert mock_get.call_count == len(get_responses)
     assert _IMPORT_CANCELLED_MSG in result.stderr
+
+
+def test_import_wait_timeout_exits_0() -> None:
+    """--wait --timeout N exits 0 on poll timeout with the recovery hint, like export --wait.
+
+    httpx.get always answers RUNNING so the real polling logic exhausts the timeout.
+    """
+    runner = CliRunner()
+    job_id = "job-timeout-import"
+    post_resp = _mock_post_response(202, _job_response(job_id, "QUEUED"))
+    running_resp = _mock_get_response(200, _job_response(job_id, "RUNNING"))
+
+    with (
+        patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.export_cmd.httpx.get", return_value=running_resp) as mock_get,
+        patch("archon_search.cli.export_cmd.time.sleep"),
+    ):
+        # --timeout 4 with _POLL_INTERVAL_SECONDS=2 → max 2 polls, then timeout
+        result = runner.invoke(
+            import_cmd,
+            ["my-collection", "/data/exports/archive.tar.gz", "--wait", "--timeout", "4", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 0, f"output={result.output!r}"
+    assert mock_get.call_count == 2
+    assert (
+        "Timed out after 4s waiting for import job to complete. "
+        f"Check status: 'archon-search jobs status {job_id}' with the same --api-url/--api-key."
+    ) in result.stderr
+    assert "Done. imported=" not in result.output
+
+
+def test_import_wait_default_timeout_is_300_seconds() -> None:
+    """Without --timeout the import poll gives up after the same default as export (300 s = 150 polls)."""
+    runner = CliRunner()
+    job_id = "job-default-timeout-import"
+    post_resp = _mock_post_response(202, _job_response(job_id, "QUEUED"))
+    running_resp = _mock_get_response(200, _job_response(job_id, "RUNNING"))
+
+    with (
+        patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.export_cmd.httpx.get", return_value=running_resp) as mock_get,
+        patch("archon_search.cli.export_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            import_cmd,
+            ["my-collection", "/data/exports/archive.tar.gz", "--wait", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 0, f"output={result.output!r}"
+    assert mock_get.call_count == 150
+    assert "Timed out after 300s waiting for import job to complete." in result.stderr
+
+
+def test_import_timeout_rejects_non_positive_value() -> None:
+    """--timeout is an IntRange(min=1) like export's: 0 is a usage error and nothing is submitted."""
+    runner = CliRunner()
+
+    with patch("archon_search.cli.export_cmd.httpx.post") as mock_post:
+        result = runner.invoke(
+            import_cmd,
+            ["my-collection", "/data/exports/archive.tar.gz", "--wait", "--timeout", "0", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 2, f"output={result.output!r}"
+    assert "Invalid value for '--timeout'" in result.output
+    mock_post.assert_not_called()
+
+
+def test_import_without_wait_does_not_poll() -> None:
+    """Without --wait the import command submits, prints the job id and never polls /jobs/{id}."""
+    runner = CliRunner()
+    post_resp = _mock_post_response(202, _job_response("job-import-nowait", "QUEUED"))
+
+    with (
+        patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.export_cmd.httpx.get") as mock_get,
+    ):
+        result = runner.invoke(
+            import_cmd,
+            ["my-collection", "/data/exports/archive.tar.gz", "--timeout", "4", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 0, f"output={result.output!r}"
+    assert "Import job submitted: job-import-nowait" in result.output
+    mock_get.assert_not_called()
+
+
+def test_import_wait_poll_connection_failure_exits_1() -> None:
+    """A connection failure while polling stays exit 1 (fatal error), distinct from the job-outcome exit 2."""
+    import httpx as _httpx
+
+    runner = CliRunner()
+    post_resp = _mock_post_response(202, _job_response("job-import-conn", "QUEUED"))
+
+    with (
+        server_reported_stopped(),
+        patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.export_cmd.httpx.get", side_effect=_httpx.ConnectError("refused")),
+        patch("archon_search.cli.export_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            import_cmd,
+            ["my-collection", "/data/exports/archive.tar.gz", "--wait", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 1, f"output={result.output!r}"
+    assert "not running" in result.stderr.lower()
 
 
 # ---------------------------------------------------------------------------
