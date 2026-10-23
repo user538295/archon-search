@@ -1,6 +1,49 @@
 # Changelog
 
 
+## [26.10.2251] - 2026-10-23
+
+**Collection DELETE safety, job lifecycle fixes, import --timeout and exit codes**
+
+**Collection writers and DELETE safety**
+
+The `DELETE /collections/{name}` endpoint now properly guards against race conditions where concurrent writers (sync, MCP ingest, import, reindex, etc.) could re-create tables or metadata that DELETE was dropping. This adds:
+- Per-collection writer registry with `locked_collection()`, `collection_writer()`, and `has_active_writer()` APIs; DELETE refuses with 503 `store_busy` while a writer is active
+- MCP `ingest_file`, `ingest_directory`, and the watcher callback register as writers; the watcher skips collections no longer in config
+- Metadata read-modify-write operations via `PATCH /collections/{name}`, in-place migration, and MCP `update_collection` now hold the collection lock across both read and write
+- Dry-run metadata reindex jobs no longer block DELETE (they carry a `dry_run` flag that `may_write_collection()` recognizes)
+
+**Job lifecycle and cancellation**
+
+Jobs now handle cancellation and startup state more reliably:
+- Jobs cancelled before claiming RUNNING mark `cancelled_before_start` and complete as CANCELLED instead of staying PENDING and blocking DELETE
+- Legacy QUEUED metadata-reindex, community-rebuild, and sync jobs from older servers are rewritten to FAILED on startup so they no longer orphan collections
+- Ingest and reindex tasks claim RUNNING via `transition()` instead of unconditionally writing it, so a `DELETE /jobs/{id}` before the claim succeeds in cancelling the job
+- The 503 `store_busy` response now clarifies "collection is busy with another write; retry after Retry-After seconds" instead of the misleading "reindex in progress"
+
+**Failed ingest retry execution**
+
+Previously, failed ingest retry jobs were created as PENDING but never executed, orphaning failed submissions. Now:
+- Retry jobs are dispatched to actually run via POST `/ingest`'s task infrastructure, preserving the original request's path, `ingested_by`, `chunk_ttl_seconds`, and `chunk_scopes`
+- Retries are bounded: `retry_max_attempts` per submission, newer jobs supersede older FAILED ones per {namespace}/{collection}/{source_path}, and client-cancelled or process-restart jobs are expired
+- `DELETE /collections/{name}` now cancels the collection's FAILED/PENDING ingest jobs so retries cannot re-create a dropped table
+- Collections in `[maintenance] exclude` are neither retried nor expired
+
+**CLI improvements**
+
+- `import --wait` gains `--timeout SECONDS` (default 300, minimum 1), matching `export --wait`'s behavior; on timeout exits 0 with a `jobs status <job_id>` hint on stderr and the job keeps running
+- `import --wait` now exits 2 on FAILED, FAILED_EXPIRED, and CANCELLED outcomes (previously 1), with exit 1 reserved for connection, auth, and HTTP errors
+- Export and import now share the same `_wait_for_terminal_job` retry logic
+
+**Code quality and maintenance**
+
+- 371 Ruff F class findings eliminated: dead imports and unused locals across 150+ test files, five F821 string annotations now use `TYPE_CHECKING` imports, and redefinitions cleaned up
+- 26 local `_FakeFastMCP` test doubles replaced with the shared `StubFastMCP` fixture; new `test_no_leaked_fastmcp_stub.py` guard test fails on a new local copy
+- 64 `xdist_group("mcp")` marks removed from 60 test files after analysis showed no shared state
+- Test vacuity fixed: HyDE test now arms HyDE and asserts it is not awaited; format asserts on test-chosen constants removed; metadata and service-registration tests fixed
+- Documentation: 30+ file:line citations re-pointed to current source; stale `[search] top_k_return` references corrected to `[database] top_k_return`; new BREAKING entry added for service-registration refusals
+
+
 ## [26.10.2205] - 2026-10-14
 
 **Docker reliability, model cache path support, and import warmup**
