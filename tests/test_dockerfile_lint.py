@@ -783,6 +783,18 @@ def test_dockerfile_does_not_install_mesa_for_libgl(dockerfile_text: str) -> Non
     )
 
 
+def test_dockerfile_unpacks_libgl_after_the_last_apt_install_purge_or_autoremove(dockerfile_text: str) -> None:
+    """``dpkg --force-depends`` leaves libglx0's Mesa dependency unmet in dpkg's database, and apt then refuses
+    every later ``install``/``purge``/``autoremove`` ("Unmet dependencies"). The CUDA base installs python3.12
+    (deadsnakes) and, for pip, curl through apt in the same ``RUN``, so the unpack must come after them."""
+    base_os_run = re.search(r"^RUN set -eux; \\\n\s+apt-get update; .*?^\s*rm -rf /var/lib/apt/lists/\*\n", dockerfile_text, re.DOTALL | re.MULTILINE)
+    assert base_os_run is not None, "the base-OS `apt-get` RUN block was not found"
+    block = base_os_run.group(0)
+    unpack = block.index("dpkg --force-depends")
+    later_apt_mutations = re.findall(r"apt-get (?:install|purge|autoremove)\b", block[unpack:])
+    assert not later_apt_mutations, f"apt would refuse these after the force-depends unpack: {later_apt_mutations}"
+
+
 def test_dockerfile_asserts_opencv_imports_at_build_time(dockerfile_text: str) -> None:
     """A missing system library must fail the build, not the first OCR request."""
     assert re.search(r"python3 -c ['\"]import cv2", dockerfile_text), (

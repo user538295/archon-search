@@ -46,12 +46,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates tini libxcb1 libx11-6 libxext6 libglib2.0-0; \
-    # opencv-python (a dependency of rapidocr and docling) links libGL.so.1 at load time. `apt-get
-    # install libgl1` drags in Mesa's software renderer through libglx0 (LLVM, ~190 MB); nothing here
-    # renders, so the three glvnd packages are unpacked alone and their Mesa dependency is skipped.
-    (cd /tmp && apt-get download libgl1 libglvnd0 libglx0 \
-        && dpkg --force-depends -i libgl1_*.deb libglvnd0_*.deb libglx0_*.deb \
-        && rm -f libgl1_*.deb libglvnd0_*.deb libglx0_*.deb); \
     if ! command -v python3.12 >/dev/null 2>&1; then \
         apt-get install -y --no-install-recommends software-properties-common gnupg; \
         add-apt-repository -y ppa:deadsnakes/ppa; \
@@ -73,6 +67,15 @@ RUN set -eux; \
         apt-get purge -y curl; \
         apt-get autoremove -y; \
     fi; \
+    # opencv-python (a dependency of rapidocr and docling) links libGL.so.1 at load time. `apt-get
+    # install libgl1` drags in Mesa's software renderer through libglx0 (LLVM, ~190 MB); nothing here
+    # renders, so the three glvnd packages are unpacked alone and their Mesa dependency is skipped.
+    # `--force-depends` leaves libglx0's Mesa dependency unmet in dpkg's database, and apt refuses
+    # every later install/purge/autoremove while one is unmet: this unpack MUST be the last package
+    # operation of this RUN (the GPU base installs python3.12 and curl above through apt).
+    (cd /tmp && apt-get download libgl1 libglvnd0 libglx0 \
+        && dpkg --force-depends -i libgl1_*.deb libglvnd0_*.deb libglx0_*.deb \
+        && rm -f libgl1_*.deb libglvnd0_*.deb libglx0_*.deb); \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
