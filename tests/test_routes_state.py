@@ -11,7 +11,12 @@ from fastapi.testclient import TestClient
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
-from archon_search.progress import CollectionProgress, IndexingState, IndexingStatus, IndexingStateStore
+from archon_search.progress import (
+    CollectionProgress,
+    IndexingState,
+    IndexingStateStore,
+    IndexingStatus,
+)
 from archon_search.server.app import create_app
 
 

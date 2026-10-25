@@ -98,7 +98,7 @@ def test_watcher_replace_no_stale_duplicates(
         rows_after = await _rows_for_doc(store_for_watcher, col, second.doc_id)
         return initial_updated_at, rows_after, initial_count
 
-    initial_updated_at, rows_after, initial_count = asyncio.run(_full())
+    initial_updated_at, rows_after, _initial_count = asyncio.run(_full())
 
     assert rows_after, "post-replace ingest must leave rows"
     # No stale duplicates: pipeline deletes the old doc before re-adding,

@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-
 # ---------------------------------------------------------------------------
 # Unit tests
 # ---------------------------------------------------------------------------
@@ -245,7 +244,7 @@ def test_cli_key_list_integration(tmp_path, monkeypatch):
     """CLI list against real TestClient returns formatted key rows (S3)."""
     from tests.integration.conftest import make_real_app
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         from archon_search.cli.key_cmd import key_cmd
 
         runner = CliRunner()
@@ -264,7 +263,7 @@ def test_cli_key_list_integration(tmp_path, monkeypatch):
             mock_client = MagicMock()
             mock_client_cls.return_value.__enter__.return_value = mock_client
             # Forward the list call to the real TestClient
-            def fake_get(url, **kwargs):  # noqa: ANN001, ANN202
+            def fake_get(url, **kwargs):
                 path = url.replace("http://localhost:8765", "")
                 params = kwargs.get("params", {})
                 headers = kwargs.get("headers", {})

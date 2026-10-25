@@ -23,7 +23,6 @@ from archon_search.server.routes_explain import ExplainNearMiss
 from tests._graph_engine_stub import install_graph_engine_stub
 from tests._hyde_stubs import rest_hyde_generating
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -72,7 +71,7 @@ def test_explain_endpoint_graph_mode_none_forwarded(tmp_path, monkeypatch) -> No
     """
     from tests.integration.conftest import make_real_app
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         pipeline = client.app.state.pipeline
         client.app.state.embedder_cache = None  # force _global_embedder path
 
@@ -116,7 +115,7 @@ def test_explain_endpoint_graph_mode_forwarded(tmp_path, monkeypatch, graph_mode
     from tests.integration.conftest import make_real_app
 
     install_graph_engine_stub(monkeypatch)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         pipeline = client.app.state.pipeline
         client.app.state.embedder_cache = None
 
@@ -156,7 +155,7 @@ def test_explain_route_graph_mode_null_response_structure(tmp_path, monkeypatch)
     """
     from tests.integration.conftest import ingest_file_via_path, make_real_app
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         # Create a real collection with ingested data
         txt_file = tmp_path / "doc.txt"
         txt_file.write_text(
@@ -202,7 +201,7 @@ def test_explain_route_graph_mode_and_hyde_true_returns_hyde_applied_false(
     from tests.integration.conftest import make_real_app
 
     install_graph_engine_stub(monkeypatch)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         pipeline = client.app.state.pipeline
         client.app.state.embedder_cache = None
 

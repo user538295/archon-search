@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import contextlib
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -108,9 +108,8 @@ def _run_wizard(
         "_install_cuda_torch": MagicMock(),
     }
 
-    with patch.multiple("archon_search.install.installer", **install_patches):
-        with patch.multiple(RealInstaller, **_base_wizard_patches()):
-            result = runner.invoke(main, args)
+    with patch.multiple("archon_search.install.installer", **install_patches), patch.multiple(RealInstaller, **_base_wizard_patches()):
+        result = runner.invoke(main, args)
     return result
 
 

@@ -5,7 +5,7 @@ import asyncio
 import hashlib
 import tarfile
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -36,7 +36,7 @@ def _chunk(doc_id: str, idx: int, text: str = "hello world") -> ChunkRecord:
         text=text,
         vector=[float(idx)] * _DIM,
         source_path=f"/tmp/{doc_id[:8]}.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
     )
 
 

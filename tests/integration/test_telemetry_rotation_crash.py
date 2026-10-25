@@ -84,6 +84,7 @@ def _run_script(script: str, log_dir: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-c", script, str(log_dir)],
         capture_output=True,
+        check=False,
     )
 
 

@@ -31,11 +31,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from archon_search._types import CollectionInfo
-from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+from archon_search.progress import (
+    CollectionProgress,
+    IndexingStateStore,
+    IndexingStatus,
+)
 from archon_search.server.routes_jobs import _TERMINAL_STATUSES
 from archon_search.sync import SearchCollectionSync, collection_sync_failed_detail
 from archon_search.types import JobStatus
-from tests._internal_error_leak import LANCE_MSG, LEAK_NEEDLE, assert_logged_with_traceback
+from tests._internal_error_leak import (
+    LANCE_MSG,
+    LEAK_NEEDLE,
+    assert_logged_with_traceback,
+)
 from tests._maintenance_status_client import make_status_client
 from tests.test_sync import make_mock_pipeline
 

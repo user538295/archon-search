@@ -89,12 +89,11 @@ async def test_search_hyde_true_returns_200_and_hyde_applied_true(tmp_path: Path
     with patch(
         "archon_search.hyde.HyDEGenerator.generate",
         new=AsyncMock(return_value=_FIXED_HYDE_VECTOR),
-    ):
-        with TestClient(app, headers={"Authorization": f"Bearer {key}"}) as client:
-            response = client.post(
-                "/search",
-                json={"query": "hello world", "collection": _COLLECTION, "hyde": True},
-            )
+    ), TestClient(app, headers={"Authorization": f"Bearer {key}"}) as client:
+        response = client.post(
+            "/search",
+            json={"query": "hello world", "collection": _COLLECTION, "hyde": True},
+        )
 
     assert response.status_code == 200, response.text
     data = response.json()
@@ -131,12 +130,11 @@ async def test_explain_hyde_true_returns_200_and_hyde_applied_true(tmp_path: Pat
     with patch(
         "archon_search.hyde.HyDEGenerator.generate",
         new=AsyncMock(return_value=_FIXED_HYDE_VECTOR),
-    ):
-        with TestClient(app, headers={"Authorization": f"Bearer {key}"}) as client:
-            response = client.post(
-                "/explain",
-                json={"query": "hello world", "collection": _COLLECTION, "hyde": True},
-            )
+    ), TestClient(app, headers={"Authorization": f"Bearer {key}"}) as client:
+        response = client.post(
+            "/explain",
+            json={"query": "hello world", "collection": _COLLECTION, "hyde": True},
+        )
 
     assert response.status_code == 200, response.text
     data = response.json()

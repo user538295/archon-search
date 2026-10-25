@@ -66,7 +66,7 @@ def test_orphan_cleanup_removes_deleted_source(
 
     with make_real_app(tmp_path, monkeypatch, maintenance_enabled=True) as (
         client,
-        cfg,
+        _cfg,
         api_key,
     ):
         # Step 2: Ingest the document so chunks exist in the store.

@@ -1,13 +1,13 @@
 """Integration tests for ACL propagation in SearchPipeline.ingest_file ."""
 from __future__ import annotations
 
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -17,8 +17,8 @@ from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdo
 def _make_pipeline(tmp_path: Path):
     """Return a SearchPipeline wired to a real LanceDB store with stub embedder/chunker/parser."""
 
-    from archon_search.store import SearchStore
     from archon_search.pipeline import SearchPipeline
+    from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
 
@@ -40,8 +40,9 @@ def _make_pipeline(tmp_path: Path):
     reranker = MagicMock()
 
     # Real chunker — but using a stub that avoids chonkie download
+    from datetime import datetime
+
     from archon_search._types import ChunkRecord
-    from datetime import datetime, timezone
 
     class _StubChunker:
         def chunk(
@@ -55,7 +56,7 @@ def _make_pipeline(tmp_path: Path):
             ingested_by: str = "cli",
             language: str = "",
         ) -> list[ChunkRecord]:
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             # One chunk per 200 chars (or one chunk if text is shorter)
             parts = [text[i:i + 200] for i in range(0, len(text), 200)] if text else []
             return [
@@ -297,8 +298,8 @@ async def test_ingest_file_deny_all_sidecar(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ingest_file_all_invalid_acl_defaults_open_with_warning(tmp_path, caplog):
-    """All-invalid _acl values → acl=None (fail-open) with a warning logged."""
+async def test_ingest_file_all_invalid_acl_fails_closed_with_warning(tmp_path, caplog):
+    """All-invalid _acl values → acl=[] (fail-closed) with a warning logged and surfaced."""
     import logging
 
     doc = tmp_path / "doc.md"
@@ -313,9 +314,11 @@ async def test_ingest_file_all_invalid_acl_defaults_open_with_warning(tmp_path, 
         assert result.status == "ok"
 
         chunks = await _read_chunks(store, collection)
+        assert any("chunk denied" in w for w in result.warnings)
+        assert chunks
         for chunk in chunks:
-            assert chunk["acl"] is None, (
-                f"Expected acl=None for all-invalid ACL, got {chunk['acl']}"
+            assert chunk["acl"] == [], (
+                f"Expected acl=[] for all-invalid ACL, got {chunk['acl']}"
             )
     finally:
         await _teardown(store)
@@ -417,7 +420,7 @@ async def test_ingest_file_front_matter_block_stripped_from_chunk_text(tmp_path)
 # ---------------------------------------------------------------------------
 
 
-def _chunk_to_candidate(chunk) -> "ScoredSearchCandidate":
+def _chunk_to_candidate(chunk) -> ScoredSearchCandidate:
     from archon_search._diagnostics import ScoredSearchCandidate
     return ScoredSearchCandidate(
         doc_id=chunk.doc_id, chunk_id=chunk.chunk_id, text=chunk.text,

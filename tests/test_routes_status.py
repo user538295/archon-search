@@ -12,7 +12,12 @@ from fastapi.testclient import TestClient
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
-from archon_search.progress import CollectionProgress, IndexingState, IndexingStatus, IndexingStateStore
+from archon_search.progress import (
+    CollectionProgress,
+    IndexingState,
+    IndexingStateStore,
+    IndexingStatus,
+)
 from archon_search.server.app import create_app
 
 
@@ -759,8 +764,9 @@ def test_get_status_includes_store_schema_version(tmp_db: Path) -> None:
 
 def test_get_status_collections_schema_behind_count(tmp_db: Path) -> None:
     """Mock 3 collections, 1 behind; assert collections_schema_behind == 1."""
-    from archon_search.constants import DEFAULT_NAMESPACE
     from unittest.mock import patch
+
+    from archon_search.constants import DEFAULT_NAMESPACE
 
     # col-a has schema_version=0 (behind); col-b and col-c are at schema_version=1 (current)
     meta_rows = [
@@ -780,8 +786,9 @@ def test_get_status_collections_schema_behind_count(tmp_db: Path) -> None:
 
 def test_get_status_collections_schema_behind_zero(tmp_db: Path) -> None:
     """All collections current (schema_version == STORE_SCHEMA_VERSION); assert count == 0."""
-    from archon_search.constants import DEFAULT_NAMESPACE
     from unittest.mock import patch
+
+    from archon_search.constants import DEFAULT_NAMESPACE
 
     # Set all collections at schema_version=1, patch STORE_SCHEMA_VERSION to 1.
     # This proves the counting logic ran and found zero laggards (not that defaults align).
@@ -801,8 +808,9 @@ def test_get_status_collections_schema_behind_zero(tmp_db: Path) -> None:
 
 def test_get_status_collections_schema_behind_all_behind(tmp_db: Path) -> None:
     """All N collections have schema_version behind; assert collections_schema_behind == N."""
-    from archon_search.constants import DEFAULT_NAMESPACE
     from unittest.mock import patch
+
+    from archon_search.constants import DEFAULT_NAMESPACE
 
     meta_rows = [
         CollectionMeta(name="col-a", namespace=DEFAULT_NAMESPACE, schema_version=0),
@@ -820,8 +828,9 @@ def test_get_status_collections_schema_behind_all_behind(tmp_db: Path) -> None:
 
 def test_get_status_collections_schema_behind_namespace_scoped(tmp_db: Path) -> None:
     """collections_schema_behind counts only the caller's namespace collections."""
-    from archon_search.constants import DEFAULT_NAMESPACE
     from unittest.mock import patch
+
+    from archon_search.constants import DEFAULT_NAMESPACE
 
     # col-a is the caller's (DEFAULT_NAMESPACE), col-b is in another namespace.
     # Only col-a is behind; col-b should not contribute to the count.

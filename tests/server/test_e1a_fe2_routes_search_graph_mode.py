@@ -24,7 +24,6 @@ from archon_search.jobs.store import JobStore
 from archon_search.pipeline import SearchPipelineResult
 from archon_search.server.app import create_app
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -272,7 +271,7 @@ def test_post_explain_graph_mode_422(tmp_path: Path) -> None:
     now that graph_mode is a known field, we instead verify that an invalid literal value is
     rejected with a 422 validation error.
     """
-    app, client = _make_app(tmp_path)
+    _app, client = _make_app(tmp_path)
 
     response = client.post(
         "/explain",

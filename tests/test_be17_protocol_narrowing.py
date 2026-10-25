@@ -55,8 +55,7 @@ def test_no_adapter_declares_relationship_labelling() -> None:
     # The narrowed relationship-type subset is gone from the package and from the
     # extractor / domain-types modules that once referenced it.
     import archon_search.enrichment as enrichment_pkg
-    import archon_search.graph_extractor as graph_extractor
-    import archon_search.graph_types as graph_types
+    from archon_search import graph_extractor, graph_types
 
     assert not hasattr(enrichment_pkg, "_VALID_RELATIONSHIP_TYPES")
     assert not hasattr(graph_extractor, "_VALID_RELATIONSHIP_TYPES")

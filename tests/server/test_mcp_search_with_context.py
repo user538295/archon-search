@@ -7,7 +7,7 @@ Implements Task 5.1 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,10 +15,14 @@ import pytest
 
 from archon_search._types import ChunkRecord, SearchResult
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW_MAX
-from archon_search.pipeline import SearchPipeline, SearchPipelineResult, SearchWithContextResult
-from tests._mcp_tools import registered_tools
-from tests._hyde_stubs import hyde_enabled_config, stub_hyde_generator
+from archon_search.pipeline import (
+    SearchPipeline,
+    SearchPipelineResult,
+    SearchWithContextResult,
+)
 from tests._fastmcp_stub import stubbed_fastmcp
+from tests._hyde_stubs import hyde_enabled_config, stub_hyde_generator
+from tests._mcp_tools import registered_tools
 
 
 def _neighbor(idx: int) -> ChunkRecord:
@@ -30,7 +34,7 @@ def _neighbor(idx: int) -> ChunkRecord:
         text=f"neighbor text {idx}",
         vector=[0.1, 0.2, 0.3, 0.4],  # non-empty per the brief
         source_path="/tmp/x.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
         file_type="md",
         updated_at="2026-05-21T10:00:00+00:00",
         ingested_by="cli",

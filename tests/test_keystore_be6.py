@@ -16,8 +16,6 @@ from __future__ import annotations
 import secrets
 from datetime import UTC, datetime
 
-
-
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
@@ -337,7 +335,7 @@ def test_get_keys_requires_auth(tmp_path, monkeypatch):
     """GET /keys without Bearer token returns 401."""
     from fastapi.testclient import TestClient
 
-    app, api_key = _make_app(tmp_path, monkeypatch)
+    app, _api_key = _make_app(tmp_path, monkeypatch)
     with TestClient(app) as client:
         resp = client.get("/keys")
         assert resp.status_code == 401, resp.text
@@ -347,7 +345,7 @@ def test_delete_keys_requires_auth(tmp_path, monkeypatch):
     """DELETE /keys/{id} without Bearer token returns 401."""
     from fastapi.testclient import TestClient
 
-    app, api_key = _make_app(tmp_path, monkeypatch)
+    app, _api_key = _make_app(tmp_path, monkeypatch)
     with TestClient(app) as client:
         resp = client.delete("/keys/some-id")
         assert resp.status_code == 401, resp.text

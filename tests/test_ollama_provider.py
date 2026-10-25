@@ -20,7 +20,6 @@ import pytest
 from archon_search._privacy import _query_fingerprint
 from archon_search.query_expansion_protocol import QueryExpansionProvider
 
-
 # ---------------------------------------------------------------------------
 # Helpers — build a mock ollama module
 # ---------------------------------------------------------------------------
@@ -64,7 +63,7 @@ async def test_ollama_generate_hypothetical_doc_returns_text(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.generate_hypothetical_doc("what is archon search?")
@@ -87,7 +86,7 @@ async def test_ollama_decompose_query_returns_variants(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.decompose_query("search query", num_queries=3)
@@ -112,7 +111,7 @@ async def test_ollama_generate_timeout_returns_none(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.generate_hypothetical_doc("test query")
@@ -136,7 +135,7 @@ async def test_ollama_generate_arbitrary_exception_returns_none(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.generate_hypothetical_doc("test query")
@@ -157,7 +156,7 @@ async def test_ollama_decompose_timeout_returns_empty_list(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.decompose_query("test query")
@@ -181,7 +180,7 @@ async def test_ollama_decompose_arbitrary_exception_returns_empty_list(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.decompose_query("test query")
@@ -209,7 +208,7 @@ async def test_ollama_no_rate_limit_enforcement(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
 
@@ -258,7 +257,7 @@ async def test_ollama_error_path_uses_query_fingerprint(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
 
@@ -290,7 +289,7 @@ def test_ollama_provider_satisfies_protocol(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     assert isinstance(provider, QueryExpansionProvider), (
@@ -320,7 +319,7 @@ async def test_ollama_generate_malformed_response_returns_none(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.generate_hypothetical_doc("test query")
@@ -346,7 +345,7 @@ async def test_ollama_generate_package_absent_returns_none(
     monkeypatch.setitem(sys.modules, "ollama", None)
     monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider", raising=False)
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
 
@@ -378,7 +377,7 @@ async def test_ollama_decompose_blank_lines_skipped(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.decompose_query("search query", num_queries=3)
@@ -400,7 +399,7 @@ async def test_ollama_decompose_long_lines_skipped(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.decompose_query("search query", num_queries=3)
@@ -421,7 +420,7 @@ async def test_ollama_decompose_control_chars_skipped(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.decompose_query("search query", num_queries=3)
@@ -445,7 +444,7 @@ async def test_ollama_decompose_truncates_to_num_queries(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.decompose_query("search query", num_queries=3)
@@ -479,7 +478,7 @@ async def test_ollama_generate_non_str_content_returns_none(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.generate_hypothetical_doc("test query")
@@ -508,7 +507,7 @@ async def test_ollama_decompose_non_str_content_returns_empty_list(
     if "archon_search.providers.ollama_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider")
 
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
 
     provider = OllamaQueryExpansionProvider(model="llama3.2")
     result = await provider.decompose_query("test query")

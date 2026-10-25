@@ -75,8 +75,8 @@ async def test_mcp_search_multi_collection_language_filter_no_longer_rejected() 
 @pytest.mark.asyncio
 async def test_mcp_search_multi_collection_file_type_filter_passed_to_pipeline() -> None:
     """Mock pipeline confirms search_many() is called with filters.file_type set."""
-    from archon_search.filters import SearchFilters
     import archon_search.server.mcp as mcp_module
+    from archon_search.filters import SearchFilters
 
     pipeline = _make_pipeline()
 
@@ -138,8 +138,8 @@ async def test_mcp_search_multi_collection_all_filter_params_forwarded() -> None
     This catches the pre-BE-4 silent data loss bug where all 6 filter types
     were dropped for multi-collection MCP search.
     """
-    from archon_search.filters import SearchFilters
     import archon_search.server.mcp as mcp_module
+    from archon_search.filters import SearchFilters
 
     pipeline = _make_pipeline()
 
@@ -262,8 +262,8 @@ async def test_mcp_search_multi_collection_include_metadata_not_in_filters() -> 
     This test pins the intentional asymmetry so it cannot be accidentally 'fixed'
     by adding include_metadata to the _multi_filters constructor.
     """
-    from archon_search.filters import SearchFilters
     import archon_search.server.mcp as mcp_module
+    from archon_search.filters import SearchFilters
 
     pipeline = _make_pipeline()
 

@@ -100,12 +100,13 @@ def test_e2e_cli_single_file_over_limit_exits_nonzero(
 
     Completes: S3
     """
-    import httpx
-    from click.testing import CliRunner
     from unittest.mock import MagicMock
 
-    from archon_search.cli.ingest import ingest
+    import httpx
+    from click.testing import CliRunner
+
     from archon_search._types import IngestError
+    from archon_search.cli.ingest import ingest
 
     oversized = tmp_path / "bigfile.pdf"
     oversized.write_bytes(b"x")  # real file so is_file() passes
@@ -266,7 +267,7 @@ def test_e2e_rest_directory_with_oversized_file_returns_202(
     # Use monkeypatch so the patch persists through the background task execution
     monkeypatch.setattr("os.path.getsize", _fake_getsize)
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         resp = client.post(
@@ -365,7 +366,7 @@ def test_ingest_result_code_job_store_round_trip(
     # Patch os.path.getsize for the entire test so the background task sees it.
     monkeypatch.setattr("os.path.getsize", _fake_getsize)
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         resp = client.post(

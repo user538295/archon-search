@@ -309,12 +309,12 @@ def test_multi_instance_docker_marker_in_pyproject() -> None:
 
     Mirrors the guard in ``test_docker_smoke.py``.
     """
-    import tomllib  # noqa: PLC0415 — stdlib, safe to import late
+    import tomllib
 
     with (REPO_ROOT / "pyproject.toml").open("rb") as fp:
         data = tomllib.load(fp)
     markers = data["tool"]["pytest"]["ini_options"]["markers"]
-    assert any(m.startswith("docker:") or m.startswith("docker ") for m in markers), (
+    assert any(m.startswith(("docker:", "docker ")) for m in markers), (
         "pyproject.toml [tool.pytest.ini_options].markers must register a "
         "'docker:' marker so --strict-markers does not reject @pytest.mark.docker"
     )
@@ -332,7 +332,7 @@ def test_multi_instance_docker_marker_in_pyproject() -> None:
     reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the multi-instance e2e suite",
 )
 @pytest.mark.skipif(not _docker_available(), reason="docker not available")
-def test_archon_dev_starts_and_responds(compose_stack: object) -> None:  # noqa: ARG001
+def test_archon_dev_starts_and_responds(compose_stack: object) -> None:
     """Both services start healthy and their data volumes are isolated.
 
     Steps:
@@ -461,7 +461,7 @@ def test_archon_dev_starts_and_responds(compose_stack: object) -> None:  # noqa:
     reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the multi-instance e2e suite",
 )
 @pytest.mark.skipif(not _docker_available(), reason="docker not available")
-def test_cross_auth_fails(compose_stack: object) -> None:  # noqa: ARG001
+def test_cross_auth_fails(compose_stack: object) -> None:
     """API keys are instance-specific: each key is rejected on the other port.
 
     Proves both directions:
@@ -507,7 +507,7 @@ def test_cross_auth_fails(compose_stack: object) -> None:  # noqa: ARG001
     reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the multi-instance e2e suite",
 )
 @pytest.mark.skipif(not _docker_available(), reason="docker not available")
-def test_mcp_endpoint_reachable(compose_stack: object) -> None:  # noqa: ARG001
+def test_mcp_endpoint_reachable(compose_stack: object) -> None:
     """MCP sub-app is mounted and its auth middleware is active on each port.
 
     A GET to ``/mcp`` with no auth must return HTTP 401 (not 404).

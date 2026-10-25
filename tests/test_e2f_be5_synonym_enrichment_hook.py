@@ -15,6 +15,7 @@ Tests:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -71,8 +72,8 @@ def _make_pipeline(
 
 def _make_maintenance_loop(tmp_path, graph_store=None, graph_config=None):
     """Create a MaintenanceLoop with minimal config for testing."""
-    from archon_search.jobs.maintenance_loop import MaintenanceLoop
     from archon_search.config import MaintenanceConfig
+    from archon_search.jobs.maintenance_loop import MaintenanceLoop
 
     job_store = MagicMock()
     job_store.list.return_value = []
@@ -141,10 +142,8 @@ def test_synonym_enrichment_debounce_no_duplicate_job(tmp_path):
         # Cancel the in-flight task to avoid ResourceWarning
         state = loop._synonym_state[key]
         state.task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await state.task
-        except (asyncio.CancelledError, Exception):
-            pass
 
     asyncio.run(_run())
 
@@ -234,6 +233,7 @@ def test_pipeline_calls_on_synonym_edges_written_after_write_graph(tmp_path):
     chunk_ingest_result.needs_recompute = False  # avoids recompute_collection_meta call
 
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=None)
     store.lock_for = MagicMock(return_value=asyncio.Lock())
@@ -323,6 +323,7 @@ def test_synonym_enrichment_gated_by_enrichment_auto_false(tmp_path):
     chunk_ingest_result.needs_recompute = False
 
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=None)
     store.lock_for = MagicMock(return_value=asyncio.Lock())
@@ -410,6 +411,7 @@ def test_synonym_enrichment_failure_does_not_propagate(tmp_path):
     chunk_ingest_result.needs_recompute = False
 
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=None)
     store.lock_for = MagicMock(return_value=asyncio.Lock())

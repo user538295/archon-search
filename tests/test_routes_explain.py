@@ -440,7 +440,8 @@ def test_rag_fusion_sub_query_result_schema() -> None:
 
 def test_explain_from_pipeline_result_threads_rag_fusion() -> None:
     """from_pipeline_result sets RAG Fusion fields when provided."""
-    from archon_search.pipeline import ExplainPipelineResult as EPR, RagFusionSubQueryInfo
+    from archon_search.pipeline import ExplainPipelineResult as EPR
+    from archon_search.pipeline import RagFusionSubQueryInfo
     from archon_search.server.routes_explain import ExplainResponse
 
     sub_query_results = [
@@ -543,7 +544,8 @@ def test_explain_rag_fusion_requested_but_disabled_hyde_still_applies(tmp_path: 
 
 def test_explain_rag_fusion_true_passes_to_pipeline(tmp_path: Path) -> None:
     """rag_fusion=True: pipeline.explain called with rag_fusion fields; response carries all five new fields."""
-    from archon_search.pipeline import RagFusionSubQueryInfo, ExplainPipelineResult as EPR
+    from archon_search.pipeline import ExplainPipelineResult as EPR
+    from archon_search.pipeline import RagFusionSubQueryInfo
 
     sub_query_results = [
         RagFusionSubQueryInfo(variant_index=0, result_count=5, top_doc_ids=["d1", "d2"]),
@@ -615,7 +617,8 @@ def test_explain_rag_fusion_failure_reason_in_response(tmp_path: Path) -> None:
 
 def test_explain_rag_fusion_sub_queries_mapped_to_schema(tmp_path: Path) -> None:
     """rag_fusion_sub_query_results on pipeline result → rag_fusion_sub_queries in response (mapped by field name)."""
-    from archon_search.pipeline import ExplainPipelineResult as EPR, RagFusionSubQueryInfo
+    from archon_search.pipeline import ExplainPipelineResult as EPR
+    from archon_search.pipeline import RagFusionSubQueryInfo
 
     sub_query_results = [
         RagFusionSubQueryInfo(variant_index=0, result_count=3, top_doc_ids=["a", "b", "c"]),
@@ -652,7 +655,10 @@ def test_explain_rag_fusion_sub_queries_mapped_to_schema(tmp_path: Path) -> None
 
 def test_explain_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
     """Pipeline raises RAGFusionDependencyError (package not installed): response is 422."""
-    from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
+    from archon_search.rag_fusion import (
+        RAG_FUSION_DEPENDENCY_DETAIL,
+        RAGFusionDependencyError,
+    )
 
     pipeline = MagicMock()
     meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
@@ -715,7 +721,10 @@ def test_explain_multi_collection_rag_fusion_passes_to_pipeline(tmp_path: Path) 
 
 def test_explain_multi_collection_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
     """Multi-collection path: RAGFusionDependencyError from pipeline returns 422."""
-    from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
+    from archon_search.rag_fusion import (
+        RAG_FUSION_DEPENDENCY_DETAIL,
+        RAGFusionDependencyError,
+    )
 
     app, client = _make_app(tmp_path)
     pipeline = MagicMock()
@@ -740,7 +749,10 @@ def test_explain_rag_fusion_dependency_error_keeps_the_install_command_in_the_lo
     """G2: fixed 422 text on the wire; the install command for the server's own env is logged."""
     import logging
 
-    from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
+    from archon_search.rag_fusion import (
+        RAG_FUSION_DEPENDENCY_DETAIL,
+        RAGFusionDependencyError,
+    )
 
     app, client = _make_app(tmp_path)
     pipeline = MagicMock()

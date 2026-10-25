@@ -13,7 +13,6 @@ from fastapi.testclient import TestClient
 
 from archon_search.config import SearchConfig, TelemetryConfig
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -39,6 +38,14 @@ def _make_test_app(config: SearchConfig) -> FastAPI:
     from archon_search.server.routes_telemetry import router
 
     app = FastAPI()
+
+    @app.middleware("http")
+    async def _authenticated_admin(request, call_next):  # type: ignore[no-untyped-def]
+        # Stands in for APIKeyMiddleware: the telemetry routes require an admin identity.
+        request.state.namespace = "default"
+        request.state.admin = True
+        return await call_next(request)
+
     app.state.config = config
     app.include_router(router)
     return app
@@ -435,5 +442,5 @@ def test_entries_only_documented_fields(tmp_path: Path) -> None:
         assert field in entry, f"missing required field: {field}"
 
     # No keys outside documented schema
-    extra_keys = set(k for k, v in entry.items() if v is not None) - DOCUMENTED_SCHEMA_FIELDS
+    extra_keys = {k for k, v in entry.items() if v is not None} - DOCUMENTED_SCHEMA_FIELDS
     assert not extra_keys, f"undocumented fields present: {extra_keys}"

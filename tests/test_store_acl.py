@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-import pytest
 import pyarrow as pa
+import pytest
 
 
 @pytest.mark.asyncio
@@ -42,6 +42,7 @@ async def test_migrate_acl_adds_column_to_existing_tables(tmp_path):
     """migrate_acl() adds acl column to existing chunk tables that lack it."""
     import lancedb
     import pyarrow as pa
+
     from archon_search.store import SearchStore
 
     db_path = tmp_path / "db"
@@ -175,8 +176,8 @@ async def test_migrate_acl_skips_when_no_meta_table(tmp_path):
 @pytest.mark.asyncio
 async def test_ingest_chunks_serializes_acl_field(tmp_path):
     """ingest_chunks() with ChunkRecord(acl=['ns1']) → persisted to LanceDB; read-back returns acl==['ns1']."""
-    from archon_search.store import SearchStore
     from archon_search._types import ChunkRecord
+    from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
     await store.connect()
@@ -206,8 +207,8 @@ async def test_ingest_chunks_serializes_acl_field(tmp_path):
 @pytest.mark.asyncio
 async def test_ingest_chunks_serializes_deny_all_acl(tmp_path):
     """ChunkRecord(acl=[]) persisted to LanceDB → read-back returns acl==[] (not None)."""
-    from archon_search.store import SearchStore
     from archon_search._types import ChunkRecord
+    from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
     await store.connect()
@@ -283,8 +284,8 @@ async def test_app_lifespan_calls_startup_migrations(tmp_path):
 @pytest.mark.asyncio
 async def test_ingest_and_hybrid_search_with_trace_returns_acl_field(tmp_path):
     """hybrid_search_with_trace() maps acl from stored row into ScoredSearchCandidate.acl."""
-    from archon_search.store import SearchStore
     from archon_search._types import ChunkRecord
+    from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
     await store.connect()
@@ -318,8 +319,8 @@ async def test_ingest_and_hybrid_search_with_trace_returns_acl_field(tmp_path):
 @pytest.mark.asyncio
 async def test_hybrid_search_with_trace_null_acl_chunk(tmp_path):
     """hybrid_search_with_trace() returns acl=None for chunks ingested with acl=None."""
-    from archon_search.store import SearchStore
     from archon_search._types import ChunkRecord
+    from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
     await store.connect()
@@ -355,6 +356,7 @@ async def test_hybrid_search_with_trace_row_missing_acl_column_defaults_none(tmp
     """hybrid_search_with_trace() uses .get('acl') — missing acl column yields acl=None, no KeyError."""
     import lancedb
     import pyarrow as pa
+
     from archon_search.store import SearchStore
 
     db_path = tmp_path / "db"
@@ -427,8 +429,8 @@ async def test_hybrid_search_with_trace_row_missing_acl_column_defaults_none(tmp
 @pytest.mark.asyncio
 async def test_fetch_adjacent_chunks_returns_acl_field(tmp_path):
     """fetch_adjacent_chunks() maps acl from stored row into ChunkRecord.acl."""
-    from archon_search.store import SearchStore
     from archon_search._types import ChunkRecord
+    from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
     await store.connect()
@@ -640,8 +642,8 @@ async def test_hybrid_search_with_trace_results_carry_acl_provenance(tmp_path):
 @pytest.mark.asyncio
 async def test_get_acl_stats_counts_protected_and_open(tmp_path):
     """get_acl_stats() returns (2, 1) for 2 acl-protected and 1 open chunk."""
-    from archon_search.store import SearchStore
     from archon_search._types import ChunkRecord
+    from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
     await store.connect()
@@ -689,8 +691,8 @@ async def test_get_acl_stats_empty_collection(tmp_path):
 @pytest.mark.asyncio
 async def test_get_acl_stats_all_open(tmp_path):
     """get_acl_stats() returns (0, N) when all chunks have acl=None."""
-    from archon_search.store import SearchStore
     from archon_search._types import ChunkRecord
+    from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
     await store.connect()
@@ -721,8 +723,8 @@ async def test_get_acl_stats_all_open(tmp_path):
 @pytest.mark.asyncio
 async def test_get_acl_stats_all_protected(tmp_path):
     """get_acl_stats() returns (N, 0) when all chunks have acl=["ns1"]."""
-    from archon_search.store import SearchStore
     from archon_search._types import ChunkRecord
+    from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
     await store.connect()
@@ -761,5 +763,183 @@ async def test_get_acl_stats_collection_not_found(tmp_path):
         protected, open_ = await store.get_acl_stats("nonexistent")
         assert protected == 0, f"Expected 0 protected, got {protected}"
         assert open_ == 0, f"Expected 0 open, got {open_}"
+    finally:
+        await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Chunk-ACL visibility: list_documents / count_visible_documents / get_chunk_visibility
+# ---------------------------------------------------------------------------
+
+_VIS_OPEN_DOC = "1" * 64
+_VIS_TEAM_A_DOC = "2" * 64
+_VIS_TEAM_B_DOC = "3" * 64
+_VIS_MIXED_DOC = "4" * 64
+_VIS_DENIED_DOC = "5" * 64
+
+
+async def _seed_visibility_collection(store, name: str) -> None:
+    """open / team-a only / team-b only / mixed (one team-a + one open chunk) / deny-all documents."""
+    from archon_search._types import ChunkRecord
+
+    def chunk(doc_id: str, idx: int, acl: list[str] | None, scopes: list[str] | None = None) -> ChunkRecord:
+        return ChunkRecord(
+            doc_id=doc_id,
+            chunk_id=f"{doc_id}-{idx:06d}",
+            text=f"text {doc_id[:1]} {idx}",
+            vector=[0.1, 0.2, 0.3, 0.4],
+            source_path=f"/docs/{doc_id[:1]}.md",
+            indexed_at="2024-01-01T00:00:00+00:00",
+            acl=acl,
+            scopes=scopes,
+        )
+
+    await store.ensure_collection(name, embedding_dim=4)
+    await store.ingest_chunks(
+        name,
+        [
+            chunk(_VIS_OPEN_DOC, 0, None),
+            chunk(_VIS_TEAM_A_DOC, 0, ["team-a"]),
+            chunk(_VIS_TEAM_B_DOC, 0, ["team-b"]),
+            chunk(_VIS_MIXED_DOC, 0, ["team-a"], scopes=["user:secret"]),
+            chunk(_VIS_MIXED_DOC, 1, None, scopes=["user:public"]),
+            chunk(_VIS_DENIED_DOC, 0, []),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_documents_omits_documents_hidden_from_the_namespace(tmp_path):
+    from archon_search.store import SearchStore
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await _seed_visibility_collection(store, "vis_list")
+
+        items, next_cursor, total = await store.list_documents("vis_list", namespace="team-b")
+
+        assert [i.doc_id for i in items] == sorted([_VIS_OPEN_DOC, _VIS_TEAM_B_DOC, _VIS_MIXED_DOC])
+        assert next_cursor is None
+        assert total == 3, "total must count visible documents only"
+        mixed = next(i for i in items if i.doc_id == _VIS_MIXED_DOC)
+        assert mixed.chunk_count == 1, "chunk_count of a partly visible document counts visible chunks only"
+        assert mixed.scopes == ["user:public"], "scopes of hidden chunks must not leak"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_documents_a_different_namespace_sees_its_own_documents(tmp_path):
+    from archon_search.store import SearchStore
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await _seed_visibility_collection(store, "vis_list_a")
+
+        items, _cursor, total = await store.list_documents("vis_list_a", namespace="team-a")
+
+        assert {i.doc_id for i in items} == {_VIS_OPEN_DOC, _VIS_TEAM_A_DOC, _VIS_MIXED_DOC}
+        assert total == 3
+        mixed = next(i for i in items if i.doc_id == _VIS_MIXED_DOC)
+        assert mixed.chunk_count == 2
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_documents_pagination_cursor_is_stable_over_hidden_documents(tmp_path):
+    from archon_search.store import SearchStore
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await _seed_visibility_collection(store, "vis_page")
+        expected = sorted([_VIS_OPEN_DOC, _VIS_TEAM_B_DOC, _VIS_MIXED_DOC])
+
+        first, cursor, total_first = await store.list_documents("vis_page", limit=2, namespace="team-b")
+        assert [i.doc_id for i in first] == expected[:2]
+        assert cursor == expected[1]
+        second, cursor_2, total_second = await store.list_documents(
+            "vis_page", limit=2, cursor=cursor, namespace="team-b"
+        )
+        assert [i.doc_id for i in second] == expected[2:]
+        assert cursor_2 is None
+        assert total_first == total_second == 3
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_documents_pre_acl_table_lists_every_document(tmp_path):
+    """A table without the acl column predates the feature: nothing is hidden."""
+    from archon_search.store import SearchStore
+
+    db_path = tmp_path / "db"
+    await _create_pre_acl_table(db_path, "vis_legacy")
+    store = SearchStore(db_path)
+    await store.connect()
+    try:
+        items, _cursor, total = await store.list_documents("vis_legacy", namespace="team-b")
+
+        assert [i.doc_id for i in items] == [_LEGACY_DOC_ID]
+        assert total == 1
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_count_visible_documents(tmp_path):
+    from archon_search.store import SearchStore
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await _seed_visibility_collection(store, "vis_count")
+
+        assert await store.count_visible_documents("vis_count", "team-a") == 3
+        assert await store.count_visible_documents("vis_count", "team-b") == 3
+        assert await store.count_visible_documents("vis_count", "team-c") == 2
+        assert await store.count_visible_documents("vis_count", "") == 2, "empty namespace sees open documents only"
+        assert await store.count_visible_documents("missing", "team-b") == 0
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_chunk_visibility_reports_hidden_chunks_and_documents(tmp_path):
+    from archon_search.store import SearchStore
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await _seed_visibility_collection(store, "vis_hidden")
+
+        visibility = await store.get_chunk_visibility("vis_hidden", "team-b")
+
+        assert visibility.hidden_chunk_ids == {
+            f"{_VIS_TEAM_A_DOC}-000000",
+            f"{_VIS_MIXED_DOC}-000000",
+            f"{_VIS_DENIED_DOC}-000000",
+        }
+        # The mixed document keeps a visible chunk, so the document itself stays visible.
+        assert visibility.hidden_doc_ids == {_VIS_TEAM_A_DOC, _VIS_DENIED_DOC}
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_chunk_visibility_of_unprotected_or_missing_collections_hides_nothing(tmp_path):
+    from archon_search.acl import ChunkVisibility
+    from archon_search.store import SearchStore
+
+    db_path = tmp_path / "db"
+    await _create_pre_acl_table(db_path, "vis_legacy_hidden")
+    store = SearchStore(db_path)
+    await store.connect()
+    try:
+        assert await store.get_chunk_visibility("vis_legacy_hidden", "team-b") == ChunkVisibility()
+        assert await store.get_chunk_visibility("missing", "team-b") == ChunkVisibility()
     finally:
         await store.disconnect()

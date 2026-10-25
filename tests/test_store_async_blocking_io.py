@@ -25,7 +25,7 @@ import hashlib
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -99,7 +99,7 @@ def _chunks(source_path: str, count: int) -> list[ChunkRecord]:
             text=f"hello world for blocking-io probe {i}",
             vector=[0.0] * _DIM,
             source_path=source_path,
-            indexed_at=datetime.now(timezone.utc).isoformat(),
+            indexed_at=datetime.now(UTC).isoformat(),
             ingested_by="cli",
         )
         for i in range(count)
@@ -169,7 +169,7 @@ async def test_reindex_metadata_stat_does_not_block_the_event_loop(
         )
         _assert_loop_was_free(probe, "stat")
     finally:
-        await connected_store.drop_collection(col)
+        await connected_store.drop_collection(col, namespace=DEFAULT_NAMESPACE)
 
 
 @pytest.mark.integration
@@ -190,7 +190,7 @@ async def test_reindex_metadata_warns_once_per_row_for_missing_source(
         assert result.processed == _SHARED_SOURCE_ROWS
         assert result.warnings == [f"missing-source: {missing}"] * _SHARED_SOURCE_ROWS
     finally:
-        await connected_store.drop_collection(col)
+        await connected_store.drop_collection(col, namespace=DEFAULT_NAMESPACE)
 
 
 @pytest.mark.asyncio

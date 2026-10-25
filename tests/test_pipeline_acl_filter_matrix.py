@@ -23,7 +23,6 @@ from archon_search.filters import SearchFilters
 from archon_search.pipeline import SearchPipeline, SearchPipelineResult
 from archon_search.store import SearchStore
 
-
 # ---------------------------------------------------------------------------
 # Mock backends (dim=4 — avoids real model weights)
 # ---------------------------------------------------------------------------
@@ -46,9 +45,6 @@ class _MockReranker:
     """Thin wrapper that matches Reranker's public interface."""
 
     is_warm: bool = False
-
-    async def rerank(self, query: str, candidates: list, top_k: int) -> list:
-        return candidates[:top_k]
 
     async def rerank_candidates(self, query: str, candidates: list, top_k: int) -> list:
         return candidates[:top_k]

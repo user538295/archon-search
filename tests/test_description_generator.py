@@ -85,10 +85,11 @@ class TestDescriptionGeneratorFallback:
         spec = importlib.util.find_spec("archon_search.description_generator")
         assert spec is not None
         # Load source and verify no archon.* imports
+        import pathlib
+
         source_file = spec.origin
         assert source_file is not None
-        with open(source_file) as f:
-            source = f.read()
+        source = pathlib.Path(source_file).read_text()
         assert "from archon." not in source
         assert "import archon." not in source
         assert "import archon\n" not in source

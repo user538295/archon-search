@@ -11,14 +11,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 from archon_search.acl import (
     AclResolutionResult,
     parse_acl_value,
     read_acl_sidecar,
     resolve_acl,
 )
-
 
 # ---------------------------------------------------------------------------
 # AclResolutionResult dataclass
@@ -109,7 +107,7 @@ def test_sidecar_too_large_warning_surfaced(tmp_path: Path) -> None:
     sidecar.write_bytes(b"ns1\n" * 20000)  # > 64 KB
     result = resolve_acl(doc, None)
     assert isinstance(result, AclResolutionResult)
-    assert result.acl is None
+    assert result.acl == []
     assert result.source == "sidecar"
     assert len(result.warnings) > 0
     assert "64" in result.warnings[0]
@@ -132,15 +130,15 @@ def test_parse_acl_value_returns_tuple() -> None:
     assert acl is None
     assert isinstance(warnings, list)
 
-    # Invalid type (bool) — fail-open with warning
+    # Invalid type (bool) — fail-closed (deny-all) with warning
     acl, warnings = parse_acl_value(True, "doc.md")
-    assert acl is None
+    assert acl == []
     assert isinstance(warnings, list)
     assert len(warnings) > 0
 
-    # Invalid names — fail-open with warning
+    # Invalid names — fail-closed (deny-all) with warning
     acl, warnings = parse_acl_value("!!!bad!!!", "doc.md")
-    assert acl is None
+    assert acl == []
     assert isinstance(warnings, list)
 
     # Empty list → deny-all
@@ -150,24 +148,24 @@ def test_parse_acl_value_returns_tuple() -> None:
 
 
 def test_parse_acl_value_bool_returns_warning_in_tuple() -> None:
-    """parse_acl_value(True, ...) returns (None, [warning_str])."""
+    """parse_acl_value(True, ...) returns ([], [warning_str])."""
     acl, warnings = parse_acl_value(True, "doc.md")
-    assert acl is None
+    assert acl == []
     assert len(warnings) == 1
     assert "bool" in warnings[0].lower() or "invalid type" in warnings[0].lower()
 
 
 def test_parse_acl_value_int_returns_warning_in_tuple() -> None:
-    """parse_acl_value(42, ...) returns (None, [warning_str])."""
+    """parse_acl_value(42, ...) returns ([], [warning_str])."""
     acl, warnings = parse_acl_value(42, "doc.md")
-    assert acl is None
+    assert acl == []
     assert len(warnings) == 1
 
 
 def test_parse_acl_value_invalid_names_returns_warning_in_tuple() -> None:
-    """parse_acl_value with all-invalid names returns (None, [warning_str])."""
+    """parse_acl_value with all-invalid names returns ([], [warning_str])."""
     acl, warnings = parse_acl_value("!!!bad!!!", "doc.md")
-    assert acl is None
+    assert acl == []
     assert len(warnings) >= 1
 
 

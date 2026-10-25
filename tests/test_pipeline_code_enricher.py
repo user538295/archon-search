@@ -23,7 +23,6 @@ import pytest
 from archon_search.embedder import Embedder
 from archon_search.reranker import Reranker
 
-
 # ---------------------------------------------------------------------------
 # Shared test infrastructure
 # ---------------------------------------------------------------------------

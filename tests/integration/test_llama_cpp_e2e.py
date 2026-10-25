@@ -27,8 +27,14 @@ import pytest
 import tomlkit
 
 from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT
-from archon_search.install.config_writer import WizardFeatures, _apply_wizard_features_to_toml
-from archon_search.install.wizard import _list_cached_models_via_cli, _prompt_llama_cpp_model
+from archon_search.install.config_writer import (
+    WizardFeatures,
+    _apply_wizard_features_to_toml,
+)
+from archon_search.install.wizard import (
+    _list_cached_models_via_cli,
+    _prompt_llama_cpp_model,
+)
 from tests._graph_engine_stub import install_graph_engine_stub
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests.test_app import wait_for_models_check_to_settle

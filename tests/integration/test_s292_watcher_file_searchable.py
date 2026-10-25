@@ -41,7 +41,7 @@ def test_watcher_manager_created_when_watch_true(
         "watch = true\n"
     )
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
         resp = client.get("/status", headers=headers)
         assert resp.status_code == 200, f"GET /status failed: {resp.text}"
@@ -70,7 +70,11 @@ async def test_new_file_becomes_searchable_via_sync_collection(
     from archon_search.embedder import Embedder
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.progress import CollectionProgress, IndexingStatus, IndexingStateStore
+    from archon_search.progress import (
+        CollectionProgress,
+        IndexingStateStore,
+        IndexingStatus,
+    )
     from archon_search.reranker import Reranker
     from archon_search.store import SearchStore
     from archon_search.sync import SearchCollectionSync

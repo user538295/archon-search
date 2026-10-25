@@ -163,7 +163,7 @@ def test_e2h_t3_mcpSearchWithContext_rejectsPprMode(
     install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True) as (
         client,
-        cfg,
+        _cfg,
         api_key,
     ):
         doc = tmp_path / "doc.txt"
@@ -272,7 +272,7 @@ def test_e2h_t3_explainMultiCollection_graphMode_returns422(
     The guard fires before any pipeline access, so no prior ingest is needed.
     """
     install_graph_engine_stub(monkeypatch, empty=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         resp = client.post(
             "/explain",
             json={

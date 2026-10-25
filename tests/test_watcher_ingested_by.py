@@ -16,7 +16,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 _SYNC_PATH = Path(__file__).resolve().parents[1] / "archon_search" / "sync.py"
 
 

@@ -26,8 +26,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-import pytest
 import lancedb.table
+import pytest
 from fastapi.testclient import TestClient
 
 # Import the real meta-table name from the store rather than hardcoding it, so a
@@ -76,7 +76,7 @@ def test_reindex_metadata_dry_run_keeps_collection_resolvable(
 
     toml_content = f"[collections]\ncollections=[{str(collection_dir)!r}]\n"
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, _cfg, api_key):
         from archon_search.sync import path_to_collection_name
 
         headers = {"Authorization": f"Bearer {api_key}"}

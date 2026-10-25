@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -23,7 +23,6 @@ from archon_search.config import BackupConfig
 from archon_search.jobs.backup_loop import BackupLoop
 from archon_search.jobs.model import JobStatus
 from archon_search.types import ExportJob
-
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -63,7 +62,7 @@ def _make_export_job(
     updated_at: str | None = None,
     error: str | None = None,
 ) -> ExportJob:
-    now = updated_at or datetime.now(timezone.utc).isoformat()
+    now = updated_at or datetime.now(UTC).isoformat()
     return ExportJob(
         job_id=job_id,
         status=status,
@@ -364,7 +363,7 @@ async def test_trigger_loop_fires_immediate_if_overdue(tmp_path: Path) -> None:
         return_value=[CollectionInfo(name="docs", doc_count=1, chunk_count=1, namespace="default")]
     )
     loop = _make_loop(tmp_path, interval_hours=24, job_store=js, search_store=ss)
-    stale = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    stale = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
     loop._save_state({"default/docs": stale})
 
     # Run one tick directly to verify overdue triggers a backup.

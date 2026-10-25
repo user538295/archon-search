@@ -318,7 +318,7 @@ def test_mcp_smoke_ingest_directory(tmp_path, monkeypatch) -> None:
 
 def test_mcp_smoke_list_collections(smoke_env) -> None:
     """calls list_collections, response is list (may be empty) (S3)."""
-    client, _cfg, api_key, session_id, smoke_col = smoke_env
+    client, _cfg, api_key, session_id, _smoke_col = smoke_env
     result = _mcp_call_tool(client, api_key, session_id, "list_collections", {})
     parsed = _assert_tool_response_valid(result, "list_collections")
     # smoke_env collection exists so list_collections must return a list
@@ -334,7 +334,7 @@ def test_mcp_smoke_list_collections(smoke_env) -> None:
 
 def test_mcp_smoke_get_collections_meta(smoke_env) -> None:
     """calls get_collections_meta, response schema-valid (S3)."""
-    client, _cfg, api_key, session_id, smoke_col = smoke_env
+    client, _cfg, api_key, session_id, _smoke_col = smoke_env
     result = _mcp_call_tool(client, api_key, session_id, "get_collections_meta", {})
     parsed = _assert_tool_response_valid(result, "get_collections_meta")
     # smoke_env collection exists so get_collections_meta must return a list

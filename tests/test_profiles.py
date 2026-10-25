@@ -1,8 +1,9 @@
 import pytest
+
 from archon_search.profiles import (
+    ENGLISH_PROFILES,
     JINA_RERANKER_MODEL,
     MULTILINGUAL_PROFILES,
-    ENGLISH_PROFILES,
     VALID_PROFILE_NAMES,
     get_profile,
 )

@@ -28,6 +28,7 @@ def docker_available() -> bool:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=DOCKER_INFO_TIMEOUT_S,
+                check=False,
             ).returncode
             == 0
         )

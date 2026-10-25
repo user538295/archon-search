@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -27,8 +27,6 @@ from archon_search._types import normalize_iso_utc
 from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
-
-UTC = timezone.utc
 
 # ---------------------------------------------------------------------------
 # Named constants — avoid magic numbers

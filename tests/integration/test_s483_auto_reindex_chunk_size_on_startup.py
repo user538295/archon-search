@@ -56,7 +56,7 @@ def test_auto_reindex_on_chunk_size_change_fires_on_startup(tmp_path, monkeypatc
 
     with make_real_app(tmp_path, monkeypatch, toml_content=toml_phase1) as (
         client,
-        cfg,
+        _cfg,
         api_key,
     ):
         headers = {"Authorization": f"Bearer {api_key}"}

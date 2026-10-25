@@ -33,7 +33,12 @@ import pytest
 
 import archon_search.jobs.scheduler as _scheduler_module
 from archon_search.types import ImportJob, IngestJob, JobStatus
-from tests.integration.conftest import ingest_file_via_path, make_real_app, search
+from tests.integration.conftest import (
+    REAL_APP_DATA_SUBDIR,
+    ingest_file_via_path,
+    make_real_app,
+    search,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -104,7 +109,7 @@ def test_export_job_reaches_done_with_archive_on_disk(
 
     col = "test-export-dispatch"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
 
         # Ingest a document so the collection and meta row exist.
@@ -186,7 +191,7 @@ def test_import_job_reaches_done_and_restores_searchable_collection(
     col_a = "test-import-source"
     col_b = "test-import-dest"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
 
         # Step 1 — ingest.
@@ -255,7 +260,7 @@ def test_user_job_precedes_backup_source_job(
     doc = tmp_path / "priority_test.md"
     doc.write_text("# Priority test\n\nContent for priority ordering test.\n" * 4)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         # Ingest so the collection + meta row exist.
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
@@ -365,8 +370,8 @@ def test_post_import_unsafe_tar_member_returns_422(
     """
     monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
 
-    # Build the unsafe archive inside tmp_path so path-safety check passes.
-    exports_dir = tmp_path / "exports"
+    # Build the unsafe archive in the caller's own export directory so the namespace path check passes.
+    exports_dir = tmp_path / REAL_APP_DATA_SUBDIR / "exports" / "default"
     exports_dir.mkdir(parents=True, exist_ok=True)
     unsafe_archive = exports_dir / "unsafe.tar.gz"
     _make_unsafe_archive(unsafe_archive)
@@ -377,7 +382,7 @@ def test_post_import_unsafe_tar_member_returns_422(
 
     col = "test-unsafe-import"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
 
         import_resp = client.post(

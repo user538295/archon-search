@@ -170,6 +170,7 @@ def _run_release_sh(
         text=True,
         env=env,
         cwd=str(repo_path) if repo_path else None,
+        check=False,
     )
 
 
@@ -308,6 +309,7 @@ class TestProvisionalTag:
             capture_output=True,
             text=True,
             cwd=worker,
+            check=False,
         )
         n = int(result_count.stdout.strip())
 
@@ -429,6 +431,7 @@ class TestChangelogPrepend:
         result_count = subprocess.run(
             ["git", "rev-list", "--count", "HEAD"],
             capture_output=True, text=True, cwd=worker,
+            check=False,
         )
         n = int(result_count.stdout.strip())
         # EXPECTED_COUNT = N+1 because the CHANGELOG.md commit brings count to N+1
@@ -491,6 +494,7 @@ class TestChangelogPrepend:
         log = subprocess.run(
             ["git", "log", "--oneline", "-2"],
             capture_output=True, text=True, cwd=worker,
+            check=False,
         )
         # The CHANGELOG commit is the most recent commit (before the tag)
         commit_msg = log.stdout.strip().splitlines()[0]
@@ -538,6 +542,7 @@ class TestChangelogPrepend:
         result_count = subprocess.run(
             ["git", "rev-list", "--count", "HEAD"],
             capture_output=True, text=True, cwd=worker,
+            check=False,
         )
         n = int(result_count.stdout.strip())
 
@@ -576,6 +581,7 @@ class TestChangelogPrepend:
         result_count = subprocess.run(
             ["git", "rev-list", "--count", "HEAD"],
             capture_output=True, text=True, cwd=worker,
+            check=False,
         )
         n = int(result_count.stdout.strip())
 
@@ -706,6 +712,7 @@ class TestDryRunOutput:
             subprocess.run(
                 ["git", "rev-list", "--count", "HEAD"],
                 capture_output=True, text=True, cwd=worker,
+                check=False,
             ).stdout.strip()
         )
 
@@ -715,11 +722,13 @@ class TestDryRunOutput:
             subprocess.run(
                 ["git", "rev-list", "--count", "HEAD"],
                 capture_output=True, text=True, cwd=worker,
+                check=False,
             ).stdout.strip()
         )
         tags = subprocess.run(
             ["git", "tag", "-l"],
             capture_output=True, text=True, cwd=worker,
+            check=False,
         ).stdout.strip()
 
         assert count_after == count_before, (

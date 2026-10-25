@@ -52,8 +52,8 @@ _ASCII_ENTITY = "LanceDB"
 # which is the only place they are observable.)
 _DOCUMENT = "\n\n".join(
     [
-        f"A {_HUNGARIAN_ENTITY} a lekérdezéseket beágyazott vektorokká alakítja, "
-        f"majd a {_ASCII_ENTITY} indexében keres rá a legközelebbi szomszédokra.",
+        (f"A {_HUNGARIAN_ENTITY} a lekérdezéseket beágyazott vektorokká alakítja, "
+        f"majd a {_ASCII_ENTITY} indexében keres rá a legközelebbi szomszédokra."),
         f"{_JAPANESE_ENTITY}は、文書を解析し、分割し、埋め込みベクトルに変換します。",
         f"{_CYRILLIC_ENTITY} {_ASCII_ENTITY} хранит векторы и полнотекстовый индекс.",
     ]

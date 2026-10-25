@@ -21,7 +21,11 @@ from typing import Any
 
 import pytest
 
-from tests.integration.conftest import make_real_app, ingest_file_via_path
+from tests.integration.conftest import (
+    REAL_APP_DATA_SUBDIR,
+    ingest_file_via_path,
+    make_real_app,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -62,44 +66,43 @@ def test_e2e_salt_file_created_on_first_start_with_mode_600(
     - A WARNING is logged mentioning telemetry and salt (first-create notice).
     - Searches produce telemetry entries with doc_ids_hashed=True and 64-char hex result_doc_ids.
     """
-    salt_path = tmp_path / ".telemetry-salt"
+    salt_path = tmp_path / REAL_APP_DATA_SUBDIR / ".telemetry-salt"
     assert not salt_path.exists(), "Pre-condition: salt file must not exist before server start."
 
     text_file = tmp_path / "col-s3" / "doc.txt"
     text_file.parent.mkdir(parents=True, exist_ok=True)
     text_file.write_text("salt creation test document for S3 e2e")
 
-    with caplog.at_level(logging.WARNING, logger="archon_search.telemetry.hasher"):
-        with make_real_app(
-            tmp_path, monkeypatch, telemetry_enabled=True, hash_doc_ids_enabled=True
-        ) as (client, cfg, api_key):
-            # Server started — assert the salt file was created.
-            assert salt_path.exists(), (
-                f"Expected salt file at {salt_path} after server start with hash_doc_ids=True (S3)."
-            )
-            # Verify size: must be exactly 32 bytes.
-            raw_salt = salt_path.read_bytes()
-            assert len(raw_salt) == 32, (
-                f"Expected 32-byte salt; got {len(raw_salt)} bytes at {salt_path} (S3)."
-            )
-            # Verify mode: must be 0o600 (owner read/write, no other permissions).
-            file_mode = stat.S_IMODE(salt_path.stat().st_mode)
-            assert file_mode == 0o600, (
-                f"Expected salt file mode 0o600; got 0o{file_mode:o} (S3). "
-                "The salt file must be unreadable by other users."
-            )
-            # Confirm searches still work (server did not crash).
-            ingest_file_via_path(client, "col-s3", str(text_file), api_key=api_key)
-            headers = {"Authorization": f"Bearer {api_key}"}
-            resp = client.post(
-                "/search",
-                json={"collection": "col-s3", "query": "salt creation"},
-                headers=headers,
-            )
-            assert resp.status_code == 200, (
-                f"Server must not crash after creating salt file (S3). "
-                f"Status: {resp.status_code} {resp.text[:200]}"
-            )
+    with caplog.at_level(logging.WARNING, logger="archon_search.telemetry.hasher"), make_real_app(
+        tmp_path, monkeypatch, telemetry_enabled=True, hash_doc_ids_enabled=True
+    ) as (client, cfg, api_key):
+        # Server started — assert the salt file was created.
+        assert salt_path.exists(), (
+            f"Expected salt file at {salt_path} after server start with hash_doc_ids=True (S3)."
+        )
+        # Verify size: must be exactly 32 bytes.
+        raw_salt = salt_path.read_bytes()
+        assert len(raw_salt) == 32, (
+            f"Expected 32-byte salt; got {len(raw_salt)} bytes at {salt_path} (S3)."
+        )
+        # Verify mode: must be 0o600 (owner read/write, no other permissions).
+        file_mode = stat.S_IMODE(salt_path.stat().st_mode)
+        assert file_mode == 0o600, (
+            f"Expected salt file mode 0o600; got 0o{file_mode:o} (S3). "
+            "The salt file must be unreadable by other users."
+        )
+        # Confirm searches still work (server did not crash).
+        ingest_file_via_path(client, "col-s3", str(text_file), api_key=api_key)
+        headers = {"Authorization": f"Bearer {api_key}"}
+        resp = client.post(
+            "/search",
+            json={"collection": "col-s3", "query": "salt creation"},
+            headers=headers,
+        )
+        assert resp.status_code == 200, (
+            f"Server must not crash after creating salt file (S3). "
+            f"Status: {resp.status_code} {resp.text[:200]}"
+        )
 
     # Assert WARNING was logged about telemetry salt (first-create event).
     warning_msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
@@ -190,7 +193,7 @@ def test_e2e_salt_reused_across_server_restarts(
     )
 
     # Verify the salt file exists at the expected path before restarting.
-    salt_path = tmp_path / ".telemetry-salt"
+    salt_path = tmp_path / REAL_APP_DATA_SUBDIR / ".telemetry-salt"
     assert salt_path.exists(), (
         f"Salt file must persist after session 1 shutdown (S4). Path: {salt_path}"
     )
@@ -273,39 +276,39 @@ def test_e2e_unreadable_salt_server_falls_back_and_does_not_crash(
     text_file.write_text("unreadable salt fallback document for S5 e2e")
 
     # Pre-create the salt file with random bytes, then make it unreadable.
-    salt_path = tmp_path / ".telemetry-salt"
+    salt_path = tmp_path / REAL_APP_DATA_SUBDIR / ".telemetry-salt"
+    salt_path.parent.mkdir(exist_ok=True)
     salt_path.write_bytes(secrets.token_bytes(32))
     salt_path.chmod(0o000)
 
     try:
-        with caplog.at_level(logging.ERROR, logger="archon_search.telemetry.hasher"):
-            with make_real_app(
-                tmp_path, monkeypatch, telemetry_enabled=True, hash_doc_ids_enabled=True
-            ) as (client, cfg, api_key):
-                # Server must start successfully even with an unreadable salt file.
-                ingest_file_via_path(client, "col-s5", str(text_file), api_key=api_key)
-                headers = {"Authorization": f"Bearer {api_key}"}
-                resp = client.post(
-                    "/search",
-                    json={"collection": "col-s5", "query": "unreadable salt"},
-                    headers=headers,
-                )
-                assert resp.status_code == 200, (
-                    f"Server must not crash when salt file is unreadable (S5). "
-                    f"Status: {resp.status_code} {resp.text[:200]}"
-                )
-                results = resp.json()["results"]
-                assert results, "S5: search must return results (server is functional)."
+        with caplog.at_level(logging.ERROR, logger="archon_search.telemetry.hasher"), make_real_app(
+            tmp_path, monkeypatch, telemetry_enabled=True, hash_doc_ids_enabled=True
+        ) as (client, cfg, api_key):
+            # Server must start successfully even with an unreadable salt file.
+            ingest_file_via_path(client, "col-s5", str(text_file), api_key=api_key)
+            headers = {"Authorization": f"Bearer {api_key}"}
+            resp = client.post(
+                "/search",
+                json={"collection": "col-s5", "query": "unreadable salt"},
+                headers=headers,
+            )
+            assert resp.status_code == 200, (
+                f"Server must not crash when salt file is unreadable (S5). "
+                f"Status: {resp.status_code} {resp.text[:200]}"
+            )
+            results = resp.json()["results"]
+            assert results, "S5: search must return results (server is functional)."
 
-                # Assert GET /status reflects hashing is disabled due to unreadable salt.
-                status_resp = client.get("/status", headers={"Authorization": f"Bearer {api_key}"})
-                assert status_resp.status_code == 200
-                telemetry = status_resp.json().get("telemetry")
-                assert telemetry is not None, "S5: telemetry sub-object must be present"
-                assert telemetry.get("hash_doc_ids_enabled") is False, (
-                    f"Expected hash_doc_ids_enabled=False in status when salt is unreadable "
-                    f"(S5 fallback). Got: {telemetry!r}"
-                )
+            # Assert GET /status reflects hashing is disabled due to unreadable salt.
+            status_resp = client.get("/status", headers={"Authorization": f"Bearer {api_key}"})
+            assert status_resp.status_code == 200
+            telemetry = status_resp.json().get("telemetry")
+            assert telemetry is not None, "S5: telemetry sub-object must be present"
+            assert telemetry.get("hash_doc_ids_enabled") is False, (
+                f"Expected hash_doc_ids_enabled=False in status when salt is unreadable "
+                f"(S5 fallback). Got: {telemetry!r}"
+            )
     finally:
         # Restore permissions so tmp_path cleanup can proceed.
         salt_path.chmod(0o600)
@@ -368,28 +371,15 @@ def test_e2e_custom_data_dir_salt_in_correct_location(
     custom_data_dir = tmp_path / "custom-data-dir"
     custom_data_dir.mkdir()
 
-    # Override ARCHON_SEARCH_DATA_DIR to the custom path BEFORE make_real_app,
-    # so get_data_dir() returns custom_data_dir during lifespan startup.
-    # make_real_app itself also calls monkeypatch.setenv for ARCHON_SEARCH_DATA_DIR,
-    # but we override it here first; make_real_app will re-set it to tmp_path.
-    # Instead, we use a fresh monkeypatch layer by passing the custom path as tmp_path.
-    # The simplest approach: use the custom_data_dir as tmp_path for make_real_app
-    # (which sets ARCHON_SEARCH_DATA_DIR=str(tmp_path)), but keep a separate
-    # directory for LanceDB (cfg.db_path) to avoid conflicts with the salt file.
-    #
-    # make_real_app sets:
-    #   - ARCHON_SEARCH_DATA_DIR = str(tmp_path_arg)    → get_data_dir() → salt_path
-    #   - cfg.db_path = str(tmp_path_arg / "db")        → database
-    #   - cfg.telemetry.log_dir = str(tmp_path_arg / "search-logs")
-    #
-    # By passing custom_data_dir as tmp_path_arg, the salt lands at
-    # custom_data_dir / ".telemetry-salt" — proving ARCHON_SEARCH_DATA_DIR is honored.
+    # make_real_app sets ARCHON_SEARCH_DATA_DIR to the private ``REAL_APP_DATA_SUBDIR`` of the directory it is
+    # given, so passing ``custom_data_dir`` puts get_data_dir() (hence the salt) under it; the corpus stays
+    # outside that subdirectory because ingest refuses paths under the data dir.
 
     text_file = custom_data_dir / "col-s15" / "doc.txt"
     text_file.parent.mkdir(parents=True, exist_ok=True)
     text_file.write_text("custom data dir document for S15 e2e salt location test")
 
-    expected_salt_path = custom_data_dir / ".telemetry-salt"
+    expected_salt_path = custom_data_dir / REAL_APP_DATA_SUBDIR / ".telemetry-salt"
 
     assert not expected_salt_path.exists(), (
         f"Pre-condition: salt must not exist at {expected_salt_path} before test."

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -29,7 +29,7 @@ def _chunk(source_path: str, **overrides) -> ChunkRecord:
         text=overrides.pop("text", "hello world for reindex"),
         vector=overrides.pop("vector", [0.0] * _DIM),
         source_path=source_path,
-        indexed_at=overrides.pop("indexed_at", datetime.now(timezone.utc).isoformat()),
+        indexed_at=overrides.pop("indexed_at", datetime.now(UTC).isoformat()),
         ingested_by=overrides.pop("ingested_by", "cli"),
         **overrides,
     )

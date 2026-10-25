@@ -1,15 +1,14 @@
 """Tests for JobStore type dispatch and ReindexJob.target_embedding_model field."""
 import json
 import uuid
-from datetime import datetime, timezone
-
+from datetime import UTC, datetime
 
 from archon_search.jobs.store import JobStore
 from archon_search.types import DeleteJob, JobStatus, ReindexJob
 
 
 def _now():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _base_kwargs():

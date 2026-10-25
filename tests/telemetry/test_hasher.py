@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # hash_doc_id — pure function tests
 # ---------------------------------------------------------------------------
@@ -209,9 +208,8 @@ def test_load_or_create_salt_write_failure_returns_none(
     with patch(
         "archon_search.telemetry.hasher.atomic_write_bytes",
         side_effect=OSError("disk full"),
-    ):
-        with caplog.at_level(logging.ERROR, logger="archon_search.telemetry.hasher"):
-            result = load_or_create_salt(hash_doc_ids_enabled=True, salt_path=salt_path)
+    ), caplog.at_level(logging.ERROR, logger="archon_search.telemetry.hasher"):
+        result = load_or_create_salt(hash_doc_ids_enabled=True, salt_path=salt_path)
 
     assert result is None, "Expected None when write fails"
     assert any(record.levelno == logging.ERROR for record in caplog.records), (
@@ -230,11 +228,12 @@ def test_app_state_set_on_startup_with_hashing_enabled(
 ) -> None:
     """Lifespan sets app.state.salt_bytes (bytes) and app.state.doc_id_hasher (Callable) when hash_doc_ids=True."""
     import secrets
+
     from fastapi.testclient import TestClient
 
     from archon_search.config import SearchConfig
-    from archon_search.jobs.store import JobStore
     from archon_search.jobs.scheduler import JobScheduler
+    from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
 
     api_key = secrets.token_hex(32)
@@ -276,11 +275,12 @@ def test_app_state_set_on_startup_with_hashing_disabled(
 ) -> None:
     """Lifespan sets app.state.salt_bytes=None and app.state.doc_id_hasher=None when hash_doc_ids=False."""
     import secrets
+
     from fastapi.testclient import TestClient
 
     from archon_search.config import SearchConfig
-    from archon_search.jobs.store import JobStore
     from archon_search.jobs.scheduler import JobScheduler
+    from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
 
     api_key = secrets.token_hex(32)

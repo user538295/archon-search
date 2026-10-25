@@ -47,15 +47,18 @@ def test_s310_sync_preserves_namespace(tmp_path, monkeypatch) -> None:
             f"pre-sync: expected namespace {_NAMESPACE!r}, got {resp.json()['namespace']!r}"
         )
 
-        # Trigger a sync run.
-        resp = client.post("/sync", headers=ns_headers)
+        # POST /sync is admin-only (it syncs every namespace's collections): the default key triggers it, and
+        # the job lives in the admin's namespace.
+        admin_headers = {"Authorization": f"Bearer {default_key}"}
+        assert client.post("/sync", headers=ns_headers).status_code == 403
+        resp = client.post("/sync", headers=admin_headers)
         assert resp.status_code == 202, f"POST /sync failed: {resp.status_code} {resp.text}"
         job_id = resp.json()["job_id"]
 
         # Poll until the sync job completes.
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
-            r = client.get(f"/jobs/{job_id}", headers=ns_headers)
+            r = client.get(f"/jobs/{job_id}", headers=admin_headers)
             assert r.status_code == 200
             status = r.json()["status"]
             if status in {"DONE", "FAILED"}:

@@ -33,7 +33,11 @@ networkx = pytest.importorskip("networkx")
 from archon_search.chunker import DocumentChunker
 from archon_search.config import GraphConfig
 from archon_search.embedder import Embedder
-from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend, RealGraphExpander
+from archon_search.eval.backends import (
+    EvalEmbedderBackend,
+    EvalRerankerBackend,
+    RealGraphExpander,
+)
 from archon_search.graph_store import GraphStore
 from archon_search.graph_types import (
     EntityType,  # lowercase enum members: .concept, .person, etc.

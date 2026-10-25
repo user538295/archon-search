@@ -112,7 +112,11 @@ def test_e2e_alias_file_creates_manual_synonym_edge(
     8. Assert a synonym_of edge with extraction_method="manual" exists.
     """
     from archon_search.graph_types import RelationshipType
-    from tests.integration.conftest import ingest_file_via_path, install_k8s_synonym_graph_stub, make_real_app
+    from tests.integration.conftest import (
+        ingest_file_via_path,
+        install_k8s_synonym_graph_stub,
+        make_real_app,
+    )
 
     # Step 1: write alias TOML file
     alias_toml = tmp_path / "aliases.toml"

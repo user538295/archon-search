@@ -141,8 +141,8 @@ def test_startup_migration_runs_on_server_start(tmp_path, monkeypatch) -> None:
     import lancedb
     import pyarrow as pa
 
-    from archon_search.store import SearchStore
     from archon_search._types import normalize_iso_utc
+    from archon_search.store import SearchStore
 
     db_path = str(tmp_path / "db")
 
@@ -226,7 +226,7 @@ def test_startup_migration_runs_on_server_start(tmp_path, monkeypatch) -> None:
     asyncio.run(_seed())
 
     # Boot the app — lifespan calls _run_startup_migrations() including migrate_acl_provenance
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, _api_key):
         resp = client.get("/health")
         assert resp.status_code == 200
 

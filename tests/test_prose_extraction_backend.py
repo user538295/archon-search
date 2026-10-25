@@ -23,17 +23,23 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from archon_search import torch_runtime
-from archon_search.paths import get_graph_models_dir
+from archon_search.paths import GRAPH_NER_MODEL_REVISION, get_graph_models_dir
 from archon_search.prose_extraction_backend import (
-    _LatchedLoadFailure,
     ProseExtractionBackend,
     ProseExtractionLoadTimeoutError,
+    _LatchedLoadFailure,
 )
-from tests._graph_engine_stub import fake_torch_and_gliner, gliner_from_pretrained_emulating_hub
+from tests._graph_engine_stub import fake_torch_and_gliner, seed_graph_model_snapshot
 from tests._load_single_flight_probe import (
     LoadSingleFlightProbe,
     gated_failing_from_pretrained,
 )
+
+
+@pytest.fixture(autouse=True)
+def _graph_model_snapshot_is_cached() -> None:
+    """The loader downloads the checkpoint before handing gliner a directory; a seeded snapshot is a cache hit."""
+    seed_graph_model_snapshot()
 
 
 def _fake_torch_with_availability(
@@ -91,16 +97,20 @@ def test_resolve_device_steps_down_to_cpu_when_device_unavailable(
     a stale/misconfigured device must not latch a permanent failure."""
     monkeypatch.setattr(torch_runtime, "_warned_settings", set())
     cuda_backend = ProseExtractionBackend(device="cuda")
-    with patch.dict(sys.modules, {"torch": _fake_torch_with_availability(cuda_available=False)}):
-        with caplog.at_level(logging.WARNING, logger="archon_search.torch_runtime"):
-            assert cuda_backend._resolve_device() == "cpu"
+    with (
+        patch.dict(sys.modules, {"torch": _fake_torch_with_availability(cuda_available=False)}),
+        caplog.at_level(logging.WARNING, logger="archon_search.torch_runtime"),
+    ):
+        assert cuda_backend._resolve_device() == "cpu"
     assert [r.getMessage() for r in caplog.records] == ["device 'cuda' is not available on this host; using cpu"]
 
     caplog.clear()
     mps_backend = ProseExtractionBackend(device="mps")
-    with patch.dict(sys.modules, {"torch": _fake_torch_with_availability(mps_available=False)}):
-        with caplog.at_level(logging.WARNING, logger="archon_search.torch_runtime"):
-            assert mps_backend._resolve_device() == "cpu"
+    with (
+        patch.dict(sys.modules, {"torch": _fake_torch_with_availability(mps_available=False)}),
+        caplog.at_level(logging.WARNING, logger="archon_search.torch_runtime"),
+    ):
+        assert mps_backend._resolve_device() == "cpu"
     assert [r.getMessage() for r in caplog.records] == ["device 'mps' is not available on this host; using cpu"]
 
 
@@ -275,10 +285,12 @@ async def test_load_failure_logs_warning_before_latching(caplog) -> None:
     torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
-    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
-        with caplog.at_level(logging.WARNING, logger="archon_search.prose_extraction_backend"):
-            with pytest.raises(RuntimeError):
-                await backend.load()
+    with (
+        patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}),
+        caplog.at_level(logging.WARNING, logger="archon_search.prose_extraction_backend"),
+        pytest.raises(RuntimeError),
+    ):
+        await backend.load()
 
     assert any("boom" in r.message for r in caplog.records)
 
@@ -304,9 +316,8 @@ async def test_load_times_out_and_latches(monkeypatch, caplog) -> None:
     backend = ProseExtractionBackend()
 
     with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
-        with caplog.at_level(logging.WARNING, logger="archon_search.prose_extraction_backend"):
-            with pytest.raises(TimeoutError):
-                await backend.load()
+        with caplog.at_level(logging.WARNING, logger="archon_search.prose_extraction_backend"), pytest.raises(TimeoutError):
+            await backend.load()
         with pytest.raises(TimeoutError):
             await backend.load()  # latched — no retry
 
@@ -403,19 +414,23 @@ def _install_importable_fake_gliner(root: Path, import_time_code: str) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.filterwarnings("error")
-async def test_load_does_not_hand_the_hub_a_deprecated_resume_download() -> None:
-    """gliner defaults `resume_download=False` and forwards it to huggingface_hub, which
-    warns on any non-None value; the load must not let that default reach the hub."""
-    model = _model_with_to()
-    torch_mod, gliner_mod = fake_torch_and_gliner(
-        MagicMock(side_effect=gliner_from_pretrained_emulating_hub(model))
-    )
+async def test_load_hands_gliner_the_local_snapshot_and_forbids_any_fetch() -> None:
+    """gliner loads the pinned snapshot directory with ``local_files_only``: it is given no repo id or revision it
+    could resolve against the hub, so it can fetch nothing (no whole-repo download, no unpinned backbone)."""
+    from_pretrained = MagicMock(return_value=_model_with_to())
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
     with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
         await backend.load()
 
+    (model_id,), kwargs = from_pretrained.call_args
+    assert Path(model_id).is_dir()
+    assert Path(model_id).parent.name == "snapshots"
+    assert Path(model_id).name == GRAPH_NER_MODEL_REVISION
+    assert kwargs["local_files_only"] is True
+    assert "revision" not in kwargs
+    assert "resume_download" not in kwargs
     assert backend.is_loaded is True
 
 
@@ -535,9 +550,11 @@ async def test_concurrent_extractions_load_the_model_once() -> None:
 
         return threading.current_thread().name
 
-    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
-        with patch("archon_search.prose_extraction_backend.asyncio.to_thread", _tracking_to_thread):
-            await asyncio.gather(*(backend.load() for _ in range(8)))
+    with (
+        patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}),
+        patch("archon_search.prose_extraction_backend.asyncio.to_thread", _tracking_to_thread),
+    ):
+        await asyncio.gather(*(backend.load() for _ in range(8)))
 
     assert from_pretrained.call_count == 1
     assert len(to_thread_calls) == 1, (
@@ -585,30 +602,29 @@ async def test_loader_cancellation_frees_a_concurrent_waiter(
         await never_release.wait()  # cancellation must interrupt this await
         return func(*args, **kwargs)
 
-    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
-        with patch(
-            "archon_search.prose_extraction_backend.asyncio.to_thread",
-            _blocking_to_thread,
-        ):
-            loader_task = asyncio.create_task(backend.load())
-            await dispatch_started.wait()  # loader genuinely in flight
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}), patch(
+        "archon_search.prose_extraction_backend.asyncio.to_thread",
+        _blocking_to_thread,
+    ):
+        loader_task = asyncio.create_task(backend.load())
+        await dispatch_started.wait()  # loader genuinely in flight
 
-            waiter_task = asyncio.create_task(backend.load())
-            await asyncio.sleep(0)  # let the waiter register on the event
+        waiter_task = asyncio.create_task(backend.load())
+        await asyncio.sleep(0)  # let the waiter register on the event
 
-            loader_task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await loader_task
+        loader_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await loader_task
 
-            # Let the waiter's own re-dispatch (it becomes the next loader)
-            # complete immediately instead of blocking forever on the same
-            # mock — it must be free to become the new loader.
-            never_release.set()
+        # Let the waiter's own re-dispatch (it becomes the next loader)
+        # complete immediately instead of blocking forever on the same
+        # mock — it must be free to become the new loader.
+        never_release.set()
 
-            # Not wedged: the waiter must have woken up (event.set() ran) and
-            # _load_event cleared, letting it become the next loader and
-            # succeed — not hang for the full wait timeout.
-            await asyncio.wait_for(waiter_task, timeout=5)
+        # Not wedged: the waiter must have woken up (event.set() ran) and
+        # _load_event cleared, letting it become the next loader and
+        # succeed — not hang for the full wait timeout.
+        await asyncio.wait_for(waiter_task, timeout=5)
 
     assert backend.is_loaded is True
     assert backend._load_event is None
@@ -651,28 +667,27 @@ async def test_wait_timeout_degrades_and_leaves_loader_bookkeeping_untouched(
         await release_loader.wait()  # holds the loader in flight for B to time out on
         return func(*args, **kwargs)
 
-    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
-        with patch(
-            "archon_search.prose_extraction_backend.asyncio.to_thread",
-            _blocking_to_thread,
-        ):
-            loader_task = asyncio.create_task(backend.load())
-            await dispatch_started.wait()  # A is genuinely the in-flight loader
-            in_flight_event = backend._load_event
-            assert in_flight_event is not None
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}), patch(
+        "archon_search.prose_extraction_backend.asyncio.to_thread",
+        _blocking_to_thread,
+    ):
+        loader_task = asyncio.create_task(backend.load())
+        await dispatch_started.wait()  # A is genuinely the in-flight loader
+        in_flight_event = backend._load_event
+        assert in_flight_event is not None
 
-            with pytest.raises(ProseExtractionLoadTimeoutError):
-                await backend.load()  # B: waits, times out
+        with pytest.raises(ProseExtractionLoadTimeoutError):
+            await backend.load()  # B: waits, times out
 
-            # B must not have mutated any of A's (the loader's) own state.
-            assert backend._model is None
-            assert backend._latched_load_failure is None
-            assert backend._load_event is in_flight_event
-            assert not in_flight_event.is_set()
+        # B must not have mutated any of A's (the loader's) own state.
+        assert backend._model is None
+        assert backend._latched_load_failure is None
+        assert backend._load_event is in_flight_event
+        assert not in_flight_event.is_set()
 
-            # Let A finish its load.
-            release_loader.set()
-            await loader_task
+        # Let A finish its load.
+        release_loader.set()
+        await loader_task
 
     assert backend.is_loaded is True
     assert backend._load_event is None
@@ -701,7 +716,7 @@ def test_module_import_does_not_pull_in_ml_libraries() -> None:
         "print('OK')\n"
     )
     result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, timeout=60
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=60, check=False
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -739,9 +754,8 @@ async def test_load_count_stays_zero_when_construction_fails() -> None:
     torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
-    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
-        with pytest.raises(RuntimeError):
-            await backend.load()
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}), pytest.raises(RuntimeError):
+        await backend.load()
 
     assert backend.load_count == 0
     assert backend.is_loaded is False
@@ -760,9 +774,8 @@ async def test_load_count_stays_zero_when_device_placement_fails() -> None:
     torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
-    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
-        with pytest.raises(RuntimeError):
-            await backend.load()
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}), pytest.raises(RuntimeError):
+        await backend.load()
 
     assert backend.load_count == 0
     assert backend.is_loaded is False

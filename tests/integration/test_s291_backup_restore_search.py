@@ -23,7 +23,12 @@ import pytest
 
 import archon_search.jobs.backup_loop as _backup_loop_module
 import archon_search.jobs.scheduler as _scheduler_module
-from tests.integration.conftest import ingest_file_via_path, make_real_app, search, wait_for_job_done
+from tests.integration.conftest import (
+    ingest_file_via_path,
+    make_real_app,
+    search,
+    wait_for_job_done,
+)
 
 pytestmark = pytest.mark.integration
 

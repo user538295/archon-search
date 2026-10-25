@@ -4,19 +4,20 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import multiprocessing
+import os
 import pickle
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from _docling_stubs import DOCLING_MODULES as _DOCLING_MODULES
 from _docling_stubs import DOCLING_OCR_TIMEOUT_S as _DOCLING_OCR_TIMEOUT_S
 from _docling_stubs import docling_stubbed as _docling_stubbed
 from _docling_stubs import reset_parser_worker_globals  # noqa: F401 — autouse fixture
+
 from archon_search import parser as archon_parser
 from archon_search.parser import DocumentParser, ParseError
 
@@ -202,9 +203,8 @@ async def test_parser_image_docling_failure_raises_parse_error(tmp_path: Path) -
     mock_docling = MagicMock()
     mock_docling.DocumentConverter = mock_converter
 
-    with _docling_stubbed(mock_docling):
-        with pytest.raises(ParseError) as exc_info:
-            await parser.parse(f)
+    with _docling_stubbed(mock_docling), pytest.raises(ParseError) as exc_info:
+        await parser.parse(f)
 
     assert exc_info.value.path == f
     # `_parse_with_docling` always rebuilds the cause as RuntimeError(payload) (parser.py), so
@@ -226,9 +226,8 @@ async def test_parser_image_corrupt_file_raises_parse_error(tmp_path: Path) -> N
     mock_docling = MagicMock()
     mock_docling.DocumentConverter = mock_converter
 
-    with _docling_stubbed(mock_docling):
-        with pytest.raises(ParseError) as exc_info:
-            await parser.parse(f)
+    with _docling_stubbed(mock_docling), pytest.raises(ParseError) as exc_info:
+        await parser.parse(f)
 
     assert exc_info.value.path == f
     # The worker reports its failure as text, not as an exception object: docling exceptions
@@ -270,13 +269,12 @@ async def test_parser_converter_reused_within_one_worker(tmp_path: Path) -> None
     mock_docling = MagicMock()
     mock_docling.DocumentConverter = mock_converter
 
-    with _docling_stubbed(mock_docling):
-        with patch("archon_search.parser._in_parse_worker", return_value=True):
-            try:
-                await parser.parse(f1)
-                await parser.parse(f2)
-            finally:
-                archon_parser._worker_converter = None
+    with _docling_stubbed(mock_docling), patch("archon_search.parser._in_parse_worker", return_value=True):
+        try:
+            await parser.parse(f1)
+            await parser.parse(f2)
+        finally:
+            archon_parser._worker_converter = None
 
     mock_converter.assert_called_once()
 
@@ -585,9 +583,8 @@ async def test_parse_worker_failure_surfaces_as_parse_error_with_path(tmp_path: 
     mock_docling = MagicMock()
     mock_docling.DocumentConverter = mock_converter
 
-    with _docling_stubbed(mock_docling):
-        with pytest.raises(ParseError) as exc_info:
-            await DocumentParser().parse(f)
+    with _docling_stubbed(mock_docling), pytest.raises(ParseError) as exc_info:
+        await DocumentParser().parse(f)
 
     assert exc_info.value.path == f
     assert "boom" in str(exc_info.value.cause)
@@ -603,7 +600,7 @@ class _BrokenThenOkExecutor:
     caller, so `_parse_with_docling` does not call `shutdown()` on it — only drops the reference.
     """
 
-    instances: list["_BrokenThenOkExecutor"] = []
+    instances: ClassVar[list[_BrokenThenOkExecutor]] = []
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         # Capture position at construction. Branching on len(instances) instead would mean
@@ -619,7 +616,7 @@ class _BrokenThenOkExecutor:
         else:
             try:
                 future.set_result(fn(*args, **kwargs))
-            except BaseException as exc:  # noqa: BLE001 — mirror the real executor's contract
+            except BaseException as exc:  # noqa: BLE001 — mirrors ProcessPoolExecutor: any worker exception, incl. BaseException, is delivered via the Future
                 future.set_exception(exc)
         return future
 
@@ -638,36 +635,35 @@ async def test_parser_recovers_after_broken_process_pool(tmp_path: Path) -> None
     mock_docling.DocumentConverter.return_value.convert.return_value.document.export_to_markdown.return_value = "ok"
 
     _BrokenThenOkExecutor.instances = []
-    with patch.dict("sys.modules", dict.fromkeys(_DOCLING_MODULES, mock_docling)):
-        with patch("archon_search.parser.ProcessPoolExecutor", _BrokenThenOkExecutor):
-            parser = DocumentParser()
+    with patch.dict("sys.modules", dict.fromkeys(_DOCLING_MODULES, mock_docling)), patch("archon_search.parser.ProcessPoolExecutor", _BrokenThenOkExecutor):
+        parser = DocumentParser()
 
-            with pytest.raises(ParseError) as exc_info:
-                await parser.parse(f)
-            assert exc_info.value.path == f, "the first failure must surface as a ParseError carrying the path"
-            # The raw BrokenProcessPool text must NOT reach ParseError.cause (it flows into
-            # IngestResult.error, which is MCP-visible) — a sanitized detail replaces it, while
-            # the original exception is still chained onto __cause__ for logs.
-            assert isinstance(exc_info.value.cause, RuntimeError) and not isinstance(
-                exc_info.value.cause, BrokenProcessPool
-            ), f"expected a sanitized RuntimeError cause, got {type(exc_info.value.cause).__name__}"
-            assert str(exc_info.value.cause) == archon_parser.PARSE_WORKER_LOST_DETAIL
-            # ParseError.detail is what reaches IngestResult.error: the curated retry hint.
-            assert exc_info.value.detail == archon_parser.PARSE_WORKER_LOST_DETAIL
-            assert isinstance(exc_info.value.__cause__, BrokenProcessPool), (
-                "the original BrokenProcessPool must still be chained onto __cause__ for logs"
-            )
-            assert len(_BrokenThenOkExecutor.instances) == 1, (
-                f"expected exactly one pool constructed so far, "
-                f"got {len(_BrokenThenOkExecutor.instances)}"
-            )
+        with pytest.raises(ParseError) as exc_info:
+            await parser.parse(f)
+        assert exc_info.value.path == f, "the first failure must surface as a ParseError carrying the path"
+        # The raw BrokenProcessPool text must NOT reach ParseError.cause (it flows into
+        # IngestResult.error, which is MCP-visible) — a sanitized detail replaces it, while
+        # the original exception is still chained onto __cause__ for logs.
+        assert isinstance(exc_info.value.cause, RuntimeError) and not isinstance(
+            exc_info.value.cause, BrokenProcessPool
+        ), f"expected a sanitized RuntimeError cause, got {type(exc_info.value.cause).__name__}"
+        assert str(exc_info.value.cause) == archon_parser.PARSE_WORKER_LOST_DETAIL
+        # ParseError.detail is what reaches IngestResult.error: the curated retry hint.
+        assert exc_info.value.detail == archon_parser.PARSE_WORKER_LOST_DETAIL
+        assert isinstance(exc_info.value.__cause__, BrokenProcessPool), (
+            "the original BrokenProcessPool must still be chained onto __cause__ for logs"
+        )
+        assert len(_BrokenThenOkExecutor.instances) == 1, (
+            f"expected exactly one pool constructed so far, "
+            f"got {len(_BrokenThenOkExecutor.instances)}"
+        )
 
-            text = await parser.parse(f)
-            assert text == "ok"
-            assert len(_BrokenThenOkExecutor.instances) == 2, (
-                "expected a fresh pool to be constructed for the next parse after recovery "
-                f"(construction count 1 -> 2), got {len(_BrokenThenOkExecutor.instances)}"
-            )
+        text = await parser.parse(f)
+        assert text == "ok"
+        assert len(_BrokenThenOkExecutor.instances) == 2, (
+            "expected a fresh pool to be constructed for the next parse after recovery "
+            f"(construction count 1 -> 2), got {len(_BrokenThenOkExecutor.instances)}"
+        )
 
 
 @pytest.mark.integration
@@ -819,9 +815,8 @@ async def test_parser_office_new_extensions_routed(ext: str, tmp_path: Path) -> 
     mock_markitdown = MagicMock()
     mock_markitdown.MarkItDown = mock_md_cls
 
-    with patch.dict("sys.modules", {"markitdown": mock_markitdown}):
-        with patch.object(parser, "_parse_office", wraps=parser._parse_office) as mock_office:
-            result = await parser.parse(f)
+    with patch.dict("sys.modules", {"markitdown": mock_markitdown}), patch.object(parser, "_parse_office", wraps=parser._parse_office) as mock_office:
+        result = await parser.parse(f)
 
     mock_office.assert_called_once_with(f)
     mock_md_instance.convert.assert_called_once()
@@ -850,9 +845,8 @@ async def test_parser_office_import_error_surfaces_message(tmp_path: Path) -> No
     f.write_bytes(b"fake docx")
     parser = DocumentParser()
 
-    with patch.dict("sys.modules", {"markitdown": None}):
-        with pytest.raises(ParseError) as exc_info:
-            await parser.parse(f)
+    with patch.dict("sys.modules", {"markitdown": None}), pytest.raises(ParseError) as exc_info:
+        await parser.parse(f)
 
     assert "markitdown" in str(exc_info.value.cause).lower()
     # ParseError.detail reaches IngestResult.error: the curated hint, with no install command
@@ -874,9 +868,8 @@ async def test_parser_office_malformed_file_raises_parse_error(tmp_path: Path) -
     mock_markitdown = MagicMock()
     mock_markitdown.MarkItDown = mock_md_cls
 
-    with patch.dict("sys.modules", {"markitdown": mock_markitdown}):
-        with pytest.raises(ParseError) as exc_info:
-            await parser.parse(f)
+    with patch.dict("sys.modules", {"markitdown": mock_markitdown}), pytest.raises(ParseError) as exc_info:
+        await parser.parse(f)
 
     assert exc_info.value.path == f
     assert isinstance(exc_info.value.cause, RuntimeError)
@@ -914,8 +907,40 @@ async def test_parser_parse_error_has_path_and_cause(tmp_path: Path) -> None:
     mock_docling = MagicMock()
     mock_docling.DocumentConverter = mock_converter
 
-    with _docling_stubbed(mock_docling):
-        with pytest.raises(ParseError) as exc_info:
-            await parser.parse(f)
+    with _docling_stubbed(mock_docling), pytest.raises(ParseError) as exc_info:
+        await parser.parse(f)
     assert exc_info.value.path == f
     assert "corrupt pdf" in str(exc_info.value.cause)
+
+
+@pytest.mark.parametrize(
+    ("platform", "preset", "expected"),
+    [
+        ("darwin", None, "cpu"),  # Apple silicon: MPS has no float64, docling's layout model needs it
+        ("darwin", "mps", "mps"),  # an operator-set value wins
+        ("linux", None, None),  # CUDA/CPU hosts keep docling's own auto selection
+    ],
+)
+def test_worker_pins_docling_off_mps_only_on_darwin(
+    monkeypatch: pytest.MonkeyPatch, platform: str, preset: str | None, expected: str | None
+) -> None:
+    monkeypatch.setattr(archon_parser.sys, "platform", platform)
+    monkeypatch.setenv("DOCLING_DEVICE", "restore-marker")  # so teardown removes what the code sets
+    monkeypatch.delenv("DOCLING_DEVICE")
+    if preset is not None:
+        monkeypatch.setenv("DOCLING_DEVICE", preset)
+
+    archon_parser._pin_docling_off_mps()
+
+    assert os.environ.get("DOCLING_DEVICE") == expected
+
+
+def test_worker_initializer_pins_docling_off_mps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(archon_parser.sys, "platform", "darwin")
+    monkeypatch.setenv("DOCLING_DEVICE", "restore-marker")  # so teardown removes what the code sets
+    monkeypatch.delenv("DOCLING_DEVICE")
+    monkeypatch.setattr(archon_parser.threading, "Thread", MagicMock())
+
+    archon_parser._worker_initializer()
+
+    assert os.environ["DOCLING_DEVICE"] == "cpu"

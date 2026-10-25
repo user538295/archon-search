@@ -23,7 +23,6 @@ import pytest
 from archon_search.config import AuthConfig, SearchConfig, load_config
 from archon_search.key_manager import KeyRecord, KeyStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -117,9 +116,9 @@ class TestKeyStoreCreate:
 
         result = asyncio.run(store.create(ns="ns1", label=None, expires_at=None))
 
-        assert "id" in result
-        assert "token" in result
-        raw_token = result["token"]
+        assert result.id
+        assert result.token
+        raw_token = result.token
         assert len(raw_token) == 64  # 32 bytes hex
         # Load the file and check the hash is stored, not the raw token
         records = asyncio.run(store.load())
@@ -133,7 +132,7 @@ class TestKeyStoreCreate:
         store = _make_store(tmp_path)
 
         result = asyncio.run(store.create(ns="ns1", label=None, expires_at=None))
-        raw_token = result["token"]
+        raw_token = result.token
 
         keys_file = tmp_path / "keys.json"
         file_content = keys_file.read_text()
@@ -175,7 +174,7 @@ class TestKeyStoreCreate:
         store = _make_store(tmp_path)
         result = asyncio.run(store.create(ns="ns1", label=None, expires_at=None))
         # Should be a valid UUID
-        parsed = uuid.UUID(result["id"])
+        parsed = uuid.UUID(result.id)
         assert parsed.version == 4
 
     def test_keystore_create_stores_namespace(self, tmp_path: Path) -> None:
@@ -433,7 +432,7 @@ class TestKeyStoreIntegration:
         """Create key, reload from file (simulating restart), key survives."""
         store1 = KeyStore(tmp_path / "keys.json")
         result = asyncio.run(store1.create(ns="ns1", label="test-label", expires_at=None))
-        created_id = result["id"]
+        created_id = result.id
 
         # Simulate restart: create a new KeyStore pointing to the same file
         store2 = KeyStore(tmp_path / "keys.json")

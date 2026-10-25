@@ -6,7 +6,6 @@ asyncio.TimeoutError to verify the field is set.
 """
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,10 +22,9 @@ async def test_search_pipeline_rag_fusion_fallback_signal(tmp_path, monkeypatch)
     """
     from archon_search.config import RAGFusionConfig
     from archon_search.pipeline import SearchPipelineResult
-
     from tests.integration.conftest import make_real_pipeline
 
-    store, pipeline = await make_real_pipeline(tmp_path, monkeypatch)
+    _store, pipeline = await make_real_pipeline(tmp_path, monkeypatch)
 
     # Ingest a document to have something to search.
     col = "rag-fusion-warning-test"
@@ -35,7 +33,7 @@ async def test_search_pipeline_rag_fusion_fallback_signal(tmp_path, monkeypatch)
     await pipeline.ingest_file(doc, col, embedder=pipeline._global_embedder)
 
     mock_generator = MagicMock()
-    mock_generator.generate_variants = AsyncMock(side_effect=asyncio.TimeoutError())
+    mock_generator.generate_variants = AsyncMock(side_effect=TimeoutError())
     rag_fusion_config = RAGFusionConfig(enabled=True)
 
     result = await pipeline.search(

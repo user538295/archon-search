@@ -156,12 +156,11 @@ def test_e2e_cli_status_displays_hash_doc_ids_flag(
         svc.status.return_value = ServiceStatus(running=True, pid=None, uptime_seconds=None)
 
         runner = CliRunner()
-        with patch("archon_search.cli.status._get_service", return_value=svc):
-            with patch(
-                "archon_search.cli.status._fetch_server_status",
-                return_value=body,
-            ):
-                result = runner.invoke(main, ["status"])
+        with patch("archon_search.cli.status._get_service", return_value=svc), patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=body,
+        ):
+            result = runner.invoke(main, ["status"])
 
     assert result.exit_code == 0, (
         f"archon-search status exited {result.exit_code}:\n{result.output}"
@@ -193,12 +192,11 @@ def test_e2e_cli_status_graceful_when_server_unreachable() -> None:
     svc.status.return_value = ServiceStatus(running=True, pid=None, uptime_seconds=None)
 
     runner = CliRunner()
-    with patch("archon_search.cli.status._get_service", return_value=svc):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=None,  # simulates server unreachable / connection error
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=svc), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=None,  # simulates server unreachable / connection error
+    ):
+        result = runner.invoke(main, ["status"])
 
     assert result.exit_code == 0, (
         f"archon-search status must exit 0 when server is unreachable (S12b). "

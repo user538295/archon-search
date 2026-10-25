@@ -14,7 +14,6 @@ import pytest
 
 from archon_search.query_expansion_protocol import QueryExpansionProvider
 
-
 # ---------------------------------------------------------------------------
 # Helpers — build a mock anthropic module
 # ---------------------------------------------------------------------------
@@ -49,7 +48,9 @@ def test_anthropic_hyde_provider_satisfies_protocol(monkeypatch: pytest.MonkeyPa
     mock_anthropic = _make_mock_anthropic()
     monkeypatch.setitem(sys.modules, "anthropic", mock_anthropic)
 
-    from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.anthropic_provider import (
+        AnthropicQueryExpansionProvider,
+    )
 
     provider = AnthropicQueryExpansionProvider(model="claude-3-5-haiku-latest")
     assert isinstance(provider, QueryExpansionProvider), (
@@ -62,7 +63,9 @@ def test_anthropic_rag_fusion_provider_satisfies_protocol(monkeypatch: pytest.Mo
     mock_anthropic = _make_mock_anthropic()
     monkeypatch.setitem(sys.modules, "anthropic", mock_anthropic)
 
-    from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.anthropic_provider import (
+        AnthropicQueryExpansionProvider,
+    )
 
     provider = AnthropicQueryExpansionProvider(model="claude-3-5-haiku-latest")
     assert isinstance(provider, QueryExpansionProvider), (
@@ -84,7 +87,9 @@ async def test_anthropic_generate_hypothetical_doc_returns_text(
     monkeypatch.setitem(sys.modules, "anthropic", mock_anthropic)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-    from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.anthropic_provider import (
+        AnthropicQueryExpansionProvider,
+    )
 
     provider = AnthropicQueryExpansionProvider(model="claude-3-5-haiku-latest")
     result = await provider.generate_hypothetical_doc("what is archon search?")
@@ -100,7 +105,7 @@ async def test_anthropic_generate_hypothetical_doc_returns_none_on_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Provider returns None (does not raise) when the Anthropic call times out."""
-    import asyncio  # noqa: PLC0415
+    import asyncio
 
     mock_anthropic = MagicMock()
 
@@ -116,7 +121,9 @@ async def test_anthropic_generate_hypothetical_doc_returns_none_on_timeout(
 
     monkeypatch.setitem(sys.modules, "anthropic", mock_anthropic)
 
-    from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.anthropic_provider import (
+        AnthropicQueryExpansionProvider,
+    )
 
     provider = AnthropicQueryExpansionProvider(model="claude-3-5-haiku-latest")
     result = await provider.generate_hypothetical_doc("test query")
@@ -138,7 +145,9 @@ async def test_anthropic_decompose_query_returns_variants(
     monkeypatch.setitem(sys.modules, "anthropic", mock_anthropic)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-    from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.anthropic_provider import (
+        AnthropicQueryExpansionProvider,
+    )
 
     provider = AnthropicQueryExpansionProvider(model="claude-3-5-haiku-latest")
     result = await provider.decompose_query("search query", num_queries=3)
@@ -154,7 +163,7 @@ async def test_anthropic_decompose_query_returns_empty_list_on_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Provider returns [] (does not raise) when the Anthropic call times out."""
-    import asyncio  # noqa: PLC0415
+    import asyncio
 
     mock_anthropic = MagicMock()
 
@@ -170,7 +179,9 @@ async def test_anthropic_decompose_query_returns_empty_list_on_timeout(
 
     monkeypatch.setitem(sys.modules, "anthropic", mock_anthropic)
 
-    from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.anthropic_provider import (
+        AnthropicQueryExpansionProvider,
+    )
 
     provider = AnthropicQueryExpansionProvider(model="claude-3-5-haiku-latest")
     result = await provider.decompose_query("test query")
@@ -187,7 +198,9 @@ async def test_anthropic_generate_hypothetical_doc_returns_none_when_no_key(
     monkeypatch.setitem(sys.modules, "anthropic", mock_anthropic)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.anthropic_provider import (
+        AnthropicQueryExpansionProvider,
+    )
 
     provider = AnthropicQueryExpansionProvider(model="claude-3-5-haiku-latest")
     result = await provider.generate_hypothetical_doc("test query")
@@ -212,7 +225,9 @@ async def test_anthropic_generate_hypothetical_doc_returns_none_on_api_error(
     monkeypatch.setitem(sys.modules, "anthropic", mock_anthropic)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-    from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.anthropic_provider import (
+        AnthropicQueryExpansionProvider,
+    )
 
     provider = AnthropicQueryExpansionProvider(model="claude-3-5-haiku-latest")
     result = await provider.generate_hypothetical_doc("test query")
@@ -228,7 +243,9 @@ async def test_anthropic_decompose_query_returns_empty_when_no_key(
     monkeypatch.setitem(sys.modules, "anthropic", mock_anthropic)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.anthropic_provider import (
+        AnthropicQueryExpansionProvider,
+    )
 
     provider = AnthropicQueryExpansionProvider(model="claude-3-5-haiku-latest")
     result = await provider.decompose_query("test query")

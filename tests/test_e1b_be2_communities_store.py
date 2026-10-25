@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-
 # ---------------------------------------------------------------------------
 # test_communities_table_schema
 # ---------------------------------------------------------------------------
@@ -221,8 +220,8 @@ def test_get_communities_for_entities_uses_python_side_filter() -> None:
     Community objects contain only those where any entity_id matches.
     """
 
-    from archon_search.graph_types import Community
     from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import Community
 
     store = GraphStore("/tmp/fake-be2-entities-filter")
 
@@ -298,8 +297,8 @@ def test_get_community_stats_empty_returns_zero_none() -> None:
 
 def test_list_community_representatives_returns_all() -> None:
     """list_community_representatives returns all Community objects from the table."""
-    from archon_search.graph_types import Community
     from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import Community
 
     store = GraphStore("/tmp/fake-be2-list-reps")
 

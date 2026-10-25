@@ -344,7 +344,7 @@ def test_mcp_revoke_key_idempotent(tmp_path, monkeypatch):
     """revoke_key on an already-revoked key returns success (idempotent)."""
     tools, key_store, _ = _get_tools(tmp_path, monkeypatch)
     result_create = asyncio.run(key_store.create(ns="default", label=None, expires_at=None))
-    key_id = result_create["id"]
+    key_id = result_create.id
     # First revoke.
     r1 = asyncio.run(tools["revoke_key"](key_id=key_id))
     assert r1.get("status") == "revoked"
@@ -448,7 +448,7 @@ def test_mcp_list_keys_status_revoked_and_all_filters(tmp_path, monkeypatch):
 
     asyncio.run(key_store.create(ns="default", label=None, expires_at=None))
     r2 = asyncio.run(key_store.create(ns="default", label=None, expires_at=None))
-    asyncio.run(key_store.revoke(r2["id"]))
+    asyncio.run(key_store.revoke(r2.id))
 
     # status=revoked → only revoked key, hidden_revoked_count=0.
     result_revoked = asyncio.run(tools["list_keys"](status="revoked", namespace=None))
@@ -494,7 +494,6 @@ def test_mcp_rotate_key_negative_grace_returns_error(tmp_path, monkeypatch):
 def test_mcp_rotate_key_grace_above_max_returns_error_without_writing(tmp_path, monkeypatch):
     """rotate_key with an overflowing grace_seconds returns validation_error before .search.env is written."""
     from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
-
     from archon_search.key_manager import ENV_VAR
 
     tools, _, _ = _get_tools(tmp_path, monkeypatch)

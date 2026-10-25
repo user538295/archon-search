@@ -109,7 +109,7 @@ def test_batched_ingest_search_e2e(
     """
     corpus_file = _build_large_corpus(tmp_path)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "test-batched-ingest"
 
         # Ingest with a generous timeout: 620 paragraphs × real LanceDB writes.

@@ -396,10 +396,10 @@ async def test_validate_models_async_survives_factory_build_raising(
     monkeypatch.setattr(
         "archon_search.enrichment.factory.EnrichmentClientFactory.build", _raising_build
     )
-    result = await validate_models_async(cfg, timeout_seconds=5, embedder_is_warm=True)
+    result = await validate_models_async(cfg, timeout_seconds=5)
     assert isinstance(result, ModelValidationResult)
     assert EXTRACTION_MODEL_PROBE_ERROR_WARNING in result.provider_warnings
-    assert result.embedder_ok is True  # embedder_is_warm=True — validation still ran normally
+    assert result.embedder_ok is True  # validation still ran normally
 
 
 async def test_validate_models_async_surfaces_extraction_probe_warning(
@@ -418,7 +418,7 @@ async def test_validate_models_async_surfaces_extraction_probe_warning(
     fake_client.summarize_community.side_effect = _slow_summarize_community
     _patch_factory(monkeypatch, fake_client)
 
-    result = await validate_models_async(cfg, timeout_seconds=5, embedder_is_warm=True)
+    result = await validate_models_async(cfg, timeout_seconds=5)
     assert isinstance(result, ModelValidationResult)
     assert EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING in result.provider_warnings
 

@@ -14,7 +14,6 @@ import pytest
 
 from archon_search._types import normalize_iso_utc
 
-
 # ---------------------------------------------------------------------------
 # Unit: _where_list_has_or_null helper
 # ---------------------------------------------------------------------------
@@ -30,7 +29,7 @@ def test_where_list_has_or_null_helper() -> None:
 
 def test_where_list_has_or_null_uses_sql_quote_str() -> None:
     """_where_list_has_or_null uses _sql_quote_str to quote the value (single-quote safety)."""
-    from archon_search.store_filters import _where_list_has_or_null, _sql_quote_str
+    from archon_search.store_filters import _sql_quote_str, _where_list_has_or_null
 
     value = "user:o'malley"
     result = _where_list_has_or_null("scopes", value)
@@ -55,8 +54,8 @@ def test_where_list_has_or_null_custom_column() -> None:
 
 def test_build_where_scope_none() -> None:
     """No scope_filter — predicate unchanged (no scope clause added)."""
-    from archon_search.store_filters import build_where
     from archon_search.filters import SearchFilters
+    from archon_search.store_filters import build_where
 
     result = build_where(SearchFilters(), scope_filter=None)
     assert "scopes" not in result
@@ -65,8 +64,8 @@ def test_build_where_scope_none() -> None:
 
 def test_build_where_scope_exact_match() -> None:
     """Exact scope_filter → (scopes IS NULL OR list_has(scopes, '<value>')) ANDed in."""
-    from archon_search.store_filters import build_where
     from archon_search.filters import SearchFilters
+    from archon_search.store_filters import build_where
 
     result = build_where(SearchFilters(), scope_filter="user:alice")
     assert "(scopes IS NULL OR list_has(scopes, 'user:alice'))" in result
@@ -74,8 +73,8 @@ def test_build_where_scope_exact_match() -> None:
 
 def test_build_where_scope_exact_match_with_filters() -> None:
     """Exact scope_filter ANDs with existing SearchFilters predicates."""
-    from archon_search.store_filters import build_where
     from archon_search.filters import SearchFilters
+    from archon_search.store_filters import build_where
 
     result = build_where(SearchFilters(file_type="md"), scope_filter="user:alice")
     assert "file_type = 'md'" in result
@@ -85,8 +84,8 @@ def test_build_where_scope_exact_match_with_filters() -> None:
 
 def test_build_where_scope_wildcard_not_in_predicate() -> None:
     """Wildcard scope_filter (ending with *) → scope predicate omitted (post-filter handles it)."""
-    from archon_search.store_filters import build_where
     from archon_search.filters import SearchFilters
+    from archon_search.store_filters import build_where
 
     result = build_where(SearchFilters(), scope_filter="user:alice*")
     assert "list_has" not in result
@@ -95,8 +94,8 @@ def test_build_where_scope_wildcard_not_in_predicate() -> None:
 
 def test_build_where_scope_wildcard_bare_star_not_in_predicate() -> None:
     """Bare '*' scope_filter → predicate omitted."""
-    from archon_search.store_filters import build_where
     from archon_search.filters import SearchFilters
+    from archon_search.store_filters import build_where
 
     result = build_where(SearchFilters(), scope_filter="*")
     assert "list_has" not in result

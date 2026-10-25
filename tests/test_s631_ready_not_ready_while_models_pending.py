@@ -22,7 +22,11 @@ from fastapi.testclient import TestClient
 
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
-from archon_search.model_validation import VALIDATION_TASK_FAILED_WARNING, ModelValidationResult
+from archon_search.model_validation import (
+    VALIDATION_TASK_FAILED_WARNING,
+    ModelValidationResult,
+)
+from archon_search.pipeline import SearchPipeline
 from archon_search.server import app as app_module
 from archon_search.server.app import create_app
 from archon_search.server.schemas import WarmupResult
@@ -140,10 +144,13 @@ def test_ready_reports_sync_and_models_pending_together(
     }
 
 
-def test_ready_is_200_with_models_fail_after_failed_warmup_before_validation(
+def test_ready_is_503_with_models_fail_after_failed_warmup_left_the_default_embedder_cold(
     client_warmup_done: TestClient,
 ) -> None:
-    """A FAILED warm-up ends the pending state as ``fail`` even while validation runs."""
+    """A FAILED warm-up ends the pending state as ``fail`` even while validation runs.
+
+    The fixture's default embedder never warmed, so the failure also gates ``ready``.
+    """
     client_warmup_done.app.state.warmup_result = WarmupResult.FAILED
     client_warmup_done.app.state.model_validation = None
 
@@ -151,8 +158,8 @@ def test_ready_is_200_with_models_fail_after_failed_warmup_before_validation(
 
     body = response.json()
     assert body["checks"]["models"] == "fail"
-    assert body["ready"] is True
-    assert response.status_code == 200
+    assert body["ready"] is False
+    assert response.status_code == 503
 
 
 @pytest.fixture
@@ -208,29 +215,29 @@ def test_lifespan_ready_503_until_validation_finishes_after_warmup(
     assert ready.json()["checks"]["models"] == "ok"
 
 
-class _RaisingWarmProbeEmbedder:
-    """An embedder whose ``is_warm`` read raises — the very first statement of the
-    lifespan's ``_run_model_validation``."""
+class _RaisingRerankerAccessor:
+    """Stands in for ``SearchPipeline.reranker``: reading it raises, as the lifespan's validation task
+    does right after the warm-up when it collects the serving backends."""
 
-    @property
-    def is_warm(self) -> bool:
-        raise RuntimeError("is_warm probe exploded")
+    def __get__(self, instance: object, owner: type) -> object:
+        raise RuntimeError("reranker accessor exploded")
 
 
 @pytest.mark.usefixtures("_offline_store")
-def test_lifespan_validation_stores_failure_when_is_warm_raises(tmp_path: Path) -> None:
-    """C1-I-7: a raising ``embedder.is_warm`` must still end the pending state.
+def test_lifespan_validation_stores_failure_when_collecting_the_backends_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C1-I-7: a raise while the validation task prepares its probe must still end the pending state.
 
-    Read outside the task's ``try``, the exception escaped the task and left
-    ``model_validation`` at ``None`` — ``checks.models: pending`` and ``/ready`` 503 for
-    the process lifetime (S631). Inside it, the task stores a failure result.
+    Outside the task's ``try``, the exception escaped the task and left ``model_validation`` at
+    ``None`` — ``checks.models: pending`` and ``/ready`` 503 for the process lifetime (S631).
+    Inside it, the task stores a failure result.
     """
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     app = create_app(config, JobStore(path=tmp_path / "jobs.json"))
-    # Only the validation task reads app.state.embedder after create_app: the pipeline
-    # and HyDE generator already captured the real instance.
-    app.state.embedder = _RaisingWarmProbeEmbedder()
+    # Only the validation task reads ``pipeline.reranker``; the warm-up uses the private field.
+    monkeypatch.setattr(SearchPipeline, "reranker", _RaisingRerankerAccessor())
 
     with TestClient(app) as client:
         wait_for_models_check_to_settle(app)

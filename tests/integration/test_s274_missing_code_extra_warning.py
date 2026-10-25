@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-import archon_search.code_enricher as code_enricher
+from archon_search import code_enricher
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
@@ -38,7 +38,6 @@ def test_missing_code_grammar_emits_ingest_warning(
     def _fake_get_grammar(ext: str):
         # Mirror the real missing-grammar branch: record the ext, return None.
         code_enricher._GRAMMAR_LOGGED.add(ext)
-        return None
 
     monkeypatch.setattr(code_enricher, "_get_grammar", _fake_get_grammar)
 

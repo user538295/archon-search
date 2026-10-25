@@ -16,7 +16,7 @@ Tests:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,7 +27,6 @@ from archon_search.config import GraphConfig
 from archon_search.filters import SearchFilters
 from archon_search.graph_types import Community, EntityType, GraphNode
 from archon_search.pipeline import GraphCommunitiesNotBuiltError, SearchPipelineResult
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -84,7 +83,7 @@ def _make_community(
         community_id=community_id,
         entity_ids=entity_ids or ["entity-1"],
         representative_chunk_ids=chunk_ids if chunk_ids is not None else ["chunk-1"],
-        built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        built_at=datetime(2024, 1, 1, tzinfo=UTC),
         summary_text=None,
     )
 
@@ -218,14 +217,13 @@ async def test_local_mode_no_communities_table_raises(connected_store, col_name)
     graph_config = GraphConfig(enabled=True)
     pipeline = _make_pipeline(connected_store, graph_store=graph_store, graph_config=graph_config)
 
-    with patch.object(pipeline, "_search_standard", new=AsyncMock()) as mock_std:
-        with pytest.raises(GraphCommunitiesNotBuiltError):
-            await pipeline.search(
-                "AuthService logs",
-                col_name,
-                embedder=pipeline._global_embedder,
-                graph_mode="local",
-            )
+    with patch.object(pipeline, "_search_standard", new=AsyncMock()) as mock_std, pytest.raises(GraphCommunitiesNotBuiltError):
+        await pipeline.search(
+            "AuthService logs",
+            col_name,
+            embedder=pipeline._global_embedder,
+            graph_mode="local",
+        )
 
     mock_std.assert_not_awaited()
 
@@ -419,14 +417,16 @@ async def test_local_mode_all_stale_chunk_ids_falls_back_to_hybrid(connected_sto
     pipeline.store.get_chunks_by_ids = AsyncMock(return_value=[])  # all stale
 
     dummy_result = SearchPipelineResult(results=[], acl_filtered=False)
-    with patch.object(pipeline, "_search_standard", new=AsyncMock(return_value=dummy_result)) as mock_std:
-        with caplog.at_level(logging.WARNING, logger="archon_search.pipeline"):
-            result = await pipeline.search(
-                "AuthService",
-                col_name,
-                embedder=pipeline._global_embedder,
-                graph_mode="local",
-            )
+    with (
+        patch.object(pipeline, "_search_standard", new=AsyncMock(return_value=dummy_result)) as mock_std,
+        caplog.at_level(logging.WARNING, logger="archon_search.pipeline"),
+    ):
+        result = await pipeline.search(
+            "AuthService",
+            col_name,
+            embedder=pipeline._global_embedder,
+            graph_mode="local",
+        )
 
     mock_std.assert_awaited_once()
     assert result.graph_expansion_applied is False
@@ -448,14 +448,16 @@ async def test_local_mode_empty_representative_chunk_ids(connected_store, col_na
     pipeline = _make_pipeline(connected_store, graph_store=graph_store, graph_config=graph_config)
 
     dummy_result = SearchPipelineResult(results=[], acl_filtered=False)
-    with patch.object(pipeline, "_search_standard", new=AsyncMock(return_value=dummy_result)) as mock_std:
-        with caplog.at_level(logging.WARNING, logger="archon_search.pipeline"):
-            result = await pipeline.search(
-                "AuthService",
-                col_name,
-                embedder=pipeline._global_embedder,
-                graph_mode="local",
-            )
+    with (
+        patch.object(pipeline, "_search_standard", new=AsyncMock(return_value=dummy_result)) as mock_std,
+        caplog.at_level(logging.WARNING, logger="archon_search.pipeline"),
+    ):
+        result = await pipeline.search(
+            "AuthService",
+            col_name,
+            embedder=pipeline._global_embedder,
+            graph_mode="local",
+        )
 
     mock_std.assert_awaited_once()
     assert result.graph_expansion_applied is False
@@ -621,7 +623,12 @@ async def test_pipeline_local_mode_real(tmp_path, monkeypatch):
     from archon_search.constants import DEFAULT_NAMESPACE
     from archon_search.embedder import Embedder
     from archon_search.graph_store import GraphStore
-    from archon_search.graph_types import Community, GraphNode, EntityType, make_stable_entity_id
+    from archon_search.graph_types import (
+        Community,
+        EntityType,
+        GraphNode,
+        make_stable_entity_id,
+    )
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
     from archon_search.reranker import Reranker
@@ -691,7 +698,7 @@ async def test_pipeline_local_mode_real(tmp_path, monkeypatch):
         community_id="test-comm-1",
         entity_ids=[node.id],
         representative_chunk_ids=[chunk_id],
-        built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        built_at=datetime(2024, 1, 1, tzinfo=UTC),
         summary_text=None,
     )
     await graph_store.write_communities(col, [community], ns="default")
@@ -721,7 +728,12 @@ async def test_local_mode_acl_filters_community_chunks(tmp_path, monkeypatch):
     from archon_search.config import GraphConfig
     from archon_search.embedder import Embedder
     from archon_search.graph_store import GraphStore
-    from archon_search.graph_types import Community, GraphNode, EntityType, make_stable_entity_id
+    from archon_search.graph_types import (
+        Community,
+        EntityType,
+        GraphNode,
+        make_stable_entity_id,
+    )
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
     from archon_search.reranker import Reranker
@@ -781,10 +793,11 @@ async def test_local_mode_acl_filters_community_chunks(tmp_path, monkeypatch):
     assert len(rows_all_a) > 0, "doc_a must have generated at least one chunk"
     chunk_id_a = rows_all_a[0]["chunk_id"]
 
-    # Add a "namespace_B" chunk via ACL sidecar
+    # doc_b sits in the same collection (namespace_A owns it: another namespace may not write it), but its
+    # sidecar grants only the "namespace_B" principal, so a namespace_A search must not return its chunks.
     (tmp_path / "doc_b.txt.acl").write_text("namespace_B")
-    await pipeline.ingest_file(doc_b, col, namespace="namespace_B", embedder=pipeline._global_embedder)
-    rows_all_b = [r async for r in store.list_chunks_raw(col, "namespace_B")
+    await pipeline.ingest_file(doc_b, col, namespace="namespace_A", embedder=pipeline._global_embedder)
+    rows_all_b = [r async for r in store.list_chunks_raw(col, "namespace_A")
                   if str(doc_b) in r.get("source_path", "")]
     assert len(rows_all_b) > 0, "doc_b must have generated at least one chunk"
     chunk_id_b = rows_all_b[0]["chunk_id"]
@@ -807,7 +820,7 @@ async def test_local_mode_acl_filters_community_chunks(tmp_path, monkeypatch):
         community_id="test-comm-acl",
         entity_ids=[node.id],
         representative_chunk_ids=[chunk_id_a, chunk_id_b],
-        built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        built_at=datetime(2024, 1, 1, tzinfo=UTC),
         summary_text=None,
     )
     await graph_store.write_communities(col, [community], ns="default")

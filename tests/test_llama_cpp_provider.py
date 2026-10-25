@@ -72,14 +72,18 @@ def _choices_body(content: str) -> dict:
 
 
 def test_implements_query_expansion_provider_protocol() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     provider = LlamaCppQueryExpansionProvider(model="local-model")
     assert isinstance(provider, QueryExpansionProvider)
 
 
 def test_is_key_available_always_true() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     provider = LlamaCppQueryExpansionProvider(model="local-model")
     assert provider.is_key_available() is True
@@ -88,10 +92,12 @@ def test_is_key_available_always_true() -> None:
 def test_default_base_url_is_llama_cpp_default() -> None:
     """S11 sibling: constructing without base_url defaults to LLAMA_CPP_BASE_URL_DEFAULT."""
     from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     provider = LlamaCppQueryExpansionProvider(model="local-model")
-    assert provider._base_url == LLAMA_CPP_BASE_URL_DEFAULT  # noqa: SLF001
+    assert provider._base_url == LLAMA_CPP_BASE_URL_DEFAULT
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +107,9 @@ def test_default_base_url_is_llama_cpp_default() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_hypothetical_doc_returns_content() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     response = _make_response(_choices_body("A hypothetical passage about the query."))
     mock_cls = _make_async_client_cls(response=response)
@@ -116,7 +124,9 @@ async def test_generate_hypothetical_doc_returns_content() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_hypothetical_doc_returns_none_on_connect_error() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     mock_cls = _make_async_client_cls(post_side_effect=httpx.ConnectError("connection refused"))
 
@@ -136,7 +146,9 @@ async def test_generate_hypothetical_doc_returns_none_on_unsupported_protocol() 
     ``ConnectError``/``TimeoutException``/``HTTPStatusError`` — which must still be
     swallowed to hold the "never raises to callers" contract.
     """
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     mock_cls = _make_async_client_cls(post_side_effect=httpx.UnsupportedProtocol("Request URL is missing scheme"))
 
@@ -150,7 +162,9 @@ async def test_generate_hypothetical_doc_returns_none_on_unsupported_protocol() 
 @pytest.mark.asyncio
 async def test_generate_hypothetical_doc_returns_none_on_503() -> None:
     """S8: llama-server returns 503 'Loading model' when no model is loaded."""
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     request = httpx.Request("POST", f"{_BASE_URL}/v1/chat/completions")
     response = _make_response({"error": {"code": 503, "message": "Loading model"}}, status_code=503)
@@ -168,7 +182,9 @@ async def test_generate_hypothetical_doc_returns_none_on_503() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_hypothetical_doc_returns_none_on_timeout() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     mock_cls = _make_async_client_cls(post_side_effect=httpx.TimeoutException("timed out"))
 
@@ -182,7 +198,9 @@ async def test_generate_hypothetical_doc_returns_none_on_timeout() -> None:
 @pytest.mark.asyncio
 async def test_generate_hypothetical_doc_returns_none_on_json_decode_error() -> None:
     """A 200 response with a malformed (non-JSON) body must not raise json.JSONDecodeError."""
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     response = MagicMock()
     response.status_code = 200
@@ -199,7 +217,9 @@ async def test_generate_hypothetical_doc_returns_none_on_json_decode_error() -> 
 
 @pytest.mark.asyncio
 async def test_decompose_query_returns_empty_on_json_decode_error() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     response = MagicMock()
     response.status_code = 200
@@ -221,7 +241,9 @@ async def test_decompose_query_returns_empty_on_json_decode_error() -> None:
 
 @pytest.mark.asyncio
 async def test_decompose_query_returns_list() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     response = _make_response(_choices_body("variant one\nvariant two\nvariant three"))
     mock_cls = _make_async_client_cls(response=response)
@@ -236,7 +258,9 @@ async def test_decompose_query_returns_list() -> None:
 
 @pytest.mark.asyncio
 async def test_decompose_query_returns_empty_on_timeout() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     mock_cls = _make_async_client_cls(post_side_effect=httpx.TimeoutException("timed out"))
 
@@ -249,7 +273,9 @@ async def test_decompose_query_returns_empty_on_timeout() -> None:
 
 @pytest.mark.asyncio
 async def test_decompose_query_returns_empty_on_connect_error() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     mock_cls = _make_async_client_cls(post_side_effect=httpx.ConnectError("connection refused"))
 
@@ -268,7 +294,9 @@ async def test_decompose_query_returns_empty_on_connect_error() -> None:
 @pytest.mark.asyncio
 async def test_normalise_guard_on_missing_choices_key_hyde() -> None:
     """Absent 'choices' key must raise neither KeyError nor IndexError — returns None."""
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     response = _make_response({"unexpected": "shape"})
     mock_cls = _make_async_client_cls(response=response)
@@ -282,7 +310,9 @@ async def test_normalise_guard_on_missing_choices_key_hyde() -> None:
 
 @pytest.mark.asyncio
 async def test_normalise_guard_on_missing_choices_key_rag_fusion() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     response = _make_response({"unexpected": "shape"})
     mock_cls = _make_async_client_cls(response=response)
@@ -297,7 +327,9 @@ async def test_normalise_guard_on_missing_choices_key_rag_fusion() -> None:
 @pytest.mark.asyncio
 async def test_normalise_guard_on_empty_choices_list() -> None:
     """Empty 'choices' list must trigger the IndexError branch, not raise."""
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     response = _make_response({"choices": []})
     mock_cls = _make_async_client_cls(response=response)
@@ -312,7 +344,9 @@ async def test_normalise_guard_on_empty_choices_list() -> None:
 @pytest.mark.asyncio
 async def test_normalise_guard_on_non_str_content() -> None:
     """Non-str 'content' (e.g. int) must trigger the TypeError branch, not raise."""
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     response = _make_response({"choices": [{"message": {"content": 12345}}]})
     mock_cls = _make_async_client_cls(response=response)
@@ -331,7 +365,9 @@ async def test_normalise_guard_on_non_str_content() -> None:
 
 @pytest.mark.asyncio
 async def test_no_anthropic_openai_client_instantiated() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     response = _make_response(_choices_body("a hypothesis"))
     mock_cls = _make_async_client_cls(response=response)
@@ -352,7 +388,9 @@ async def test_no_anthropic_openai_client_instantiated() -> None:
 
 @pytest.mark.asyncio
 async def test_httpx_target_base_url_matches_configured_llama_cpp_base_url() -> None:
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
 
     custom_base_url = "http://localhost:9999"
     response = _make_response(_choices_body("a hypothesis"))
@@ -378,9 +416,11 @@ async def test_hyde_end_to_end_with_llama_cpp() -> None:
     """S1: HyDEGenerator wired with LlamaCppQueryExpansionProvider produces a vector, hyde_applied=True."""
     from archon_search.config import HyDEConfig
     from archon_search.hyde import HyDEGenerator
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
     from archon_search.server._hyde import RequestHyDE
     from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
 
     response = _make_response(_choices_body("A hypothetical passage about archon search."))
     mock_cls = _make_async_client_cls(response=response)
@@ -409,7 +449,9 @@ async def test_hyde_end_to_end_with_llama_cpp() -> None:
 async def test_rag_fusion_end_to_end_with_llama_cpp() -> None:
     """S2: RAGFusionGenerator wired with LlamaCppQueryExpansionProvider decomposes the query."""
     from archon_search.config import RAGFusionConfig
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
     from archon_search.rag_fusion import RAGFusionGenerator
 
     response = _make_response(_choices_body("variant one\nvariant two"))
@@ -434,9 +476,11 @@ async def test_llama_cpp_fallback_on_unreachable() -> None:
     """S6: llama-server unreachable → provider returns None, HyDE falls back with no exception."""
     from archon_search.config import HyDEConfig
     from archon_search.hyde import HyDEGenerator
+    from archon_search.providers.llama_cpp_provider import (
+        LlamaCppQueryExpansionProvider,
+    )
     from archon_search.server._hyde import RequestHyDE
     from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS
-    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
 
     mock_cls = _make_async_client_cls(post_side_effect=httpx.ConnectError("connection refused"))
 

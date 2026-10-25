@@ -20,7 +20,10 @@ import pytest
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.pipeline import SearchPipeline
-from archon_search.server._ingest_lock import COLLECTION_WRITER_IN_PROGRESS_DETAIL, STORE_BUSY_CODE
+from archon_search.server._ingest_lock import (
+    COLLECTION_WRITER_IN_PROGRESS_DETAIL,
+    STORE_BUSY_CODE,
+)
 from archon_search.server.app import _run_startup_sync, create_app
 from archon_search.store import SearchStore
 from archon_search.sync import path_to_collection_name

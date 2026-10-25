@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -173,7 +173,7 @@ def test_mcp_get_graph_tool_registered(
         monkeypatch,
         graph_enabled=True,
         mcp_enabled=True,
-    ) as (client, cfg, api_key):
+    ) as (client, _cfg, api_key):
         session_id = _mcp_initialize(client, api_key)
         tools_result = _mcp_tools_list(client, api_key, session_id)
 
@@ -197,7 +197,7 @@ def test_mcp_get_graph_returns_summary_after_ingest(
         monkeypatch,
         graph_enabled=True,
         mcp_enabled=True,
-    ) as (client, cfg, api_key):
+    ) as (client, _cfg, api_key):
         # Ingest a document
         doc_text = "Alice works in Seattle. Bob works in Portland."
         doc_file = tmp_path / "test.txt"
@@ -375,7 +375,7 @@ def test_mcp_get_graph_cross_collection_returns_merged_summary(
         monkeypatch,
         graph_enabled=True,
         mcp_enabled=True,
-    ) as (client, cfg, api_key):
+    ) as (client, _cfg, api_key):
         # Ingest documents into two collections
         doc_text_1 = "Alice works in Seattle."
         doc_text_2 = "Charlie works in Portland."

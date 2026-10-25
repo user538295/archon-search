@@ -9,11 +9,15 @@ import pytest
 import archon_search.rag_fusion as rag_fusion_mod
 import archon_search.server.mcp as mcp_module
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
-from archon_search.progress import CollectionProgress, IndexingState, IndexingStatus, IndexingStateStore
+from archon_search.progress import (
+    CollectionProgress,
+    IndexingState,
+    IndexingStateStore,
+    IndexingStatus,
+)
 from archon_search.server.mcp import _needs_install_trigger
 from tests._collection_lock_stub import with_locked_collection_meta
 from tests._fastmcp_stub import stub_mcp_tool, stub_mcp_tools
-
 
 # ---------------------------------------------------------------------------
 # M12.13 — no state file → fresh install, must trigger
@@ -194,6 +198,7 @@ def _get_delete_tool_fn(pipeline):
 def test_mcp_delete_document_maps_store_busy_to_store_busy_code() -> None:
     """delete_document MCP handler returns code='store_busy' when store is busy."""
     import asyncio
+
     from archon_search.store import StoreBusyError
 
     pipeline = _make_pipeline_mock_with_delete(delete_side_effect=StoreBusyError(timeout_s=0.1))
@@ -484,6 +489,7 @@ def test_mcp_search_with_context_hyde_false_returns_hyde_applied_false() -> None
 def test_mcp_explain_reranker_score_populated_when_rerank_true() -> None:
     """S391: MCP explain with rerank=true returns non-null reranker_score in breakdown."""
     import asyncio
+
     from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
     from archon_search.pipeline import ExplainPipelineResult
 
@@ -1218,6 +1224,7 @@ def test_search_include_metadata_false_clears_metadata() -> None:
 def test_search_multi_collection_returns_mcp_search_response_shape() -> None:
     """Multi-collection search path also returns McpSearchResponse shape."""
     import asyncio
+
     from archon_search.pipeline import SearchPipelineResult
 
     search_result = _make_search_result()
@@ -1245,6 +1252,7 @@ def test_search_multi_collection_returns_mcp_search_response_shape() -> None:
 def test_search_acl_filtered_with_excluded_collections() -> None:
     """search returns acl_filtered=True and excluded_collections with name/reason."""
     import asyncio
+
     from archon_search.pipeline import ExcludedCollection
 
     excluded = [ExcludedCollection(name="restricted-col", reason="acl")]
@@ -1264,8 +1272,9 @@ def test_search_schema_drift_returns_schema_validation_error() -> None:
     from unittest.mock import patch
 
     from pydantic import ValidationError
-    from archon_search.server.mcp_schemas import McpSearchResultSchema
+
     from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import McpSearchResultSchema
 
     # Build a real ValidationError using the helper pattern from the plan
     try:
@@ -1441,8 +1450,9 @@ def test_search_with_context_schema_drift_returns_schema_validation_error() -> N
     from unittest.mock import patch
 
     from pydantic import ValidationError
-    from archon_search.server.mcp_schemas import McpSearchResultSchema
+
     from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import McpSearchResultSchema
 
     # Build a real ValidationError using the test helper pattern
     try:
@@ -1653,8 +1663,9 @@ def test_ingest_directory_schema_drift_returns_schema_validation_error() -> None
 
 def _make_full_collection_meta():
     """Return a CollectionMeta with all internal fields populated."""
-    from archon_search.collection_meta import CollectionMeta
     from datetime import datetime
+
+    from archon_search.collection_meta import CollectionMeta
 
     return CollectionMeta(
         name="col1",

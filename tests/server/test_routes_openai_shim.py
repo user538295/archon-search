@@ -138,7 +138,7 @@ class TestGetModelsWithCollections:
             tmp_path,
             monkeypatch,
             openai_shim_enabled=True,
-        ) as (client, cfg, api_key):
+        ) as (client, _cfg, api_key):
             headers = {"Authorization": f"Bearer {api_key}"}
             ingest_file_via_path(client, "col-a", str(doc_a), api_key=api_key)
             ingest_file_via_path(client, "col-b", str(doc_b), api_key=api_key)
@@ -161,7 +161,7 @@ class TestGetModelsEmptyNamespace:
             tmp_path,
             monkeypatch,
             openai_shim_enabled=True,
-        ) as (client, cfg, api_key):
+        ) as (client, _cfg, api_key):
             headers = {"Authorization": f"Bearer {api_key}"}
             resp = client.get("/v1/models", headers=headers)
 

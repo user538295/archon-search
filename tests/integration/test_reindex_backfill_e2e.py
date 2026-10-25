@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -36,7 +36,7 @@ def _legacy_chunk(source_path: str) -> ChunkRecord:
         text="pre-A1 chunk content searching",
         vector=[0.0] * _DIM,
         source_path=source_path,
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
         ingested_by="cli",  # overwritten via table.update below
     )
 

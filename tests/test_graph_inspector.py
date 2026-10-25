@@ -7,21 +7,27 @@ import math
 
 import pytest
 
+from archon_search.acl import ChunkVisibility
 from archon_search.graph_inspector import (
-    CrossCollectionGraphView,
+    _MENTIONS_SCAN_CEILING,
     CollectionGraphView,
+    CrossCollectionGraphView,
     GraphEdgeInspection,
     GraphMLDependencyError,
     GraphNodeInspection,
-    _MENTIONS_SCAN_CEILING,
     _truncate_graph,
     inspect_collection,
     inspect_cross_collection,
     to_graphml,
 )
-from archon_search.graph_types import GraphEdge, GraphMention, GraphNode, EntityType, RelationshipType
+from archon_search.graph_types import (
+    EntityType,
+    GraphEdge,
+    GraphMention,
+    GraphNode,
+    RelationshipType,
+)
 from tests.conftest import MockGraphStore
-
 
 # ============================================================================
 # Truncation helper tests
@@ -1099,7 +1105,7 @@ async def test_inspect_cross_collection_real_store(tmp_path):
 # ============================================================================
 
 
-def _make_node(entity_id: str, entity_name: str, collection: str = "test") -> "GraphNode":
+def _make_node(entity_id: str, entity_name: str, collection: str = "test") -> GraphNode:
     return GraphNode(
         id=entity_id,
         entity_name=entity_name,
@@ -1109,7 +1115,7 @@ def _make_node(entity_id: str, entity_name: str, collection: str = "test") -> "G
     )
 
 
-def _make_mention(entity_id: str, chunk_id: str) -> "GraphMention":
+def _make_mention(entity_id: str, chunk_id: str) -> GraphMention:
     return GraphMention(entity_id=entity_id, chunk_id=chunk_id, doc_id="doc1")
 
 
@@ -1718,6 +1724,7 @@ async def test_inspect_collection_tfidf_idf_formula(tmp_path):
     Uses a real GraphStore with LanceDB to ensure end-to-end correctness.
     """
     import math
+
     from archon_search.graph_store import GraphStore
 
     db_path = str(tmp_path / "test.db")
@@ -1731,7 +1738,7 @@ async def test_inspect_collection_tfidf_idf_formula(tmp_path):
     #   entity-df1: unique (df=1)
     #   entity-df2: in 2 collections (df=2)
     #   entity-df3: in all 3 collections (df=3)
-    from archon_search.graph_types import GraphNode, GraphMention, EntityType
+    from archon_search.graph_types import EntityType, GraphMention, GraphNode
 
     nodes = [
         GraphNode(id="entity-df1", entity_name="DF1", entity_type=EntityType.concept,
@@ -2481,7 +2488,7 @@ def test_graph_inspector_includes_zero_weight_synonym_edges() -> None:
         GraphEdgeInspection("edge-syn", "id-a", "id-syn", weight=0, source_chunk_ids=[], relationship_type="synonym_of"),
     ]
     # No truncation — all nodes survive
-    out_nodes, out_edges, _ = _truncate_graph(nodes, edges, max_nodes=10, max_edges=10)
+    _out_nodes, out_edges, _ = _truncate_graph(nodes, edges, max_nodes=10, max_edges=10)
     syn_edges = [e for e in out_edges if e.relationship_type == "synonym_of"]
     assert len(syn_edges) == 1
     assert syn_edges[0].edge_id == "edge-syn"
@@ -2550,7 +2557,7 @@ def test_graph_inspector_synonym_edges_not_truncated_by_edge_cap() -> None:
         GraphEdgeInspection("syn-1", "id-a", "id-b", weight=0, source_chunk_ids=[], relationship_type="synonym_of"),
         GraphEdgeInspection("syn-2", "id-c", "id-d", weight=0, source_chunk_ids=[], relationship_type="synonym_of"),
     ]
-    out_nodes, out_edges, truncated = _truncate_graph(nodes, edges, max_nodes=10, max_edges=2)
+    _out_nodes, out_edges, truncated = _truncate_graph(nodes, edges, max_nodes=10, max_edges=2)
 
     # truncated=True because more than 2 non-synonym edges
     assert truncated is True
@@ -2672,3 +2679,183 @@ async def test_inspector_caps_keep_typed_edge_over_untyped(tmp_path):
         assert view.truncated is True
     finally:
         await graph_store.disconnect()
+
+
+# ============================================================================
+# Chunk ACL: nothing a hidden chunk/document supports may be returned
+# ============================================================================
+
+
+class _FakeVisibilitySource:
+    """Chunk-ACL provider: per-collection ChunkVisibility; records the (collection, namespace) asked for."""
+
+    def __init__(self, by_collection: dict[str, ChunkVisibility]) -> None:
+        self._by_collection = by_collection
+        self.calls: list[tuple[str, str]] = []
+
+    async def get_chunk_visibility(self, collection: str, namespace: str) -> ChunkVisibility:
+        self.calls.append((collection, namespace))
+        return self._by_collection.get(collection, ChunkVisibility())
+
+
+def _acl_node(entity_id: str, source_doc_id: str, collection: str = "test") -> GraphNode:
+    return GraphNode(
+        id=entity_id,
+        entity_name=entity_id.upper(),
+        entity_type=EntityType.concept,
+        source_doc_id=source_doc_id,
+        collection_name=collection,
+    )
+
+
+def _acl_edge(edge_id: str, source: str, target: str, source_doc_id: str = "open-doc") -> GraphEdge:
+    return GraphEdge(
+        id=edge_id,
+        source_node_id=source,
+        target_node_id=target,
+        relationship_type=RelationshipType.related_to,
+        source_doc_id=source_doc_id,
+    )
+
+
+def _acl_mention(entity_id: str, chunk_id: str) -> GraphMention:
+    return GraphMention(entity_id=entity_id, chunk_id=chunk_id, doc_id=chunk_id.rsplit("-", 1)[0])
+
+
+_HIDDEN_CHUNK = "secret-doc-0"
+_VISIBLE_CHUNK = "open-doc-0"
+_HIDING = ChunkVisibility(hidden_chunk_ids=frozenset({_HIDDEN_CHUNK}), hidden_doc_ids=frozenset({"secret-doc"}))
+
+
+@pytest.mark.asyncio
+async def test_inspect_drops_entities_whose_only_evidence_is_hidden(mock_graph_store: MockGraphStore):
+    mock_graph_store.nodes["test"] = [
+        _acl_node("seen", "open-doc"),
+        _acl_node("shared", "secret-doc"),
+        _acl_node("secret", "secret-doc"),
+    ]
+    mock_graph_store.mentions["test"] = [
+        _acl_mention("seen", _VISIBLE_CHUNK),
+        _acl_mention("shared", _VISIBLE_CHUNK),
+        _acl_mention("shared", _HIDDEN_CHUNK),
+        _acl_mention("secret", _HIDDEN_CHUNK),
+    ]
+    source = _FakeVisibilitySource({"test": _HIDING})
+
+    view = await inspect_collection(
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=100, max_edges=100,
+        ns="team-b", visibility_source=source,
+    )
+
+    assert {n.entity_id for n in view.nodes} == {"seen", "shared"}
+    assert view.node_count == 2, "node_count must not count the hidden entity"
+    assert {n.entity_id: n.chunk_count for n in view.nodes} == {"seen": 1, "shared": 1}
+    assert source.calls == [("test", "team-b")]
+
+
+@pytest.mark.asyncio
+async def test_inspect_edge_evidence_comes_from_visible_chunks_only(mock_graph_store: MockGraphStore):
+    mock_graph_store.nodes["test"] = [_acl_node("a", "open-doc"), _acl_node("b", "open-doc"), _acl_node("c", "open-doc")]
+    mock_graph_store.edges["test"] = [
+        _acl_edge("ab", "a", "b"),  # co-occur in a visible and a hidden chunk
+        _acl_edge("ac", "a", "c"),  # co-occur only in a hidden chunk
+    ]
+    mock_graph_store.mentions["test"] = [
+        _acl_mention("a", _VISIBLE_CHUNK),
+        _acl_mention("b", _VISIBLE_CHUNK),
+        _acl_mention("a", _HIDDEN_CHUNK),
+        _acl_mention("b", _HIDDEN_CHUNK),
+        _acl_mention("c", _HIDDEN_CHUNK),
+    ]
+
+    view = await inspect_collection(
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=100, max_edges=100,
+        ns="team-b", visibility_source=_FakeVisibilitySource({"test": _HIDING}),
+    )
+
+    assert {n.entity_id for n in view.nodes} == {"a", "b"}, "c only appears in a hidden chunk"
+    assert [e.edge_id for e in view.edges] == ["ab"]
+    assert view.edges[0].weight == 1
+    assert view.edges[0].source_chunk_ids == [_VISIBLE_CHUNK]
+    assert view.edge_count == 1
+
+
+@pytest.mark.asyncio
+async def test_inspect_drops_edge_supported_only_by_hidden_chunks_between_visible_entities(
+    mock_graph_store: MockGraphStore,
+):
+    mock_graph_store.nodes["test"] = [_acl_node("a", "open-doc"), _acl_node("b", "open-doc")]
+    mock_graph_store.edges["test"] = [_acl_edge("ab", "a", "b")]
+    mock_graph_store.mentions["test"] = [
+        _acl_mention("a", _VISIBLE_CHUNK),
+        _acl_mention("b", "open-doc-1"),
+        _acl_mention("a", _HIDDEN_CHUNK),
+        _acl_mention("b", _HIDDEN_CHUNK),
+    ]
+
+    view = await inspect_collection(
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=100, max_edges=100,
+        ns="team-b", visibility_source=_FakeVisibilitySource({"test": _HIDING}),
+    )
+
+    assert {n.entity_id for n in view.nodes} == {"a", "b"}
+    assert view.edges == [], "the only co-occurrence is in a hidden chunk"
+
+
+@pytest.mark.asyncio
+async def test_inspect_mentionless_nodes_and_edges_follow_their_source_document(mock_graph_store: MockGraphStore):
+    """Def/ref data has no mentions: provenance is the document that wrote it."""
+    mock_graph_store.nodes["test"] = [
+        _acl_node("fn-open", "open-doc"),
+        _acl_node("fn-open-2", "open-doc"),
+        _acl_node("fn-secret", "secret-doc"),
+    ]
+    mock_graph_store.edges["test"] = [
+        _acl_edge("open-edge", "fn-open", "fn-open-2", source_doc_id="open-doc"),
+        _acl_edge("hidden-edge", "fn-open", "fn-open-2", source_doc_id="secret-doc"),
+        _acl_edge("to-secret", "fn-open", "fn-secret", source_doc_id="open-doc"),
+    ]
+
+    view = await inspect_collection(
+        mock_graph_store, "test", total_chunk_count=0, max_nodes=100, max_edges=100,
+        ns="team-b", visibility_source=_FakeVisibilitySource({"test": _HIDING}),
+    )
+
+    assert {n.entity_id for n in view.nodes} == {"fn-open", "fn-open-2"}
+    assert [e.edge_id for e in view.edges] == ["open-edge"]
+
+
+@pytest.mark.asyncio
+async def test_inspect_without_visibility_source_applies_no_acl(mock_graph_store: MockGraphStore):
+    mock_graph_store.nodes["test"] = [_acl_node("secret", "secret-doc")]
+    mock_graph_store.mentions["test"] = [_acl_mention("secret", _HIDDEN_CHUNK)]
+
+    view = await inspect_collection(
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=100, max_edges=100, ns="team-b",
+    )
+
+    assert [n.entity_id for n in view.nodes] == ["secret"]
+
+
+@pytest.mark.asyncio
+async def test_inspect_cross_collection_applies_each_collections_visibility(mock_graph_store: MockGraphStore):
+    mock_graph_store.nodes["one"] = [_acl_node("shared", "open-doc", "one"), _acl_node("secret", "secret-doc", "one")]
+    mock_graph_store.nodes["two"] = [_acl_node("shared", "open-doc", "two"), _acl_node("other", "open-doc", "two")]
+    mock_graph_store.mentions["one"] = [
+        _acl_mention("shared", _VISIBLE_CHUNK),
+        _acl_mention("shared", _HIDDEN_CHUNK),
+        _acl_mention("secret", _HIDDEN_CHUNK),
+    ]
+    mock_graph_store.mentions["two"] = [_acl_mention("shared", _HIDDEN_CHUNK), _acl_mention("other", _VISIBLE_CHUNK)]
+    # Collection "two" stores a chunk with the same id but an open ACL: visibility is per collection.
+    source = _FakeVisibilitySource({"one": _HIDING})
+
+    view = await inspect_cross_collection(
+        mock_graph_store, ["one", "two"], {"one": 10, "two": 10}, max_nodes=100, max_edges=100,
+        ns="team-b", visibility_source=source,
+    )
+
+    assert {n.entity_id for n in view.nodes} == {"shared", "other"}
+    assert {n.entity_id: n.chunk_count for n in view.nodes} == {"shared": 2, "other": 1}
+    assert view.node_count == 2
+    assert source.calls == [("one", "team-b"), ("two", "team-b")]

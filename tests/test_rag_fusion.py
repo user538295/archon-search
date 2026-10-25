@@ -14,7 +14,6 @@ import pytest
 
 from archon_search.config import RAGFusionConfig
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
@@ -69,18 +68,29 @@ def test_fingerprint_is_16_hex_chars() -> None:
     assert all(c in "0123456789abcdef" for c in fp)
 
 
-def test_fingerprint_matches_sha256() -> None:
-    from archon_search._privacy import _query_fingerprint
+def test_fingerprint_is_a_keyed_hmac_not_bare_sha256() -> None:
+    import hmac
 
-    query = "test query"
-    expected = hashlib.sha256(query.encode()).hexdigest()[:16]
-    assert _query_fingerprint(query) == expected
+    from archon_search import _privacy
+    from archon_search._privacy import (
+        _query_fingerprint,
+        configure_query_fingerprint_salt,
+    )
+
+    saved = _privacy._fingerprint_key
+    try:
+        configure_query_fingerprint_salt(b"k" * 32)
+        query = "test query"
+        assert _query_fingerprint(query) == hmac.digest(b"k" * 32, query.encode(), "sha256").hex()[:16]
+        assert _query_fingerprint(query) != hashlib.sha256(query.encode()).hexdigest()[:16]
+    finally:
+        _privacy._fingerprint_key = saved
 
 
 def test_fingerprint_importable_from_hyde() -> None:
     """hyde.py must re-export _query_fingerprint from _privacy.py."""
-    from archon_search.hyde import _query_fingerprint as hyde_fp
     from archon_search._privacy import _query_fingerprint as privacy_fp
+    from archon_search.hyde import _query_fingerprint as hyde_fp
 
     # Both should return the same result (same function or same implementation)
     assert hyde_fp("test") == privacy_fp("test")
@@ -286,7 +296,7 @@ async def test_generate_variants_timeout_fallback(
     is logged (by the provider) and the generator returns [].
     """
     config = _make_config()
-    mock_mod = _make_mock_anthropic_module(side_effect=asyncio.TimeoutError())
+    mock_mod = _make_mock_anthropic_module(side_effect=TimeoutError())
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
@@ -413,7 +423,7 @@ async def test_rate_limit_fallback(
 @pytest.mark.asyncio
 async def test_rate_limit_skip_includes_llama_cpp_rag_fusion() -> None:
     """provider='llama_cpp' must skip rate limiting, mirroring ollama/claude_cli."""
-    from archon_search.rag_fusion import RAGFusionGenerator  # noqa: PLC0415
+    from archon_search.rag_fusion import RAGFusionGenerator
 
     config = _make_config(provider="llama_cpp", max_requests_per_minute=1)
 
@@ -512,7 +522,7 @@ async def test_fingerprint_no_raw_query_in_log(
     """
     query = "very-unique-secret-query-rag-12345"
     config = _make_config()
-    mock_mod = _make_mock_anthropic_module(side_effect=asyncio.TimeoutError())
+    mock_mod = _make_mock_anthropic_module(side_effect=TimeoutError())
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 

@@ -34,7 +34,10 @@ from archon_search.cli.main import main
 from archon_search.config import SearchConfig, load_config
 from archon_search.install import InstallError, RealInstaller
 from archon_search.install.config_writer import _wizard_record_path
-from archon_search.install.extras import CODE_EXTRA_SIZE_ESTIMATE, GRAPH_MODEL_SIZE_ESTIMATE
+from archon_search.install.extras import (
+    CODE_EXTRA_SIZE_ESTIMATE,
+    GRAPH_MODEL_SIZE_ESTIMATE,
+)
 from archon_search.install.licenses import (
     _download_fasttext_model,
     _prompt_fasttext_license,
@@ -127,10 +130,12 @@ def _patched_wizard(**extra_module_patches: Any) -> Generator[None, None, None]:
 
     # `--force --delete-db` stops the service through prewarm's own import; unpatched it
     # would unload the developer's real launchd/systemd service.
-    with patch.multiple("archon_search.install.installer", **module_level):
-        with patch.multiple(RealInstaller, **installer_patches):
-            with patch("archon_search.install.prewarm.get_search_service", MagicMock()):
-                yield
+    with (
+        patch.multiple("archon_search.install.installer", **module_level),
+        patch.multiple(RealInstaller, **installer_patches),
+        patch("archon_search.install.prewarm.get_search_service", MagicMock()),
+    ):
+        yield
 
 
 @pytest.fixture
@@ -258,20 +263,19 @@ def test_e2e_interactive_watch_and_telemetry(runner: CliRunner, tmp_path: Path) 
     #  9. HyDE/RAG Fusion: "n"
     # 10. graph enrichment: "n"
     # 11. "Proceed?": "y"
-    stdin_responses = "\n".join(["n", "n", "n", "y", "y", "n", "", "", "n", "n", "y"]) + "\n"
+    stdin_responses = "n\nn\nn\ny\ny\nn\n\n\nn\nn\ny" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard():
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "balanced",
-                    "--config", str(config_path),
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
+    with _no_anthropic_key(), _patched_wizard():
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "balanced",
+                "--config", str(config_path),
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     assert config_path.exists()
@@ -292,22 +296,19 @@ def test_e2e_interactive_enter_at_bool_prompts_is_refused_and_reasked(runner: Cl
 
     # Same prompt order as test_e2e_interactive_watch_and_telemetry, with Enter (refused) then
     # `n` at prompts 4 (watch), 5 (telemetry) and 6 (eager load).
-    stdin_responses = "\n".join(
-        ["n", "n", "n", "", "n", "", "n", "", "n", "", "", "n", "n", "y"]
-    ) + "\n"
+    stdin_responses = "n\nn\nn\n\nn\n\nn\n\nn\n\n\nn\nn\ny" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard():
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "balanced",
-                    "--config", str(config_path),
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
+    with _no_anthropic_key(), _patched_wizard():
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "balanced",
+                "--config", str(config_path),
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     for prompt in (
@@ -338,22 +339,21 @@ def test_e2e_interactive_force_delete_db_exits_zero(runner: CliRunner, tmp_path:
     # 1 multilingual n / 2 code n / 3 reranker n / 4 watch n / 5 telemetry n /
     # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n /
     # 11 delete-db confirm "yes" / 12 "Proceed?" y
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "", "n", "n", "yes", "y"]) + "\n"
+    stdin_responses = "n\nn\nn\nn\nn\nn\n\n\nn\nn\nyes\ny" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard():
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--force",
-                    "--delete-db",
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
+    with _no_anthropic_key(), _patched_wizard():
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--force",
+                "--delete-db",
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
 
@@ -388,7 +388,7 @@ _DOCUMENTED_PROMPT_ORDER = [
 # 6 telemetry n / 7 eager n / 8 routing "" / 9 log "" / 10 HyDE n /
 # 11 graph enrichment n / 12 "Proceed?" y
 _DOCUMENTED_FLOW_ANSWERS = (
-    "\n".join(["n", "", "n", "n", "n", "n", "n", "", "", "n", "n", "y"]) + "\n"
+    "n\n\nn\nn\nn\nn\nn\n\n\nn\nn\ny" + "\n"
 )
 
 
@@ -401,13 +401,12 @@ def _run_documented_flow(runner: CliRunner, tmp_path: Path) -> Result:
     """
     config_path = tmp_path / "archon-search.toml"
 
-    with _no_anthropic_key():
-        with _patched_wizard():
-            result = runner.invoke(
-                main,
-                ["wizard", "--config", str(config_path), "--skip-preload"],
-                input=_DOCUMENTED_FLOW_ANSWERS,
-            )
+    with _no_anthropic_key(), _patched_wizard():
+        result = runner.invoke(
+            main,
+            ["wizard", "--config", str(config_path), "--skip-preload"],
+            input=_DOCUMENTED_FLOW_ANSWERS,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     return result
@@ -483,22 +482,21 @@ def test_proceed_prompt_rejects_yes_and_reasks_exits_zero(runner: CliRunner, tmp
     # 1 multilingual n / 2 code n / 3 reranker n / 4 watch n / 5 telemetry n /
     # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n /
     # 11 delete-db confirm "yes" / 12 "Proceed?" yes (refused) then y
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "", "n", "n", "yes", "yes", "y"]) + "\n"
+    stdin_responses = "n\nn\nn\nn\nn\nn\n\n\nn\nn\nyes\nyes\ny" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard():
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--force",
-                    "--delete-db",
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
+    with _no_anthropic_key(), _patched_wizard():
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--force",
+                "--delete-db",
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     assert result.output.count("Proceed? [y/n]: ") == 2
@@ -519,22 +517,21 @@ def test_proceed_prompt_eof_aborts_installation(runner: CliRunner, tmp_path: Pat
     # 1 multilingual n / 2 code n / 3 reranker n / 4 watch n / 5 telemetry n /
     # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n /
     # 11 delete-db confirm "yes"  (stdin exhausted → EOFError at Proceed?)
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "", "n", "n", "yes"]) + "\n"
+    stdin_responses = "n\nn\nn\nn\nn\nn\n\n\nn\nn\nyes" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard():
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--force",
-                    "--delete-db",
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
+    with _no_anthropic_key(), _patched_wizard():
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--force",
+                "--delete-db",
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code != 0, f"Expected non-zero exit, got {result.exit_code}:\nOUT: {result.output}"
     assert "Installation aborted." in result.output, (
@@ -559,28 +556,24 @@ def test_e2e_interactive_no_profile_flag_metal_gpu_force_delete_exits_zero(
     # 4 code n / 5 reranker n / 6 watch n / 7 telemetry n / 8 eager n /
     # 9 routing "" / 10 log "" / 11 HyDE n / 12 graph enrichment n /
     # 13 delete-db confirm "yes" / 14 "Proceed?" y
-    stdin_responses = "\n".join(
-        ["n", "", "y", "n", "n", "n", "n", "n", "", "", "n", "n", "yes", "y"]
-    ) + "\n"
+    stdin_responses = "n\n\ny\nn\nn\nn\nn\nn\n\n\nn\nn\nyes\ny" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard():
-            with patch.multiple(
-                RealInstaller,
-                detect_gpu=MagicMock(return_value=GpuType.METAL),
-                _accelerator_validated=MagicMock(return_value=False),
-            ):
-                result = runner.invoke(
-                    main,
-                    [
-                        "wizard",
-                        "--config", str(config_path),
-                        "--force",
-                        "--delete-db",
-                        "--skip-preload",
-                    ],
-                    input=stdin_responses,
-                )
+    with _no_anthropic_key(), _patched_wizard(), patch.multiple(
+        RealInstaller,
+        detect_gpu=MagicMock(return_value=GpuType.METAL),
+        _accelerator_validated=MagicMock(return_value=False),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--config", str(config_path),
+                "--force",
+                "--delete-db",
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
@@ -618,24 +611,23 @@ def test_e2e_interactive_multilingual_yes(runner: CliRunner, tmp_path: Path) -> 
     #  9. HyDE/RAG Fusion: "n"
     # 10. graph enrichment: "n"
     #  confirmation: "y"
-    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "n", "y"]) + "\n"
+    stdin_responses = "y\nn\nn\nn\nn\n\n\nn\nn\ny" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard(
-            **{"archon_search.install.installer._select_profile": select_profile_spy,
-               "archon_search.install.installer._prompt_fasttext_license": MagicMock(),
-               "archon_search.install.installer._download_fasttext_model": MagicMock()}
-        ):
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
+    with _no_anthropic_key(), _patched_wizard(
+        **{"archon_search.install.installer._select_profile": select_profile_spy,
+           "archon_search.install.installer._prompt_fasttext_license": MagicMock(),
+           "archon_search.install.installer._download_fasttext_model": MagicMock()}
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     # _select_profile should have been called with multilingual=True
@@ -668,20 +660,19 @@ def test_e2e_interactive_invalid_routing_retries(runner: CliRunner, tmp_path: Pa
     # 10. HyDE/RAG Fusion: "n"
     # 11. graph enrichment: "n"
     # 12. "Proceed?": "y"
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "badval", "hybrid", "", "n", "n", "y"]) + "\n"
+    stdin_responses = "n\nn\nn\nn\nn\nn\nbadval\nhybrid\n\nn\nn\ny" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard():
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
+    with _no_anthropic_key(), _patched_wizard():
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     assert config_path.exists()
@@ -940,25 +931,24 @@ def test_wizard_declineProceedPrompt_revertsGraphEnabled(runner: CliRunner, tmp_
     #  9. HyDE/RAG Fusion: "n"
     # 10. graph enrichment: "n"
     # 11. "Proceed?": "n"  ← decline
-    stdin_responses = "\n".join(["n", "y", "n", "n", "n", "n", "", "", "n", "n", "n"]) + "\n"
+    stdin_responses = "n\ny\nn\nn\nn\nn\n\n\nn\nn\nn" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard(
-            **{
-                "archon_search.install.installer._install_code_extra": install_code_mock,
-                "archon_search.install.installer._install_graph_extra": install_graph_mock,
-            }
-        ):
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
+    with _no_anthropic_key(), _patched_wizard(
+        **{
+            "archon_search.install.installer._install_code_extra": install_code_mock,
+            "archon_search.install.installer._install_graph_extra": install_graph_mock,
+        }
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
     # The install calls are unreachable from this early-return path — they
@@ -1109,23 +1099,22 @@ def test_e2e_hyde_declineProceedPrompt_reverts(runner: CliRunner, tmp_path: Path
     #  7. routing strategy: "" (default)
     #  8. log format: "" (default)
     #  9. "Proceed?": "n"  ← decline
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "", "n"]) + "\n"
+    stdin_responses = "n\nn\nn\nn\nn\nn\n\n\nn" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard(
-            **{"archon_search.install.installer._install_query_expansion_extras": install_mock}
-        ):
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--skip-preload",
-                    "--enable-hyde",
-                ],
-                input=stdin_responses,
-            )
+    with _no_anthropic_key(), _patched_wizard(
+        **{"archon_search.install.installer._install_query_expansion_extras": install_mock}
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--skip-preload",
+                "--enable-hyde",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
     install_mock.assert_not_called()
@@ -1161,20 +1150,16 @@ def test_wizard_llama_cpp_model_picker_cache_populated(runner: CliRunner, tmp_pa
     # 16. "Enable LLM-backed graph enrichment?": "n"
     # 17. "Proceed?": "y"
     stdin_responses = (
-        "\n".join(
-            ["n", "n", "n", "n", "n", "n", "", "", "y", "llama_cpp", "", "1", "llama_cpp", "", "2", "n", "y"]
-        )
+        "n\nn\nn\nn\nn\nn\n\n\ny\nllama_cpp\n\n1\nllama_cpp\n\n2\nn\ny"
         + "\n"
     )
 
-    with _no_anthropic_key():
-        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1", "m2"]) as mock_fetch:
-            with _patched_wizard():
-                result = runner.invoke(
-                    main,
-                    ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
-                    input=stdin_responses,
-                )
+    with _no_anthropic_key(), patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1", "m2"]) as mock_fetch, _patched_wizard():
+        result = runner.invoke(
+            main,
+            ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     assert mock_fetch.call_count == 2
@@ -1197,20 +1182,16 @@ def test_wizard_llama_cpp_model_picker_cache_empty(runner: CliRunner, tmp_path: 
     # (no numbered picker is shown when the local cache is empty); trailing "n" declines
     # the FE-2 graph-enrichment step before "Proceed?".
     stdin_responses = (
-        "\n".join(
-            ["n", "n", "n", "n", "n", "n", "", "", "y", "llama_cpp", "", "hmodel", "llama_cpp", "", "rmodel", "n", "y"]
-        )
+        "n\nn\nn\nn\nn\nn\n\n\ny\nllama_cpp\n\nhmodel\nllama_cpp\n\nrmodel\nn\ny"
         + "\n"
     )
 
-    with _no_anthropic_key():
-        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=[]):
-            with _patched_wizard():
-                result = runner.invoke(
-                    main,
-                    ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
-                    input=stdin_responses,
-                )
+    with _no_anthropic_key(), patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=[]), _patched_wizard():
+        result = runner.invoke(
+            main,
+            ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
@@ -1244,20 +1225,16 @@ def test_wizard_graph_provider_step_writes_all_three_fields(runner: CliRunner, t
     # 13. numbered model picker: "1"
     # 14. "Proceed?": "y"
     stdin_responses = (
-        "\n".join(
-            ["n", "n", "n", "n", "n", "n", "", "", "n", "y", "llama_cpp", "http://box:8080", "1", "y"]
-        )
+        "n\nn\nn\nn\nn\nn\n\n\nn\ny\nllama_cpp\nhttp://box:8080\n1\ny"
         + "\n"
     )
 
-    with _no_anthropic_key():
-        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1", "m2"]) as mock_fetch:
-            with _patched_wizard():
-                result = runner.invoke(
-                    main,
-                    ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
-                    input=stdin_responses,
-                )
+    with _no_anthropic_key(), patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1", "m2"]) as mock_fetch, _patched_wizard():
+        result = runner.invoke(
+            main,
+            ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     mock_fetch.assert_called_once_with()  # the local cache probe takes no base URL
@@ -1292,20 +1269,16 @@ def test_wizard_abort_reverts_graph_enrichment_only(runner: CliRunner, tmp_path:
     # 13. numbered model picker: "1"
     # 14. "Proceed?": "n"  ← decline
     stdin_responses = (
-        "\n".join(
-            ["n", "n", "n", "n", "n", "n", "", "", "n", "y", "llama_cpp", "http://box:8080", "1", "n"]
-        )
+        "n\nn\nn\nn\nn\nn\n\n\nn\ny\nllama_cpp\nhttp://box:8080\n1\nn"
         + "\n"
     )
 
-    with _no_anthropic_key():
-        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]):
-            with _patched_wizard():
-                result = runner.invoke(
-                    main,
-                    ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
-                    input=stdin_responses,
-                )
+    with _no_anthropic_key(), patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]), _patched_wizard():
+        result = runner.invoke(
+            main,
+            ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
     assert config_path.exists(), "Config should have been written before the Proceed? prompt"
@@ -1503,22 +1476,21 @@ def test_e2e_multilingual_declineProceedPrompt_reverts_flag(runner: CliRunner, t
     #  8. HyDE/RAG Fusion: "n"
     #  9. graph enrichment: "n"
     # 10. "Proceed?": "n"  ← decline
-    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "n", "n"]) + "\n"
+    stdin_responses = "y\nn\nn\nn\nn\n\n\nn\nn\nn" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard(
-            **{"archon_search.install.installer._install_multilingual_extra": install_multilingual_mock}
-        ):
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
+    with _no_anthropic_key(), _patched_wizard(
+        **{"archon_search.install.installer._install_multilingual_extra": install_multilingual_mock}
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
     install_multilingual_mock.assert_not_called()
@@ -1544,22 +1516,21 @@ def test_e2e_interactive_multilingual_install_triggered(runner: CliRunner, tmp_p
     install_multilingual_mock = MagicMock()
 
     # Same interactive setup as the decline test above, but Proceed="y".
-    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "n", "y"]) + "\n"
+    stdin_responses = "y\nn\nn\nn\nn\n\n\nn\nn\ny" + "\n"
 
-    with _no_anthropic_key():
-        with _patched_wizard(
-            **{"archon_search.install.installer._install_multilingual_extra": install_multilingual_mock}
-        ):
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
+    with _no_anthropic_key(), _patched_wizard(
+        **{"archon_search.install.installer._install_multilingual_extra": install_multilingual_mock}
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     install_multilingual_mock.assert_called_once()
@@ -2151,9 +2122,8 @@ def test_wizard_enable_hyde_works_without_anthropic_key(runner: CliRunner, tmp_p
     """--enable-hyde without ANTHROPIC_API_KEY succeeds (BE-8 removed the API key gate)."""
     config_path = tmp_path / "archon-search.toml"
     env_without_key = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    with _patched_wizard():
-        with patch.dict("os.environ", env_without_key, clear=True):
-            result = runner.invoke(main, _wizard_args(config_path, "--enable-hyde"))
+    with _patched_wizard(), patch.dict("os.environ", env_without_key, clear=True):
+        result = runner.invoke(main, _wizard_args(config_path, "--enable-hyde"))
     assert result.exit_code == 0, f"Expected exit 0 (no API key gate), got: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
     assert doc.get("hyde", {}).get("enabled") is True, (
@@ -2166,9 +2136,8 @@ def test_wizard_enable_rag_fusion_works_without_anthropic_key(runner: CliRunner,
     """--enable-rag-fusion without ANTHROPIC_API_KEY succeeds (BE-8 removed the API key gate)."""
     config_path = tmp_path / "archon-search.toml"
     env_without_key = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    with _patched_wizard():
-        with patch.dict("os.environ", env_without_key, clear=True):
-            result = runner.invoke(main, _wizard_args(config_path, "--enable-rag-fusion"))
+    with _patched_wizard(), patch.dict("os.environ", env_without_key, clear=True):
+        result = runner.invoke(main, _wizard_args(config_path, "--enable-rag-fusion"))
     assert result.exit_code == 0, f"Expected exit 0 (no API key gate), got: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
     assert doc.get("rag_fusion", {}).get("enabled") is True, (
@@ -2181,9 +2150,8 @@ def test_wizard_non_interactive_skips_hyde_prompt_even_with_key(runner: CliRunne
     """--non-interactive with ANTHROPIC_API_KEY set: no prompt, so HyDE/RAG Fusion stay unanswered —
     neither table is written and both resolve to the disabled default."""
     config_path = tmp_path / "archon-search.toml"
-    with _patched_wizard():
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
-            result = runner.invoke(main, _wizard_args(config_path))
+    with _patched_wizard(), patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
+        result = runner.invoke(main, _wizard_args(config_path))
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
     assert "hyde" not in doc
@@ -2197,12 +2165,11 @@ def test_wizard_non_interactive_skips_hyde_prompt_even_with_key(runner: CliRunne
 def test_wizard_enable_hyde_and_rag_fusion_writes_toml(runner: CliRunner, tmp_path: Path) -> None:
     """--enable-hyde --enable-rag-fusion with ANTHROPIC_API_KEY writes both to TOML."""
     config_path = tmp_path / "archon-search.toml"
-    with _patched_wizard():
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
-            result = runner.invoke(
-                main,
-                _wizard_args(config_path, "--enable-hyde", "--enable-rag-fusion"),
-            )
+    with _patched_wizard(), patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
+        result = runner.invoke(
+            main,
+            _wizard_args(config_path, "--enable-hyde", "--enable-rag-fusion"),
+        )
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
     assert doc["hyde"]["enabled"] is True, "hyde.enabled should be True"
@@ -2222,14 +2189,16 @@ def test_wizard_server_key_writes_key_file(runner: CliRunner, tmp_path: Path) ->
     config_path = tmp_path / "archon-search.toml"
     key_file = tmp_path / ".search.env"
 
-    with _patched_wizard():
-        with _no_anthropic_key():
-            with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
-                with patch("archon_search.install.os.chmod") as mock_chmod:
-                    result = runner.invoke(
-                        main,
-                        _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
-                    )
+    with (
+        _patched_wizard(),
+        _no_anthropic_key(),
+        patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}),
+        patch("archon_search.install.os.chmod") as mock_chmod,
+    ):
+        result = runner.invoke(
+            main,
+            _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     assert key_file.exists(), "key file should be created by --server-key"
@@ -2245,14 +2214,11 @@ def test_wizard_server_key_prints_history_warning(runner: CliRunner, tmp_path: P
     """--server-key prints shell history warning to output."""
     config_path = tmp_path / "archon-search.toml"
 
-    with _patched_wizard():
-        with _no_anthropic_key():
-            with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
-                with patch("archon_search.install.os.chmod"):
-                    result = runner.invoke(
-                        main,
-                        _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
-                    )
+    with _patched_wizard(), _no_anthropic_key(), patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}), patch("archon_search.install.os.chmod"):
+        result = runner.invoke(
+            main,
+            _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     assert "shell history" in result.output, (
@@ -2265,14 +2231,11 @@ def test_wizard_server_key_prints_restart_note(runner: CliRunner, tmp_path: Path
     """--server-key prints restart note to output."""
     config_path = tmp_path / "archon-search.toml"
 
-    with _patched_wizard():
-        with _no_anthropic_key():
-            with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
-                with patch("archon_search.install.os.chmod"):
-                    result = runner.invoke(
-                        main,
-                        _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
-                    )
+    with _patched_wizard(), _no_anthropic_key(), patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}), patch("archon_search.install.os.chmod"):
+        result = runner.invoke(
+            main,
+            _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     assert "archon-search restart" in result.output, (
@@ -2287,21 +2250,18 @@ def test_wizard_server_key_with_env_var_set_prints_priority_warning(
     """--server-key with ARCHON_SEARCH_API_KEY set prints env-var priority warning."""
     config_path = tmp_path / "archon-search.toml"
 
-    with _patched_wizard():
-        with patch.dict("os.environ", {"ARCHON_SEARCH_API_KEY": "b" * 64}, clear=False):
-            with patch.dict(
-                "os.environ",
-                {
-                    **{k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"},
-                    "ARCHON_SEARCH_DATA_DIR": str(tmp_path),
-                },
-                clear=True,
-            ):
-                with patch("archon_search.install.os.chmod"):
-                    result = runner.invoke(
-                        main,
-                        _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
-                    )
+    with _patched_wizard(), patch.dict("os.environ", {"ARCHON_SEARCH_API_KEY": "b" * 64}, clear=False), patch.dict(
+        "os.environ",
+        {
+            **{k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"},
+            "ARCHON_SEARCH_DATA_DIR": str(tmp_path),
+        },
+        clear=True,
+    ), patch("archon_search.install.os.chmod"):
+        result = runner.invoke(
+            main,
+            _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     assert "ARCHON_SEARCH_API_KEY" in result.output, (
@@ -2320,21 +2280,18 @@ def test_wizard_server_key_with_env_var_set_still_writes_file(
     config_path = tmp_path / "archon-search.toml"
     key_file = tmp_path / ".search.env"
 
-    with _patched_wizard():
-        with patch.dict("os.environ", {"ARCHON_SEARCH_API_KEY": "b" * 64}, clear=False):
-            with patch.dict(
-                "os.environ",
-                {
-                    **{k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"},
-                    "ARCHON_SEARCH_DATA_DIR": str(tmp_path),
-                },
-                clear=True,
-            ):
-                with patch("archon_search.install.os.chmod"):
-                    result = runner.invoke(
-                        main,
-                        _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
-                    )
+    with _patched_wizard(), patch.dict("os.environ", {"ARCHON_SEARCH_API_KEY": "b" * 64}, clear=False), patch.dict(
+        "os.environ",
+        {
+            **{k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"},
+            "ARCHON_SEARCH_DATA_DIR": str(tmp_path),
+        },
+        clear=True,
+    ), patch("archon_search.install.os.chmod"):
+        result = runner.invoke(
+            main,
+            _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
+        )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     assert key_file.exists(), "key file should be written even when ARCHON_SEARCH_API_KEY env is set"
@@ -3063,13 +3020,12 @@ def _real_fasttext_provisioning(data_dir: Path, **extra: Any) -> Generator[Path,
     Yields the path lid.176.ftz must be published to, read from the same accessor
     the installer itself passes to the downloader (installer.py:1346).
     """
-    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(data_dir)}):
-        with _patched_wizard(
-            _prompt_fasttext_license=_prompt_fasttext_license,
-            _download_fasttext_model=_download_fasttext_model,
-            **extra,
-        ):
-            yield get_fasttext_models_dir() / "lid.176.ftz"
+    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(data_dir)}), _patched_wizard(
+        _prompt_fasttext_license=_prompt_fasttext_license,
+        _download_fasttext_model=_download_fasttext_model,
+        **extra,
+    ):
+        yield get_fasttext_models_dir() / "lid.176.ftz"
 
 
 # The literal opening of every InstallError _download_fasttext_model raises
@@ -3332,9 +3288,8 @@ def _recorded_wizard(events: list[tuple[str, str]], **extra: Any) -> Generator[N
         name: MagicMock(side_effect=recorder(name, result))
         for name, result in _BYTE_MOVING_STEPS
     }
-    with patch("builtins.input", spy_input):
-        with _patched_wizard(**steps, **extra):
-            yield
+    with patch("builtins.input", spy_input), _patched_wizard(**steps, **extra):
+        yield
 
 
 def _answers(*, multilingual: str, graph: str) -> str:
@@ -3343,17 +3298,7 @@ def _answers(*, multilingual: str, graph: str) -> str:
     The bundled code/graph question is the second one; the AI-query-expansion step is
     pre-answered by --enable-hyde, so its prompts never fire.
     """
-    return "\n".join([
-        multilingual,  # Will your corpus include non-English documents?
-        graph,         # the one bundled code-indexing + graph-extraction question
-        "y",           # Keep reranker enabled? (minimal ships one)
-        "n",           # Auto-watch directories?
-        "n",           # Enable local query telemetry?
-        "n",           # Eager-load models at startup?
-        "",            # Routing strategy (default)
-        "",            # Log format (default)
-        "y",           # Proceed?
-    ]) + "\n"
+    return f"{multilingual}\n{graph}\ny\nn\nn\nn\n\n\ny" + "\n"
 
 
 def _run_wizard(
@@ -3373,18 +3318,17 @@ def _run_wizard(
     steps the disclosure must precede.
     """
     config_path = tmp_path / "archon-search.toml"
-    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
-        with _recorded_wizard(events):
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--enable-hyde",
-                ],
-                input=_answers(multilingual=multilingual, graph=graph),
-            )
+    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}), _recorded_wizard(events):
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--enable-hyde",
+            ],
+            input=_answers(multilingual=multilingual, graph=graph),
+        )
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     return result, config_path
 
@@ -3687,26 +3631,24 @@ def _run_graph_provider_wizard(
     written TOML, not a mock call, is what the assertions read.
     """
     config_path = tmp_path / "archon-search.toml"
-    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
-        with _patched_wizard(
-            _prewarm_models=MagicMock(return_value=prewarm_device),
-            probe_device_availability=MagicMock(return_value=availability),
-        ):
-            with _unconfigured_cli_logging():
-                result = runner.invoke(
-                    main,
-                    [
-                        "wizard",
-                        "--profile", "minimal",
-                        "--config", str(config_path),
-                        "--enable-hyde",
-                        "--graph-device", _CUDA_DEVICE,
-                    ],
-                    # One extra line answers the accelerator offer when it is shown
-                    # (`y` accepts, `n` declines; any other input is re-asked);
-                    # it is left unread on every leg where no offer appears.
-                    input=_answers(multilingual="n", graph="y") + offer_answer + "\n",
-                )
+    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}), _patched_wizard(
+        _prewarm_models=MagicMock(return_value=prewarm_device),
+        probe_device_availability=MagicMock(return_value=availability),
+    ), _unconfigured_cli_logging():
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--enable-hyde",
+                "--graph-device", _CUDA_DEVICE,
+            ],
+            # One extra line answers the accelerator offer when it is shown
+            # (`y` accepts, `n` declines; any other input is re-asked);
+            # it is left unread on every leg where no offer appears.
+            input=_answers(multilingual="n", graph="y") + offer_answer + "\n",
+        )
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     return result, config_path
 
@@ -3839,13 +3781,12 @@ def test_fresh_install_writes_only_answered_keys(
     pip-installs."""
     config_path = tmp_path / "archon-search.toml"
 
-    with _patched_wizard(_install_cuda_torch=MagicMock()):
-        with patch.multiple(
-            RealInstaller,
-            detect_gpu=MagicMock(return_value=detected_gpu),
-            _accelerator_validated=MagicMock(return_value=accelerator_ok),
-        ):
-            result = runner.invoke(main, _wizard_args(config_path, *extra))
+    with _patched_wizard(_install_cuda_torch=MagicMock()), patch.multiple(
+        RealInstaller,
+        detect_gpu=MagicMock(return_value=detected_gpu),
+        _accelerator_validated=MagicMock(return_value=accelerator_ok),
+    ):
+        result = runner.invoke(main, _wizard_args(config_path, *extra))
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
 
     assert _written(config_path) == {

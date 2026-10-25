@@ -28,6 +28,7 @@ Tests verify:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -551,10 +552,8 @@ def test_pageRankRecompute_debouncesOnRepeatedIngest(tmp_path) -> None:
         # Cancel the in-flight task to avoid ResourceWarning/unawaited-task noise.
         state = loop._pagerank_state[key]
         state.task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await state.task
-        except (asyncio.CancelledError, Exception):
-            pass
 
     asyncio.run(_run())
 

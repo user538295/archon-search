@@ -20,7 +20,6 @@ import pytest
 
 from archon_search.key_manager import KeyStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -65,7 +64,7 @@ class TestKeyStoreRevoke:
         """revoke(id) sets status=revoked in keys.json (S4)."""
         store = _make_store(tmp_path)
         result = asyncio.run(store.create(ns="ns", label=None, expires_at=None))
-        key_id = result["id"]
+        key_id = result.id
 
         asyncio.run(store.revoke(key_id))
 
@@ -77,7 +76,7 @@ class TestKeyStoreRevoke:
         """Revoked key is not in active_keys() (S9)."""
         store = _make_store(tmp_path)
         result = asyncio.run(store.create(ns="ns", label=None, expires_at=None))
-        key_id = result["id"]
+        key_id = result.id
 
         asyncio.run(store.revoke(key_id))
 
@@ -97,7 +96,7 @@ class TestKeyStoreRevoke:
         """revoke() on an already-revoked key is a no-op — no exception and no disk write."""
         store = _make_store(tmp_path)
         result = asyncio.run(store.create(ns="ns", label=None, expires_at=None))
-        key_id = result["id"]
+        key_id = result.id
 
         asyncio.run(store.revoke(key_id))  # first call — performs the write
 
@@ -122,17 +121,17 @@ class TestKeyStoreRevoke:
         r1 = asyncio.run(store.create(ns="ns", label=None, expires_at=None))
         r2 = asyncio.run(store.create(ns="ns", label=None, expires_at=None))
 
-        asyncio.run(store.revoke(r1["id"]))
+        asyncio.run(store.revoke(r1.id))
 
         active = asyncio.run(store.active_keys())
         assert len(active) == 1
-        assert active[0].id == r2["id"]
+        assert active[0].id == r2.id
 
     def test_keystore_revoke_only_managed_key(self, tmp_path: Path) -> None:
         """Revoking the last/only key is allowed — no error raised (S18)."""
         store = _make_store(tmp_path)
         result = asyncio.run(store.create(ns="ns", label=None, expires_at=None))
-        key_id = result["id"]
+        key_id = result.id
 
         # Must not raise
         asyncio.run(store.revoke(key_id))
@@ -213,7 +212,7 @@ class TestKeyStoreListKeys:
         r1 = asyncio.run(store.create(ns="ns", label=None, expires_at=None))
         asyncio.run(store.create(ns="ns2", label=None, expires_at=None))
 
-        asyncio.run(store.revoke(r1["id"]))
+        asyncio.run(store.revoke(r1.id))
 
         records = asyncio.run(store.list_keys())
         assert len(records) == 2
@@ -337,9 +336,9 @@ class TestKeyStoreRevokeIntegration:
         active_keys() re-reads keys.json on every request, the next request
         with the managed token must be rejected with 401 immediately.
         """
-        from tests.integration.conftest import make_real_app
+        from tests.integration.conftest import REAL_APP_DATA_SUBDIR, make_real_app
 
-        with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
             # Create a managed key via POST /keys
             resp = client.post(
                 "/keys",
@@ -361,7 +360,7 @@ class TestKeyStoreRevokeIntegration:
             # HTTP route (DELETE /keys/{id} is BE-6, not yet implemented). Because
             # active_keys() reads keys.json from disk on every call, the next request
             # with the managed token will see the revoked status immediately.
-            key_store_path = tmp_path / "keys.json"
+            key_store_path = tmp_path / REAL_APP_DATA_SUBDIR / "keys.json"
             from archon_search.key_manager import KeyStore as _KeyStore
             revoke_store = _KeyStore(key_store_path)
             asyncio.run(revoke_store.revoke(key_id))

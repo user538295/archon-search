@@ -18,7 +18,6 @@ import pytest
 
 from tests.integration.conftest import make_real_app
 
-
 # ---------------------------------------------------------------------------
 # Unit — enable gate (no real FastMCP needed; create_mcp_http_app is mocked)
 # ---------------------------------------------------------------------------
@@ -27,15 +26,17 @@ from tests.integration.conftest import make_real_app
 @pytest.mark.integration
 def test_mcp_disabled_skips_mount(tmp_path, monkeypatch) -> None:
     """mcp.enabled=False → create_mcp_http_app() is never called; no /mcp route."""
-    with patch("archon_search.server.mcp.create_mcp_http_app") as mock_factory:
-        with make_real_app(tmp_path, monkeypatch, mcp_enabled=False) as (client, _cfg, _key):
-            # Factory must never be invoked when MCP is disabled.
-            assert mock_factory.call_count == 0
-            # No mount route registered on the FastAPI app.
-            mounted = [
-                r for r in client.app.routes if getattr(r, "path", "") == "/mcp"
-            ]
-            assert mounted == []
+    with (
+        patch("archon_search.server.mcp.create_mcp_http_app") as mock_factory,
+        make_real_app(tmp_path, monkeypatch, mcp_enabled=False) as (client, _cfg, _key),
+    ):
+        # Factory must never be invoked when MCP is disabled.
+        assert mock_factory.call_count == 0
+        # No mount route registered on the FastAPI app.
+        mounted = [
+            r for r in client.app.routes if getattr(r, "path", "") == "/mcp"
+        ]
+        assert mounted == []
 
 
 # ---------------------------------------------------------------------------
@@ -111,8 +112,7 @@ def test_mcp_failure_does_not_block_rest(tmp_path, monkeypatch) -> None:
     with patch(
         "archon_search.server.mcp.create_mcp_http_app",
         side_effect=RuntimeError("boom"),
-    ):
-        with make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, _cfg, api_key):
-            assert client.get("/health").status_code == 200
-            resp = client.get("/mcp", headers={"Authorization": f"Bearer {api_key}"})
-            assert resp.status_code == 404
+    ), make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, _cfg, api_key):
+        assert client.get("/health").status_code == 200
+        resp = client.get("/mcp", headers={"Authorization": f"Bearer {api_key}"})
+        assert resp.status_code == 404

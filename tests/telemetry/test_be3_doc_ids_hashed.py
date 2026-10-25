@@ -25,7 +25,6 @@ from archon_search.telemetry.entry import (
     TelemetryEntry,
 )
 
-
 # ---------------------------------------------------------------------------
 # unit: doc_ids_hashed field default
 # ---------------------------------------------------------------------------
@@ -279,8 +278,9 @@ def test_telemetry_entry_jsonl_round_trip_with_doc_ids_hashed(
     tmp_path: Path,
 ) -> None:
     """Entry with doc_ids_hashed=True serialises and deserialises correctly via writer + reader."""
-    from archon_search.telemetry.writer import TelemetryWriter
     import hmac
+
+    from archon_search.telemetry.writer import TelemetryWriter
 
     log_dir = tmp_path / "search-logs"
     salt = b"\xab" * 32

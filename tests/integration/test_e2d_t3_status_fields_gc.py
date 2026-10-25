@@ -76,7 +76,7 @@ def test_e2d_t3_status_stale_mention_count_zero_after_clean_gc(
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True, maintenance_enabled=True) as (
         client,
-        cfg,
+        _cfg,
         api_key,
     ):
         # Step 1: BEFORE GC — verify that last_graph_gc_at is null (pre-condition).

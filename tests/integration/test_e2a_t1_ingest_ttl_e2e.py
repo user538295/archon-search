@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -24,8 +24,6 @@ from archon_search.sync import path_to_collection_name
 from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
-
-UTC = timezone.utc
 
 # ---------------------------------------------------------------------------
 # Named constants — avoid magic numbers
@@ -67,7 +65,7 @@ def _poll_job_done(client, job_id: str, api_key: str) -> None:
 
 async def _read_schema_names(db_path: str, col: str) -> list[str]:
     """Return schema column names via fresh LanceDB connection (no shared locks with server)."""
-    import lancedb  # noqa: PLC0415
+    import lancedb
     db = await lancedb.connect_async(str(db_path))
     table = await db.open_table(col)
     schema = await table.schema()
@@ -98,7 +96,7 @@ def test_ingest_with_ttl_appears_in_expiring_endpoint(
     doc_file.write_text("hello world content for e2a t1 ttl precedence test", encoding="utf-8")
 
     toml = f'[collections]\ncollections = ["{col_path!s}"]\n'
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
         headers = _auth(api_key)
 
         # Prime the collection meta via a real ingest (creates meta row safely through HTTP).
@@ -175,7 +173,7 @@ def test_patch_collection_default_ttl_applies_to_new_ingest(
     setup_file.write_text("setup content for collection meta priming", encoding="utf-8")
 
     toml = f'[collections]\ncollections = ["{col_path!s}"]\n'
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
         headers = _auth(api_key)
 
         # Prime the collection meta via a real ingest of a separate setup file.
@@ -255,7 +253,7 @@ def test_ingest_null_ttl_not_in_expiring(
     doc_file.write_text("hello world for e2a t1 null ttl test", encoding="utf-8")
 
     toml = f'[collections]\ncollections = ["{col_path!s}"]\n'
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
         headers = _auth(api_key)
 
         # Ingest without any TTL (no chunk_ttl_seconds, no collection default).
@@ -297,7 +295,7 @@ def test_ingest_invalid_ttl_422(
     doc_file.write_text("content", encoding="utf-8")
 
     toml = f'[collections]\ncollections = ["{col_path!s}"]\n'
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
         headers = _auth(api_key)
 
         # chunk_ttl_seconds=0 is outside the valid range [1, 2^31-1] → 422.
@@ -327,7 +325,7 @@ def test_ingest_invalid_scopes_list_422(
     doc_file.write_text("content", encoding="utf-8")
 
     toml = f'[collections]\ncollections = ["{col_path!s}"]\n'
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
         headers = _auth(api_key)
 
         too_many_scopes = [f"scope-{i}" for i in range(_SCOPES_OVER_LIMIT)]  # 101 items

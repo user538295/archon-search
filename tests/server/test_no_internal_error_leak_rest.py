@@ -29,7 +29,11 @@ from fastapi.testclient import TestClient
 
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
-from archon_search.graph_inspector import GRAPHML_DEPENDENCY_DETAIL, CollectionGraphView, CrossCollectionGraphView
+from archon_search.graph_inspector import (
+    GRAPHML_DEPENDENCY_DETAIL,
+    CollectionGraphView,
+    CrossCollectionGraphView,
+)
 from archon_search.hyde import HYDE_DEPENDENCY_DETAIL
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import (
@@ -175,7 +179,7 @@ def _raised(exc: Exception) -> Exception:
     """*exc* with a traceback, as the pipeline hands it to ``ExplainStageError``."""
     try:
         raise exc
-    except Exception as caught:  # noqa: BLE001
+    except Exception as caught:  # noqa: BLE001 — helper only attaches a traceback to the given exception instance
         return caught
 
 
@@ -469,8 +473,8 @@ def test_rotate_invalid_input_is_rejected_before_writing_the_key_file(
 ) -> None:
     """A blank server-held default key is a server fault: 500 with the curated text, before .search.env is written."""
     app, _ = _rotate_app(tmp_path, monkeypatch)
-    managed = asyncio.run(app.state.key_store.create(ns="default", label=None, expires_at=None))
-    client = TestClient(app, raise_server_exceptions=False, headers={"Authorization": f"Bearer {managed['token']}"})
+    managed = asyncio.run(app.state.key_store.create(ns="default", label=None, expires_at=None, admin=True))
+    client = TestClient(app, raise_server_exceptions=False, headers={"Authorization": f"Bearer {managed.token}"})
     app.state.api_key = "   "  # a blank current default key
     write = MagicMock()
     monkeypatch.setattr("archon_search.key_manager.atomic_write_bytes", write)

@@ -22,9 +22,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from tests._hyde_stubs import stub_hyde_generator
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
-
+from tests._hyde_stubs import stub_hyde_generator
 
 
 def _make_pipeline(*, graph_mode_applied: str | None = None) -> Any:

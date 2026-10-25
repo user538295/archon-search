@@ -21,6 +21,7 @@ Tests verify:
 """
 from __future__ import annotations
 
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1867,7 +1868,7 @@ def test_graph_store_creates_cosine_index_on_name_embedding() -> None:
     # Simulate table now has the index (second call must be a no-op).
     # Use a plain object so .columns is a real list, not a MagicMock attribute.
     class _FakeIndex:
-        columns = ["name_embedding"]
+        columns: ClassVar[list[str]] = ["name_embedding"]
         name = "name_embedding_idx"
 
     index_info_with_index = [_FakeIndex()]
@@ -2193,7 +2194,7 @@ def test_getMentionsForEntityIds_returnsOnlyRequestedEntities() -> None:
             "test-col", [entity_a, entity_b], ns="default"
         )
 
-    from archon_search.graph_store import _where_in as _gs_where_in  # noqa: PLC0415
+    from archon_search.graph_store import _where_in as _gs_where_in
 
     result = asyncio.run(_run())
     assert len(result) == 2

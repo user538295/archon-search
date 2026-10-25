@@ -28,6 +28,7 @@ def test_importing_archon_search_pins_system_allocator_on_macos() -> None:
         capture_output=True,
         text=True,
         env=env,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "system", (

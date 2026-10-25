@@ -82,6 +82,7 @@ def test_mcp_wrong_token_returns_401() -> None:
 # ---------------------------------------------------------------------------
 
 import re as _re
+
 _REQUEST_ID_RE = _re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 _MCP_INIT = {

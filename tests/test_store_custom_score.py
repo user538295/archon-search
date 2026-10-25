@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -29,7 +29,7 @@ def _chunk(custom_score: float | None) -> ChunkRecord:
         text="hello",
         vector=[0.0] * _DIM,
         source_path=f"/tmp/{doc_id[:8]}.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
         custom_score=custom_score,
     )
 

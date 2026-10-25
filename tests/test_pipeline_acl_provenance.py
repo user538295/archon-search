@@ -8,15 +8,14 @@ Covers:
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, SearchResult
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -25,8 +24,8 @@ from archon_search._types import ChunkRecord, SearchResult
 
 def _make_pipeline(tmp_path: Path):
     """Return a SearchPipeline wired to a real LanceDB store with stub embedder/chunker/parser."""
-    from archon_search.store import SearchStore
     from archon_search.pipeline import SearchPipeline
+    from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
 
@@ -57,7 +56,7 @@ def _make_pipeline(tmp_path: Path):
             ingested_by: str = "cli",
             language: str = "",
         ) -> list[ChunkRecord]:
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             parts = [text[i : i + 200] for i in range(0, len(text), 200)] if text else []
             return [
                 ChunkRecord(

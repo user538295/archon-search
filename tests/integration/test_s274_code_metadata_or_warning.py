@@ -52,7 +52,7 @@ def test_py_ingest_yields_symbol_metadata_or_warning(
         "    return f'hello {name}'\n"
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
         col = "code_test"
 

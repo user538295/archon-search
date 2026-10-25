@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -50,7 +50,7 @@ def _make_chunk(doc_id: str, chunk_idx: int, text: str, source_path: str):
         text=text,
         vector=[0.0] * _EMBEDDING_DIM,
         source_path=source_path,
-        indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+        indexed_at=normalize_iso_utc(datetime.now(UTC)),
         acl=None,
     )
 
@@ -98,7 +98,7 @@ def test_list_documents_endpoint_first_page(
     n_docs = 12
     page_size = 5
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         store = client.app.state.search_store
         asyncio.run(
             _inject_n_docs(store, col, n_docs, namespace="default")
@@ -142,7 +142,7 @@ def test_list_documents_endpoint_second_page(
     n_docs = 12
     page_size = 5
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         store = client.app.state.search_store
         asyncio.run(
             _inject_n_docs(store, col, n_docs, namespace="default")
@@ -187,7 +187,7 @@ def test_list_documents_endpoint_last_page_no_cursor(
     n_docs = 6
     page_size = 5
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         store = client.app.state.search_store
         asyncio.run(
             _inject_n_docs(store, col, n_docs, namespace="default")
@@ -227,7 +227,7 @@ def test_list_documents_endpoint_deleted_cursor_no_error(
     n_docs = 8
     page_size = 5
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         store = client.app.state.search_store
         asyncio.run(
             _inject_n_docs(store, col, n_docs, namespace="default")
@@ -403,7 +403,7 @@ def test_list_documents_mcp_cursor_backward_compat(
     """MCP list_documents without cursor param still works (S7 — backward compat)."""
     col = "be6-mcp-no-cursor"
 
-    with make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, _cfg, api_key):
         store = client.app.state.search_store
         asyncio.run(
             _inject_n_docs(store, col, 3, namespace="default")
@@ -432,7 +432,7 @@ def test_list_documents_mcp_cursor_returns_next_page(
     n_docs = 8
     page_size = 5
 
-    with make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, _cfg, api_key):
         store = client.app.state.search_store
         asyncio.run(
             _inject_n_docs(store, col, n_docs, namespace="default")

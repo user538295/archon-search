@@ -15,8 +15,8 @@ from __future__ import annotations
 import contextlib
 import logging
 import sys
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -57,7 +57,7 @@ def test_e2e_ingest_path_safety_full_flow(
     Verifies that the path-safety check fires at the route handler level
     (not silently swallowed) and that no job entry is persisted.
     """
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         # POST /ingest with a path that contains '/..' — the validator must reject it.
@@ -97,13 +97,14 @@ def test_serve_command_with_real_app_responds_to_ready(
     # The default config (<data dir>/archon-search.toml) does not exist under
     # tmp_path, so load_config uses defaults, never the developer's real config.
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
 
     from archon_search.config import load_config
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
 
-    # load_config(serve=True) flips host default to 0.0.0.0
+    # load_config(serve=True) in the container flips the host default to 0.0.0.0
     config = load_config(serve=True)
     config.db_path = str(tmp_path / "db")
     config.backup.interval_hours = 0
@@ -118,7 +119,7 @@ def test_serve_command_with_real_app_responds_to_ready(
 
     # Assert the host-default flip actually happened (primary invariant of serve=True).
     assert config.host == "0.0.0.0", (
-        f"serve=True must set host default to '0.0.0.0', got {config.host!r}"
+        f"serve=True in the container must set host default to '0.0.0.0', got {config.host!r}"
     )
 
     with TestClient(app) as client:
@@ -293,16 +294,15 @@ def _run_wizard_dry_run(tmp_path: Path) -> object:
                         _check_disk_space=MagicMock(),
                         _legacy_service_path=MagicMock(return_value=tmp_path / "fake.plist"),
                         _remove_legacy_service=MagicMock(),
-                        _acquire_install_lock=_noop_install_lock):
-        with patch.multiple(RealInstaller, **_make_wizard_patches()):
-            result = runner.invoke(main, [
-                "wizard",
-                "--dry-run",
-                "--non-interactive",
-                "--profile", "balanced",
-                "--skip-preload",
-                "--config", str(config_path),
-            ])
+                        _acquire_install_lock=_noop_install_lock), patch.multiple(RealInstaller, **_make_wizard_patches()):
+        result = runner.invoke(main, [
+            "wizard",
+            "--dry-run",
+            "--non-interactive",
+            "--profile", "balanced",
+            "--skip-preload",
+            "--config", str(config_path),
+        ])
     return result
 
 

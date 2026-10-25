@@ -20,9 +20,10 @@ import io
 import json
 import logging
 import tarfile
+from collections.abc import Callable
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Any, Callable, NamedTuple
+from typing import Any, NamedTuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import fastmcp.server.server
@@ -143,7 +144,7 @@ async def _wire(tools: dict[str, Any], tool_name: str, /, **kwargs: Any) -> tupl
     """
     try:
         result = await tools[tool_name](**kwargs)
-    except Exception as exc:  # noqa: BLE001 — emulating FastMCP's own catch-all
+    except Exception as exc:  # noqa: BLE001 — the test probes error handling: any exception escaping a tool is captured to inspect its wire text
         return exc, f"Error calling tool {tool_name!r}: {exc}"
     return result, json.dumps(result, default=str)
 
@@ -739,7 +740,7 @@ async def test_revoke_key_write_failure_does_not_echo_key_file_path(
     monkeypatch.setattr(key_manager, "atomic_write_bytes", write)
 
     with caplog.at_level(logging.ERROR):
-        result, wire = await _wire(_tools(mock_pipeline(), key_store=key_store), "revoke_key", key_id=created["id"])
+        result, wire = await _wire(_tools(mock_pipeline(), key_store=key_store), "revoke_key", key_id=created.id)
 
     write.assert_called_once()
     _assert_error_without_leak(result, wire, _INTERNAL_ERROR_CODE, INTERNAL_ERROR_DETAIL)
@@ -767,15 +768,20 @@ async def test_create_key_write_failure_does_not_echo_key_file_path(
 
 
 def _import_archive(tmp_path: Path, embedding_model: str) -> Path:
-    """A minimal archive that passes every import_collection check before the collection lookup."""
+    """A minimal archive that passes every import_collection check before the collection lookup.
+
+    It sits in the caller's own export directory (``<data_dir>/exports/default/``) and names that namespace.
+    """
     manifest = {
         "schema_version": EXPORT_SCHEMA_VERSION,
         "collection": "col",
+        "namespace": "default",
         "exported_at": "2024-01-01T00:00:00+00:00",
         "doc_count": 0,
         "active_embedding_model": embedding_model,
     }
-    archive_path = tmp_path / "import.tar.gz"
+    archive_path = tmp_path / "exports" / "default" / "import.tar.gz"
+    archive_path.parent.mkdir(parents=True)
     with tarfile.open(archive_path, "w:gz") as tf:
         for name, payload in (("manifest.json", json.dumps(manifest).encode()), ("documents.jsonl", b"")):
             info = tarfile.TarInfo(name=name)
@@ -962,6 +968,7 @@ def _real_parse_pipeline() -> SearchPipeline:
     """
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=None)
+    store.assert_collection_access = AsyncMock()
     return SearchPipeline(
         store=store,
         embedder=MagicMock(),

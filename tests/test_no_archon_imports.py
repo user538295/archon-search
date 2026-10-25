@@ -4,7 +4,6 @@ Unit: test_no_archon_config_imports — archon.config.loader not imported anywhe
 
 from pathlib import Path
 
-
 ARCHON_SEARCH_PKG = Path(__file__).parent.parent / "archon_search"
 
 FORBIDDEN_PATTERNS = [

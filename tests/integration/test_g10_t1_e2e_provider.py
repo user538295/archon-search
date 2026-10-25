@@ -11,7 +11,6 @@ Run with:
 """
 from __future__ import annotations
 
-import asyncio
 import sys
 import types
 from pathlib import Path
@@ -102,7 +101,7 @@ def test_e2e_hyde_ollama_timeout_fallback(
         # Replace the provider's _get_client to raise asyncio.TimeoutError
         provider = client.app.state.hyde_generator._provider
         mock_client = MagicMock()
-        mock_client.chat = AsyncMock(side_effect=asyncio.TimeoutError("simulated timeout"))
+        mock_client.chat = AsyncMock(side_effect=TimeoutError("simulated timeout"))
         monkeypatch.setattr(provider, "_get_client", lambda: mock_client)
 
         resp = client.post(

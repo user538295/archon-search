@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # HTTP: async ingest job result carries warnings
 # ---------------------------------------------------------------------------
@@ -30,7 +29,7 @@ def test_async_ingest_warnings_in_job_result(tmp_path: Path, monkeypatch) -> Non
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"tenantA\n" + b"x" * 65537)  # > 64 KB
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         resp = client.post(
@@ -76,7 +75,7 @@ def test_async_ingest_no_warnings_for_normal_sidecar(tmp_path: Path, monkeypatch
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("tenantA\n")
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         resp = client.post(
@@ -125,7 +124,7 @@ def test_async_ingest_directory_warnings_aggregated_in_job_result(tmp_path: Path
     sidecar2 = subdir / "doc2.md.acl"
     sidecar2.write_text("tenantB\n")  # valid
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         resp = client.post(
@@ -177,7 +176,7 @@ def test_mcp_ingest_file_tool_returns_warnings_for_oversized_sidecar(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"tenantA\n" + b"x" * 65537)
 
-    with make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, _cfg, api_key):
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",

@@ -93,7 +93,7 @@ import pytest
 
 from archon_search.config import GraphConfig, SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
-from archon_search.graph_types import RelationshipType, ChunkInput
+from archon_search.graph_types import ChunkInput, RelationshipType
 from archon_search.paths import get_graph_models_dir
 from archon_search.pipeline import create_pipeline
 
@@ -639,6 +639,7 @@ def _run_determinism_child(run_index: int) -> dict:
         timeout=_SMALL_RUN_BUDGET_S,
         cwd=str(_REPO_ROOT),
         env=env,
+        check=False,
     )
     assert child.returncode == 0, (
         f"graph_real_artifact determinism child {run_index} exited "

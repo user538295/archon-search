@@ -17,7 +17,6 @@ from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 
-
 def _make_mcp_app(
     pipeline: Any,
     *,
@@ -60,7 +59,7 @@ async def test_mcp_search_calls_embedder_cache_get_or_load() -> None:
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    cache, resolved = _make_embedder_cache("model-X")
+    cache, _resolved = _make_embedder_cache("model-X")
     app = _make_mcp_app(pipeline, embedder_cache=cache)
 
     await app.tools["search"](query="q", collection="col")
@@ -126,7 +125,7 @@ async def test_mcp_search_with_context_calls_embedder_cache_get_or_load() -> Non
     from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
     pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 
-    cache, resolved = _make_embedder_cache("model-X")
+    cache, _resolved = _make_embedder_cache("model-X")
     app = _make_mcp_app(pipeline, embedder_cache=cache)
 
     await app.tools["search_with_context"](query="q", collection="col")
@@ -170,7 +169,7 @@ async def test_mcp_explain_single_collection_calls_embedder_cache_get_or_load() 
         return_value=ExplainPipelineResult(top_results=[], near_misses=[], acl_filtered=False)
     )
 
-    cache, resolved = _make_embedder_cache("model-X")
+    cache, _resolved = _make_embedder_cache("model-X")
     app = _make_mcp_app(pipeline, embedder_cache=cache)
 
     await app.tools["explain"](query="q", collection="col")

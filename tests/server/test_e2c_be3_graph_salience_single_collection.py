@@ -88,7 +88,7 @@ class TestGraphRouteSalienceFrequencyDefault:
         col_dir.mkdir()
         with make_real_app(
             tmp_path, monkeypatch, graph_enabled=True
-        ) as (client, cfg, api_key):
+        ) as (client, _cfg, api_key):
             # Register collection under DEFAULT_NAMESPACE so get_collection_meta finds it
             _register_collection(client, str(col_dir), api_key)
 
@@ -112,7 +112,7 @@ class TestGraphRouteSalienceInvalidReturns422:
     ) -> None:
         with make_real_app(
             tmp_path, monkeypatch, graph_enabled=True
-        ) as (client, cfg, api_key):
+        ) as (client, _cfg, api_key):
             response = client.get(
                 "/graph/some-collection?salience=bm25", headers=_auth(api_key)
             )
@@ -146,7 +146,7 @@ class TestGraphRouteSalienceTfidfReturnsMode:
         col_dir.mkdir()
         with make_real_app(
             tmp_path, monkeypatch, graph_enabled=True
-        ) as (client, cfg, api_key):
+        ) as (client, _cfg, api_key):
             _register_collection(client, str(col_dir), api_key)
 
             response = client.get("/graph/tfidfcol?salience=tfidf", headers=_auth(api_key))
@@ -181,7 +181,7 @@ class TestGraphRouteCrossNamespaceCollectionReturns404:
             monkeypatch,
             graph_enabled=True,
             namespaces={ns_b_key: "ns-b"},
-        ) as (client, cfg, api_key):
+        ) as (client, _cfg, api_key):
             # Register "nsacol" under DEFAULT_NAMESPACE using the main api_key
             _register_collection(client, str(col_dir), api_key)
 

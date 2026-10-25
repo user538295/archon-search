@@ -21,6 +21,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.server.routes_jobs import JOB_STORE_WRITE_FAILED_DETAIL
 from archon_search.server.schemas import CodedErrorDetail, ErrorDetail
+from tests._collection_access_stub import allow_collection_access
 
 TEST_KEY = os.environ.get("ARCHON_SEARCH_API_KEY", "0" * 64)
 AUTH = {"Authorization": f"Bearer {TEST_KEY}"}
@@ -33,7 +34,7 @@ def _make_client(tmp_path: Path, max_file_mb: int = 0) -> tuple[TestClient, JobS
     config.db_path = str(tmp_path / "search")
     config.ingest.max_file_mb = max_file_mb
     job_store = JobStore(path=tmp_path / "jobs.json")
-    app = create_app(config, job_store)
+    app = allow_collection_access(create_app(config, job_store))  # no lifespan: the store is never connected
     return TestClient(app, headers=AUTH), job_store
 
 
@@ -47,7 +48,7 @@ def test_ingest_route_413_single_file_over_limit(tmp_path: Path) -> None:
     oversized = tmp_path / "big.pdf"
     oversized.write_bytes(b"x")  # real file so is_file() passes
 
-    client, job_store = _make_client(tmp_path, max_file_mb=1)
+    client, _job_store = _make_client(tmp_path, max_file_mb=1)
 
     # Patch os.path.getsize so the file appears larger than 1 MB.
     with patch("os.path.getsize", return_value=2 * ONE_MB):
@@ -147,7 +148,7 @@ def test_ingest_route_202_single_file_under_limit(tmp_path: Path) -> None:
     small = tmp_path / "small.pdf"
     small.write_bytes(b"x")
 
-    client, job_store = _make_client(tmp_path, max_file_mb=10)
+    client, _job_store = _make_client(tmp_path, max_file_mb=10)
 
     with patch("os.path.getsize", return_value=5 * ONE_MB):
         response = client.post("/ingest", json={"collection": "docs", "path": str(small)})
@@ -160,7 +161,7 @@ def test_ingest_route_202_max_file_mb_zero(tmp_path: Path) -> None:
     big = tmp_path / "huge.pdf"
     big.write_bytes(b"x")
 
-    client, job_store = _make_client(tmp_path, max_file_mb=0)
+    client, _job_store = _make_client(tmp_path, max_file_mb=0)
 
     with patch("os.path.getsize", return_value=999 * ONE_MB):
         response = client.post("/ingest", json={"collection": "docs", "path": str(big)})
@@ -176,7 +177,7 @@ def test_ingest_route_202_directory_path_no_413(tmp_path: Path) -> None:
     subdir = tmp_path / "docs"
     subdir.mkdir()
 
-    client, job_store = _make_client(tmp_path, max_file_mb=1)
+    client, _job_store = _make_client(tmp_path, max_file_mb=1)
 
     # Even if files inside would be oversized, the route pre-check is skipped for dirs.
     with patch("os.path.getsize", return_value=2 * ONE_MB) as mock_getsize:
@@ -189,7 +190,7 @@ def test_ingest_route_202_directory_path_no_413(tmp_path: Path) -> None:
 def test_ingest_route_202_documents_payload_no_413(tmp_path: Path) -> None:
     """body.documents payload (no path) → 202: no *file* is sized, and the inline
     per-document cap (S293) leaves a document under the limit alone."""
-    client, job_store = _make_client(tmp_path, max_file_mb=1)
+    client, _job_store = _make_client(tmp_path, max_file_mb=1)
 
     response = client.post(
         "/ingest",
@@ -209,7 +210,7 @@ def test_ingest_route_413_symlink_follows_target_size(tmp_path: Path) -> None:
     symlink = tmp_path / "link.pdf"
     symlink.symlink_to(target)
 
-    client, job_store = _make_client(tmp_path, max_file_mb=1)
+    client, _job_store = _make_client(tmp_path, max_file_mb=1)
 
     with patch("os.path.getsize", return_value=2 * ONE_MB):
         response = client.post("/ingest", json={"collection": "docs", "path": str(symlink)})
@@ -264,7 +265,7 @@ def test_size_check_boundary_consistent(tmp_path: Path, monkeypatch: pytest.Monk
     at_limit = tmp_path / "exact.txt"
     at_limit.write_bytes(b"x")
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         with patch("os.path.getsize", return_value=exact_bytes):
@@ -315,7 +316,7 @@ def test_size_check_boundary_consistent(tmp_path: Path, monkeypatch: pytest.Monk
         )
         return store, pipeline
 
-    store, pipeline = asyncio.run(_make_pipeline_with_limit())
+    _store, pipeline = asyncio.run(_make_pipeline_with_limit())
 
     with patch("os.path.getsize", return_value=exact_bytes):
         result = asyncio.run(

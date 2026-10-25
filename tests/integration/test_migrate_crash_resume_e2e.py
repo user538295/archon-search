@@ -81,7 +81,7 @@ def test_migration_crash_inject_and_resume_e2e(
         introduced_at=999,
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
         search_store = client.app.state.search_store
 
@@ -217,7 +217,7 @@ def test_migration_cancel_schema_version_not_updated_e2e(
         introduced_at=999,
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
         search_store = client.app.state.search_store
         headers = _auth(api_key)

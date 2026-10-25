@@ -35,9 +35,9 @@ class TestRealCommunityEvalBackendProtocol:
     def test_dispatching_community_store_routes_by_collection(self) -> None:
         """DispatchingCommunityStore routes requests to the correct backend by collection name."""
         from archon_search.eval.backends import (
+            CommunityStoreStub,
             DispatchingCommunityStore,
             RealCommunityEvalBackend,
-            CommunityStoreStub,
         )
         from archon_search.graph_store import GraphStore
 
@@ -64,9 +64,9 @@ class TestDispatchingCommunityStoreRouting:
     async def test_dispatcher_routes_to_stub_for_graph_collection(self) -> None:
         """Dispatcher routes graph collection to CommunityStoreStub."""
         from archon_search.eval.backends import (
+            CommunityStoreStub,
             DispatchingCommunityStore,
             RealCommunityEvalBackend,
-            CommunityStoreStub,
         )
         from archon_search.graph_store import GraphStore
 
@@ -89,9 +89,9 @@ class TestDispatchingCommunityStoreRouting:
     async def test_dispatcher_routes_to_real_backend_for_multihop(self) -> None:
         """Dispatcher routes multihop-2wiki collection to RealCommunityEvalBackend."""
         from archon_search.eval.backends import (
+            CommunityStoreStub,
             DispatchingCommunityStore,
             RealCommunityEvalBackend,
-            CommunityStoreStub,
         )
         from archon_search.graph_store import GraphStore
         from archon_search.graph_types import (
@@ -329,7 +329,7 @@ class TestRealCommunityBackendIntegration:
 
         from archon_search.eval.backends import RealCommunityEvalBackend
 
-        lancedb_root, graph_stores = build_communities_for_eval
+        _lancedb_root, graph_stores = build_communities_for_eval
         graph_store = graph_stores["multihop-2wiki"]
         backend = RealCommunityEvalBackend(graph_store=graph_store)
 
@@ -348,7 +348,7 @@ class TestRealCommunityBackendIntegration:
 
         from archon_search.eval.backends import RealCommunityEvalBackend
 
-        lancedb_root, graph_stores = build_communities_for_eval
+        _lancedb_root, graph_stores = build_communities_for_eval
         graph_store = graph_stores["multihop-musique"]
         backend = RealCommunityEvalBackend(graph_store=graph_store)
 

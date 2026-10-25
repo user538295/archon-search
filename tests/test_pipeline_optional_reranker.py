@@ -13,7 +13,6 @@ from archon_search.embedder import Embedder
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -93,8 +92,8 @@ def test_pipeline_skips_reranker_when_model_is_empty() -> None:
 # ---------------------------------------------------------------------------
 
 def test_app_skips_reranker_when_config_model_empty(tmp_path) -> None:
-    from archon_search.server.app import create_app
     from archon_search.jobs import JobStore
+    from archon_search.server.app import create_app
 
     cfg = SearchConfig(reranker_model="")
     # Isolate the jobs file under tmp_path so the test never touches

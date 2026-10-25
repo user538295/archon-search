@@ -16,7 +16,6 @@ from archon_search.observability import (
     sanitize_request_id,
 )
 
-
 # ---------------------------------------------------------------------------
 # StageRecorder
 # ---------------------------------------------------------------------------
@@ -74,19 +73,16 @@ def test_record_stage_noop_when_unbound() -> None:
 
 
 def test_record_stage_records_timing_when_bound() -> None:
-    with bind_stage_recorder() as recorder:
-        with record_stage("embed"):
-            pass
+    with bind_stage_recorder() as recorder, record_stage("embed"):
+        pass
     assert "embed" in recorder.stage_timings_ms
     assert recorder.stage_timings_ms["embed"] >= 0
 
 
 def test_record_stage_records_in_finally_on_raise() -> None:
     """Timing is recorded even if the block raises."""
-    with bind_stage_recorder() as recorder:
-        with pytest.raises(ValueError):
-            with record_stage("embed"):
-                raise ValueError("boom")
+    with bind_stage_recorder() as recorder, pytest.raises(ValueError), record_stage("embed"):
+        raise ValueError("boom")
     assert "embed" in recorder.stage_timings_ms
 
 

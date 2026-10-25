@@ -160,7 +160,11 @@ def test_e2e_search_traverses_synonym_edges(tmp_path: Path, monkeypatch) -> None
     8. POST /search with graph_mode="naive" and query "K8s".
     9. Assert search results contain text from the Kubernetes document.
     """
-    from tests.integration.conftest import ingest_file_via_path, install_k8s_synonym_graph_stub, make_real_app
+    from tests.integration.conftest import (
+        ingest_file_via_path,
+        install_k8s_synonym_graph_stub,
+        make_real_app,
+    )
 
     # Step 1: install content-dependent graph-engine stub BEFORE make_real_app
     install_k8s_synonym_graph_stub(monkeypatch)

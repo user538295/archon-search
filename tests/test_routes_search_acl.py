@@ -15,7 +15,6 @@ from archon_search.pipeline import SearchPipelineResult
 from archon_search.server.app import create_app
 from archon_search.server.routes_search import SearchResponse
 
-
 # ---------------------------------------------------------------------------
 # schema unit tests
 # ---------------------------------------------------------------------------

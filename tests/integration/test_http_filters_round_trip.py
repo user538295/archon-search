@@ -12,12 +12,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+
+if TYPE_CHECKING:
+    from archon_search._types import ChunkRecord
 
 pytestmark = pytest.mark.integration
 
@@ -29,7 +33,7 @@ _EMBEDDING_DIM = 384
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_chunk(doc_id: str, idx: int, text: str, source_path: str, *, language: str = "") -> "ChunkRecord":  # type: ignore[name-defined]  # noqa: F821
+def _make_chunk(doc_id: str, idx: int, text: str, source_path: str, *, language: str = "") -> ChunkRecord:  # type: ignore[name-defined]
     """Build a ``ChunkRecord`` for direct store injection."""
     from archon_search._types import ChunkRecord, normalize_iso_utc
 
@@ -39,7 +43,7 @@ def _make_chunk(doc_id: str, idx: int, text: str, source_path: str, *, language:
         text=text,
         vector=[0.0] * _EMBEDDING_DIM,
         source_path=source_path,
-        indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+        indexed_at=normalize_iso_utc(datetime.now(UTC)),
         language=language,
     )
 
@@ -199,7 +203,7 @@ def test_system_metadata_fields_always_present_regardless_of_include_metadata(
         "are always returned by the search endpoint.\n" * 4
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "test-system-fields"
         ingest_file_via_path(client, col, str(md_file), api_key=api_key)
 
@@ -282,7 +286,7 @@ def test_indexed_after_filter_excludes_older_docs(
     doc_b_path = tmp_path / "doc_b.md"
     doc_b_path.write_text("# Document Beta\n\nThis is the newer document.\n" * 4)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "test-indexed-after"
 
         # Ingest doc A
@@ -290,7 +294,7 @@ def test_indexed_after_filter_excludes_older_docs(
 
         # Record timestamp T (slightly in the future to ensure doc B will be strictly after)
         time.sleep(0.01)
-        timestamp_t = datetime.now(timezone.utc)
+        timestamp_t = datetime.now(UTC)
         time.sleep(0.01)
 
         # Ingest doc B
@@ -422,7 +426,7 @@ def test_full_rfc3339_datetime_indexed_bounds_are_accepted_and_applied(
             "/search", json=body, headers={"Authorization": f"Bearer {api_key}"}
         )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         for idx in range(3):
             ingest_file_via_path(
                 client, col, str(tmp_path / f"rfc3339_doc_{idx}.md"), api_key=api_key
@@ -461,7 +465,7 @@ def test_full_rfc3339_datetime_indexed_bounds_are_accepted_and_applied(
         # Second-level boundary around a real chunk timestamp: date granularity
         # alone would collapse both of these to the same day and fail one side.
         newest = max(
-            datetime.fromisoformat(item["indexed_at"].replace("Z", "+00:00"))
+            datetime.fromisoformat(item["indexed_at"])
             for item in baseline_items
         )
         before_newest = normalize_iso_utc(newest - timedelta(seconds=1))

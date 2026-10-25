@@ -11,8 +11,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from archon_search.config import GraphConfig, SearchConfig
-from archon_search.server.schemas import GraphCollectionStats, GraphStatusDetail, StatusResponse
-
+from archon_search.server.schemas import (
+    GraphCollectionStats,
+    GraphStatusDetail,
+    StatusResponse,
+)
 
 # ---------------------------------------------------------------------------
 # Unit tests — schemas

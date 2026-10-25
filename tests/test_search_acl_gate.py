@@ -1,11 +1,9 @@
 """Unit tests for AclGateSchema, acl_context on SearchRequest, and acl_gate on SearchResultSchema (g15 BE-5)."""
 from __future__ import annotations
 
-
 from archon_search._types import SearchResult
 from archon_search.server.routes_search import SearchRequest, SearchResultSchema
 from archon_search.server.schemas import AclGateSchema
-
 
 # ---------------------------------------------------------------------------
 # AclGateSchema field/type tests

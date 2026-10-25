@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 
-
 from archon_search.telemetry.entry import TelemetryEntry
 
 

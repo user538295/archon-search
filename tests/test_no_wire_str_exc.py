@@ -181,6 +181,10 @@ _SERVER = "archon_search/server"
 # (file, enclosing function, except clause type, ordinal) of one handler whose message is
 # curated, user-facing text.
 _ALLOWLIST: frozenset[tuple[str, str, str, int]] = frozenset({
+    # ForbiddenError carries one of the fixed authz details in ``archon_search.server.authz``; it never embeds caller data.
+    (f"{_SERVER}/authz.py", "require_admin_dependency", "ForbiddenError", 1),
+    (f"{_SERVER}/routes_keys.py", "create_key", "ForbiddenError", 1),
+    (f"{_SERVER}/routes_keys.py", "list_keys", "ForbiddenError", 1),
     # "No community representatives found for collection ..." — names the caller's collection.
     # search / explain each have a single-collection and a multi-collection handler.
     (f"{_SERVER}/mcp.py", "search", "GraphCommunitiesNotBuiltError", 1),
@@ -196,11 +200,16 @@ _ALLOWLIST: frozenset[tuple[str, str, str, int]] = frozenset({
     # Retryable store-lock timeout; the message carries only the timeout.
     (f"{_SERVER}/mcp.py", "ingest_file", "StoreBusyError", 1),
     (f"{_SERVER}/mcp.py", "ingest_directory", "StoreBusyError", 1),
+    # The MCP ingest tools' fixed text: COLLECTION_UNAVAILABLE_DETAIL (another namespace owns the collection) and
+    # the max_discovered_files message, which names no path.
+    (f"{_SERVER}/mcp.py", "ingest_file", "CollectionOwnershipError", 1),
+    (f"{_SERVER}/mcp.py", "ingest_directory", "CollectionOwnershipError", 1),
+    (f"{_SERVER}/mcp.py", "ingest_directory", "IngestTooManyFilesError", 1),
     (f"{_SERVER}/mcp.py", "delete_document", "StoreBusyError", 1),
     (f"{_SERVER}/mcp.py", "update_collection", "StoreBusyError", 1),
     # Embedding-model validation text written for the caller.
     (f"{_SERVER}/mcp.py", "update_collection", "ModelValidationError", 1),
-    (f"{_SERVER}/routes_collections.py", "add_collection", "ModelValidationError", 1),
+    (f"{_SERVER}/routes_collections.py", "_add_collection", "ModelValidationError", 1),
     (f"{_SERVER}/routes_collections.py", "patch_collection", "ModelValidationError", 1),
     # `unsupported model '<name>'; supported: ...` — the registry's own text (model_specs.UnsupportedModelError).
     ("archon_search/model_validation.py", "validate_embedding_model", "UnsupportedModelError", 1),
@@ -215,8 +224,20 @@ _ALLOWLIST: frozenset[tuple[str, str, str, int]] = frozenset({
     # Curated job errors: no pending REWRITE migration, no graph nodes, ingest path not found.
     (f"{_SERVER}/routes_collections.py", "_migration_task", "NoPendingRewriteMigrationError", 1),
     (f"{_SERVER}/routes_graph.py", "_community_rebuild_task", "NoGraphNodesError", 1),
-    (f"{_SERVER}/routes_jobs.py", "_default_ingest_task", "IngestPathNotFoundError", 1),
-    (f"{_SERVER}/routes_jobs.py", "_default_ingest_task_with_lock", "IngestPathNotFoundError", 1),
+    # An ingest job's error: the caller's own missing path, the fixed COLLECTION_UNAVAILABLE_DETAIL (another namespace
+    # owns the collection) and the fixed max_discovered_files text; none embeds a server path or the owner.
+    (
+        f"{_SERVER}/routes_jobs.py",
+        "_default_ingest_task",
+        "(IngestPathNotFoundError, CollectionOwnershipError, IngestTooManyFilesError)",
+        1,
+    ),
+    (
+        f"{_SERVER}/routes_jobs.py",
+        "_default_ingest_task_with_lock",
+        "(IngestPathNotFoundError, CollectionOwnershipError, IngestTooManyFilesError)",
+        1,
+    ),
     # Archive rejection text / PathUnsafeError reason code archon-search built itself.
     (f"{_SERVER}/routes_export.py", "_import_task", "(ArchiveRejectedError, PathUnsafeError)", 1),
     # TelemetryReader.resolve_dates' date-range text, about the caller's since/until.

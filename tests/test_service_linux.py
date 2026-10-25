@@ -57,18 +57,16 @@ def test_start_raises_on_failure() -> None:
     """start() raises RuntimeError when systemctl returns non-zero."""
     from archon_search.platform.linux import SystemdSearchService
     svc = SystemdSearchService()
-    with patch.object(svc, "_run", return_value=_fail("start error")):
-        with pytest.raises(RuntimeError, match="systemctl start failed"):
-            svc.start()
+    with patch.object(svc, "_run", return_value=_fail("start error")), pytest.raises(RuntimeError, match="systemctl start failed"):
+        svc.start()
 
 
 def test_start_raises_when_systemctl_not_found() -> None:
     """start() raises RuntimeError when systemctl binary is absent."""
     from archon_search.platform.linux import SystemdSearchService
     svc = SystemdSearchService()
-    with patch.object(svc, "_run", side_effect=FileNotFoundError):
-        with pytest.raises(RuntimeError, match="systemctl binary not found"):
-            svc.start()
+    with patch.object(svc, "_run", side_effect=FileNotFoundError), pytest.raises(RuntimeError, match="systemctl binary not found"):
+        svc.start()
 
 
 # ── stop ───────────────────────────────────────────────────────────────────────
@@ -143,18 +141,16 @@ def test_stop_raises_on_failure() -> None:
     """stop() raises RuntimeError when systemctl returns non-zero."""
     from archon_search.platform.linux import SystemdSearchService
     svc = SystemdSearchService()
-    with patch.object(svc, "_run", return_value=_fail("stop error")):
-        with pytest.raises(RuntimeError, match="systemctl stop failed"):
-            svc.stop()
+    with patch.object(svc, "_run", return_value=_fail("stop error")), pytest.raises(RuntimeError, match="systemctl stop failed"):
+        svc.stop()
 
 
 def test_stop_raises_when_systemctl_not_found() -> None:
     """stop() raises RuntimeError when systemctl binary is absent."""
     from archon_search.platform.linux import SystemdSearchService
     svc = SystemdSearchService()
-    with patch.object(svc, "_run", side_effect=FileNotFoundError):
-        with pytest.raises(RuntimeError, match="systemctl binary not found"):
-            svc.stop()
+    with patch.object(svc, "_run", side_effect=FileNotFoundError), pytest.raises(RuntimeError, match="systemctl binary not found"):
+        svc.stop()
 
 
 # ── status ─────────────────────────────────────────────────────────────────────
@@ -331,18 +327,16 @@ def test_restart_raises_on_failure() -> None:
     """restart() raises RuntimeError when systemctl returns non-zero."""
     from archon_search.platform.linux import SystemdSearchService
     svc = SystemdSearchService()
-    with patch.object(svc, "_run", return_value=_fail("restart error")):
-        with pytest.raises(RuntimeError, match="systemctl restart failed"):
-            svc.restart()
+    with patch.object(svc, "_run", return_value=_fail("restart error")), pytest.raises(RuntimeError, match="systemctl restart failed"):
+        svc.restart()
 
 
 def test_restart_raises_when_systemctl_not_found() -> None:
     """restart() raises RuntimeError when systemctl binary is absent."""
     from archon_search.platform.linux import SystemdSearchService
     svc = SystemdSearchService()
-    with patch.object(svc, "_run", side_effect=FileNotFoundError):
-        with pytest.raises(RuntimeError, match="systemctl binary not found"):
-            svc.restart()
+    with patch.object(svc, "_run", side_effect=FileNotFoundError), pytest.raises(RuntimeError, match="systemctl binary not found"):
+        svc.restart()
 
 
 # ── register rollback ──────────────────────────────────────────────────────────
@@ -362,10 +356,9 @@ def test_register_raises_and_cleans_up_on_enable_failure(tmp_path: Path) -> None
 
     with (
         patch.object(type(svc), "_unit_path", property(lambda self: unit)),
-        patch.object(svc, "_run", side_effect=mock_run),
+        patch.object(svc, "_run", side_effect=mock_run),pytest.raises(RuntimeError)
     ):
-        with pytest.raises(RuntimeError):
-            svc.register(config_path=_CONFIG_PATH)
+        svc.register(config_path=_CONFIG_PATH)
 
     assert not unit.exists(), "unit file should have been deleted on rollback"
     daemon_reload_calls = [c for c in calls if "daemon-reload" in c]

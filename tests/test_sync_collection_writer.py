@@ -19,7 +19,11 @@ import pytest
 
 from archon_search._types import CollectionInfo, IngestResult
 from archon_search.constants import DEFAULT_NAMESPACE
-from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+from archon_search.progress import (
+    CollectionProgress,
+    IndexingStateStore,
+    IndexingStatus,
+)
 from archon_search.store import SearchStore
 from archon_search.sync import SearchCollectionSync, collection_sync_failed_detail
 
@@ -242,7 +246,7 @@ async def test_the_drop_runs_under_the_collection_lock_like_delete_does(tmp_path
 
     async def drop(name: str, **kwargs: Any) -> None:
         lock_held_during_drop.append(store.lock_for(name).locked())
-        assert kwargs == {"_locked_by_caller": True}
+        assert kwargs == {"namespace": "default", "_locked_by_caller": True}
 
     store.drop_collection.side_effect = drop
 

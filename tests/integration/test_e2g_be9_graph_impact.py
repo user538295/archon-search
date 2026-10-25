@@ -33,8 +33,8 @@ from archon_search.graph_types import (
     make_stable_edge_id,
     make_stable_entity_id,
 )
-from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -187,7 +187,7 @@ def test_graphImpactRoute_guardsGraphDisabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GET /graph/{collection}/impact/{symbol} → 422 when graph.enabled=false."""
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, _cfg, api_key):
         response = client.get("/graph/any-collection/impact/foo", headers=_auth(api_key))
 
         assert response.status_code == 422, (
@@ -203,7 +203,7 @@ def test_graphImpactMcpTool_returnsErrorResponse_whenGraphDisabled(
     graph.enabled=false."""
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=False, mcp_enabled=True
-    ) as (client, cfg, api_key):
+    ) as (client, _cfg, api_key):
         session_id = _mcp_initialize(client, api_key)
 
         result = _mcp_tool_call(
@@ -397,17 +397,19 @@ def test_graphImpactRoute_omittedDepthDirection_appliesDefaults(
     captured_calls: list[dict] = []
     original_compute_impact = GraphStore.compute_impact
 
-    async def _spy_compute_impact(self, collection, symbol, depth, direction, extraction_method_filter, file_path, ns):
+    async def _spy_compute_impact(
+        self, collection, symbol, depth, direction, extraction_method_filter, file_path, ns, visibility=None
+    ):
         captured_calls.append({"depth": depth, "direction": direction})
         return await original_compute_impact(
-            self, collection, symbol, depth, direction, extraction_method_filter, file_path, ns
+            self, collection, symbol, depth, direction, extraction_method_filter, file_path, ns, visibility
         )
 
     monkeypatch.setattr(GraphStore, "compute_impact", _spy_compute_impact)
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True
-    ) as (client, cfg, api_key):
+    ) as (client, _cfg, api_key):
         doc_file = tmp_path / "doc-defaults.txt"
         doc_file.write_text("defaults test content", encoding="utf-8")
         ingest_file_via_path(client, "defaults-col", str(doc_file), api_key=api_key)
@@ -444,7 +446,7 @@ def test_graphImpactRoute_invalidDirection_returns422(
     """REST returns 422 with an 'invalid direction' message for an unrecognized direction."""
     install_graph_engine_stub(monkeypatch, empty=True)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc_file = tmp_path / "doc-baddir.txt"
         doc_file.write_text("bad direction content", encoding="utf-8")
         ingest_file_via_path(client, "baddir-col", str(doc_file), api_key=api_key)
@@ -467,7 +469,7 @@ def test_graphImpactMcpTool_invalidDirection_returnsValidationError(
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True
-    ) as (client, cfg, api_key):
+    ) as (client, _cfg, api_key):
         doc_file = tmp_path / "doc-baddir-mcp.txt"
         doc_file.write_text("bad direction content", encoding="utf-8")
         ingest_file_via_path(client, "baddir-mcp-col", str(doc_file), api_key=api_key)
@@ -492,7 +494,7 @@ def test_graphImpactRoute_collectionNotFound_returns404(
     """REST returns 404 with detail 'collection not found' for a nonexistent collection."""
     install_graph_engine_stub(monkeypatch, empty=True)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         response = client.get(
             "/graph/does-not-exist-col/impact/foo", headers=_auth(api_key)
         )
@@ -511,7 +513,7 @@ def test_graphImpactMcpTool_collectionNotFound_returnsNotFound(
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True
-    ) as (client, cfg, api_key):
+    ) as (client, _cfg, api_key):
         session_id = _mcp_initialize(client, api_key)
         result = _mcp_tool_call(
             client, api_key, session_id, "graph_impact",
@@ -532,7 +534,7 @@ def test_graphImpactRoute_depthZero_returns422(
     """REST returns 422 for depth=0 rather than silently returning an empty 200."""
     install_graph_engine_stub(monkeypatch, empty=True)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc_file = tmp_path / "doc-depth0.txt"
         doc_file.write_text("depth zero content", encoding="utf-8")
         ingest_file_via_path(client, "depth0-col", str(doc_file), api_key=api_key)
@@ -554,7 +556,7 @@ def test_graphImpactMcpTool_depthZero_returnsValidationError(
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True
-    ) as (client, cfg, api_key):
+    ) as (client, _cfg, api_key):
         doc_file = tmp_path / "doc-depth0-mcp.txt"
         doc_file.write_text("depth zero content", encoding="utf-8")
         ingest_file_via_path(client, "depth0-mcp-col", str(doc_file), api_key=api_key)

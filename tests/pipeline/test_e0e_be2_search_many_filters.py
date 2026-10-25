@@ -21,7 +21,6 @@ from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
 
 from .conftest import make_embedder, make_reranker
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -12,12 +12,13 @@ Run with:
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -49,7 +50,7 @@ async def _seed_graph_with_typed_nodes(
     Also creates a minimal chunk record so collection is visible.
     """
     import hashlib
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from archon_search._types import ChunkRecord, normalize_iso_utc
     from archon_search.collection_meta import CollectionMeta
@@ -74,7 +75,7 @@ async def _seed_graph_with_typed_nodes(
                 text="Kubernetes is managed by Alice",
                 vector=[0.0] * _STUB_EMBEDDING_DIM,
                 source_path=f"/fake/{collection}.txt",
-                indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+                indexed_at=normalize_iso_utc(datetime.now(UTC)),
             )
         ]
         await store.ingest_chunks(collection, chunks)

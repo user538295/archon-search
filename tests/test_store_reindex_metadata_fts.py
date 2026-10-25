@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -16,7 +16,6 @@ import pytest
 
 from archon_search._types import ChunkRecord
 from archon_search.store import SearchStore
-
 
 _DIM = 4
 
@@ -33,7 +32,7 @@ def _chunk(source_path: str, text: str = "hello world for fts test") -> ChunkRec
         text=text,
         vector=[0.1] * _DIM,
         source_path=source_path,
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
         ingested_by="cli",
     )
 

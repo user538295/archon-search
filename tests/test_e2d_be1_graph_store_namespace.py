@@ -17,7 +17,6 @@ from archon_search.constants import _validate_namespace
 from archon_search.graph_store import GraphStore
 from archon_search.graph_types import EntityType, GraphNode, make_stable_entity_id
 
-
 # ---------------------------------------------------------------------------
 # Unit: table name format
 # ---------------------------------------------------------------------------

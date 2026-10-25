@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-
 # ---------------------------------------------------------------------------
 # Unit tests
 # ---------------------------------------------------------------------------
@@ -402,12 +401,13 @@ def test_cli_key_rotate_integration(tmp_path, monkeypatch):
     - A second rotation is authenticated with that new token.
     - The first new token (revoked by the second rotation) returns 401.
     """
-    from archon_search.key_manager import ENV_VAR as _ENV_VAR
+    from fastapi.testclient import TestClient
+
     from archon_search.config import SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
+    from archon_search.key_manager import ENV_VAR as _ENV_VAR
     from archon_search.server.app import create_app
-    from fastapi.testclient import TestClient
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv(_ENV_VAR, raising=False)
@@ -428,9 +428,9 @@ def test_cli_key_rotate_integration(tmp_path, monkeypatch):
 
         runner = CliRunner()
 
-        def _make_fake_post(test_client):  # noqa: ANN001, ANN202
+        def _make_fake_post(test_client):
             """Return a callable that forwards httpx POST calls to test_client."""
-            def _fake_post(url, **kwargs):  # noqa: ANN001, ANN202
+            def _fake_post(url, **kwargs):
                 path = url.replace("http://localhost:8765", "")
                 headers = kwargs.get("headers", {})
                 json_body = kwargs.get("json", {})

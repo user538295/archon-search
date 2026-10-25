@@ -560,6 +560,7 @@ def test_e2e_eval_gate_synonym_bridge_and_negative_control() -> None:
             text=True,
             timeout=300,
             env=child_env,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         pytest.fail(

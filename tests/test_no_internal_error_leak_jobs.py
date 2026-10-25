@@ -24,7 +24,10 @@ import pytest
 from archon_search._path_safety import validate_ingest_path
 from archon_search._types import CollectionInfo
 from archon_search.config import GraphConfig, MaintenanceConfig, SearchConfig
-from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderNotReadyError
+from archon_search.embedder_cache import (
+    EMBEDDER_NOT_READY_DETAIL,
+    EmbedderNotReadyError,
+)
 from archon_search.jobs.maintenance_loop import (
     EXPIRED_CHUNK_PRUNING_FAILED_DETAIL,
     FTS_OPTIMIZE_FAILED_DETAIL,
@@ -41,7 +44,10 @@ from archon_search.server.routes_collections import (
     _migration_task,
     _reindex_metadata_task,
 )
-from archon_search.server.routes_graph import COMMUNITY_REBUILD_FAILED_DETAIL, _community_rebuild_task
+from archon_search.server.routes_graph import (
+    COMMUNITY_REBUILD_FAILED_DETAIL,
+    _community_rebuild_task,
+)
 from archon_search.server.routes_jobs import (
     INGEST_FAILED_DETAIL,
     INGEST_PATH_NOT_FOUND_PREFIX,
@@ -52,7 +58,12 @@ from archon_search.server.routes_jobs import (
     _reindex_task,
 )
 from archon_search.types import JobStatus, MigrationKind, MigrationSpec
-from tests._internal_error_leak import LANCE_MSG, LEAK_NEEDLE, ONNX_MSG, assert_logged_with_traceback
+from tests._internal_error_leak import (
+    LANCE_MSG,
+    LEAK_NEEDLE,
+    ONNX_MSG,
+    assert_logged_with_traceback,
+)
 from tests._maintenance_status_client import make_status_client
 
 _COLLECTION = "col"

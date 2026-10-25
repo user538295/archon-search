@@ -61,11 +61,15 @@ def test_readme_default_port_matches_config(
         f"README must reference the actual default host/port {default_host}:{default_port}"
     )
 
-    serve_host = load_config(tmp_path / "nonexistent.toml", serve=True).host
-    assert serve_host == "0.0.0.0"
-    assert f"{serve_host}:{default_port}" in readme, (
-        f"README Quick Start must reference the real `serve` bind address {serve_host}:{default_port}"
-    )
+    native_serve_host = load_config(tmp_path / "nonexistent.toml", serve=True).host
+    assert native_serve_host == default_host
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    container_serve_host = load_config(tmp_path / "nonexistent.toml", serve=True).host
+    assert container_serve_host == "0.0.0.0"
+    for serve_host in (native_serve_host, container_serve_host):
+        assert f"{serve_host}:{default_port}" in readme, (
+            f"README Quick Start must reference the real `serve` bind address {serve_host}:{default_port}"
+        )
 
 
 def test_readme_documents_auth_exempt_paths() -> None:

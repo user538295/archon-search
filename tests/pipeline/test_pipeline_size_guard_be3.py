@@ -259,7 +259,7 @@ async def test_pipeline_guard_directory_batch_continues(tmp_path, monkeypatch):
     """S10 — ingest_directory with mixed sizes: oversized file errors, under-limit file succeeds."""
     import hashlib
 
-    store, pipeline = await _make_real_pipeline_with_limit(tmp_path, monkeypatch, max_file_mb=1)
+    _store, pipeline = await _make_real_pipeline_with_limit(tmp_path, monkeypatch, max_file_mb=1)
 
     corpus = tmp_path / "corpus"
     corpus.mkdir()
@@ -296,7 +296,7 @@ async def test_pipeline_guard_directory_batch_continues(tmp_path, monkeypatch):
 @pytest.mark.integration
 async def test_pipeline_guard_watcher_path_continues(tmp_path, monkeypatch):
     """S11 — watcher path: pipeline.ingest_file() with oversized file returns error, no exception."""
-    store, pipeline = await _make_real_pipeline_with_limit(tmp_path, monkeypatch, max_file_mb=1)
+    _store, pipeline = await _make_real_pipeline_with_limit(tmp_path, monkeypatch, max_file_mb=1)
 
     oversized = tmp_path / "big_watcher.md"
     oversized.write_bytes(b"x")

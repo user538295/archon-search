@@ -1,8 +1,6 @@
 """Tests for Pydantic schema structure (Tasks 6.x)."""
 from __future__ import annotations
 
-
-
 # ---------------------------------------------------------------------------
 # Task 6.4 — SearchResponse.embedding_model field
 # ---------------------------------------------------------------------------

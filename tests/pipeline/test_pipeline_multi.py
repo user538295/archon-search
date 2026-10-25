@@ -104,7 +104,7 @@ def _search_many_pipeline(
 async def test_search_many_embeds_once() -> None:
     cols = ["A", "B", "C"]
     leg_map = {c: [_scored(c, "d" * 64, f"{'d' * 64}-000000")] for c in cols}
-    pipeline, store, embedder, reranker = _search_many_pipeline(
+    pipeline, _store, embedder, _reranker = _search_many_pipeline(
         leg_map=leg_map, meta_list=[_meta(c) for c in cols]
     )
     await pipeline.search_many("q", cols)
@@ -118,7 +118,7 @@ async def test_search_many_reranks_once() -> None:
         "A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")],
         "B": [_scored("B", "b" * 64, f"{'b' * 64}-000000")],
     }
-    pipeline, store, embedder, reranker = _search_many_pipeline(
+    pipeline, _store, _embedder, reranker = _search_many_pipeline(
         leg_map=leg_map, meta_list=[_meta("A"), _meta("B")]
     )
     spy = AsyncMock(side_effect=reranker.rerank_candidates)
@@ -296,7 +296,7 @@ async def test_same_chunk_id_in_two_collections_both_survive() -> None:
         "A": [_scored("A", "a" * 64, shared_chunk)],
         "B": [_scored("B", "a" * 64, shared_chunk)],
     }
-    pipeline, store, embedder, reranker = _search_many_pipeline(
+    pipeline, _store, _embedder, reranker = _search_many_pipeline(
         leg_map=leg_map, meta_list=[_meta("A"), _meta("B")]
     )
     spy = AsyncMock(side_effect=reranker.rerank_candidates)
@@ -406,7 +406,7 @@ async def test_search_many_uses_provided_query_vector() -> None:
     """search_many() uses caller-provided query_vector; _global_embedder.embed_one must NOT be called."""
     cols = ["A"]
     leg_map = {c: [_scored(c, "d" * 64, f"{'d' * 64}-000000")] for c in cols}
-    pipeline, store, embedder, reranker = _search_many_pipeline(
+    pipeline, store, embedder, _reranker = _search_many_pipeline(
         leg_map=leg_map, meta_list=[_meta(c) for c in cols]
     )
 
@@ -427,7 +427,7 @@ async def test_search_many_embeds_when_no_query_vector() -> None:
     """search_many() calls _global_embedder.embed_one when query_vector is None (pre-C4 behaviour)."""
     cols = ["A"]
     leg_map = {c: [_scored(c, "d" * 64, f"{'d' * 64}-000000")] for c in cols}
-    pipeline, store, embedder, reranker = _search_many_pipeline(
+    pipeline, _store, embedder, _reranker = _search_many_pipeline(
         leg_map=leg_map, meta_list=[_meta(c) for c in cols]
     )
 
@@ -484,7 +484,7 @@ async def test_explain_multi_collection_no_embedding_model_attribute_error() -> 
 # _fuse_rag_fusion_results — Task 2.1 (C5 RAG Fusion)
 # ---------------------------------------------------------------------------
 
-def _make_candidate(chunk_id: str, doc_id: str = "doc-x") -> "ScoredSearchCandidate":
+def _make_candidate(chunk_id: str, doc_id: str = "doc-x") -> ScoredSearchCandidate:
     """Build a minimal ScoredSearchCandidate for fusion tests."""
     from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
     return ScoredSearchCandidate(
@@ -1507,7 +1507,7 @@ async def test_search_many_rag_fusion_generates_once() -> None:
         "A": [_rag_scored("A", "a" * 64, f"{'a' * 64}-000000")],
         "B": [_rag_scored("B", "b" * 64, f"{'b' * 64}-000000")],
     }
-    pipeline, store, embedder, reranker = _make_rag_fusion_search_many_pipeline(
+    pipeline, store, _embedder, _reranker = _make_rag_fusion_search_many_pipeline(
         leg_map=leg_map,
         meta_list=[_meta("A"), _meta("B")],
     )
@@ -1549,7 +1549,7 @@ async def test_search_many_rag_fusion_false_unchanged() -> None:
     leg_map = {
         "A": [_rag_scored("A", "a" * 64, f"{'a' * 64}-000000")],
     }
-    pipeline, store, embedder, reranker = _make_rag_fusion_search_many_pipeline(
+    pipeline, store, _embedder, _reranker = _make_rag_fusion_search_many_pipeline(
         leg_map=leg_map,
         meta_list=[_meta("A")],
     )
@@ -1589,7 +1589,7 @@ async def test_search_many_rag_fusion_mixed_collection_types() -> None:
         "Fts1": [_rag_scored("Fts1", "f1" * 32, f"{'f1' * 32}-000000")],
     }
     has_vi_map = {"Vec1": True, "Vec2": True, "Fts1": False}
-    pipeline, store, embedder, reranker = _make_rag_fusion_search_many_pipeline(
+    pipeline, store, _embedder, _reranker = _make_rag_fusion_search_many_pipeline(
         leg_map=leg_map,
         meta_list=[_meta("Vec1"), _meta("Vec2"), _meta("Fts1")],
         has_vector_index_map=has_vi_map,
@@ -1623,7 +1623,7 @@ async def test_search_many_rag_fusion_embedding_fallback_sets_attempted() -> Non
     from archon_search.config import RAGFusionConfig
 
     leg_map = {"A": [_rag_scored("A", "a" * 64, f"{'a' * 64}-000000")]}
-    pipeline, store, embedder, reranker = _make_rag_fusion_search_many_pipeline(
+    pipeline, _store, embedder, _reranker = _make_rag_fusion_search_many_pipeline(
         leg_map=leg_map,
         meta_list=[_meta("A")],
     )
@@ -1819,7 +1819,7 @@ async def test_explain_rag_fusion_failure_sets_attempted_and_reason() -> None:
     # Generator raises TimeoutError internally (the RAGFusionGenerator catches it and returns []
     # in real use, but here we simulate a scenario where the exception propagates from the generator)
     mock_generator = MagicMock()
-    mock_generator.generate_variants = AsyncMock(side_effect=asyncio.TimeoutError())
+    mock_generator.generate_variants = AsyncMock(side_effect=TimeoutError())
 
     rag_config = RAGFusionConfig(enabled=True, num_queries=2)
 

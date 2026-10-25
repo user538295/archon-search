@@ -10,7 +10,6 @@ from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.pipeline import SearchPipelineResult
 from archon_search.server.app import _check_multilingual_deps
 
-
 # ---------------------------------------------------------------------------
 # _check_multilingual_deps
 # ---------------------------------------------------------------------------
@@ -38,9 +37,11 @@ class TestCheckMultilingualDeps:
         model_path.touch()
 
         # Simulate fasttext not installed by making import raise ImportError
-        with patch("archon_search.server.app._import_fasttext", side_effect=ImportError("no module named fasttext")):
-            with pytest.raises(RuntimeError) as exc_info:
-                _check_multilingual_deps(cfg)
+        with (
+            patch("archon_search.server.app._import_fasttext", side_effect=ImportError("no module named fasttext")),
+            pytest.raises(RuntimeError) as exc_info,
+        ):
+            _check_multilingual_deps(cfg)
         assert "fasttext-wheel" in str(exc_info.value)
 
     @pytest.mark.parametrize(
@@ -50,9 +51,11 @@ class TestCheckMultilingualDeps:
     def test_package_missing_names_the_install_command(self, request, prefix_fixture, command):
         """The remedy is the install command for the running install method (uv tool vs pip)."""
         request.getfixturevalue(prefix_fixture)
-        with patch("archon_search.server.app._import_fasttext", side_effect=ImportError("no fasttext")):
-            with pytest.raises(RuntimeError) as exc_info:
-                _check_multilingual_deps(_make_config(multilingual=True))
+        with (
+            patch("archon_search.server.app._import_fasttext", side_effect=ImportError("no fasttext")),
+            pytest.raises(RuntimeError) as exc_info,
+        ):
+            _check_multilingual_deps(_make_config(multilingual=True))
         assert str(exc_info.value) == (
             f"multilingual=true but fasttext-wheel is not installed; run: {command} 'archon-search[multilingual]'"
         )
@@ -63,13 +66,15 @@ class TestCheckMultilingualDeps:
 
         mock_fasttext = MagicMock()
         missing_path = tmp_path / "missing" / "lid.176.ftz"
-        with patch("archon_search.server.app._import_fasttext", return_value=mock_fasttext):
-            with patch(
+        with (
+            patch("archon_search.server.app._import_fasttext", return_value=mock_fasttext),
+            patch(
                 "archon_search.server.app._multilingual_model_path",
                 return_value=missing_path,
-            ):
-                with pytest.raises(RuntimeError) as exc_info:
-                    _check_multilingual_deps(cfg)
+            ),
+            pytest.raises(RuntimeError) as exc_info,
+        ):
+            _check_multilingual_deps(cfg)
         assert "lid.176.ftz" in str(exc_info.value)
 
     def test_check_multilingual_deps_all_present(self, tmp_path):
@@ -80,12 +85,14 @@ class TestCheckMultilingualDeps:
         model_path.touch()
 
         mock_fasttext = MagicMock()
-        with patch("archon_search.server.app._import_fasttext", return_value=mock_fasttext):
-            with patch(
+        with (
+            patch("archon_search.server.app._import_fasttext", return_value=mock_fasttext),
+            patch(
                 "archon_search.server.app._multilingual_model_path",
                 return_value=model_path,
-            ):
-                _check_multilingual_deps(cfg)  # no exception
+            ),
+        ):
+            _check_multilingual_deps(cfg)  # no exception
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +104,8 @@ class TestCreateAppLanguageDetectorWiring:
     def test_create_app_wires_language_detector_when_multilingual(self, tmp_path):
         """create_app() passes a LanguageDetector to SearchPipeline when multilingual=True."""
         from archon_search.jobs import JobStore
-        from archon_search.server.app import create_app
         from archon_search.language_detector import LanguageDetector
+        from archon_search.server.app import create_app
 
         cfg = SearchConfig()
         cfg.multilingual = True
@@ -124,8 +131,8 @@ class TestCreateAppLanguageDetectorWiring:
     def test_create_app_no_language_detector_when_not_multilingual(self, tmp_path):
         """create_app() does NOT pass a LanguageDetector to SearchPipeline when multilingual=False."""
         from archon_search.jobs import JobStore
-        from archon_search.server.app import create_app
         from archon_search.language_detector import LanguageDetector
+        from archon_search.server.app import create_app
 
         cfg = SearchConfig()
         cfg.multilingual = False

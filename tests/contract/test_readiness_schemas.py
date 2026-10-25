@@ -72,7 +72,11 @@ def test_readiness_response_ready_not_gated_on_models_fail() -> None:
 
 
 def test_readiness_response_ok_shape() -> None:
-    from archon_search.server.schemas import CheckStatus, ReadinessChecks, ReadinessResponse
+    from archon_search.server.schemas import (
+        CheckStatus,
+        ReadinessChecks,
+        ReadinessResponse,
+    )
 
     # models=OK and sync=OK are explicit: ready=True with either check "pending"
     # is unreachable from routes_ready.ready (ready_flag is gated on neither
@@ -91,7 +95,11 @@ def test_readiness_response_ok_shape() -> None:
 
 
 def test_readiness_response_fail_shape() -> None:
-    from archon_search.server.schemas import CheckStatus, ReadinessChecks, ReadinessResponse
+    from archon_search.server.schemas import (
+        CheckStatus,
+        ReadinessChecks,
+        ReadinessResponse,
+    )
 
     obj = ReadinessResponse(ready=False, checks=ReadinessChecks(storage=CheckStatus.FAIL))
     assert obj.model_dump() == {
@@ -165,7 +173,11 @@ def test_status_response_readiness_defaults_to_none() -> None:
 
 
 def test_readiness_response_ok_snapshot() -> None:
-    from archon_search.server.schemas import CheckStatus, ReadinessChecks, ReadinessResponse
+    from archon_search.server.schemas import (
+        CheckStatus,
+        ReadinessChecks,
+        ReadinessResponse,
+    )
 
     # models=OK and sync=OK are explicit: ready=True with either check "pending"
     # is unreachable from routes_ready.ready (ready_flag is gated on neither
@@ -187,7 +199,11 @@ def test_readiness_response_ok_snapshot() -> None:
 
 
 def test_readiness_response_fail_snapshot() -> None:
-    from archon_search.server.schemas import CheckStatus, ReadinessChecks, ReadinessResponse
+    from archon_search.server.schemas import (
+        CheckStatus,
+        ReadinessChecks,
+        ReadinessResponse,
+    )
 
     obj = ReadinessResponse(ready=False, checks=ReadinessChecks(storage=CheckStatus.FAIL))
     assert json.dumps(obj.model_dump(mode="json"), sort_keys=True) == (

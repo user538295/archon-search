@@ -49,6 +49,7 @@ deterministic and weight-free; the ratio, not the absolute number, is the point.
 """
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -71,6 +72,9 @@ _INGEST_WAIT_TIMEOUT_SECONDS = 30.0
 
 #: Ceiling for waiting out the backgrounded startup warm-up before step 1.
 _WARMUP_SETTLE_TIMEOUT_SECONDS = 30.0
+
+#: ``/health`` polls after the failure is raised, so it can travel out of the worker thread.
+_FAILURE_PROPAGATION_POLLS = 5
 
 #: The eight fields the documented ``SearchResponse`` result carries
 #: (``Documentation/Architecture/600_api_reference_or_public_interface.md``).
@@ -106,16 +110,19 @@ class _TransientCrossEncoderFailure(RuntimeError):
     """Stands in for an HF 429 / network blip / unwritable cache during the build."""
 
 
-def _settle_startup_warmup(client) -> None:
-    """Drive the event loop until the background startup warm-up has run.
+def _settle_startup_warmup(client, failure_raised: threading.Event) -> None:
+    """Drive the event loop until the background startup warm-up has failed (or warmed).
 
     ``TestClient`` only advances the app's loop while a request is in flight, so
-    the cheap ``/health`` poll is what lets the warm-up task reach the reranker.
+    the cheap ``/health`` poll is what lets the warm-up task reach the reranker and
+    then lets its failure propagate out of the worker thread.
     """
     reranker = client.app.state.pipeline._reranker
     deadline = time.monotonic() + _WARMUP_SETTLE_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-        if reranker._warmup_failed or reranker.is_warm:
+        if failure_raised.is_set() or reranker.is_warm:
+            for _ in range(_FAILURE_PROPAGATION_POLLS):
+                client.get("/health")
             return
         client.get("/health")
         time.sleep(0.05)
@@ -156,7 +163,7 @@ def test_s283_search_answers_with_documented_fields_after_failed_warmup(tmp_path
 
     # Before the app starts: the startup warm-up must be the call that fails, so
     # the latch is already set when the round trip begins.
-    install_cold_reranker_build(
+    failure_raised = install_cold_reranker_build(
         monkeypatch,
         _COLD_CROSS_ENCODER_LOAD_SECONDS,
         transient_failure=_TransientCrossEncoderFailure("cross-encoder download failed (transient)"),
@@ -165,9 +172,9 @@ def test_s283_search_answers_with_documented_fields_after_failed_warmup(tmp_path
     with make_real_app(data_dir, monkeypatch, toml_content=_TOML) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
-        _settle_startup_warmup(client)
+        _settle_startup_warmup(client, failure_raised)
         reranker = client.app.state.pipeline._reranker
-        assert reranker._warmup_failed, "startup warm-up was expected to fail transiently"
+        assert failure_raised.is_set(), "startup warm-up was expected to fail transiently"
         assert not reranker.is_warm, "the cross-encoder must still be cold after that failure"
 
         # --- Step 1: collection add <tmpdir> --wait ---
@@ -202,8 +209,8 @@ def test_s283_search_answers_with_documented_fields_after_failed_warmup(tmp_path
 
         assert elapsed < _CLIENT_SEARCH_TIMEOUT_SECONDS, (
             f"first POST /search took {elapsed:.1f}s after `collection add --wait` reported the "
-            f"ingest complete — Reranker._warmup_failed (reranker.py:85) was latched by a "
-            f"transient startup failure, so both the S281 ingest gate (_job_warmup.await_models_warm) and "
+            f"ingest complete — a transient startup warm-up failure was latched, so both the "
+            f"S281 ingest gate (_job_warmup.await_models_warm) and "
             f"the search route's own pre-pay (routes_search.search) silently no-opped and the "
             f"cold cross-encoder build ran inside the request. A real client times out and "
             f"records status=0 body=None (S283). One transient warm-up failure must not disarm "

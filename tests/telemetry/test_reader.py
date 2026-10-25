@@ -234,9 +234,8 @@ def test_read_entries_skips_oserror_file(
             raise PermissionError("permission denied")
         return real_open(self, *args, **kwargs)
 
-    with patch.object(Path, "open", patched_open):
-        with patch.object(reader, "files_in_range", return_value=[good_file, bad_file]):
-            entries, skipped = reader.read_entries(date(2026, 5, 13), date(2026, 5, 14))
+    with patch.object(Path, "open", patched_open), patch.object(reader, "files_in_range", return_value=[good_file, bad_file]):
+        entries, _skipped = reader.read_entries(date(2026, 5, 13), date(2026, 5, 14))
 
     assert len(entries) == 1
     assert entries[0].query_id == "q1"

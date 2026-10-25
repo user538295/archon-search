@@ -8,8 +8,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.watcher import CollectionWatcher, _DebounceHandler, _log_future_exception
-
+from archon_search.watcher import (
+    CollectionWatcher,
+    _DebounceHandler,
+    _log_future_exception,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -44,7 +47,7 @@ class TestDebounceHandler:
     def test_debounce_handler_schedules_callback(self):
         """on_any_event with a file event starts a timer; firing it submits the coroutine."""
         loop = asyncio.new_event_loop()
-        cb, calls = _make_async_callback()
+        cb, _calls = _make_async_callback()
         # Use a long debounce so the timer doesn't auto-fire during the test
         handler = _DebounceHandler(cb, loop, "mycol", debounce_seconds=60.0)
 
@@ -171,9 +174,11 @@ class TestDebounceHandler:
         cb, _ = _make_async_callback()
         handler = _DebounceHandler(cb, loop, "mycol", debounce_seconds=0.0)
 
-        with patch("asyncio.run_coroutine_threadsafe", side_effect=RuntimeError("Event loop is closed")):
-            with caplog.at_level(logging.WARNING, logger="archon"):
-                handler._fire()  # must not raise
+        with (
+            patch("asyncio.run_coroutine_threadsafe", side_effect=RuntimeError("Event loop is closed")),
+            caplog.at_level(logging.WARNING, logger="archon"),
+        ):
+            handler._fire()  # must not raise
 
         assert "Event loop closed" in caplog.text or "loop" in caplog.text.lower()
         loop.close()
@@ -188,9 +193,8 @@ class TestDebounceHandler:
         mock_timer = MagicMock()
         handler._timer = mock_timer
 
-        with patch("asyncio.run_coroutine_threadsafe", side_effect=ValueError("unexpected")):
-            with pytest.raises(ValueError, match="unexpected"):
-                handler._fire()
+        with patch("asyncio.run_coroutine_threadsafe", side_effect=ValueError("unexpected")), pytest.raises(ValueError, match="unexpected"):
+            handler._fire()
 
         # _timer must be None regardless of whether the exception was RuntimeError or not
         assert handler._timer is None
@@ -216,9 +220,8 @@ class TestDebounceHandler:
 
         handler._async_callback = capturing_async_callback
 
-        with patch("asyncio.run_coroutine_threadsafe", side_effect=ValueError("boom")):
-            with pytest.raises(ValueError, match="boom"):
-                handler._fire()
+        with patch("asyncio.run_coroutine_threadsafe", side_effect=ValueError("boom")), pytest.raises(ValueError, match="boom"):
+            handler._fire()
 
         assert len(created_coros) == 1
         coro = created_coros[0]
@@ -355,10 +358,9 @@ class TestCollectionWatcher:
         mock_observer.start.side_effect = OSError("no such file")
         mock_observer.is_alive.return_value = False
 
-        with patch("archon_search.watcher.Observer", return_value=mock_observer):
-            with caplog.at_level(logging.WARNING, logger="archon"):
-                watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
-                watcher.start()  # must not raise
+        with patch("archon_search.watcher.Observer", return_value=mock_observer), caplog.at_level(logging.WARNING, logger="archon"):
+            watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
+            watcher.start()  # must not raise
 
         assert watcher.is_alive() is False
         assert len(caplog.records) > 0
@@ -741,10 +743,9 @@ class TestWatcherManager:
         mock_observer.schedule.side_effect = OSError("inotify limit reached")
         mock_observer.is_alive.return_value = False
 
-        with patch("archon_search.watcher.Observer", return_value=mock_observer):
-            with caplog.at_level(logging.WARNING, logger="archon"):
-                watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
-                watcher.start()  # must not raise
+        with patch("archon_search.watcher.Observer", return_value=mock_observer), caplog.at_level(logging.WARNING, logger="archon"):
+            watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
+            watcher.start()  # must not raise
 
         assert watcher.is_alive() is False
         assert any(r.levelno == logging.WARNING for r in caplog.records)

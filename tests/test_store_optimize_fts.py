@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -17,7 +17,6 @@ import pytest
 
 from archon_search._types import ChunkRecord
 from archon_search.store import FTSIndexNotFoundError, SearchStore
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -37,7 +36,7 @@ def _chunk(doc_id: str, idx: int, text: str = "hello world") -> ChunkRecord:
         text=text,
         vector=[float(idx + 1)] * _DIM,
         source_path=f"/tmp/{doc_id[:8]}.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
     )
 
 

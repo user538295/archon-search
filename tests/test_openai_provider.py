@@ -20,7 +20,6 @@ import pytest
 from archon_search._privacy import _query_fingerprint
 from archon_search.query_expansion_protocol import QueryExpansionProvider
 
-
 # ---------------------------------------------------------------------------
 # Helpers — build a mock openai module
 # ---------------------------------------------------------------------------
@@ -90,7 +89,7 @@ async def test_openai_generate_hypothetical_doc_returns_text(
     if "archon_search.providers.openai_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.openai_provider")
 
-    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider
 
     provider = OpenAIQueryExpansionProvider(model="gpt-4o-mini")
     result = await provider.generate_hypothetical_doc("what is archon search?")
@@ -114,7 +113,7 @@ async def test_openai_decompose_query_returns_variants(
     if "archon_search.providers.openai_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.openai_provider")
 
-    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider
 
     provider = OpenAIQueryExpansionProvider(model="gpt-4o-mini")
     result = await provider.decompose_query("search query", num_queries=3)
@@ -142,7 +141,7 @@ async def test_openai_generate_arbitrary_exception_returns_none(
     if "archon_search.providers.openai_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.openai_provider")
 
-    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider
 
     provider = OpenAIQueryExpansionProvider(model="gpt-4o-mini")
     result = await provider.generate_hypothetical_doc("test query")
@@ -167,7 +166,7 @@ async def test_openai_decompose_arbitrary_exception_returns_empty_list(
     if "archon_search.providers.openai_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.openai_provider")
 
-    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider
 
     provider = OpenAIQueryExpansionProvider(model="gpt-4o-mini")
     result = await provider.decompose_query("test query")
@@ -198,7 +197,7 @@ async def test_openai_adapter_has_no_rate_limiting(
     if "archon_search.providers.openai_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.openai_provider")
 
-    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider
 
     provider = OpenAIQueryExpansionProvider(model="gpt-4o-mini")
 
@@ -242,13 +241,13 @@ def test_openai_package_absent_raises_config_error(
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-for-unit-test")
 
-    from archon_search.config import ConfigError, SearchConfig, HyDEConfig  # noqa: PLC0415
+    from archon_search.config import ConfigError, HyDEConfig, SearchConfig
 
     config = SearchConfig()
     config.hyde = HyDEConfig(provider="openai", model="gpt-4o-mini")
 
     # _check_provider_deps must raise ConfigError when openai package absent
-    from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+    from archon_search.server.app import _check_provider_deps
 
     with pytest.raises(ConfigError, match="openai"):
         _check_provider_deps(config)
@@ -279,7 +278,7 @@ async def test_openai_error_path_uses_query_fingerprint(
     if "archon_search.providers.openai_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.openai_provider")
 
-    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider
 
     provider = OpenAIQueryExpansionProvider(model="gpt-4o-mini")
 
@@ -312,7 +311,7 @@ def test_openai_provider_satisfies_protocol(
     if "archon_search.providers.openai_provider" in sys.modules:
         monkeypatch.delitem(sys.modules, "archon_search.providers.openai_provider")
 
-    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider  # noqa: PLC0415
+    from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider
 
     provider = OpenAIQueryExpansionProvider(model="gpt-4o-mini")
     assert isinstance(provider, QueryExpansionProvider), (

@@ -103,6 +103,7 @@ def test_create_pipeline_uses_lazy_fasttext_models_dir(
     for the second factory call site (alongside ``server/app.py::create_app``).
     Added in the iterative review of Task 2.5 to close a TDD gap."""
     from unittest.mock import patch
+
     from archon_search.config import SearchConfig
 
     data_dir = tmp_path / "lazy-data"

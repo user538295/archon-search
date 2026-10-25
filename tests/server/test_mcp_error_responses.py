@@ -9,9 +9,6 @@ import pytest
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
-
-
-
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
@@ -220,14 +217,14 @@ async def test_mcp_ingest_file_rejects_nul_byte() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_ingest_file_uses_validator_returned_path() -> None:
-    """ingest_file passes the Path object returned by validate_ingest_path directly to pipeline."""
+    """ingest_file passes the Path object returned by validate_ingest_source directly to pipeline."""
     from archon_search._types import IngestResult
 
     pipeline = MagicMock()
     pipeline.ingest_file = AsyncMock(return_value=IngestResult(doc_id="d", chunks_created=1, status="ok"))
     app = _make_app(pipeline)
     sentinel = Path("/sentinel/value")
-    with patch("archon_search.server.mcp.validate_ingest_path", return_value=sentinel):
+    with patch("archon_search.server.mcp.validate_ingest_source", return_value=sentinel):
         await app.tools["ingest_file"](path="/any/path.md", collection=None)
     # The Path OBJECT must be passed directly — no str() conversion, no re-resolution.
     assert pipeline.ingest_file.call_args.args[0] == sentinel
@@ -278,12 +275,12 @@ async def test_mcp_ingest_directory_reuses_path_unsafe_message() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_ingest_directory_uses_validator_returned_path() -> None:
-    """ingest_directory passes the Path object returned by validate_ingest_path directly to pipeline."""
+    """ingest_directory passes the Path object returned by validate_ingest_source directly to pipeline."""
     pipeline = MagicMock()
     pipeline.ingest_directory = AsyncMock(return_value=[])
     app = _make_app(pipeline)
     sentinel = Path("/sentinel/value")
-    with patch("archon_search.server.mcp.validate_ingest_path", return_value=sentinel):
+    with patch("archon_search.server.mcp.validate_ingest_source", return_value=sentinel):
         await app.tools["ingest_directory"](path="/any/dir", collection=None)
     assert pipeline.ingest_directory.call_args.args[0] == Path("/sentinel/value")
 

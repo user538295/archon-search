@@ -15,7 +15,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
-
 import pytest
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
@@ -29,7 +28,6 @@ from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.server.schemas import MaintenanceStatusDetail
-
 
 # ---------------------------------------------------------------------------
 # Schema tests

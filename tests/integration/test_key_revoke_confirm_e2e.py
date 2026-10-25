@@ -40,7 +40,7 @@ def _forwarder(client, method):
 def test_e2e_revoke_prompt_shows_label_and_revokes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         from archon_search.cli.key_cmd import key_cmd
 
         # Step 1 — issue a labelled managed key.
@@ -85,7 +85,7 @@ def test_e2e_revoke_prompt_shows_label_and_revokes(
 def test_e2e_revoke_prompt_declined_keeps_key_active(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         from archon_search.cli.key_cmd import key_cmd
 
         created = client.post(

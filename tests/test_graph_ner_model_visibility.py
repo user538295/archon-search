@@ -23,7 +23,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from archon_search.config import ConfigError, SearchConfig
-from archon_search.graph_extractor import ensure_graph_engine_importable, gliner_not_installed_message
+from archon_search.graph_extractor import (
+    ensure_graph_engine_importable,
+    gliner_not_installed_message,
+)
 from archon_search.jobs import JobStore
 from archon_search.model_validation import (
     GLINER_NOT_INSTALLED_WARNING,
@@ -54,7 +57,7 @@ def _config_with_graph(tmp_path: Path, *, enabled: bool, multilingual: bool) -> 
     return config
 
 
-def _gliner_absent() -> "patch.dict[str, object | None]":
+def _gliner_absent() -> patch.dict[str, object | None]:
     """Bind ``sys.modules['gliner']`` to ``None`` — the suite's absent-module
     idiom (mirrors ``tests/test_graph_deps_construction_guard.py``'s
     ``_gliner_absent`` helper; `find_spec` returns `None` for a `None` entry,

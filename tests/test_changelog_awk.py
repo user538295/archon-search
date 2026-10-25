@@ -26,6 +26,7 @@ def _run_awk(content: str) -> str:
         input=content,
         capture_output=True,
         text=True,
+        check=False,
     )
     return result.stdout.rstrip()
 

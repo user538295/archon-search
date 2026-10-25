@@ -16,6 +16,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 pytestmark = pytest.mark.integration
@@ -69,20 +70,31 @@ def _make_collection_meta(
     )
 
 
+def _own_dir(tmp_path: Path) -> Path:
+    """The default namespace's export directory below *tmp_path*, which the import tests patch in as the data dir."""
+    directory = tmp_path / "exports" / "default"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
 def _make_valid_tar(
-    tmp_path: Path, embedding_model: str = "BAAI/bge-small-en-v1.5", schema_version: object = 1
+    tmp_path: Path,
+    embedding_model: str = "BAAI/bge-small-en-v1.5",
+    schema_version: object = 1,
+    namespace: str = "default",
 ) -> Path:
     """Create a minimal valid .tar.gz archive with manifest.json and documents.jsonl."""
     manifest = {
         "schema_version": schema_version,
         "collection": "my-col",
+        "namespace": namespace,
         "exported_at": "2024-01-01T00:00:00+00:00",
         "doc_count": 0,
         "active_embedding_model": embedding_model,
         "description": "",
         "archon_search_version": "dev",
     }
-    archive_path = tmp_path / "test.tar.gz"
+    archive_path = _own_dir(tmp_path) / "test.tar.gz"
     with tarfile.open(archive_path, "w:gz") as tf:
         manifest_bytes = json.dumps(manifest).encode()
         info = tarfile.TarInfo(name="manifest.json")
@@ -117,6 +129,25 @@ def test_mcp_tool_count_is_15(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_mcp_export_collection_returns_job(tmp_path: Path) -> None:
     """export_collection returns a dict with job_id and status=QUEUED."""
+    meta = _make_collection_meta()
+    pipeline = _make_pipeline(meta)
+    job_store = _make_job_store(tmp_path)
+    config = _make_config()
+
+    app = _make_mcp_app(pipeline, config=config, job_store=job_store)
+    tool = app.tools["export_collection"]
+
+    result = await tool(collection="my-col")
+
+    assert isinstance(result, dict)
+    assert "job_id" in result
+    assert result["status"] == "QUEUED"
+    assert result.get("error") is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_export_collection_writes_to_the_namespace_exports_directory(tmp_path: Path) -> None:
+    """The archive path is ``<data_dir>/exports/<namespace>/<collection>-<timestamp>.tar.gz``."""
     from archon_search.paths import get_data_dir
 
     meta = _make_collection_meta()
@@ -127,32 +158,9 @@ async def test_mcp_export_collection_returns_job(tmp_path: Path) -> None:
     app = _make_mcp_app(pipeline, config=config, job_store=job_store)
     tool = app.tools["export_collection"]
 
-    # Use the data dir as the output_path so it passes validation
-    output_dir = get_data_dir() / "exports"
-    result = await tool(collection="my-col", output_path=str(output_dir))
+    result = await tool(collection="my-col")
 
-    assert isinstance(result, dict)
-    assert "job_id" in result
-    assert result["status"] == "QUEUED"
-    assert result.get("error") is None
-
-
-@pytest.mark.asyncio
-async def test_mcp_export_collection_default_output_path(tmp_path: Path) -> None:
-    """export_collection with empty output_path uses the data dir exports directory."""
-    meta = _make_collection_meta()
-    pipeline = _make_pipeline(meta)
-    job_store = _make_job_store(tmp_path)
-    config = _make_config()
-
-    app = _make_mcp_app(pipeline, config=config, job_store=job_store)
-    tool = app.tools["export_collection"]
-
-    result = await tool(collection="my-col", output_path="")
-
-    assert isinstance(result, dict)
-    assert "job_id" in result
-    assert result["status"] == "QUEUED"
+    assert Path(result["output_path"]).parent == get_data_dir() / "exports" / "default"
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +169,8 @@ async def test_mcp_export_collection_default_output_path(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_mcp_export_path_unsafe(tmp_path: Path) -> None:
-    """export_collection with path outside data dir returns McpErrorResponse."""
+async def test_mcp_export_collection_takes_no_output_path(tmp_path: Path) -> None:
+    """The export directory is pinned to the caller's namespace (SecReview #4): there is no ``output_path`` argument."""
     meta = _make_collection_meta()
     pipeline = _make_pipeline(meta)
     job_store = _make_job_store(tmp_path)
@@ -171,12 +179,8 @@ async def test_mcp_export_path_unsafe(tmp_path: Path) -> None:
     app = _make_mcp_app(pipeline, config=config, job_store=job_store)
     tool = app.tools["export_collection"]
 
-    # /tmp is not inside get_data_dir()
-    result = await tool(collection="my-col", output_path="/tmp/unsafe-export")
-
-    assert isinstance(result, dict)
-    assert "error" in result
-    assert result.get("code") == "path_unsafe"
+    with pytest.raises(TypeError, match="output_path"):
+        await tool(collection="my-col", output_path="/tmp/unsafe-export")
 
 
 # ---------------------------------------------------------------------------
@@ -187,8 +191,6 @@ async def test_mcp_export_path_unsafe(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_mcp_export_collection_not_found(tmp_path: Path) -> None:
     """export_collection returns not_found error when collection does not exist."""
-    from archon_search.paths import get_data_dir
-
     # pipeline.store.get_collection_meta returns None
     pipeline = _make_pipeline(collection_meta=None)
     job_store = _make_job_store(tmp_path)
@@ -197,8 +199,7 @@ async def test_mcp_export_collection_not_found(tmp_path: Path) -> None:
     app = _make_mcp_app(pipeline, config=config, job_store=job_store)
     tool = app.tools["export_collection"]
 
-    output_dir = get_data_dir() / "exports"
-    result = await tool(collection="ghost-col", output_path=str(output_dir))
+    result = await tool(collection="ghost-col")
 
     assert isinstance(result, dict)
     assert "error" in result
@@ -282,7 +283,7 @@ async def test_mcp_import_corrupt_archive_sends_sanitized_error(tmp_path: Path) 
     """tarfile/gzip error text (derived from the archive's bytes) never reaches the client."""
     from archon_search.jobs.export_archive import INVALID_ARCHIVE_DETAIL
 
-    corrupt = tmp_path / "corrupt.tar.gz"
+    corrupt = _own_dir(tmp_path) / "corrupt.tar.gz"
     corrupt.write_bytes(b"not a real gzip archive")
 
     result = await _import_tool_result(tmp_path, corrupt)
@@ -293,7 +294,7 @@ async def test_mcp_import_corrupt_archive_sends_sanitized_error(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_mcp_import_rejected_manifest_keeps_its_own_message(tmp_path: Path) -> None:
     """A non-JSON manifest gets archon-search's wording, never the JSON parser's."""
-    archive_path = tmp_path / "bad-manifest.tar.gz"
+    archive_path = _own_dir(tmp_path) / "bad-manifest.tar.gz"
     with tarfile.open(archive_path, "w:gz") as tf:
         for name, payload in (("manifest.json", b"{not json"), ("documents.jsonl", b"")):
             info = tarfile.TarInfo(name=name)
@@ -310,7 +311,10 @@ async def test_mcp_import_rejected_manifest_keeps_its_own_message(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_mcp_import_unexpected_manifest_error_sends_sanitized_error(tmp_path: Path) -> None:
-    from archon_search.jobs.export_archive import INVALID_MANIFEST_DETAIL, ImportArchiveReader
+    from archon_search.jobs.export_archive import (
+        INVALID_MANIFEST_DETAIL,
+        ImportArchiveReader,
+    )
 
     def _internal_failure(_self: ImportArchiveReader) -> dict:
         raise ValueError("internal: /var/lib/secret/state.db is locked")
@@ -324,7 +328,7 @@ async def test_mcp_import_unexpected_manifest_error_sends_sanitized_error(tmp_pa
 @pytest.mark.asyncio
 async def test_mcp_import_deeply_nested_manifest_is_rejected_not_raised(tmp_path: Path) -> None:
     """Nesting deep enough to make the JSON parser raise RecursionError is a refusal, not a crash."""
-    archive_path = tmp_path / "deep-manifest.tar.gz"
+    archive_path = _own_dir(tmp_path) / "deep-manifest.tar.gz"
     with tarfile.open(archive_path, "w:gz") as tf:
         for name, payload in (("manifest.json", b"[" * 100_000), ("documents.jsonl", b"")):
             info = tarfile.TarInfo(name=name)
@@ -342,7 +346,10 @@ async def test_mcp_import_deeply_nested_manifest_is_rejected_not_raised(tmp_path
 @pytest.mark.asyncio
 async def test_mcp_import_model_mismatch_truncates_archive_supplied_model(tmp_path: Path) -> None:
     """A crafted model name is quoted truncated, in the REST route's exact wording."""
-    from archon_search.jobs.export_archive import ARCHIVE_VALUE_MAX_CHARS, quote_archive_value
+    from archon_search.jobs.export_archive import (
+        ARCHIVE_VALUE_MAX_CHARS,
+        quote_archive_value,
+    )
 
     crafted_model = "m" * 10_000
     result = await _import_tool_result(tmp_path, _make_valid_tar(tmp_path, embedding_model=crafted_model))

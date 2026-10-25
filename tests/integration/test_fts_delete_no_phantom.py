@@ -22,13 +22,13 @@ from typing import Any
 
 import pytest
 
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 from tests.integration.conftest import (
     ingest_file_via_path,
     make_real_app,
     make_real_pipeline,
     search,
 )
-from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 pytestmark = pytest.mark.integration
 
@@ -186,7 +186,7 @@ async def test_mcp_delete_document_no_phantom_hits_in_subsequent_search(
         # Verify the FTS index was actually built after ingest.
         # optimize_fts() raises FTSIndexNotFoundError only when no FTS index exists;
         # succeeding here confirms the index is present and the phantom test is meaningful.
-        from archon_search.store import FTSIndexNotFoundError  # noqa: PLC0415
+        from archon_search.store import FTSIndexNotFoundError
 
         try:
             await store.optimize_fts(collection)
@@ -246,7 +246,7 @@ def test_e2e_delete_document_via_mcp_no_phantom_hits(
     """
     unique_term = "e2ephantomblizzard99xyz"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         collection = "fts-e2e-mcp-delete-col"
 
         # Write a file and ingest it via HTTP
@@ -307,7 +307,7 @@ def test_e2e_reingest_via_ingest_file_old_content_absent(
     unique_term_a = "reingestableoakwood77abc"
     unique_term_b = "reingestablepinewood77xyz"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         collection = "fts-reingest-col"
 
         # Write initial content with term A and ingest

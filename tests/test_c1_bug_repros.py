@@ -25,6 +25,7 @@ import ast
 import asyncio
 import threading
 from contextlib import ExitStack
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,7 +37,11 @@ from archon_search.config import SearchConfig
 from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
 from archon_search.model_validation import ModelValidationResult
-from tests._job_store_faults import JOB_WRITE_FAILURES, assert_error_logged_with_traceback, failing_job_writes
+from tests._job_store_faults import (
+    JOB_WRITE_FAILURES,
+    assert_error_logged_with_traceback,
+    failing_job_writes,
+)
 from tests.test_app import (
     MODELS_CHECK_SETTLE_TIMEOUT_SECONDS,
     wait_for_models_check_to_settle,
@@ -97,7 +102,7 @@ def _isolate_sync_suppression_sentinel(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 def _enter_store_patches(stack: ExitStack) -> None:
     """Enter the patches that keep ``create_app``'s lifespan off real LanceDB I/O."""
-    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.store import SearchStore
 
     async def _fake_connect(self: SearchStore) -> None:
         # A bare AsyncMock() leaves self._db at its __init__ default (None), so
@@ -131,9 +136,9 @@ async def test_startup_sync_holds_sync_lock(tmp_path: Path, job_store: JobStore)
     Oracle: ``SearchCollectionSync.sync`` records whether the lock was held at the
     moment it was entered. Nothing else can observe this without racing.
     """
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+    from archon_search.server.app import create_app
+    from archon_search.store import SearchStore
+    from archon_search.sync import SearchCollectionSync, SyncResult
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -201,9 +206,9 @@ async def test_background_tasks_cancelled_before_store_disconnect(
     Oracle: ``SearchStore.disconnect`` records the not-yet-done background tasks
     at the instant it runs. A correct shutdown order leaves that list empty.
     """
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+    from archon_search.server.app import create_app
+    from archon_search.store import SearchStore
+    from archon_search.sync import SearchCollectionSync, SyncResult
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -299,11 +304,11 @@ async def test_telemetry_drains_before_background_tasks_cancelled(
     ``finally`` and re-running this test: it fails (drain_end no longer
     precedes background_task_cancelled, and the marker never reaches disk).
     """
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
-    from archon_search.telemetry.entry import TelemetryEntry  # noqa: PLC0415
-    from archon_search.telemetry.writer import TelemetryWriter  # noqa: PLC0415
+    from archon_search.server.app import create_app
+    from archon_search.store import SearchStore
+    from archon_search.sync import SearchCollectionSync, SyncResult
+    from archon_search.telemetry.entry import TelemetryEntry
+    from archon_search.telemetry.writer import TelemetryWriter
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -411,7 +416,7 @@ def test_connect_fail_msg_with_base_url_does_not_consult_service_manager() -> No
     a different server (S530). The documented contract: "there is no in-process
     fallback" and connection refused always prints the not-running message.
     """
-    from archon_search.cli import _helpers  # noqa: PLC0415
+    from archon_search.cli import _helpers
 
     service = MagicMock()
     service.status.return_value.running = True
@@ -457,7 +462,7 @@ async def test_waiter_timeout_does_not_spawn_duplicate_loader(
     ``make_embedder``, a waiter (W1) times out, and a fresh caller (W2) arrives
     — ``make_embedder`` must still have been called exactly once.
     """
-    from archon_search import embedder_cache as ec  # noqa: PLC0415
+    from archon_search import embedder_cache as ec
 
     # Dial every module-level timeout constant down; a realistic production value
     # (120 s) would make this test unusable.
@@ -549,7 +554,7 @@ async def test_cancelled_loader_leaves_cache_loadable_for_next_caller(
     for the same model with a working ``make_embedder`` — it must succeed right
     away, not time out.
     """
-    from archon_search import embedder_cache as ec  # noqa: PLC0415
+    from archon_search import embedder_cache as ec
 
     for name in dir(ec):
         if "TIMEOUT" in name.upper() and isinstance(getattr(ec, name), (int, float)):
@@ -628,7 +633,7 @@ async def test_loader_cancelled_while_acquiring_lock_on_success_path_leaves_cach
     parked there, release the lock, then assert the next caller loads
     successfully rather than timing out.
     """
-    from archon_search import embedder_cache as ec  # noqa: PLC0415
+    from archon_search import embedder_cache as ec
 
     monkeypatch.setattr(ec, "_LOAD_WAIT_TIMEOUT_SECONDS", 0.2)
 
@@ -720,7 +725,7 @@ async def test_waiter_timeout_does_not_wake_concurrent_waiter_into_duplicate_loa
     out, the loader's shared event must still be unset, and ``make_embedder``
     must have been called exactly once even after both waiters finish.
     """
-    from archon_search import embedder_cache as ec  # noqa: PLC0415
+    from archon_search import embedder_cache as ec
 
     for name in dir(ec):
         if "TIMEOUT" in name.upper() and isinstance(getattr(ec, name), (int, float)):
@@ -791,7 +796,7 @@ def test_embedder_not_ready_error_type_exists() -> None:
     surfaces as HTTP 500 instead of 503 (retry later). The cache needs its own
     exception type for routes to map.
     """
-    from archon_search import embedder_cache as ec  # noqa: PLC0415
+    from archon_search import embedder_cache as ec
 
     exc_type = getattr(ec, "EmbedderNotReadyError", None)
     assert exc_type is not None, (
@@ -816,14 +821,17 @@ def test_embedder_not_ready_error_returns_503_on_wire(tmp_path: Path) -> None:
     the ``except EmbedderNotReadyError`` handler IS reachable — this proves the
     mapping end to end instead of only checking that the exception type exists.
     """
-    import os  # noqa: PLC0415
-    from unittest.mock import AsyncMock, MagicMock  # noqa: PLC0415
+    import os
+    from unittest.mock import AsyncMock, MagicMock
 
-    from fastapi.testclient import TestClient  # noqa: PLC0415
+    from fastapi.testclient import TestClient
 
-    from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
-    from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderNotReadyError  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.embedder_cache import (
+        EMBEDDER_NOT_READY_DETAIL,
+        EmbedderNotReadyError,
+    )
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
@@ -877,14 +885,14 @@ def test_embedder_not_ready_error_returns_503_from_explain(tmp_path: Path) -> No
     escape uncaught, surfacing as HTTP 500. This proves the generic handler
     registered in ``create_app`` covers a route OTHER than ``/search``.
     """
-    import os  # noqa: PLC0415
-    from unittest.mock import AsyncMock, MagicMock  # noqa: PLC0415
+    import os
+    from unittest.mock import AsyncMock, MagicMock
 
-    from fastapi.testclient import TestClient  # noqa: PLC0415
+    from fastapi.testclient import TestClient
 
-    from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
-    from archon_search.embedder_cache import EmbedderNotReadyError  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.embedder_cache import EmbedderNotReadyError
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
@@ -932,11 +940,11 @@ async def test_eager_warmup_has_terminal_timeout(
     ``routes_search._SEARCH_TIMEOUT_SECONDS``) so this test can dial it down —
     the loop below rebinds every numeric ``*TIMEOUT*`` constant in ``server/warmup.py``.
     """
-    from archon_search.embedder_cache import EmbedderCache  # noqa: PLC0415
-    from archon_search.pipeline import SearchPipeline  # noqa: PLC0415
-    from archon_search.server import warmup as warmup_module  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.server import warmup as warmup_module
+    from archon_search.server.app import create_app
+    from archon_search.store import SearchStore
 
     for name in dir(warmup_module):
         if "TIMEOUT" in name.upper() and isinstance(getattr(warmup_module, name), (int, float)):
@@ -1009,9 +1017,9 @@ async def test_eager_warmup_cancelled_sets_failed(tmp_path: Path, job_store: Job
     ``"pending"`` — ``/ready`` and any operator reading it were told the warm-up was
     still progressing when it would never run again.
     """
-    from archon_search.embedder_cache import EmbedderCache  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.server.app import create_app
+    from archon_search.store import SearchStore
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -1071,9 +1079,9 @@ async def test_ready_gates_on_startup_sync_task() -> None:
     is still being (re)built — a load balancer routing traffic there gets stale
     or missing results, but the endpoint answers 200.
     """
-    import json  # noqa: PLC0415
+    import json
 
-    from archon_search.server.routes_ready import ready  # noqa: PLC0415
+    from archon_search.server.routes_ready import ready
 
     cfg = SearchConfig()
     cfg.eager_load_embedders = False
@@ -1121,9 +1129,9 @@ async def test_ready_gates_on_startup_sync_task() -> None:
 @pytest.mark.asyncio
 async def test_ready_returns_200_when_startup_sync_task_completed() -> None:
     """``GET /ready`` must report ready once the startup sync task is done."""
-    import json  # noqa: PLC0415
+    import json
 
-    from archon_search.server.routes_ready import ready  # noqa: PLC0415
+    from archon_search.server.routes_ready import ready
 
     cfg = SearchConfig()
     cfg.eager_load_embedders = False
@@ -1180,9 +1188,9 @@ async def test_ready_sync_fail_when_startup_sync_failed() -> None:
     deliberately swallowed so a corrupted collection cannot wedge the pod's
     readiness forever.
     """
-    import json  # noqa: PLC0415
+    import json
 
-    from archon_search.server.routes_ready import ready  # noqa: PLC0415
+    from archon_search.server.routes_ready import ready
 
     cfg = SearchConfig()
     cfg.eager_load_embedders = False
@@ -1232,9 +1240,9 @@ async def test_ready_returns_200_when_startup_sync_task_attribute_missing() -> N
     ``getattr`` guard in ``_startup_sync_pending`` must treat that the same as
     "not pending", not as an error.
     """
-    import json  # noqa: PLC0415
+    import json
 
-    from archon_search.server.routes_ready import ready  # noqa: PLC0415
+    from archon_search.server.routes_ready import ready
 
     cfg = SearchConfig()
     cfg.eager_load_embedders = False
@@ -1295,12 +1303,12 @@ async def test_startup_sync_with_per_collection_errors_sets_startup_sync_failed(
     ``/ready`` reports ``checks.sync == "fail"`` — while ``ready`` stays True (a
     failed sync must never wedge the pod).
     """
-    import json  # noqa: PLC0415
+    import json
 
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.server.routes_ready import ready  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+    from archon_search.server.app import create_app
+    from archon_search.server.routes_ready import ready
+    from archon_search.store import SearchStore
+    from archon_search.sync import SearchCollectionSync, SyncResult
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -1390,10 +1398,10 @@ async def test_startup_sync_has_terminal_timeout(
     ``_WARMUP_TASK_TIMEOUT_SECONDS`` in ``server/warmup.py``) so this test can dial
     it down — the loop below rebinds every numeric ``*TIMEOUT*`` constant in ``app.py``.
     """
-    from archon_search.server import app as app_module  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+    from archon_search.server import app as app_module
+    from archon_search.server.app import create_app
+    from archon_search.store import SearchStore
+    from archon_search.sync import SearchCollectionSync
 
     for name in dir(app_module):
         if "TIMEOUT" in name.upper() and isinstance(getattr(app_module, name), (int, float)):
@@ -1448,7 +1456,7 @@ async def test_startup_sync_has_terminal_timeout(
             sync_result = app.state.sync_result
 
             # /ready must never gate on this failure — 200 with checks.sync='fail'.
-            from archon_search.server.routes_ready import ready  # noqa: PLC0415
+            from archon_search.server.routes_ready import ready
 
             sync_task = app.state._startup_sync_task
             assert sync_task is not None and sync_task.done(), (
@@ -1465,7 +1473,7 @@ async def test_startup_sync_has_terminal_timeout(
             shutdown.set()
             await lifespan_task
 
-    import json  # noqa: PLC0415
+    import json
 
     assert startup_sync_failed is True, (
         "a wedged startup sync did not set app.state._startup_sync_failed=True "
@@ -1492,7 +1500,7 @@ def test_status_surfaces_sync_result(tmp_path: Path, monkeypatch: pytest.MonkeyP
     ``sync_result`` (the phase most likely to hold ``/ready`` at 503 the
     longest, per C6-4) had no operator-visible counterpart at all.
     """
-    from tests.integration.conftest import make_real_app  # noqa: PLC0415
+    from tests.integration.conftest import make_real_app
 
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         client.app.state.sync_result = "pending"
@@ -1510,7 +1518,7 @@ def test_status_surfaces_sync_result_terminal_states(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
     """``GET /status`` must surface both terminal sync outcomes, not just 'pending'."""
-    from tests.integration.conftest import make_real_app  # noqa: PLC0415
+    from tests.integration.conftest import make_real_app
 
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         client.app.state.sync_result = value
@@ -1541,8 +1549,8 @@ def test_cli_sync_connect_failure_uses_patched_probe_only() -> None:
     the "starting up" message, not "not running". For a custom ``--api-url``, the
     service manager is never consulted (S530).
     """
-    from archon_search.cli import _helpers  # noqa: PLC0415
-    from archon_search.cli.sync import sync as sync_cmd  # noqa: PLC0415
+    from archon_search.cli import _helpers
+    from archon_search.cli.sync import sync as sync_cmd
 
     service = MagicMock()
     service.status.return_value.running = True
@@ -1584,7 +1592,7 @@ def test_no_cli_module_imports_unused_server_not_running_msg() -> None:
     dead and are only kept alive by a ``hasattr`` assertion in
     ``tests/test_cli_260_connection_refused_ux.py``.
     """
-    import archon_search.cli as cli_pkg  # noqa: PLC0415
+    import archon_search.cli as cli_pkg
 
     module_names = (
         "key_cmd",
@@ -1631,7 +1639,7 @@ def test_connect_fail_msg_requires_storage_ok_for_starting_hint() -> None:
     *failed* answers 503 with ``models: pending`` too, and the operator is told
     to "wait for models to load" for a server that will never become ready.
     """
-    from archon_search.cli import _helpers  # noqa: PLC0415
+    from archon_search.cli import _helpers
 
     resp = MagicMock()
     resp.status_code = 503
@@ -1662,7 +1670,7 @@ def test_status_surfaces_warmup_result(tmp_path: Path, monkeypatch: pytest.Monke
     actually inspects — has no way to show that warm-up is in progress, done, or
     failed.
     """
-    from tests.integration.conftest import make_real_app  # noqa: PLC0415
+    from tests.integration.conftest import make_real_app
 
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         # The lifespan warm-up (S279) would overwrite the pinned value — let it finish.
@@ -1687,7 +1695,7 @@ def test_status_surfaces_warmup_result_terminal_states(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
     """``GET /status`` must surface both terminal warm-up outcomes, not just 'pending'."""
-    from tests.integration.conftest import make_real_app  # noqa: PLC0415
+    from tests.integration.conftest import make_real_app
 
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         # The lifespan warm-up (S279) would overwrite the pinned value — let it finish.
@@ -1716,7 +1724,7 @@ async def test_warmup_pending_evaluated_once_per_ready_request(
     between them yields a body with ``checks.models == "pending"`` and
     ``ready: true`` — a self-contradictory response.
     """
-    from archon_search.server import routes_ready  # noqa: PLC0415
+    from archon_search.server import routes_ready
 
     cfg = SearchConfig()
     cfg.eager_load_embedders = True
@@ -1771,7 +1779,7 @@ def test_connect_fail_msg_handles_null_checks_without_swallowing() -> None:
     whether the probe failed or returned a non-usable body), the service manager is
     *never* consulted. The function returns ``_SERVER_NOT_RUNNING_MSG`` immediately.
     """
-    from archon_search.cli import _helpers  # noqa: PLC0415
+    from archon_search.cli import _helpers
 
     resp = MagicMock()
     resp.status_code = 503
@@ -1806,15 +1814,14 @@ def test_connect_fail_msg_propagates_unexpected_internal_error() -> None:
     surfaces as a real exception instead of being silently treated as "probe
     unusable, fall back to the managed-service check".
     """
-    from archon_search.cli import _helpers  # noqa: PLC0415
+    from archon_search.cli import _helpers
 
     resp = MagicMock()
     resp.status_code = 503
     resp.json.side_effect = AttributeError("boom")
 
-    with patch.object(_helpers.httpx, "get", return_value=resp):
-        with pytest.raises(AttributeError):
-            _helpers._server_connect_fail_msg("http://127.0.0.1:8765")
+    with patch.object(_helpers.httpx, "get", return_value=resp), pytest.raises(AttributeError):
+        _helpers._server_connect_fail_msg("http://127.0.0.1:8765")
 
 
 # --------------------------------------------------------------------------- #
@@ -1836,7 +1843,7 @@ def test_connect_fail_msg_handles_non_dict_body_without_crashing(body: object) -
     manager is *never* consulted. The function returns ``_SERVER_NOT_RUNNING_MSG``
     immediately — whether the probe failed or returned a non-usable body.
     """
-    from archon_search.cli import _helpers  # noqa: PLC0415
+    from archon_search.cli import _helpers
 
     resp = MagicMock()
     resp.status_code = 503
@@ -1881,7 +1888,7 @@ def test_connect_fail_msg_recognizes_sync_pending_as_starting_up() -> None:
     failing the test outright, and the result would flip with whether a local
     service happens to be up.
     """
-    from archon_search.cli import _helpers  # noqa: PLC0415
+    from archon_search.cli import _helpers
 
     resp = MagicMock()
     resp.status_code = 503
@@ -1919,7 +1926,7 @@ def test_connect_fail_msg_probe_succeeds_non_usable_body_does_not_consult_servic
     The contract (docstring, ca54533b): when ``base_url`` is given, the service manager
     is *never* consulted — not on probe failure, not on a non-usable probe response.
     """
-    from archon_search.cli import _helpers  # noqa: PLC0415
+    from archon_search.cli import _helpers
 
     service = MagicMock()
     service.status.return_value = MagicMock(running=True)
@@ -1953,8 +1960,8 @@ def test_sequential_add_second_does_not_report_starting_up_when_probe_non_usable
     second add outputs ``_SERVER_STARTING_MSG``; after the fix it outputs
     ``_SERVER_NOT_RUNNING_MSG``.
     """
-    from archon_search.cli import _helpers  # noqa: PLC0415
-    from archon_search.cli.collection import collection  # noqa: PLC0415
+    from archon_search.cli import _helpers
+    from archon_search.cli.collection import collection
 
     runner = CliRunner()
 
@@ -2071,7 +2078,7 @@ def _make_recording_sync():
     extraction — and the block is about to grow again with this brief's own
     sticky-suppression tests, so the duplication would only compound.
     """
-    from archon_search.sync import SyncResult  # noqa: PLC0415
+    from archon_search.sync import SyncResult
 
     sync_calls: list[list[str]] = []
 
@@ -2090,8 +2097,8 @@ def _enter_startup_sync_lifespan_patches(stack: ExitStack, sync_impl=None) -> No
     ``SearchCollectionSync.sync`` stub — pass the ``recording_sync`` from
     ``_make_recording_sync()`` (or any other stub) via ``sync_impl``.
     """
-    from archon_search.store import SearchStore  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+    from archon_search.store import SearchStore
+    from archon_search.sync import SearchCollectionSync
 
     _enter_store_patches(stack)
     stack.enter_context(patch.object(SearchStore, "disconnect", new=AsyncMock()))
@@ -2106,9 +2113,9 @@ def _enter_startup_sync_lifespan_patches(stack: ExitStack, sync_impl=None) -> No
 # failure must never fail startup, matching _start_startup_sync_job's posture.
 # --------------------------------------------------------------------------- #
 def test_write_sync_suppressed_sentinel_creates_minimal_json_body() -> None:
-    import json  # noqa: PLC0415
+    import json
 
-    from archon_search.sync_suppression import (  # noqa: PLC0415
+    from archon_search.sync_suppression import (
         get_sync_suppressed_file,
         write_sync_suppressed_sentinel,
     )
@@ -2123,7 +2130,7 @@ def test_write_sync_suppressed_sentinel_creates_minimal_json_body() -> None:
 
 
 def test_write_sync_suppressed_sentinel_fails_open_on_write_error() -> None:
-    import archon_search.sync_suppression as ss_module  # noqa: PLC0415
+    import archon_search.sync_suppression as ss_module
 
     def _raising_atomic_write(path, data):
         raise OSError("disk full")
@@ -2136,7 +2143,7 @@ def test_write_sync_suppressed_sentinel_fails_open_on_write_error() -> None:
 
 
 def test_clear_sync_suppressed_sentinel_fails_open_on_unlink_error() -> None:
-    import archon_search.sync_suppression as ss_module  # noqa: PLC0415
+    import archon_search.sync_suppression as ss_module
 
     ss_module.write_sync_suppressed_sentinel()
     assert ss_module.get_sync_suppressed_file().exists(), "test setup is wrong"
@@ -2146,7 +2153,7 @@ def test_clear_sync_suppressed_sentinel_fails_open_on_unlink_error() -> None:
 
 
 def test_clear_sync_suppressed_sentinel_is_idempotent_when_absent() -> None:
-    from archon_search.sync_suppression import (  # noqa: PLC0415
+    from archon_search.sync_suppression import (
         clear_sync_suppressed_sentinel,
         get_sync_suppressed_file,
     )
@@ -2165,10 +2172,10 @@ def test_clean_sync_clears_stale_sentinel_even_when_sync_result_is_not_degraded(
     configuration could never be removed by the sanctioned resume path, and
     would silently suppress the first boot after collections were added back.
     """
-    from types import SimpleNamespace  # noqa: PLC0415
+    from types import SimpleNamespace
 
-    from archon_search.server.routes_sync import _clear_degraded_sync_state  # noqa: PLC0415
-    from archon_search.sync_suppression import (  # noqa: PLC0415
+    from archon_search.server.routes_sync import _clear_degraded_sync_state
+    from archon_search.sync_suppression import (
         get_sync_suppressed_file,
         write_sync_suppressed_sentinel,
     )
@@ -2207,9 +2214,9 @@ async def test_startup_sync_suppressed_after_process_restart_marker(
     ``SearchCollectionSync.sync`` must never be called, with a WARNING pointing
     the operator at the manual resume path.
     """
-    import logging  # noqa: PLC0415
+    import logging
 
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.server.app import create_app
 
     jobs_path = tmp_path / "jobs.json"
     _seed_crashed_ingest_jobs_file(jobs_path)
@@ -2274,7 +2281,7 @@ async def test_startup_sync_runs_when_no_process_restart_marker(tmp_path: Path) 
     Counterpart to the suppression test above: the crash-loop guard must key on
     the ``process_restart`` marker only, never disable the startup sync outright.
     """
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.server.app import create_app
 
     # No jobs file at all — the ordinary clean-shutdown boot.
     job_store = JobStore(path=tmp_path / "jobs.json")
@@ -2309,7 +2316,7 @@ async def test_crashed_export_job_does_not_suppress_startup_sync(tmp_path: Path)
     suppressing the startup sync for it would strand the index on a stale
     corpus for an unrelated reason.
     """
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.server.app import create_app
 
     jobs_path = tmp_path / "jobs.json"
     seeder = JobStore(path=jobs_path)
@@ -2357,7 +2364,7 @@ def test_status_surfaces_suppressed_sync_result(
     ``sync_result == "suppressed"`` — the degraded-but-ready flag an operator
     reads to learn the index is stale and needs a manual ``POST /sync``.
     """
-    from tests.integration.conftest import make_real_app  # noqa: PLC0415
+    from tests.integration.conftest import make_real_app
 
     _seed_crashed_ingest_jobs_file(tmp_path / "jobs.json")
 
@@ -2391,7 +2398,7 @@ def test_ready_warns_but_stays_200_when_startup_sync_suppressed(
     (``_startup_sync_failed`` was never set) fires. ``"warn"`` is informational
     only: it must not gate ``ready``, exactly like ``checks.models: "warn"``.
     """
-    from tests.integration.conftest import make_real_app  # noqa: PLC0415
+    from tests.integration.conftest import make_real_app
 
     _seed_crashed_ingest_jobs_file(tmp_path / "jobs.json")
 
@@ -2425,9 +2432,9 @@ def test_successful_manual_sync_clears_suppressed_state(
     ``POST /sync``; if the degraded flag survived that resume it would be stuck
     for the process lifetime and stop meaning anything.
     """
-    import time  # noqa: PLC0415
+    import time
 
-    from tests.integration.conftest import make_real_app  # noqa: PLC0415
+    from tests.integration.conftest import make_real_app
 
     _seed_crashed_ingest_jobs_file(tmp_path / "jobs.json")
 
@@ -2492,10 +2499,10 @@ async def test_sync_suppression_persists_across_second_reboot(tmp_path: Path) ->
     re-entering the same workload that killed the process. The sticky
     sentinel written during boot 1 must keep it suppressed on boot 2.
     """
-    import json  # noqa: PLC0415
+    import json
 
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.sync_suppression import get_sync_suppressed_file  # noqa: PLC0415
+    from archon_search.server.app import create_app
+    from archon_search.sync_suppression import get_sync_suppressed_file
 
     jobs_path = tmp_path / "jobs.json"
     _seed_crashed_ingest_jobs_file(jobs_path)
@@ -2566,8 +2573,8 @@ async def test_startup_sync_after_a_cancelled_ingest_is_suppressed_only_if_it_ha
     restart completes the cancel and the startup sync runs as it would after any clean stop, writing no sticky
     sentinel that would keep every later boot suppressed until an operator runs ``POST /sync``.
     """
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.sync_suppression import get_sync_suppressed_file  # noqa: PLC0415
+    from archon_search.server.app import create_app
+    from archon_search.sync_suppression import get_sync_suppressed_file
 
     jobs_path = tmp_path / "jobs.json"
     seeder = JobStore(path=jobs_path)
@@ -2619,12 +2626,12 @@ async def test_watcher_guard_skips_while_suppressed_and_resumes_after_clean_sync
     forever even after a clean manual sync, since ``crashed_ingest_on_load``
     is a boot-time snapshot that a manual sync cannot touch).
     """
-    import logging  # noqa: PLC0415
+    import logging
 
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.server.routes_sync import _sync_task  # noqa: PLC0415
-    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+    from archon_search.server.app import create_app
+    from archon_search.server.routes_sync import _sync_task
+    from archon_search.server.schemas import StartupSyncResult
+    from archon_search.sync import SearchCollectionSync
 
     jobs_path = tmp_path / "jobs.json"
     _seed_crashed_ingest_jobs_file(jobs_path)
@@ -2732,11 +2739,11 @@ async def test_crash_during_startup_sync_arms_the_guard_on_the_next_boot(
     still in flight* — that byte-for-byte is what a SIGKILLed process leaves
     behind — and booting a second app over the snapshot.
     """
-    import json  # noqa: PLC0415
+    import json
 
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+    from archon_search.server.app import create_app
+    from archon_search.store import SearchStore
+    from archon_search.sync import SearchCollectionSync, SyncResult
 
     jobs_path = tmp_path / "jobs.json"
     job_store = JobStore(path=jobs_path)
@@ -2835,7 +2842,7 @@ def test_load_corrupt_tail_after_running_ingest_row_does_not_leak_crashed_flag(
     ``self._jobs = {}`` — it must reset the flag too, or the guard stays armed
     forever with no jobs on record to ever un-arm it.
     """
-    import json  # noqa: PLC0415
+    import json
 
     jobs_path = tmp_path / "jobs.json"
     raw = [
@@ -2899,11 +2906,11 @@ def test_stale_running_ingest_job_arms_guard_and_survives_recovery(
     test isolates ``_load()``'s own in-memory result, which is the ordering
     fix-brief-A item 4 actually pins.
     """
-    import json  # noqa: PLC0415
-    from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+    import json
+    from datetime import datetime, timedelta
 
     jobs_path = tmp_path / "jobs.json"
-    stale = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    stale = (datetime.now(UTC) - timedelta(days=8)).isoformat()
     raw = [
         {
             "job_id": "job-stale",
@@ -2922,7 +2929,7 @@ def test_stale_running_ingest_job_arms_guard_and_survives_recovery(
     ]
     jobs_path.write_text(json.dumps(raw))
 
-    load_start = datetime.now(timezone.utc)
+    load_start = datetime.now(UTC)
     with patch.object(JobStore, "_write_atomic", new=lambda self: None):
         store = JobStore(path=jobs_path)
 
@@ -2949,11 +2956,11 @@ def test_eviction_only_load_leaves_crashed_flag_false(tmp_path: Path) -> None:
     ``crashed_ingest_on_load`` False — it is narrower than the ``modified``
     flag ``_load()`` returns, which also covers plain age-eviction.
     """
-    import json  # noqa: PLC0415
-    from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+    import json
+    from datetime import datetime, timedelta
 
     jobs_path = tmp_path / "jobs.json"
-    stale = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    stale = (datetime.now(UTC) - timedelta(days=8)).isoformat()
     raw = [
         {
             "job_id": "job-done-stale",
@@ -3001,10 +3008,10 @@ async def _boot_and_get_sole_startup_sync_job(
     wait for ``wait_for`` (an ``asyncio.Event``) if given, then shut down and
     return the single job the startup sync created.
     """
-    from archon_search.server import app as app_module  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+    from archon_search.server import app as app_module
+    from archon_search.server.app import create_app
+    from archon_search.store import SearchStore
+    from archon_search.sync import SearchCollectionSync
 
     if dial_down_timeouts:
         assert monkeypatch is not None
@@ -3055,8 +3062,8 @@ async def _boot_and_get_sole_startup_sync_job(
 async def test_startup_sync_partial_errors_records_sanitized_job_error(
     tmp_path: Path, job_store: JobStore
 ) -> None:
-    from archon_search.server.app import _STARTUP_SYNC_ERROR_PARTIAL  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+    from archon_search.server.app import _STARTUP_SYNC_ERROR_PARTIAL
+    from archon_search.sync import SearchCollectionSync, SyncResult
 
     async def failing_sync(self: SearchCollectionSync, collections: list[str], progress_cb=None) -> SyncResult:
         return SyncResult(errors=["collection 'docs': path does not exist"])
@@ -3071,8 +3078,8 @@ async def test_startup_sync_partial_errors_records_sanitized_job_error(
 async def test_startup_sync_timeout_records_sanitized_job_error(
     tmp_path: Path, job_store: JobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from archon_search.server.app import _STARTUP_SYNC_ERROR_TIMEOUT  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+    from archon_search.server.app import _STARTUP_SYNC_ERROR_TIMEOUT
+    from archon_search.sync import SearchCollectionSync
 
     sync_entered = asyncio.Event()
 
@@ -3107,7 +3114,7 @@ async def test_startup_sync_cancelled_during_shutdown_records_cancelled_not_fail
     Not a behavioural guard: ``CANCELLED`` is terminal, so neither value arms the
     crash-loop guard. This pins correctness of the record.
     """
-    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync, SyncResult
 
     sync_entered = asyncio.Event()
     release = asyncio.Event()
@@ -3138,8 +3145,8 @@ async def test_startup_sync_generic_exception_records_sanitized_error_not_raw_me
     recognizable token must not reach the wire-facing job ``error`` field —
     only the sanitized ``_STARTUP_SYNC_ERROR_FAILED`` constant may appear.
     """
-    from archon_search.server.app import _STARTUP_SYNC_ERROR_FAILED  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+    from archon_search.server.app import _STARTUP_SYNC_ERROR_FAILED
+    from archon_search.sync import SearchCollectionSync
 
     _SECRET_TOKEN = "sk-live-do-not-leak-4f8a9c21"
 
@@ -3167,7 +3174,7 @@ async def test_start_startup_sync_job_store_failure_still_runs_the_sync(
     the pre-fix code only caught ``OSError`` in ``_start_startup_sync_job``, so
     this specifically pins the broadened ``except Exception``.
     """
-    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync, SyncResult
 
     sync_calls: list[list[str]] = []
 
@@ -3181,8 +3188,8 @@ async def test_start_startup_sync_job_store_failure_still_runs_the_sync(
     # Not using _boot_and_get_sole_startup_sync_job: it asserts exactly one job
     # exists, which does not hold here — create_sync always raises, so no job
     # is ever written. Drive the boot directly instead.
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.server.app import create_app
+    from archon_search.store import SearchStore
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -3242,11 +3249,11 @@ async def test_start_startup_sync_job_base_exception_does_not_escape_the_task(
     exactly the escape the module docstring's "never let the task escape"
     comment (app.py) exists to prevent.
     """
-    from archon_search.server import app as app_module  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+    from archon_search.server import app as app_module
+    from archon_search.server.app import create_app
+    from archon_search.server.schemas import StartupSyncResult
+    from archon_search.store import SearchStore
+    from archon_search.sync import SearchCollectionSync, SyncResult
 
     class _ExoticBaseException(BaseException):
         """Simulates a non-Exception BaseException (not KeyboardInterrupt/
@@ -3308,9 +3315,9 @@ async def test_start_startup_sync_job_base_exception_does_not_escape_the_task(
 # no claim that can fail.
 # --------------------------------------------------------------------------- #
 def test_start_startup_sync_job_persists_running_in_one_write(job_store: JobStore) -> None:
-    from archon_search.server.app import _start_startup_sync_job  # noqa: PLC0415
-    from archon_search.types import SyncJob  # noqa: PLC0415
-    from tests._job_store_faults import recording_job_writes  # noqa: PLC0415
+    from archon_search.server.app import _start_startup_sync_job
+    from archon_search.types import SyncJob
+    from tests._job_store_faults import recording_job_writes
 
     with recording_job_writes() as writes:
         job_id = _start_startup_sync_job(job_store)
@@ -3334,9 +3341,9 @@ def test_start_startup_sync_job_persists_running_in_one_write(job_store: JobStor
 # parameter instead of a hidden capture.
 # --------------------------------------------------------------------------- #
 def test_run_startup_sync_hoisted_to_module_level() -> None:
-    import inspect  # noqa: PLC0415
+    import inspect
 
-    from archon_search.server import app as app_module  # noqa: PLC0415
+    from archon_search.server import app as app_module
 
     fn = getattr(app_module, "_run_startup_sync", None)
     assert fn is not None, (
@@ -3368,7 +3375,7 @@ class _CleanCollectionSync:
     """A ``SearchCollectionSync`` stand-in whose ``sync`` finishes at once with an empty, error-free result."""
 
     async def sync(self, collections: list[str], progress_cb=None):
-        from archon_search.sync import SyncResult  # noqa: PLC0415
+        from archon_search.sync import SyncResult
 
         return SyncResult()
 
@@ -3380,9 +3387,9 @@ class _ExplodingCollectionSync:
 
 async def _run_sync_task(job_store: JobStore, job, collection_sync, lock: asyncio.Lock, app_state=None) -> None:
     """Await ``_sync_task`` over ``["docs"]``; *app_state* defaults to one with no startup-sync record."""
-    from types import SimpleNamespace  # noqa: PLC0415
+    from types import SimpleNamespace
 
-    from archon_search.server.routes_sync import _sync_task  # noqa: PLC0415
+    from archon_search.server.routes_sync import _sync_task
 
     await _sync_task(
         job=job,
@@ -3416,7 +3423,7 @@ async def test_sync_task_generic_exception_records_sanitized_error_not_raw_messa
     exception message carrying a recognizable token must not reach the
     wire-facing job ``error`` field.
     """
-    from archon_search.server.routes_sync import _SYNC_FAILED_DETAIL  # noqa: PLC0415
+    from archon_search.server.routes_sync import _SYNC_FAILED_DETAIL
 
     _SECRET_TOKEN = "sk-live-do-not-leak-4f8a9c21"
     running_job = _make_running_sync_job(job_store)
@@ -3559,9 +3566,9 @@ async def test_sync_task_clean_sync_does_not_rewrite_non_suppressed_sync_result(
     or FAILED -> DONE"); its positive coverage lives in
     ``test_sync_task_clean_sync_clears_symmetric_degraded_state`` below.
     """
-    from types import SimpleNamespace  # noqa: PLC0415
+    from types import SimpleNamespace
 
-    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
+    from archon_search.server.schemas import StartupSyncResult
 
     for starting_state in (
         None,
@@ -3602,10 +3609,10 @@ async def test_sync_task_clean_sync_clears_symmetric_degraded_state(
     unlink it, or the NEXT boot would still see it on disk and re-suppress
     despite the operator having just resumed.
     """
-    from types import SimpleNamespace  # noqa: PLC0415
+    from types import SimpleNamespace
 
-    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
-    from archon_search.sync_suppression import (  # noqa: PLC0415
+    from archon_search.server.schemas import StartupSyncResult
+    from archon_search.sync_suppression import (
         get_sync_suppressed_file,
         write_sync_suppressed_sentinel,
     )
@@ -3643,10 +3650,10 @@ async def test_sync_task_with_errors_does_not_clear_suppressed(job_store: JobSto
     ``result.errors`` (no exception) must NOT clear a ``SUPPRESSED``
     ``sync_result`` — only a clean sync (no errors) is the sanctioned resume path.
     """
-    from types import SimpleNamespace  # noqa: PLC0415
+    from types import SimpleNamespace
 
-    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
-    from archon_search.sync import SyncResult  # noqa: PLC0415
+    from archon_search.server.schemas import StartupSyncResult
+    from archon_search.sync import SyncResult
 
     running_job = _make_running_sync_job(job_store)
     lock = asyncio.Lock()
@@ -3683,10 +3690,10 @@ async def test_sync_task_with_errors_clears_neither_field_under_new_rule(
     SUPPRESSED without ``_startup_sync_failed`` — this one additionally covers
     FAILED and pins that the symmetric flag stays put too.
     """
-    from types import SimpleNamespace  # noqa: PLC0415
+    from types import SimpleNamespace
 
-    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
-    from archon_search.sync import SyncResult  # noqa: PLC0415
+    from archon_search.server.schemas import StartupSyncResult
+    from archon_search.sync import SyncResult
 
     running_job = _make_running_sync_job(job_store)
     lock = asyncio.Lock()
@@ -3717,9 +3724,9 @@ async def test_sync_task_with_errors_clears_neither_field_under_new_rule(
 def test_get_jobs_kind_sync_filter_returns_sync_jobs(
     tmp_path: Path, job_store: JobStore, auth_headers: dict[str, str]
 ) -> None:
-    from fastapi.testclient import TestClient  # noqa: PLC0415
+    from fastapi.testclient import TestClient
 
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.server.app import create_app
 
     sync_job = job_store.create_sync(namespace="default")
     ingest_job = job_store.create(collection="docs")
@@ -3747,7 +3754,7 @@ def test_get_jobs_kind_sync_filter_returns_sync_jobs(
 # ``(KeyError, OSError)``.
 # --------------------------------------------------------------------------- #
 def test_finish_startup_sync_job_never_raises_into_task() -> None:
-    from archon_search.server.app import _finish_startup_sync_job  # noqa: PLC0415
+    from archon_search.server.app import _finish_startup_sync_job
 
     class _ExplodingStore:
         def update(self, job_id, **fields):

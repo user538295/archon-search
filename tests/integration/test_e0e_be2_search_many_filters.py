@@ -71,7 +71,7 @@ def test_search_many_file_type_filter_applied_per_leg(tmp_path: Path) -> None:
     from archon_search.filters import SearchFilters
 
     async def _run() -> object:
-        pipeline, store = await _make_real_pipeline(tmp_path)
+        pipeline, _store = await _make_real_pipeline(tmp_path)
 
         # Ingest a .md file into col-a (collections created automatically on ingest)
         md_path = tmp_path / "guide.md"
@@ -114,7 +114,7 @@ def test_search_many_filter_glob_real_pipeline(tmp_path: Path) -> None:
     from archon_search.filters import SearchFilters
 
     async def _run() -> object:
-        pipeline, store = await _make_real_pipeline(tmp_path)
+        pipeline, _store = await _make_real_pipeline(tmp_path)
 
         md_path = tmp_path / "readme.md"
         md_path.write_text(

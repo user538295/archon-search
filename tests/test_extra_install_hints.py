@@ -15,12 +15,25 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.community_builder import CommunityDependencyError, _run_leiden_partition_sync
+from archon_search.community_builder import (
+    CommunityDependencyError,
+    _run_leiden_partition_sync,
+)
 from archon_search.config import HyDEConfig, RAGFusionConfig
-from archon_search.graph_inspector import CollectionGraphView, GraphMLDependencyError, to_graphml
+from archon_search.graph_inspector import (
+    CollectionGraphView,
+    GraphMLDependencyError,
+    to_graphml,
+)
 from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
-from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
-from tests._internal_error_leak import hyde_generator_without_provider, rag_fusion_generator_without_provider
+from archon_search.rag_fusion import (
+    RAG_FUSION_DEPENDENCY_DETAIL,
+    RAGFusionDependencyError,
+)
+from tests._internal_error_leak import (
+    hyde_generator_without_provider,
+    rag_fusion_generator_without_provider,
+)
 
 _INSTALL_METHODS = pytest.mark.parametrize(
     ("prefix_fixture", "command"),
@@ -57,7 +70,7 @@ def test_missing_networkx_names_the_install_command(
 def test_missing_fasttext_names_the_install_command(
     request: pytest.FixtureRequest, prefix_fixture: str, command: str, tmp_path: Path
 ) -> None:
-    import archon_search.language_detector as ld_module  # noqa: PLC0415
+    import archon_search.language_detector as ld_module
 
     request.getfixturevalue(prefix_fixture)
     model_path = tmp_path / "lid.176.ftz"

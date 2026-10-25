@@ -57,10 +57,10 @@ class TestCommunityBuilderDeterminism:
 
         import asyncio
 
+        from archon_search.community_builder import CommunityBuilder
         from archon_search.config import GraphConfig
         from archon_search.graph_store import GraphStore
         from archon_search.graph_types import GraphEdge, GraphNode
-        from archon_search.community_builder import CommunityBuilder
 
         # Config with graph enabled
         graph_config = GraphConfig(
@@ -71,10 +71,11 @@ class TestCommunityBuilderDeterminism:
             max_global_candidates=100,
         )
 
-        from archon_search.graph_types import EntityType, RelationshipType
         from archon_search.graph_types import (
-            make_stable_entity_id,
+            EntityType,
+            RelationshipType,
             make_stable_edge_id,
+            make_stable_entity_id,
         )
 
         # Create a simple test graph (3 nodes in a chain)
@@ -178,10 +179,10 @@ class TestCommunityBuilderDeterminism:
 
         import asyncio
 
+        from archon_search.community_builder import CommunityBuilder
         from archon_search.config import GraphConfig
         from archon_search.graph_store import GraphStore
         from archon_search.graph_types import GraphEdge, GraphNode
-        from archon_search.community_builder import CommunityBuilder
 
         # Config with small max_community_size to trigger splitting
         graph_config = GraphConfig(
@@ -192,10 +193,11 @@ class TestCommunityBuilderDeterminism:
             max_global_candidates=100,
         )
 
-        from archon_search.graph_types import EntityType, RelationshipType
         from archon_search.graph_types import (
-            make_stable_entity_id,
+            EntityType,
+            RelationshipType,
             make_stable_edge_id,
+            make_stable_entity_id,
         )
 
         # Create a larger graph (6+ nodes) that Leiden will initially group together
@@ -277,11 +279,17 @@ class TestCommunityBuilderDeterminism:
 
         import asyncio
 
+        from archon_search.community_builder import CommunityBuilder
         from archon_search.config import GraphConfig
         from archon_search.graph_store import GraphStore
-        from archon_search.graph_types import EntityType, GraphEdge, GraphNode, RelationshipType
-        from archon_search.graph_types import make_stable_edge_id, make_stable_entity_id
-        from archon_search.community_builder import CommunityBuilder
+        from archon_search.graph_types import (
+            EntityType,
+            GraphEdge,
+            GraphNode,
+            RelationshipType,
+            make_stable_edge_id,
+            make_stable_entity_id,
+        )
 
         graph_config = GraphConfig(
             enabled=True,

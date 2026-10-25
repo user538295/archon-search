@@ -1,7 +1,7 @@
 """Tests for SearchFilters Pydantic model (archon_search/filters.py)."""
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -44,26 +44,26 @@ def test_indexed_after_naive_treated_as_utc():
     naive_dt = datetime(2025, 1, 15, 10, 30, 0)
     f = SearchFilters(indexed_after=naive_dt)
     assert f.indexed_after is not None
-    assert f.indexed_after.tzinfo == timezone.utc
+    assert f.indexed_after.tzinfo == UTC
 
 
 def test_indexed_after_date_only_coerced_to_start_of_day():
     d = date(2025, 3, 10)
     f = SearchFilters(indexed_after=d)
-    assert f.indexed_after == datetime(2025, 3, 10, 0, 0, 0, 0, tzinfo=timezone.utc)
+    assert f.indexed_after == datetime(2025, 3, 10, 0, 0, 0, 0, tzinfo=UTC)
 
 
 def test_indexed_before_date_only_coerced_to_end_of_day():
     d = date(2025, 3, 10)
     f = SearchFilters(indexed_before=d)
-    assert f.indexed_before == datetime(2025, 3, 10, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    assert f.indexed_before == datetime(2025, 3, 10, 23, 59, 59, 999999, tzinfo=UTC)
 
 
 def test_indexed_after_greater_than_indexed_before_rejected():
     with pytest.raises(ValidationError):
         SearchFilters(
-            indexed_after=datetime(2025, 5, 20, tzinfo=timezone.utc),
-            indexed_before=datetime(2025, 5, 10, tzinfo=timezone.utc),
+            indexed_after=datetime(2025, 5, 20, tzinfo=UTC),
+            indexed_before=datetime(2025, 5, 10, tzinfo=UTC),
         )
 
 
@@ -131,16 +131,16 @@ def test_file_type_multi_dots_stripped():
 
 def test_indexed_before_json_date_string_coerced_to_end_of_day():
     f = SearchFilters.model_validate({"indexed_before": "2025-03-10"})
-    assert f.indexed_before == datetime(2025, 3, 10, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    assert f.indexed_before == datetime(2025, 3, 10, 23, 59, 59, 999999, tzinfo=UTC)
 
 
 def test_indexed_after_json_date_string_coerced_to_start_of_day():
     f = SearchFilters.model_validate({"indexed_after": "2025-03-10"})
-    assert f.indexed_after == datetime(2025, 3, 10, 0, 0, 0, 0, tzinfo=timezone.utc)
+    assert f.indexed_after == datetime(2025, 3, 10, 0, 0, 0, 0, tzinfo=UTC)
 
 
 def test_indexed_after_equals_indexed_before_accepted():
-    dt = datetime(2025, 3, 10, 12, 0, 0, tzinfo=timezone.utc)
+    dt = datetime(2025, 3, 10, 12, 0, 0, tzinfo=UTC)
     f = SearchFilters(indexed_after=dt, indexed_before=dt)
     assert f.indexed_after == f.indexed_before
 
@@ -149,7 +149,7 @@ def test_indexed_before_naive_treated_as_utc():
     naive_dt = datetime(2025, 1, 15, 10, 30, 0)
     f = SearchFilters(indexed_before=naive_dt)
     assert f.indexed_before is not None
-    assert f.indexed_before.tzinfo == timezone.utc
+    assert f.indexed_before.tzinfo == UTC
 
 
 # --- Bug 3: language="" ---
@@ -179,5 +179,5 @@ def test_source_path_prefix_valid_accepted():
 def test_both_indexed_as_date_objects_same_day():
     d = date(2025, 3, 10)
     f = SearchFilters(indexed_after=d, indexed_before=d)
-    assert f.indexed_after == datetime(2025, 3, 10, 0, 0, 0, 0, tzinfo=timezone.utc)
-    assert f.indexed_before == datetime(2025, 3, 10, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    assert f.indexed_after == datetime(2025, 3, 10, 0, 0, 0, 0, tzinfo=UTC)
+    assert f.indexed_before == datetime(2025, 3, 10, 23, 59, 59, 999999, tzinfo=UTC)

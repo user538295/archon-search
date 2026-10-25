@@ -38,7 +38,7 @@ def test_is_instance_of_lifecycle() -> None:
 
 def test_start_calls_launchctl_load_and_start(tmp_path: Path) -> None:
     """start() calls launchctl load <plist> then launchctl start <label>."""
-    from archon_search.platform.macos import LaunchdSearchService, _LABEL
+    from archon_search.platform.macos import _LABEL, LaunchdSearchService
     svc = LaunchdSearchService()
     plist = tmp_path / "com.archon.search.plist"
     plist.write_text("<plist/>")
@@ -84,10 +84,9 @@ def test_start_raises_if_plist_missing(tmp_path: Path) -> None:
 
     with (
         patch.object(type(svc), "_plist_path", property(lambda self: plist)),
-        patch.object(svc, "_is_loaded", return_value=False),
+        patch.object(svc, "_is_loaded", return_value=False),pytest.raises(RuntimeError, match="Plist not installed")
     ):
-        with pytest.raises(RuntimeError, match="Plist not installed"):
-            svc.start()
+        svc.start()
 
 
 def test_start_raises_on_load_failure(tmp_path: Path) -> None:
@@ -100,10 +99,9 @@ def test_start_raises_on_load_failure(tmp_path: Path) -> None:
     with (
         patch.object(type(svc), "_plist_path", property(lambda self: plist)),
         patch.object(svc, "_is_loaded", return_value=False),
-        patch.object(svc, "_run", return_value=_fail("load error")),
+        patch.object(svc, "_run", return_value=_fail("load error")),pytest.raises(RuntimeError, match="launchctl load failed")
     ):
-        with pytest.raises(RuntimeError, match="launchctl load failed"):
-            svc.start()
+        svc.start()
 
 
 def test_start_raises_on_start_failure(tmp_path: Path) -> None:
@@ -124,10 +122,9 @@ def test_start_raises_on_start_failure(tmp_path: Path) -> None:
     with (
         patch.object(type(svc), "_plist_path", property(lambda self: plist)),
         patch.object(svc, "_is_loaded", return_value=False),
-        patch.object(svc, "_run", side_effect=mock_run),
+        patch.object(svc, "_run", side_effect=mock_run),pytest.raises(RuntimeError, match="launchctl start failed")
     ):
-        with pytest.raises(RuntimeError, match="launchctl start failed"):
-            svc.start()
+        svc.start()
 
 
 def test_start_raises_when_launchctl_not_found(tmp_path: Path) -> None:
@@ -140,10 +137,9 @@ def test_start_raises_when_launchctl_not_found(tmp_path: Path) -> None:
     with (
         patch.object(type(svc), "_plist_path", property(lambda self: plist)),
         patch.object(svc, "_is_loaded", return_value=False),
-        patch.object(svc, "_run", side_effect=FileNotFoundError),
+        patch.object(svc, "_run", side_effect=FileNotFoundError),pytest.raises(RuntimeError, match="launchctl binary not found")
     ):
-        with pytest.raises(RuntimeError, match="launchctl binary not found"):
-            svc.start()
+        svc.start()
 
 
 # ── stop ───────────────────────────────────────────────────────────────────────
@@ -247,10 +243,9 @@ def test_stop_raises_on_unload_failure() -> None:
 
     with (
         patch.object(svc, "_is_loaded", return_value=True),
-        patch.object(svc, "_run", return_value=_fail("unload error")),
+        patch.object(svc, "_run", return_value=_fail("unload error")),pytest.raises(RuntimeError, match="launchctl unload failed")
     ):
-        with pytest.raises(RuntimeError, match="launchctl unload failed"):
-            svc.stop()
+        svc.stop()
 
 
 def test_stop_raises_when_launchctl_not_found() -> None:
@@ -260,10 +255,9 @@ def test_stop_raises_when_launchctl_not_found() -> None:
 
     with (
         patch.object(svc, "_is_loaded", return_value=True),
-        patch.object(svc, "_run", side_effect=FileNotFoundError),
+        patch.object(svc, "_run", side_effect=FileNotFoundError),pytest.raises(RuntimeError, match="launchctl binary not found")
     ):
-        with pytest.raises(RuntimeError, match="launchctl binary not found"):
-            svc.stop()
+        svc.stop()
 
 
 # ── status ─────────────────────────────────────────────────────────────────────
@@ -348,6 +342,7 @@ def test_register_writes_plist_with_python_executable(
 ) -> None:
     """register() launches the server via a wrapper script that uses sys.executable."""
     from pathlib import Path as _Path
+
     from archon_search.platform.macos import LaunchdSearchService
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
@@ -363,6 +358,7 @@ def test_register_plist_uses_taskpolicy(
 ) -> None:
     """register() wraps server command with taskpolicy -b for background QoS."""
     from pathlib import Path as _Path
+
     from archon_search.platform.macos import LaunchdSearchService
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
@@ -513,10 +509,9 @@ def test_unregister_raises_when_launchctl_not_found(tmp_path: Path) -> None:
     with (
         patch.object(type(svc), "_plist_path", property(lambda self: plist)),
         patch.object(svc, "_is_loaded", return_value=True),
-        patch.object(svc, "_run", side_effect=FileNotFoundError),
+        patch.object(svc, "_run", side_effect=FileNotFoundError),pytest.raises(RuntimeError, match="launchctl binary not found")
     ):
-        with pytest.raises(RuntimeError, match="launchctl binary not found"):
-            svc.unregister()
+        svc.unregister()
 
 
 # ── restart default ───────────────────────────────────────────────────────────
@@ -624,6 +619,7 @@ def test_register_writes_wrapper_script_on_macos(
 ) -> None:
     """register() writes run-server.sh with mode 0o755 in data_dir."""
     import stat as _stat
+
     from archon_search.platform.macos import LaunchdSearchService
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
@@ -645,7 +641,7 @@ def test_wrapper_script_syntax_is_valid(
     with patch.object(Path, "home", return_value=tmp_path):
         svc.register(config_path=_CONFIG_PATH)
     wrapper = tmp_path / ".archon-search" / "run-server.sh"
-    result = subprocess.run(["sh", "-n", str(wrapper)], capture_output=True, text=True)
+    result = subprocess.run(["sh", "-n", str(wrapper)], capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"sh -n syntax check failed: {result.stderr}"
 
 
@@ -1210,9 +1206,18 @@ def test_register_wraps_write_errors_naming_the_path_written(
     svc = LaunchdSearchService()
     plist = tmp_path / "LaunchAgents" / "com.archon.search.plist"
     expected = re.escape(message.format(data_dir=data_dir, plist=plist))
+    original = getattr(Path, method)
+    service_files = {"run-server.sh", plist.name}
+
+    def fail_for_the_service_files(self: Path, *args: object, **kwargs: object):
+        # Only the files register() writes fail: ensure_private_dir() chmods every directory it creates.
+        if self.name in service_files:
+            raise error
+        return original(self, *args, **kwargs)
+
     with (
         patch.object(type(svc), "_plist_path", property(lambda self: plist)),
-        patch(f"pathlib.Path.{method}", side_effect=error),
+        patch(f"pathlib.Path.{method}", autospec=True, side_effect=fail_for_the_service_files),
         pytest.raises(RuntimeError, match=f"^{expected}$") as excinfo,
     ):
         svc.register(config_path=_CONFIG_PATH)

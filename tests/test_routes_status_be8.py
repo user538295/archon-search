@@ -20,7 +20,6 @@ from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

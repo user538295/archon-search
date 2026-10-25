@@ -78,7 +78,7 @@ def test_mcp_namespace_propagation_cross_ns_tool_call(tmp_path, monkeypatch) -> 
         tmp_path,
         monkeypatch,
         mcp_enabled=True,
-    ) as (client, cfg, api_key):
+    ) as (client, _cfg, api_key):
         # Create a managed key scoped to ns-a using the admin API
         resp = client.post(
             "/keys",

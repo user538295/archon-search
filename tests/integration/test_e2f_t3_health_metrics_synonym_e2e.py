@@ -120,7 +120,11 @@ def test_e2e_health_metrics_reflect_synonym_activity(
     7. GET /status → assert synonym_edge_count > 0 in the collection's GraphCollectionStats.
     8. GET /graph/{collection} → assert at least one edge has relationship_type="synonym_of".
     """
-    from tests.integration.conftest import ingest_file_via_path, install_k8s_synonym_graph_stub, make_real_app
+    from tests.integration.conftest import (
+        ingest_file_via_path,
+        install_k8s_synonym_graph_stub,
+        make_real_app,
+    )
 
     # Step 1: install content-dependent graph-engine stub BEFORE make_real_app
     install_k8s_synonym_graph_stub(monkeypatch)

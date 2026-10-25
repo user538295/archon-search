@@ -50,7 +50,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from pythonjsonlogger.jsonlogger import JsonFormatter
 
 import archon_search.server.app as app_module
@@ -107,13 +106,13 @@ def test_run_server_json_log_format_all_log_lines_are_json(
     log_path = tmp_path / "archon-search.log"
     monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "archon-search.toml"))
 
-    def _fake_uvicorn_run(app, **kwargs):  # noqa: ANN001, ANN003
+    def _fake_uvicorn_run(app, **kwargs):
         # Faithfully reproduce what real uvicorn does on startup: build a real
         # uvicorn.Config with whatever run_server passed (host/port and, once
         # fixed, log_config) and run its REAL configure_logging(). Default
         # resolution (no log_config → uvicorn's text LOGGING_CONFIG) is uvicorn's
         # own, not the test's.
-        import uvicorn  # noqa: PLC0415
+        import uvicorn
 
         # Mimic the launchd plist: StandardOutPath/StandardErrorPath both point
         # at the log file, so the process's stdout/stderr go there. Redirect
@@ -202,7 +201,7 @@ def test_run_server_text_format_omits_log_config(
     uvicorn.run — uvicorn keeps its colored text default."""
     captured: dict = {}
 
-    def _fake_uvicorn_run(app, **kwargs):  # noqa: ANN001, ANN003
+    def _fake_uvicorn_run(app, **kwargs):
         captured.update(kwargs)
 
     monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "archon-search.toml"))

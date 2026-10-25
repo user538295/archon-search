@@ -9,14 +9,14 @@ import pytest
 
 def test_chunker_importable_from_archon_search() -> None:
     """Chunker must be importable from archon_search after the module move."""
-    from archon_search.chunker import DocumentChunker  # noqa: PLC0415
+    from archon_search.chunker import DocumentChunker
 
     assert DocumentChunker is not None
 
 
 def test_store_importable_from_archon_search() -> None:
     """SearchStore must be importable from archon_search after the module move."""
-    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.store import SearchStore
 
     assert SearchStore is not None
 

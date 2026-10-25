@@ -18,7 +18,6 @@ import pytest
 from archon_search.graph_expander import ExpandedQuery
 from archon_search.pipeline import SearchPipelineResult
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -191,18 +190,17 @@ async def test_search_expanded_text_reaches_embedder(connected_store, col_name):
         embedded_texts.append(text)
         return [0.1] * 4
 
-    with patch.object(pipeline._global_embedder, "embed_one", side_effect=_capture_embed):
-        with patch.object(
-            pipeline.store,
-            "hybrid_search_with_trace",
-            new=AsyncMock(return_value=[]),
-        ):
-            await pipeline.search(
-                "AuthService",
-                col_name,
-                embedder=pipeline._global_embedder,
-                graph_mode="naive",
-            )
+    with patch.object(pipeline._global_embedder, "embed_one", side_effect=_capture_embed), patch.object(
+        pipeline.store,
+        "hybrid_search_with_trace",
+        new=AsyncMock(return_value=[]),
+    ):
+        await pipeline.search(
+            "AuthService",
+            col_name,
+            embedder=pipeline._global_embedder,
+            graph_mode="naive",
+        )
 
     # The embedder must have been called with the expanded text, not the original
     assert "AuthService TokenValidator" in embedded_texts
@@ -225,30 +223,32 @@ async def test_search_graph_mode_with_rag_fusion_applies_expansion_to_original(
 
     rag_config = RAGFusionConfig(enabled=True)
 
-    with patch.object(
-        pipeline.store,
-        "has_vector_index",
-        new=AsyncMock(return_value=True),  # True so we reach variant generation
-    ):
-        with patch.object(
+    with (
+        patch.object(
+            pipeline.store,
+            "has_vector_index",
+            new=AsyncMock(return_value=True),  # True so we reach variant generation
+        ),
+        patch.object(
             pipeline._global_embedder,
             "embed_one",
             new=AsyncMock(return_value=[0.1] * 4),
-        ):
-            with patch.object(
-                pipeline.store,
-                "hybrid_search_with_trace",
-                new=AsyncMock(return_value=[]),
-            ):
-                result = await pipeline.search(
-                    "AuthService",
-                    col_name,
-                    embedder=pipeline._global_embedder,
-                    graph_mode="naive",
-                    rag_fusion=True,
-                    rag_fusion_generator=mock_rag_gen,
-                    rag_fusion_config=rag_config,
-                )
+        ),
+        patch.object(
+            pipeline.store,
+            "hybrid_search_with_trace",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        result = await pipeline.search(
+            "AuthService",
+            col_name,
+            embedder=pipeline._global_embedder,
+            graph_mode="naive",
+            rag_fusion=True,
+            rag_fusion_generator=mock_rag_gen,
+            rag_fusion_config=rag_config,
+        )
 
     # Expansion ran on the original query
     expander.expand.assert_awaited_once_with("AuthService", col_name, ns="default")
@@ -314,22 +314,20 @@ async def test_search_many_applies_expansion_per_leg(connected_store, col_name):
         pipeline,
         "get_all_collections_meta",
         new=AsyncMock(return_value=[meta1, meta2]),
+    ), patch.object(
+        pipeline._global_embedder,
+        "embed_one",
+        new=AsyncMock(return_value=[0.1] * 4),
+    ), patch.object(
+        pipeline.store,
+        "hybrid_search_with_trace",
+        new=store_mock,
     ):
-        with patch.object(
-            pipeline._global_embedder,
-            "embed_one",
-            new=AsyncMock(return_value=[0.1] * 4),
-        ):
-            with patch.object(
-                pipeline.store,
-                "hybrid_search_with_trace",
-                new=store_mock,
-            ):
-                result = await pipeline.search_many(
-                    "AuthService",
-                    [col_name, col2],
-                    graph_mode="naive",
-                )
+        result = await pipeline.search_many(
+            "AuthService",
+            [col_name, col2],
+            graph_mode="naive",
+        )
 
     # Expander must have been called once per collection with the correct collection name
     calls = expander.expand.await_args_list

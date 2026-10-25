@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -62,7 +62,7 @@ async def _inject_chunks_ns(store, col: str, embedding_model: str, namespace: st
         text=_DOC_TEXT,
         vector=[0.0] * _EMBEDDING_DIM,
         source_path=_DOC_PATH,
-        indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+        indexed_at=normalize_iso_utc(datetime.now(UTC)),
         acl=None,
     )
 

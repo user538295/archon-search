@@ -16,8 +16,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
+from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 
 def _make_app(pipeline: MagicMock) -> StubFastMCP:
@@ -79,6 +79,7 @@ def test_mcp_ingest_result_schema_rejects_invalid_code() -> None:
     loudly at the MCP boundary rather than passing through silently.
     """
     from pydantic import ValidationError
+
     from archon_search.server.mcp_schemas import IngestResultSchema
 
     with pytest.raises(ValidationError):

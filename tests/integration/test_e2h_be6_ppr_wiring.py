@@ -22,13 +22,13 @@ from archon_search.graph_types import (
     GraphNode,
     make_stable_entity_id,
 )
+from tests._graph_engine_stub import install_graph_engine_stub
 from tests.integration.conftest import (
     ingest_file_via_path,
     make_real_app,
     mcp_initialize,
     mcp_tool_call,
 )
-from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("ppr_wiring")]
 
@@ -143,7 +143,7 @@ def test_pprMode_emptyNodeTable_fallsBackToHybrid(
     """
     # Use a stub that extracts NO entities so the graph stays empty after ingest
     install_graph_engine_stub(monkeypatch, empty=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("kubernetes is a container orchestration system.")
         ingest_file_via_path(client, "col", str(doc), api_key=api_key)
@@ -252,7 +252,7 @@ def test_pprMode_multiCollection_returns422(
 ) -> None:
     """Multi-collection PPR is not supported: POST /search with collections + graph_mode='ppr' returns 422."""
     install_graph_engine_stub(monkeypatch, entities=[("kubernetes", "system")], content_aware=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc = tmp_path / "k8s.txt"
         doc.write_text("kubernetes is used for container orchestration at scale.")
         ingest_file_via_path(client, "col", str(doc), api_key=api_key)

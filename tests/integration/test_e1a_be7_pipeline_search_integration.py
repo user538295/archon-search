@@ -12,7 +12,6 @@ import pytest
 
 from archon_search.graph_expander import ExpandedQuery
 
-
 # ---------------------------------------------------------------------------
 # Integration test
 # ---------------------------------------------------------------------------

@@ -1,9 +1,8 @@
 """BE-1 tests: JobKind enum, SyncJob, MetadataReindexJob, store round-trip."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import json
+from pathlib import Path
 
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.types import (
@@ -14,7 +13,6 @@ from archon_search.types import (
     MigrationKind,
     SyncJob,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

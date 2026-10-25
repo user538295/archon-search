@@ -24,7 +24,6 @@ from archon_search._diagnostics import (
 from archon_search.pipeline import ExplainPipelineResult, SearchPipeline
 from archon_search.server.routes_explain import ExplainResult
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

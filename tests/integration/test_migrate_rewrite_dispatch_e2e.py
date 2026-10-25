@@ -71,7 +71,7 @@ def test_migration_job_dispatched_and_reaches_done(
         introduced_at=999,
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
         search_store = client.app.state.search_store
 
@@ -146,7 +146,7 @@ def test_migration_job_progress_written_every_100_chunks(
     )
     progress_calls: list[tuple[int, int, str]] = []
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
         search_store = client.app.state.search_store
 
@@ -231,7 +231,7 @@ def test_migration_job_dispatched_via_scheduler_reaches_done(
         introduced_at=999,
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
         search_store = client.app.state.search_store
 
@@ -306,7 +306,7 @@ def test_migration_job_resume_from_failed_state_reaches_done(
         introduced_at=999,
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
         search_store = client.app.state.search_store
 
@@ -397,8 +397,8 @@ def test_rewrite_migration_full_lifecycle_e2e(
     """
     monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
 
-    from archon_search.types import MigrationKind, MigrationSpec
     from archon_search.sync import path_to_collection_name
+    from archon_search.types import MigrationKind, MigrationSpec
 
     dummy_spec = MigrationSpec(
         name="lifecycle_rewrite",
@@ -407,7 +407,7 @@ def test_rewrite_migration_full_lifecycle_e2e(
         introduced_at=999,
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
         search_store = client.app.state.search_store
         headers = _auth(api_key)
@@ -502,8 +502,8 @@ def test_concurrent_ingest_503_during_rewrite_e2e(
     # Lower the lock-acquisition timeout so the ingest 503s quickly.
     monkeypatch.setattr(_constants, "INGEST_LOCK_TIMEOUT_S", 0.05)
 
-    from archon_search.types import MigrationKind, MigrationSpec
     from archon_search.sync import path_to_collection_name
+    from archon_search.types import MigrationKind, MigrationSpec
 
     dummy_spec = MigrationSpec(
         name="concurrent_rewrite",
@@ -515,7 +515,7 @@ def test_concurrent_ingest_503_during_rewrite_e2e(
     lock_held_event = threading.Event()
     allow_release_event = threading.Event()
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
         search_store = client.app.state.search_store
         headers = _auth(api_key)
@@ -622,8 +622,8 @@ def test_list_jobs_kind_migration_filter(
     """
     monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
 
-    from archon_search.types import MigrationKind, MigrationSpec
     from archon_search.sync import path_to_collection_name
+    from archon_search.types import MigrationKind, MigrationSpec
 
     dummy_spec = MigrationSpec(
         name="filter_test_rewrite",
@@ -632,7 +632,7 @@ def test_list_jobs_kind_migration_filter(
         introduced_at=999,
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         search_store = client.app.state.search_store
         headers = _auth(api_key)
 
@@ -710,8 +710,8 @@ def test_empty_collection_rewrite_completes_immediately_e2e(
     """
     monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
 
-    from archon_search.types import MigrationKind, MigrationSpec
     from archon_search.sync import path_to_collection_name
+    from archon_search.types import MigrationKind, MigrationSpec
 
     dummy_spec = MigrationSpec(
         name="empty_rewrite",
@@ -720,7 +720,7 @@ def test_empty_collection_rewrite_completes_immediately_e2e(
         introduced_at=999,
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
         search_store = client.app.state.search_store
         headers = _auth(api_key)
@@ -814,7 +814,7 @@ def test_migrate_rewrite_persists_job_only_as_running(tmp_path: Path, monkeypatc
     would be the scheduler's to run (a second _migration_task, or after a restart one whose caller got 500)."""
     from tests._job_store_faults import recording_job_writes
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col_name = _add_collection(client, tmp_path, api_key)
         with _dummy_rewrite_patches(client.app.state.search_store), recording_job_writes() as writes:
             resp = client.post(f"/collections/{col_name}/migrate", json={"backup_confirmed": True}, headers=_auth(api_key))
@@ -838,7 +838,7 @@ def test_migrate_rewrite_job_write_failure_returns_sanitized_500_and_never_runs(
     import archon_search.server.routes_collections as routes_collections_mod
     from tests._job_store_faults import failing_job_writes
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         job_store = client.app.state.job_store
         col_name = _add_collection(client, tmp_path, api_key)
         with _dummy_rewrite_patches(client.app.state.search_store), \

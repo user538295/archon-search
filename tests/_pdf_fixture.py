@@ -30,7 +30,7 @@ def generate_three_page_pdf(target: Path) -> None:
     """
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    from reportlab.pdfgen.canvas import Canvas  # noqa: PLC0415
+    from reportlab.pdfgen.canvas import Canvas
 
     c = Canvas(str(target), pagesize=(612, 792), invariant=True)
     c.setCreator("archon-search-test")
@@ -56,9 +56,9 @@ def generate_scanned_pdf(target: Path, text: str = "ARCHON SEARCH SCANNED PAGE")
     """
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    from PIL import Image, ImageDraw, ImageFont  # noqa: PLC0415
-    from reportlab.lib.utils import ImageReader  # noqa: PLC0415
-    from reportlab.pdfgen.canvas import Canvas  # noqa: PLC0415
+    from PIL import Image, ImageDraw, ImageFont
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen.canvas import Canvas
 
     size = 1024
     img = Image.new("RGB", (size, size), (255, 255, 255))

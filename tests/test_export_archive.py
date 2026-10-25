@@ -21,7 +21,6 @@ from archon_search.jobs.export_archive import (
     quote_archive_value,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -53,6 +52,7 @@ def _make_manifest(doc_count: int = 3) -> dict:
     return {
         "schema_version": EXPORT_SCHEMA_VERSION,
         "collection": "test-col",
+        "namespace": "default",
         "exported_at": "2024-01-01T00:00:00Z",
         "doc_count": doc_count,
         "active_embedding_model": "BAAI/bge-small-en-v1.5",
@@ -164,6 +164,7 @@ class TestImportArchiveReader:
         incomplete_manifest = {
             "schema_version": EXPORT_SCHEMA_VERSION,
             "collection": "test-col",
+            "namespace": "default",
             "exported_at": "2024-01-01T00:00:00Z",
             "doc_count": 0,
             # "active_embedding_model" intentionally missing
@@ -339,7 +340,7 @@ def test_quote_archive_value_quotes_non_string_values(value: object, expected: s
 
 def test_quote_archive_value_escapes_control_and_bidi_characters() -> None:
     """A newline, an ANSI escape or a right-to-left override cannot forge log or terminal output."""
-    assert quote_archive_value("a\nb\x1b[31mc‮d") == "'a\\nb\\x1b[31mc\\u202ed'"
+    assert quote_archive_value("a\nb\x1b[31mc\u202ed") == "'a\\nb\\x1b[31mc\\u202ed'"
 
 
 # ---------------------------------------------------------------------------
@@ -499,3 +500,30 @@ def test_manifest_error_detail_logs_the_cause_it_withholds(caplog: pytest.LogCap
     assert _INTERNAL_CAUSE in record.getMessage()
     assert record.exc_info is not None
     assert record.exc_info[1] is cause
+
+
+def test_open_private_closes_the_fd_when_restricting_it_fails(tmp_path, monkeypatch):
+    import os
+
+    from archon_search.jobs import export_archive
+
+    opened: list[int] = []
+    real_open = os.open
+
+    def tracking_open(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+
+    def failing_restrict(fd):
+        raise OSError("fchmod refused")
+
+    monkeypatch.setattr(export_archive.os, "open", tracking_open)
+    monkeypatch.setattr(export_archive, "restrict_fd_to_owner", failing_restrict)
+
+    with pytest.raises(OSError, match="fchmod refused"):
+        export_archive._open_private(tmp_path / "x.tmp", 0, "wb")
+
+    assert len(opened) == 1
+    with pytest.raises(OSError):  # EBADF: the descriptor was closed, not leaked
+        os.fstat(opened[0])

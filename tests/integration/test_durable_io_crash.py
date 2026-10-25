@@ -121,6 +121,7 @@ def _run_script(script: str, target: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-c", script, str(target)],
         capture_output=True,
+        check=False,
     )
 
 

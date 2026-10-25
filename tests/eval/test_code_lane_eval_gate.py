@@ -34,6 +34,7 @@ import pytest
 pytest.importorskip("tree_sitter")
 pytest.importorskip("tree_sitter_python")
 
+from archon_search.eval.fixtures import build_doc_collection_map, load_eval_corpus
 from archon_search.eval.metrics import compute_recall_at_k
 from archon_search.eval.runner import (
     _build_code_lane_pipeline,
@@ -41,7 +42,6 @@ from archon_search.eval.runner import (
     assert_thresholds,
     run_eval_suite,
 )
-from archon_search.eval.fixtures import build_doc_collection_map, load_eval_corpus
 
 CORPUS_ROOT = Path(__file__).resolve().parent
 RUNTIME_CONFIG_PATH = CORPUS_ROOT / "runtime.toml"
@@ -793,6 +793,7 @@ def test_e2e_codeDefrefEvalGate_subprocess() -> None:
             text=True,
             timeout=300,
             env=child_env,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         pytest.fail(

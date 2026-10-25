@@ -228,7 +228,7 @@ def test_revoke_yes_integration(tmp_path, monkeypatch):
     """`key revoke --yes` against a real server actually revokes the key."""
     from tests.integration.conftest import make_real_app
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         from archon_search.cli.key_cmd import key_cmd
 
         created = client.post(

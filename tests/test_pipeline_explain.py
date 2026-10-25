@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -11,9 +12,12 @@ from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import ChunkRecord
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder import Embedder
-from archon_search.pipeline import ExplainPipelineResult, ExplainStageError, SearchPipeline
+from archon_search.pipeline import (
+    ExplainPipelineResult,
+    ExplainStageError,
+    SearchPipeline,
+)
 from archon_search.reranker import Reranker
-
 
 # ---------------------------------------------------------------------------
 # Mock backends
@@ -184,7 +188,7 @@ async def test_explain_rerank_false_uses_rrf_ordering(connected_store, col_name)
         )
 
     # Combined list must be sorted by rrf_score desc, tie-break (doc_id, chunk_id) asc
-    for a, b in zip(all_candidates, all_candidates[1:]):
+    for a, b in itertools.pairwise(all_candidates):
         a_key = (-a.score_breakdown.rrf_score, a.doc_id, a.chunk_id)
         b_key = (-b.score_breakdown.rrf_score, b.doc_id, b.chunk_id)
         assert a_key <= b_key, (
@@ -370,7 +374,7 @@ async def test_explain_identical_scores_tie_break_by_doc_chunk_id(connected_stor
         )
 
     # Must be sorted by (doc_id, chunk_id) ascending (since scores tie)
-    for a, b in zip(all_candidates, all_candidates[1:]):
+    for a, b in itertools.pairwise(all_candidates):
         a_key = (a.doc_id, a.chunk_id)
         b_key = (b.doc_id, b.chunk_id)
         assert a_key <= b_key, (
@@ -441,24 +445,6 @@ async def test_explain_uses_rerank_candidates(connected_store, col_name, monkeyp
     await pipeline.explain("common alpha beta", col_name, top_k=5, rerank=True)
 
     spy.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_explain_does_not_call_private_rerank_with_trace(
-    connected_store, col_name, monkeypatch
-):
-    """explain() does the rerank work via rerank_candidates, not the private alias."""
-    from unittest.mock import AsyncMock
-
-    pipeline = _make_pipeline(connected_store, top_k_retrieve=10, top_k_return=5)
-    await _ingest(connected_store, col_name, _make_records(5))
-
-    alias_spy = AsyncMock(side_effect=pipeline._reranker._rerank_with_trace)
-    monkeypatch.setattr(pipeline._reranker, "_rerank_with_trace", alias_spy)
-
-    await pipeline.explain("common alpha beta", col_name, top_k=5, rerank=True)
-
-    alias_spy.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

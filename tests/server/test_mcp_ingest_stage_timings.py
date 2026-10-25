@@ -12,9 +12,6 @@ from archon_search.config import SearchConfig
 from archon_search.observability import _stage_recorder, record_stage
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
-
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

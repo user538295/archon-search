@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
 from archon_search._types import CollectionInfo
+from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.store import SearchStore
 from archon_search.sync import collection_sync_failed_detail, path_to_collection_name
 
@@ -121,7 +123,7 @@ class TestSearchCollectionSync:
         syncer = SearchCollectionSync(pipeline)
         result = await syncer.sync([])  # empty desired
 
-        pipeline.store.drop_collection.assert_called_once_with("oldcol", _locked_by_caller=True)
+        pipeline.store.drop_collection.assert_called_once_with("oldcol", namespace=DEFAULT_NAMESPACE, _locked_by_caller=True)
         assert "oldcol" in result.removed
         assert result.errors == []
 
@@ -334,7 +336,7 @@ class TestSearchCollectionSync:
         syncer = SearchCollectionSync(pipeline)
         result = await syncer.sync([])
 
-        pipeline.store.drop_collection.assert_called_once_with("managed", _locked_by_caller=True)
+        pipeline.store.drop_collection.assert_called_once_with("managed", namespace=DEFAULT_NAMESPACE, _locked_by_caller=True)
         assert "managed" in result.removed
         assert "unmanaged" in result.skipped
 
@@ -398,6 +400,7 @@ class TestSearchCollectionSync:
     async def test_migration_updates_manifest_on_rename(self, tmp_path):
         """After rename, manifest entry archon-history → sessions."""
         import json
+
         from archon_search.sync import SearchCollectionSync
 
         db_path = tmp_path / "db"
@@ -459,8 +462,9 @@ class TestSearchCollectionSync:
     async def test_failed_apply_collection_excluded_from_manifest(self, tmp_path):
         """Collection where _apply_collection_changes returns an error must NOT appear in manifest."""
         import json
-        from archon_search.sync import SearchCollectionSync
         from unittest.mock import MagicMock
+
+        from archon_search.sync import SearchCollectionSync
 
         existing_dir = tmp_path / "myproject"
         existing_dir.mkdir()
@@ -503,8 +507,9 @@ class TestSearchCollectionSync:
     async def test_successful_apply_collection_included_in_manifest(self, tmp_path):
         """Collection where _apply_collection_changes returns None (success) MUST appear in manifest."""
         import json
-        from archon_search.sync import SearchCollectionSync
         from unittest.mock import MagicMock
+
+        from archon_search.sync import SearchCollectionSync
 
         existing_dir = tmp_path / "goodproject"
         existing_dir.mkdir()
@@ -544,7 +549,11 @@ class TestSearchCollectionSync:
     async def test_chunk_size_change_auto_reindex_uses_reindex_ingested_by(self, tmp_path):
         """S483 regression: chunk_size change with auto_reindex=True must use ingested_by='reindex'."""
         from archon_search._types import IngestResult
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -731,8 +740,9 @@ class TestManifestLookupByPath:
         assert result is None
 
     def test_expands_tilde_in_stored_path(self, tmp_path):
-        from archon_search.sync import manifest_lookup_by_path
         from pathlib import Path
+
+        from archon_search.sync import manifest_lookup_by_path
 
         home_relative = "~/.archon/history/sessions"
         resolved = str(Path(home_relative).expanduser().resolve())
@@ -790,7 +800,7 @@ class TestSearchCollectionSyncIntegration:
                 ingested_by: str,
                 language: str = "",
             ) -> list[ChunkRecord]:
-                from datetime import datetime, timezone
+                from datetime import datetime
                 if not text or not text.strip():
                     return []
                 return [ChunkRecord(
@@ -799,7 +809,7 @@ class TestSearchCollectionSyncIntegration:
                     text=text[:200],
                     vector=[],
                     source_path=source_path,
-                    indexed_at=datetime.now(timezone.utc).isoformat(),
+                    indexed_at=datetime.now(UTC).isoformat(),
                     file_type=file_type,
                     updated_at=updated_at,
                     ingested_by=ingested_by,
@@ -921,6 +931,7 @@ class TestSyncLocking:
     async def test_concurrent_sync_same_collection_serialized(self, tmp_path):
         """Two concurrent sync() calls on the same collection are serialized."""
         import asyncio
+
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "shared"
@@ -972,6 +983,7 @@ class TestSyncLocking:
     async def test_concurrent_sync_different_collections_parallel(self, tmp_path):
         """Two concurrent sync() calls on different collections run concurrently."""
         import asyncio
+
         from archon_search.sync import SearchCollectionSync
 
         dir_a = tmp_path / "col_a"
@@ -1006,7 +1018,7 @@ class TestSyncLocking:
 
 class TestWriteManifest:
     def test_write_manifest_delegates_to_atomic_write_json(self, tmp_path: Path) -> None:
-        from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+        from archon_search.sync import SearchCollectionSync
 
         syncer = SearchCollectionSync(pipeline=object())
         manifest_path = tmp_path / "sync_manifest.json"
@@ -1018,8 +1030,12 @@ class TestWriteManifest:
         mock_write.assert_called_once_with(manifest_path, manifest)
 
     def test_write_manifest_oserror_swallowed_by_safe_state_update(self, tmp_path: Path) -> None:
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus  # noqa: PLC0415
-        from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
+        from archon_search.sync import SearchCollectionSync
 
         store = IndexingStateStore(tmp_path)
         syncer = SearchCollectionSync(pipeline=object(), state_store=store)
@@ -1031,7 +1047,7 @@ class TestWriteManifest:
 
 class TestManifestRemoveEntry:
     def test_manifest_remove_entry_removes_key(self, tmp_path: Path) -> None:
-        from archon_search.sync import manifest_remove_entry  # noqa: PLC0415
+        from archon_search.sync import manifest_remove_entry
 
         manifest_path = tmp_path / "sync_manifest.json"
         manifest_path.write_text(json.dumps({"sessions": "/home/user/.archon/sessions", "other": "/data"}))
@@ -1042,14 +1058,14 @@ class TestManifestRemoveEntry:
         mock_write.assert_called_once_with(manifest_path, {"other": "/data"})
 
     def test_manifest_remove_entry_noop_if_missing(self, tmp_path: Path) -> None:
-        from archon_search.sync import manifest_remove_entry  # noqa: PLC0415
+        from archon_search.sync import manifest_remove_entry
 
         nonexistent = tmp_path / "no_such_manifest.json"
         # Must not raise
         manifest_remove_entry(nonexistent, "sessions")
 
     def test_manifest_remove_entry_swallows_oserror(self, tmp_path: Path) -> None:
-        from archon_search.sync import manifest_remove_entry  # noqa: PLC0415
+        from archon_search.sync import manifest_remove_entry
 
         manifest_path = tmp_path / "sync_manifest.json"
         manifest_path.write_text(json.dumps({"sessions": "/home/user/.archon/sessions"}))
@@ -1069,6 +1085,7 @@ class TestSyncProgress:
     def _make_syncer_with_state(self, tmp_path, existing_collections=None, manifest=None, file_count=5, ingest_results=None):
         """Helper: build a SearchCollectionSync with a real IndexingStateStore."""
         import asyncio
+
         from archon_search._types import IngestResult
         from archon_search.progress import IndexingStateStore
         from archon_search.sync import SearchCollectionSync
@@ -1537,6 +1554,7 @@ class TestSyncProgress:
     async def test_sync_wraps_caller_callback(self, tmp_path):
         """Caller's progress_cb should still be called."""
         import asyncio
+
         from archon_search._types import IngestResult
         from archon_search.progress import IndexingStateStore
         from archon_search.sync import SearchCollectionSync
@@ -1592,7 +1610,11 @@ class TestSyncProgress:
     @pytest.mark.asyncio
     async def test_sync_resets_stale_in_progress(self, tmp_path):
         """On sync entry, any IN_PROGRESS entries should be reset to PENDING."""
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
@@ -1617,7 +1639,11 @@ class TestSyncProgress:
     @pytest.mark.asyncio
     async def test_sync_cleans_removed_collections(self, tmp_path):
         """Removed collections should be cleaned from state file."""
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         manifest = {"oldcol": "/some/old/path"}
@@ -1840,6 +1866,7 @@ class TestSyncProgress:
     async def test_sync_multiple_collections_mixed_results(self, tmp_path):
         """Multiple collections: one succeeds, one fails — each has correct state."""
         import asyncio
+
         from archon_search._types import IngestResult
         from archon_search.progress import IndexingStateStore, IndexingStatus
         from archon_search.sync import SearchCollectionSync
@@ -2101,7 +2128,11 @@ class TestSyncResumable:
     @pytest.mark.asyncio
     async def test_reset_stale_preserves_processed_paths(self, tmp_path):
         """IN_PROGRESS state with processed_paths → after reset, PENDING with paths preserved."""
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
@@ -2148,7 +2179,11 @@ class TestSyncResumable:
     @pytest.mark.asyncio
     async def test_load_processed_paths_collection_absent(self, tmp_path):
         """Collection not in state → returns []."""
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         state_store = IndexingStateStore(tmp_path / "state")
@@ -2164,7 +2199,11 @@ class TestSyncResumable:
     async def test_sync_resumes_from_processed_paths(self, tmp_path):
         """State with processed_paths → exclude_paths passed to ingest_directory."""
         from archon_search._types import IngestResult
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         new_dir = tmp_path / "myproject"
@@ -2197,7 +2236,11 @@ class TestSyncResumable:
     async def test_sync_new_collection_preseeded_paths_excluded_new_ingested(self, tmp_path):
         """Pre-seeded path is excluded; new path is ingested; final state has both."""
         from archon_search._types import IngestResult
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -2298,7 +2341,11 @@ class TestSyncResumable:
     async def test_sync_processed_files_offset_correct(self, tmp_path):
         """resume_offset=5, 3 new files: state shows processed_files=8."""
         from archon_search._types import IngestResult
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         new_dir = tmp_path / "myproject"
@@ -2336,7 +2383,11 @@ class TestSyncResumable:
     async def test_sync_total_files_correct_with_resume(self, tmp_path):
         """resume_offset=5, total_new=3: state shows total_files=8."""
         from archon_search._types import IngestResult
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         new_dir = tmp_path / "myproject"
@@ -2515,7 +2566,11 @@ class TestSyncResumable:
     @pytest.mark.asyncio
     async def test_sync_all_files_already_processed_state_correct(self, tmp_path):
         """All files excluded → DONE with total_files=resume_offset, processed_files=resume_offset."""
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         new_dir = tmp_path / "myproject"
@@ -2585,7 +2640,11 @@ class TestSyncResumable:
     async def test_sync_resumes_existing_collection_with_pending_status(self, tmp_path):
         """Collection in existing with PENDING status → Step 6.5 resumes it."""
         from archon_search._types import IngestResult
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         existing_dir = tmp_path / "myproject"
@@ -2626,7 +2685,11 @@ class TestSyncResumable:
     async def test_sync_resumed_collection_not_in_unchanged(self, tmp_path):
         """PENDING collection in existing & desired → NOT in result.unchanged."""
         from archon_search._types import IngestResult
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         dir_a = tmp_path / "project_a"
@@ -2679,7 +2742,11 @@ class TestSyncResumable:
         detector; sync leaves the collection unchanged (status stays DONE, no phantom
         mtime entries are added).
         """
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -2730,7 +2797,11 @@ class TestSyncResumable:
     async def test_sync_resumes_existing_collection_with_failed_status(self, tmp_path):
         """FAILED collection in existing & desired → Step 6.5 resumes it."""
         from archon_search._types import IngestResult
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         existing_dir = tmp_path / "myproject"
@@ -2782,7 +2853,11 @@ class TestSyncResumable:
         carry those paths so a crash between the state write and the first batch
         does not lose resume progress.
         """
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -2812,9 +2887,11 @@ class TestSyncResumable:
                 first_in_progress.append(cp)
                 raise RuntimeError("stop after first IN_PROGRESS write")
 
-        with patch.object(syncer, "_safe_state_update", side_effect=capturing_safe_update):
-            with pytest.raises(RuntimeError, match="stop after first IN_PROGRESS write"):
-                await syncer.sync([str(col_dir)])
+        with (
+            patch.object(syncer, "_safe_state_update", side_effect=capturing_safe_update),
+            pytest.raises(RuntimeError, match="stop after first IN_PROGRESS write"),
+        ):
+            await syncer.sync([str(col_dir)])
 
         assert len(first_in_progress) == 1, "Expected exactly one captured IN_PROGRESS write"
         assert first_in_progress[0].processed_paths == resume_paths, (
@@ -2903,7 +2980,11 @@ class TestResetStalePreservesPhase4Fields:
 
     def test_reset_stale_preserves_phase4_fields(self, tmp_path):
         """IN_PROGRESS → PENDING must preserve file_mtimes, file_hashes, indexed_embedding_model, indexed_chunk_size."""
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
@@ -2956,7 +3037,7 @@ class TestResetStaleInProgressDelegation:
 
         calls: list = []
 
-        def spy_reset_in_progress(self, predicate):  # noqa: ANN001
+        def spy_reset_in_progress(self, predicate):
             calls.append(predicate)
 
         monkeypatch.setattr(
@@ -3052,7 +3133,7 @@ class TestResetStaleInProgressDelegation:
         writes: list = []
         orig_write = IndexingStateStore.write
 
-        def spy_write(self, state):  # noqa: ANN001
+        def spy_write(self, state):
             writes.append(state)
             return orig_write(self, state)
 
@@ -3091,7 +3172,7 @@ class TestResetStaleInProgressDelegation:
         pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
         state_store = IndexingStateStore(tmp_path / "state")
 
-        def boom(self, predicate):  # noqa: ANN001
+        def boom(self, predicate):
             raise RuntimeError("boom")
 
         monkeypatch.setattr(IndexingStateStore, "reset_in_progress", boom)
@@ -3206,7 +3287,11 @@ class TestTask45:
 
     def test_load_file_mtimes_collection_absent(self, tmp_path):
         """State exists but collection name is not in it — returns {}."""
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         pipeline = make_mock_pipeline(tmp_path)
@@ -3217,7 +3302,11 @@ class TestTask45:
 
     def test_load_file_mtimes_from_provided_state(self, tmp_path):
         """When state is passed directly, returns its file_mtimes for the named collection."""
-        from archon_search.progress import CollectionProgress, IndexingState, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingState,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         pipeline = make_mock_pipeline(tmp_path)
@@ -3332,7 +3421,7 @@ class TestTask45:
 
         # syncer has new model; indexed with old model
         syncer = self._make_syncer(tmp_path, embedding_model="new-model")
-        new_files, changed_files, deleted, force = syncer._check_collection_changes(
+        new_files, changed_files, _deleted, force = syncer._check_collection_changes(
             "col", source, {}, "old-model", 0
         )
         # force_full_reindex → eligible files go to changed_files, new_files empty
@@ -3348,7 +3437,7 @@ class TestTask45:
         f.write_text("hello")
 
         syncer = self._make_syncer(tmp_path, chunk_size=1024, auto_reindex=True)
-        new_files, changed_files, deleted, force = syncer._check_collection_changes(
+        new_files, changed_files, _deleted, force = syncer._check_collection_changes(
             "col", source, {}, "", 512
         )
         assert force is True
@@ -3368,7 +3457,7 @@ class TestTask45:
 
         syncer = self._make_syncer(tmp_path, chunk_size=1024, auto_reindex=False)
         with caplog.at_level(logging.WARNING, logger="archon"):
-            new_files, changed_files, deleted, force = syncer._check_collection_changes(
+            new_files, changed_files, _deleted, force = syncer._check_collection_changes(
                 "col", source, {key: mtime}, "", 512
             )
 
@@ -3390,7 +3479,7 @@ class TestTask45:
 
         # syncer has a model set, but indexed_embedding_model is "" (first sync)
         syncer = self._make_syncer(tmp_path, embedding_model="some-model")
-        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
+        new_files, changed_files, _deleted, _ = syncer._check_collection_changes(
             "col", source, {key: mtime}, "", 0
         )
         # Guard skipped → no force_full_reindex, file is unchanged
@@ -3408,7 +3497,7 @@ class TestTask45:
 
         syncer = self._make_syncer(tmp_path, chunk_size=1024)
         # indexed_chunk_size=0 means first sync — guard should be skipped
-        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
+        new_files, changed_files, _deleted, _ = syncer._check_collection_changes(
             "col", source, {key: mtime}, "", 0
         )
         assert new_files == []
@@ -3457,7 +3546,11 @@ class TestTask45:
 
     def test_load_file_mtimes_from_state_store_success(self, tmp_path):
         """When state_store has data for the collection, returns its file_mtimes."""
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         pipeline = make_mock_pipeline(tmp_path)
@@ -3515,7 +3608,7 @@ class TestTask45:
             return [FakePath(p) for p in real_iter(path)]
 
         syncer._iter_eligible_files = patched_iter
-        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
+        new_files, changed_files, _deleted, _ = syncer._check_collection_changes(
             "col", source, {key: 1.0}, "", 0
         )
         # changed_files contains FakePath objects; check by resolved string
@@ -3546,6 +3639,7 @@ class TestTask45:
     def test_load_file_mtimes_exception_returns_empty(self, tmp_path):
         """If state_store.read() raises, _load_file_mtimes returns {}."""
         from unittest.mock import MagicMock
+
         from archon_search.sync import SearchCollectionSync
 
         pipeline = make_mock_pipeline(tmp_path)
@@ -3593,7 +3687,11 @@ def _make_mock_pipeline_with_ingest_file(tmp_path, existing_collections=None, ma
 
 def _make_done_state(tmp_path, collection_name, file_mtimes, embedding_model="", chunk_size=512):
     """Write a DONE state with file_mtimes to the state store."""
-    from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+    from archon_search.progress import (
+        CollectionProgress,
+        IndexingStateStore,
+        IndexingStatus,
+    )
 
     state_store = IndexingStateStore(tmp_path / "state")
     state_store.update_collection(collection_name, CollectionProgress(
@@ -3883,6 +3981,60 @@ class TestTask46:
 
         pipeline.store.optimize_fts.assert_called_once_with("myproject")
 
+    @pytest.mark.asyncio
+    async def test_sync_first_fts_build_is_not_an_error(self, tmp_path, caplog):
+        """No FTS index yet is the designed first-build path: build it quietly, sync succeeds."""
+        import logging
+
+        from archon_search.store import FTSIndexNotFoundError
+        from archon_search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        (col_dir / "doc.md").write_text("content")
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest={"myproject": str(col_dir.resolve())}
+        )
+        pipeline.store.optimize_fts = AsyncMock(side_effect=FTSIndexNotFoundError("no FTS index"))
+        pipeline.ingest_file = AsyncMock(return_value=MagicMock(status="ok", warnings=[]))
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=512)
+        with caplog.at_level(logging.DEBUG):
+            result = await syncer.sync([str(col_dir)])
+
+        assert result.errors == []
+        pipeline.store.rebuild_fts_index.assert_awaited_once_with("myproject", language="en")
+        noisy = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert not noisy, f"first FTS build must not warn; got {[r.getMessage() for r in noisy]!r}"
+
+    @pytest.mark.asyncio
+    async def test_sync_genuine_optimize_failure_warns_and_rebuilds(self, tmp_path, caplog):
+        """A real optimize_fts failure is logged at WARNING with a traceback, then the index is rebuilt."""
+        import logging
+
+        from archon_search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        (col_dir / "doc.md").write_text("content")
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest={"myproject": str(col_dir.resolve())}
+        )
+        pipeline.store.optimize_fts = AsyncMock(side_effect=RuntimeError("lance compaction failed"))
+        pipeline.ingest_file = AsyncMock(return_value=MagicMock(status="ok", warnings=[]))
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=512)
+        with caplog.at_level(logging.WARNING):
+            result = await syncer.sync([str(col_dir)])
+
+        assert result.errors == []
+        pipeline.store.rebuild_fts_index.assert_awaited_once_with("myproject", language="en")
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "optimize_fts failed" in r.getMessage()]
+        assert len(warnings) == 1
+        assert warnings[0].exc_info is not None
+
     # ------------------------------------------------------------------
     # Test 10: recompute_collection_meta called after FTS rebuild
     # ------------------------------------------------------------------
@@ -4065,6 +4217,7 @@ class TestTask46:
     async def test_sync_chunk_size_change_warns_only(self, tmp_path, caplog):
         """Chunk size mismatch + auto_reindex=False → warning logged, no re-ingest."""
         import logging
+
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -4141,6 +4294,7 @@ class TestTask46:
     async def test_sync_apply_changes_batched_state_writes(self, tmp_path):
         """Processing 51 new files → IN_PROGRESS state written at 50-file boundary."""
         from unittest.mock import patch
+
         from archon_search.progress import IndexingStatus
         from archon_search.sync import SearchCollectionSync
 
@@ -4830,7 +4984,11 @@ class TestSyncCollectionMethod:
     @pytest.mark.asyncio
     async def test_sync_collection_no_changes(self, tmp_path):
         """When _check_collection_changes returns no diffs, _apply_collection_changes is NOT called."""
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -4856,7 +5014,12 @@ class TestSyncCollectionMethod:
     @pytest.mark.asyncio
     async def test_sync_collection_with_new_file(self, tmp_path):
         """When new files detected, _apply_collection_changes is called with new_files."""
-        from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingState,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -4883,7 +5046,12 @@ class TestSyncCollectionMethod:
     @pytest.mark.asyncio
     async def test_sync_collection_with_deleted_file(self, tmp_path):
         """When deleted paths detected, _apply_collection_changes is called with deleted_paths."""
-        from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingState,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -4912,7 +5080,12 @@ class TestSyncCollectionMethod:
         """Only one sync_collection call runs at a time for the same collection name."""
         import asyncio
 
-        from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingState,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -4943,7 +5116,6 @@ class TestSyncCollectionMethod:
                 lock_event.set()
                 await asyncio.sleep(0.02)
                 execution_log.append("end")
-            return None
 
         with patch.object(syncer, "_check_collection_changes", return_value=([new_file], [], [], False)), \
              patch.object(syncer, "_apply_collection_changes", side_effect=slow_apply):
@@ -4983,7 +5155,12 @@ class TestSyncCollectionMethod:
         collection is logged — not the returned wire text, whose cause was already logged."""
         import logging
 
-        from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingState,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -5010,7 +5187,12 @@ class TestSyncCollectionMethod:
     @pytest.mark.asyncio
     async def test_sync_collection_with_changed_file(self, tmp_path):
         """When changed files detected, _apply_collection_changes is called with changed_files."""
-        from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingState,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -5234,7 +5416,7 @@ def test_sync_uses_collection_meta_over_state_store(tmp_path):
     # Collection was updated to use a new model that doesn't match what was indexed
     meta = CollectionMeta(name="myproject", active_embedding_model="model-X")
     # indexed_embedding_model matches global but not meta.active → reindex triggered
-    new_f, changed_f, deleted, _ = syncer._check_collection_changes(
+    new_f, changed_f, _deleted, _ = syncer._check_collection_changes(
         "myproject",
         source_path,
         file_mtimes={real_key: real_mtime},
@@ -5291,7 +5473,7 @@ def test_sync_model_change_triggers_reindex(tmp_path):
 
     meta = CollectionMeta(name="myproject", active_embedding_model="model-new")
     # was indexed with model-old, now active is model-new → reindex triggered
-    new_f, changed_f, deleted, _ = syncer._check_collection_changes(
+    _new_f, changed_f, _deleted, _ = syncer._check_collection_changes(
         "myproject",
         source_path,
         file_mtimes={real_key: real_mtime},
@@ -5305,8 +5487,9 @@ def test_sync_model_change_triggers_reindex(tmp_path):
 
 def test_no_self_embedding_model_in_sync():
     """After rename, 'self._embedding_model' must not appear in sync.py."""
-    import archon_search.sync as sync_module
     import inspect
+
+    import archon_search.sync as sync_module
 
     source = inspect.getsource(sync_module)
     assert "self._embedding_model" not in source, (
@@ -5368,7 +5551,11 @@ class TestTask92WritePerCollectionModel:
     async def test_sync_write_sites_use_per_collection_model_apply_changes(self, tmp_path):
         """_apply_collection_changes called with meta writes meta.active_embedding_model to state."""
         from archon_search.collection_meta import CollectionMeta
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "testcol"
@@ -5413,7 +5600,11 @@ class TestTask92WritePerCollectionModel:
     @pytest.mark.asyncio
     async def test_sync_write_sites_use_per_collection_model_meta_none(self, tmp_path):
         """When meta is None (new collection), indexed_embedding_model is written as ''."""
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "newcol"
@@ -5456,8 +5647,9 @@ class TestTask92WritePerCollectionModel:
 
 def test_no_global_embedding_model_in_sync():
     """After cleanup, 'self._global_embedding_model' must not appear in sync.py."""
-    import archon_search.sync as sync_module
     import inspect
+
+    import archon_search.sync as sync_module
 
     source = inspect.getsource(sync_module)
     assert "self._global_embedding_model" not in source, (
@@ -5500,7 +5692,8 @@ class TestTask93PerCollectionEmbedderAtIngestSites:
             syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=256)
 
             if path == "initial_sync":
-                from archon_search.progress import CollectionProgress as CP, IndexingStatus as IS
+                from archon_search.progress import CollectionProgress as CP
+                from archon_search.progress import IndexingStatus as IS
                 result = await syncer._ingest_collection(
                     "testcol",
                     col_dir,
@@ -5570,7 +5763,8 @@ class TestTask93PerCollectionEmbedderAtIngestSites:
             )
 
             if path == "initial_sync":
-                from archon_search.progress import CollectionProgress as CP, IndexingStatus as IS
+                from archon_search.progress import CollectionProgress as CP
+                from archon_search.progress import IndexingStatus as IS
                 await syncer._ingest_collection(
                     "testcol", col_dir, progress_cb=None,
                     CollectionProgress=CP, IndexingStatus=IS, meta=meta,
@@ -5588,8 +5782,9 @@ class TestTask93PerCollectionEmbedderAtIngestSites:
     async def test_sync_ingest_defaults_device_to_auto(self, tmp_path):
         """No device configured → make_embedder gets the ``auto`` setting."""
         from archon_search.collection_meta import CollectionMeta
-        from archon_search.progress import CollectionProgress as CP, IndexingStatus as IS
+        from archon_search.progress import CollectionProgress as CP
         from archon_search.progress import IndexingStateStore
+        from archon_search.progress import IndexingStatus as IS
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "testcol"
@@ -5698,7 +5893,11 @@ class TestTask93PerCollectionEmbedderAtIngestSites:
     @pytest.mark.asyncio
     async def test_sync_ingest_collection_meta_none_falls_back_to_global(self, tmp_path):
         """_ingest_collection with meta=None falls back to _global_embedder (not make_embedder)."""
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "testcol"

@@ -13,15 +13,13 @@ sufficient to prove auth accepts/rejects correctly without requiring ingested da
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
-
-UTC = timezone.utc
 
 
 def _auth(key: str) -> dict[str, str]:
@@ -42,7 +40,7 @@ def test_e2e_revoke_and_reject(tmp_path, monkeypatch):
     3. Revoke the key via DELETE /keys/{id}.
     4. Re-use the same token — assert 401 (without server restart).
     """
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, default_api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, default_api_key):
         # Step 1 — create managed key.
         create_resp = client.post(
             "/keys",
@@ -111,7 +109,7 @@ def test_e2e_expired_key_rejected(tmp_path, monkeypatch):
     Per the plan (S26 / S10): the server accepts creation of a key with a past
     ``expires_at`` (201); the key is immediately expired and rejected on auth.
     """
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, default_api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, default_api_key):
         # Create a key that is already expired (1 day in the past).
         past_expires = (datetime.now(UTC) - timedelta(days=1)).isoformat()
         create_resp = client.post(
@@ -151,7 +149,7 @@ def test_e2e_list_shows_hint(tmp_path, monkeypatch):
     - The revoked key does NOT appear in the default view.
     - The revoked key DOES appear in GET /keys?status=all.
     """
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, default_api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, default_api_key):
         # Create key A.
         resp_a = client.post(
             "/keys",

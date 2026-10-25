@@ -266,7 +266,10 @@ async def test_mcp_search_rag_fusion_dependency_absent_returns_error() -> None:
     raised when the anthropic package is absent for RAG fusion). Asserts the
     MCP tool catches it and returns code='validation_error'.
     """
-    from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
+    from archon_search.rag_fusion import (
+        RAG_FUSION_DEPENDENCY_DETAIL,
+        RAGFusionDependencyError,
+    )
 
     pipeline = MagicMock()
     embedder = MagicMock()

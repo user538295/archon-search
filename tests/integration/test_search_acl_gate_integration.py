@@ -7,9 +7,7 @@ import pytest
 
 from archon_search._types import SearchResult
 from archon_search.pipeline import SearchPipelineResult
-
 from tests.integration.conftest import make_real_app, make_real_pipeline
-
 
 # ---------------------------------------------------------------------------
 # Helpers

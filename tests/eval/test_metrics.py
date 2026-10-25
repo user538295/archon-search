@@ -26,7 +26,6 @@ from archon_search.eval.metrics import (
 )
 from archon_search.eval.types import EvalSearchResult, QueryEvalTrace
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

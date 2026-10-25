@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Test: __init__ raises on missing fasttext package
 # ---------------------------------------------------------------------------
@@ -38,9 +37,8 @@ def test_detect_model_file_missing(tmp_path: Path) -> None:
 
     missing_path = tmp_path / "nonexistent.ftz"
 
-    with patch("archon_search.language_detector.fasttext"):
-        with pytest.raises(FileNotFoundError):
-            LanguageDetector(missing_path)
+    with patch("archon_search.language_detector.fasttext"), pytest.raises(FileNotFoundError):
+        LanguageDetector(missing_path)
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +294,7 @@ async def test_detect_empty_predictions_returns_unknown(tmp_path: Path) -> None:
 
 def test_normalize_lang_code_mak_is_not_macedonian() -> None:
     """mak (Makasar) must not be mapped to mk (Macedonian)."""
-    from archon_search.language_detector import _normalize_lang_code, _FASTTEXT_ISO_MAP
+    from archon_search.language_detector import _FASTTEXT_ISO_MAP, _normalize_lang_code
 
     assert "mak" not in _FASTTEXT_ISO_MAP, (
         "'mak' is Makasar (Indonesia), not Macedonian; must not map to 'mk'"

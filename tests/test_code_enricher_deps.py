@@ -36,7 +36,7 @@ def test_code_enricher_importable_without_tree_sitter(monkeypatch):
         monkeypatch.setitem(sys.modules, pkg, None)  # type: ignore[arg-type]
 
     # Must not raise ImportError
-    from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher  # noqa: F401
+    from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher
 
     assert CodeEnricher is not None
     assert CODE_EXTENSIONS is not None

@@ -1,7 +1,7 @@
 """Integration tests for GET /status backup extension — D2 Task 4.2."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -149,7 +149,7 @@ def test_status_next_run_at_computed_from_last_tick(
     client = _make_client(tmp_path, auth_headers, collections, interval_hours=2)
     with client:
         # Set _last_tick_at on the backup_loop
-        last_tick = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+        last_tick = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC).isoformat()
         client.app.state.backup_loop._last_tick_at = last_tick
         response = client.get("/status")
     body = response.json()

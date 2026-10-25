@@ -16,7 +16,6 @@ import pytest
 
 from archon_search.store import ChunkIngestResult
 
-
 # ---------------------------------------------------------------------------
 # Mock helpers
 # ---------------------------------------------------------------------------
@@ -60,6 +59,7 @@ class FakeStore:
     _config = SearchConfig()
 
     def __init__(self) -> None:
+        self.assert_collection_access = AsyncMock(return_value=None)
         self.optimize_fts = AsyncMock(return_value=None)
         self.rebuild_fts_index = AsyncMock(return_value=None)
         self.get_dominant_language = AsyncMock(return_value="en")
@@ -169,7 +169,7 @@ def test_ingest_file_fallback_to_rebuild_on_optimize_failure(tmp_path: Any) -> N
     import logging
 
     with patch.object(
-        logging.getLogger("archon_search.pipeline"),
+        logging.getLogger("archon_search.store"),
         "warning",
     ) as mock_warn:
         result = asyncio.run(
@@ -188,6 +188,35 @@ def test_ingest_file_fallback_to_rebuild_on_optimize_failure(tmp_path: Any) -> N
     assert any("fallback" in msg.lower() or "rebuild" in msg.lower() for msg in warning_messages), (
         f"Expected warning about fallback; got: {warning_messages!r}"
     )
+
+
+def test_ingest_file_first_ingest_without_fts_index_builds_it_without_warning(
+    tmp_path: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A brand-new collection has no FTS index: optimize_fts raises FTSIndexNotFoundError.
+
+    That is the designed first-ingest path, not a failure: the index is created via
+    rebuild_fts_index and nothing at WARNING or above is logged (no traceback noise)."""
+    import logging
+
+    from archon_search.store import FTSIndexNotFoundError
+
+    store = FakeStore()
+    store.optimize_fts = AsyncMock(side_effect=FTSIndexNotFoundError("no FTS index"))
+    pipeline = make_pipeline(store)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Test\n\n" + "Some content. " * 30)
+
+    with caplog.at_level(logging.DEBUG, logger="archon_search.store"):
+        result = asyncio.run(
+            pipeline.ingest_file(md_file, "mycol", embedder=pipeline._global_embedder)
+        )
+
+    assert result.status == "ok"
+    store.rebuild_fts_index.assert_called_once_with("mycol", language="en")
+    noisy = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert not noisy, f"first ingest must not warn; got {[r.getMessage() for r in noisy]!r}"
 
 
 def test_ingest_file_uses_rebuild_under_plan_b(
@@ -290,6 +319,25 @@ async def test_ingest_file_new_content_searchable_after_optimize(
         f"Expected doc_id {result.doc_id!r} searchable after ingest_file; got {returned_doc_ids!r}"
     )
 
+
+@pytest.mark.asyncio
+async def test_first_ingest_into_real_collection_logs_no_warning_and_creates_fts_index(
+    connected_store: Any, col_name: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Real LanceDB store: the first ingest has no FTS index yet, builds it, and stays quiet."""
+    import logging
+
+    pipeline = make_pipeline(connected_store)
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# First\n\n" + "Some content. " * 30)
+
+    with caplog.at_level(logging.DEBUG, logger="archon_search.store"):
+        result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
+
+    assert result.status == "ok"
+    noisy = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert not noisy, f"first ingest must not warn; got {[r.getMessage() for r in noisy]!r}"
+    await connected_store.optimize_fts(col_name)  # raises FTSIndexNotFoundError if never built
 
 @pytest.mark.asyncio
 async def test_reingest_file_old_content_not_searchable(

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,7 +15,6 @@ import pytest
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.store import JobStore
 from archon_search.types import ExportJob, ImportJob, JobStatus
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -92,7 +91,7 @@ def test_create_import_job_custom_namespace(store: JobStore) -> None:
 
 
 def _make_old_job_dict(job_id: str, status: str, job_type: str = "ingest") -> dict:
-    old_ts = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    old_ts = (datetime.now(UTC) - timedelta(days=8)).isoformat()
     base = {
         "job_id": job_id,
         "status": status,
@@ -128,7 +127,7 @@ def test_evict_old_skips_running(tmp_path: Path) -> None:
     We verify this by checking an active RUNNING job (< 7 days) survives."""
     jobs_path = tmp_path / "jobs.json"
     jid = str(uuid.uuid4())
-    recent_ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    recent_ts = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     data = [
         {
             "job_id": jid,
@@ -158,7 +157,7 @@ def test_evict_old_skips_cancelling(tmp_path: Path) -> None:
     """A CANCELLING job: crash recovery flips to FAILED. Recent one must not be evicted."""
     jobs_path = tmp_path / "jobs.json"
     jid = str(uuid.uuid4())
-    recent_ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    recent_ts = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     data = [
         {
             "job_id": jid,
@@ -331,7 +330,7 @@ def test_serialization_roundtrip_import_job(tmp_path: Path) -> None:
 def test_load_legacy_job_missing_progress(tmp_path: Path) -> None:
     """Pre-D1 persisted jobs without a 'progress' key deserialize with progress=None."""
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     data = [
         {
             "job_id": "legacy-001",
@@ -355,7 +354,7 @@ def test_load_legacy_job_missing_progress(tmp_path: Path) -> None:
 def test_load_legacy_export_job_missing_progress(tmp_path: Path) -> None:
     """Pre-D1 export job without 'progress' key deserializes with progress=None."""
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     data = [
         {
             "job_id": "legacy-export-001",
@@ -398,9 +397,9 @@ def test_list_queued_bulk_ordering(tmp_path: Path) -> None:
 
     # Force distinct created_at via direct state manipulation for deterministic ordering
     from datetime import timedelta
-    ts1 = (datetime.now(timezone.utc) - timedelta(seconds=20)).isoformat()
-    ts2 = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
-    ts3 = datetime.now(timezone.utc).isoformat()
+    ts1 = (datetime.now(UTC) - timedelta(seconds=20)).isoformat()
+    ts2 = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
+    ts3 = datetime.now(UTC).isoformat()
     store._jobs[j1.job_id] = store._jobs[j1.job_id].__class__(
         **{**store._jobs[j1.job_id].__dict__, "created_at": ts1}
     )

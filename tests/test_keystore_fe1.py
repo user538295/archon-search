@@ -14,7 +14,6 @@ import click
 import pytest
 from click.testing import CliRunner
 
-
 # ---------------------------------------------------------------------------
 # Duration parser unit tests
 # ---------------------------------------------------------------------------

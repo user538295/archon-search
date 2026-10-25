@@ -12,7 +12,6 @@ from archon_search._types import (
     SearchResult,
 )
 
-
 # ---------------------------------------------------------------------------
 # Task 1.1 — Search response schemas
 # ---------------------------------------------------------------------------
@@ -458,8 +457,8 @@ def test_mcp_ingest_result_schema_warnings_default_empty():
 
 
 def test_ingest_result_schema_from_result_excludes_needs_recompute():
-    from archon_search.server.mcp_schemas import IngestResultSchema
     from archon_search._types import IngestResult
+    from archon_search.server.mcp_schemas import IngestResultSchema
 
     r = IngestResult(
         doc_id="d1",
@@ -498,8 +497,8 @@ def test_document_info_schema_fields():
 
 
 def test_document_info_schema_from_result():
-    from archon_search.server.mcp_schemas import DocumentInfoSchema
     from archon_search._types import DocumentInfo
+    from archon_search.server.mcp_schemas import DocumentInfoSchema
 
     doc = DocumentInfo(
         doc_id="d1",

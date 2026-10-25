@@ -13,6 +13,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+from archon_search._types import ChunkRecord
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder
@@ -28,11 +30,11 @@ from archon_search.pipeline import (
 from archon_search.reranker import Reranker
 from archon_search.router import MultiCollectionRouter
 from archon_search.server.app import create_app
-from archon_search.server.routes_explain import ROUTING_UNAVAILABLE_CODE, ROUTING_UNAVAILABLE_DETAIL
-from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
-from archon_search._types import ChunkRecord
+from archon_search.server.routes_explain import (
+    ROUTING_UNAVAILABLE_CODE,
+    ROUTING_UNAVAILABLE_DETAIL,
+)
 from tests._fastmcp_stub import stubbed_fastmcp
-
 
 # ---------------------------------------------------------------------------
 # Mock backends (copied from tests/test_pipeline_explain.py)
@@ -1358,8 +1360,8 @@ async def test_post_explain_pinned_collection_wrong_namespace_returns_404(tmp_pa
 async def test_post_explain_telemetry_emits_no_query(tmp_path: Path) -> None:
     """Telemetry entry for /explain must not contain 'query' key or the raw query string."""
     from archon_search.store import SearchStore
-    from archon_search.telemetry.writer import TelemetryWriter
     from archon_search.telemetry.reader import TelemetryReader
+    from archon_search.telemetry.writer import TelemetryWriter
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
@@ -1450,6 +1452,7 @@ async def test_post_explain_telemetry_emits_no_query(tmp_path: Path) -> None:
 def test_explain_telemetry_has_correlation_id(tmp_path: Path) -> None:
     """POST /explain telemetry entry carries the correlation_id set by RequestContextMiddleware."""
     from unittest.mock import MagicMock
+
     from archon_search.telemetry.writer import TelemetryWriter
 
     app, _ = _make_app(tmp_path)
@@ -2098,7 +2101,7 @@ def test_post_explain_multi_collection_fanout_timeout_returns_504(tmp_path: Path
 
 def test_explain_result_language_field_three_state(tmp_path: Path) -> None:
     """ExplainResult.language carries 'fr' for tagged, '' for untagged (not None)."""
-    from archon_search.server.routes_explain import ExplainResult, ExplainNearMiss
+    from archon_search.server.routes_explain import ExplainNearMiss, ExplainResult
 
     # Tagged candidate → language is "fr"
     tagged_cand = ScoredSearchCandidate(

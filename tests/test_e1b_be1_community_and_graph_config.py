@@ -15,14 +15,13 @@ from __future__ import annotations
 
 import dataclasses
 import textwrap
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from archon_search.config import ConfigError, GraphConfig, load_config
 from archon_search.graph_types import Community
-
 
 # ---------------------------------------------------------------------------
 # Community dataclass
@@ -31,7 +30,7 @@ from archon_search.graph_types import Community
 
 def test_community_dataclass_defaults() -> None:
     """Community instantiates with required fields; summary_text defaults to None."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     community = Community(
         community_id="comm-001",
         entity_ids=["entity-a", "entity-b"],
@@ -47,7 +46,7 @@ def test_community_dataclass_defaults() -> None:
 
 def test_community_summary_text_nullable() -> None:
     """Community.summary_text can be set to a non-None string."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     community = Community(
         community_id="comm-002",
         entity_ids=["entity-x"],
@@ -65,7 +64,7 @@ def test_community_required_list_fields_are_not_shared() -> None:
     NOT share list state between instances (no mutable-default trap since both list fields
     are required positional arguments with no default value).
     """
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     c1 = Community(
         community_id="c1",
         entity_ids=[],
@@ -84,7 +83,7 @@ def test_community_required_list_fields_are_not_shared() -> None:
 
 def test_community_built_at_accepts_utc_aware() -> None:
     """Community accepts a UTC-aware datetime for built_at."""
-    utc_now = datetime.now(tz=timezone.utc)
+    utc_now = datetime.now(tz=UTC)
     community = Community(
         community_id="c3",
         entity_ids=[],

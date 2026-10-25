@@ -8,7 +8,6 @@ import pytest
 
 from tests.integration.conftest import make_real_app
 
-
 # Stub the extraction engine to allow graph-enabled app creation
 
 
@@ -29,7 +28,7 @@ class TestGraphRoute422WhenGraphDisabled:
 
     def test_graph_route_422_when_graph_disabled(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/{collection} returns 422 when graph.enabled=false."""
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, _cfg, api_key):
             response = client.get("/graph/test-collection", headers=_auth(api_key))
             assert response.status_code == 422
             assert "graph inspection requires [graph] enabled=true" in response.json()["detail"]
@@ -41,7 +40,7 @@ class TestGraphRoute404CollectionNotFound:
 
     def test_graph_route_404_collection_not_found(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/{nonexistent} returns 404 when collection not registered."""
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
             response = client.get("/graph/nonexistent-collection", headers=_auth(api_key))
             assert response.status_code == 404
             assert "collection not found" in response.json()["detail"]
@@ -54,7 +53,7 @@ class TestGraphRouteInvalidFormat:
     def test_graph_route_invalid_format_returns_422(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/{collection}?format=svg returns 422 for invalid format."""
         toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, _cfg, api_key):
             # Invalid format value should be caught by FastAPI enum validation
             response = client.get("/graph/test?format=svg", headers=_auth(api_key))
             assert response.status_code == 422
@@ -69,7 +68,7 @@ class TestGetGraphJson:
         # Note: This test verifies response structure, not graph population
         # (full end-to-end graph extraction requires the extraction engine, tested separately)
         toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, _cfg, api_key):
             # Query the graph endpoint — collection exists but is empty
             response = client.get("/graph/test", headers=_auth(api_key))
             # Should return 200 (not 404) for registered collection even if empty
@@ -94,7 +93,7 @@ class TestGetGraphEmpty:
         # When a collection doesn't exist, the endpoint returns 404
         # When a collection exists but has no graph data, it returns 200 with empty nodes/edges
         toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, _cfg, api_key):
             response = client.get("/graph/nonexistent", headers=_auth(api_key))
             # Nonexistent collection returns 404 (correct behavior)
             assert response.status_code == 404
@@ -129,7 +128,7 @@ class TestGetGraphGraphML:
     def test_get_graph_graphml_content_type(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/col?format=graphml returns 200 with application/xml content type."""
         toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, _cfg, api_key):
             # Query the graph endpoint with graphml format
             response = client.get("/graph/test?format=graphml", headers=_auth(api_key))
 
@@ -156,7 +155,7 @@ class TestCrossCollectionRoute422LessThanTwo:
 
     def test_cross_collection_route_422_less_than_two(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/cross-collection?collections=only-one returns 422."""
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
             response = client.get("/graph/cross-collection?collections=only-one", headers=_auth(api_key))
             assert response.status_code == 422
             assert "at least 2 distinct" in response.json()["detail"]
@@ -168,7 +167,7 @@ class TestCrossCollectionRouteMissingParam:
 
     def test_cross_collection_route_missing_param_returns_422(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/cross-collection with no collections param returns 422."""
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
             response = client.get("/graph/cross-collection", headers=_auth(api_key))
             assert response.status_code == 422
 
@@ -179,7 +178,7 @@ class TestCrossCollectionRouteEmptyParam:
 
     def test_cross_collection_route_empty_param_returns_422(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/cross-collection?collections= (empty string) returns 422."""
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
             response = client.get("/graph/cross-collection?collections=", headers=_auth(api_key))
             assert response.status_code == 422
             assert "required" in response.json()["detail"].lower()
@@ -192,7 +191,7 @@ class TestCrossCollectionRouteDeduplicates:
     def test_cross_collection_route_deduplicates_collections(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/cross-collection?collections=a,a,b deduplicates correctly."""
         toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, _cfg, api_key):
             # Requesting a,a,b should deduplicate to a,b; collection "a" doesn't exist
             # so we expect 404, confirming that dedup occurred (if no dedup, would error on param validation)
             response = client.get("/graph/cross-collection?collections=test,test,test", headers=_auth(api_key))
@@ -208,7 +207,7 @@ class TestCrossCollectionJsonResponse:
     def test_get_cross_collection_json_merged_nodes(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/cross-collection returns 200 JSON with merged data."""
         toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, _cfg, api_key):
             # Query cross-collection endpoint with two test collections
             response = client.get("/graph/cross-collection?collections=test,test-2", headers=_auth(api_key))
 
@@ -239,7 +238,7 @@ class TestCrossCollectionGraphML:
     def test_get_cross_collection_graphml_valid(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/cross-collection?format=graphml returns 200 with valid GraphML."""
         toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, _cfg, api_key):
             # Query cross-collection endpoint with graphml format
             response = client.get(
                 "/graph/cross-collection?collections=test,test-2&format=graphml",
@@ -269,7 +268,7 @@ class TestCrossCollectionRouteNotCapturedByCollection:
 
     def test_cross_collection_route_not_captured_by_collection_param(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/cross-collection?collections=a,b is not treated as collection='cross-collection'."""
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
             # If routing is wrong, this would try to find a collection named "cross-collection"
             # Correct routing should check the collections parameter and error on <2 collections
             response = client.get(

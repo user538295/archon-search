@@ -6,9 +6,7 @@ Tests (TDD — written before implementation):
 """
 from __future__ import annotations
 
-
 from archon_search.graph_inspector import GraphNodeInspection
-
 
 # ---------------------------------------------------------------------------
 # Unit: GraphNodeInspection carries entity_type

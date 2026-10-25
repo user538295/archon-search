@@ -7,7 +7,7 @@ Tests:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,7 +16,6 @@ import pytest
 from archon_search.config import GraphConfig
 from archon_search.graph_types import Community, EntityType, GraphNode
 from archon_search.pipeline import SearchPipelineResult
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -72,7 +71,7 @@ def _make_community(
         community_id=community_id,
         entity_ids=entity_ids or ["entity-1"],
         representative_chunk_ids=chunk_ids if chunk_ids is not None else ["chunk-1"],
-        built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        built_at=datetime(2024, 1, 1, tzinfo=UTC),
         summary_text=None,
     )
 
@@ -214,16 +213,15 @@ async def test_search_many_local_mode_per_collection_isolation(connected_store, 
         side_effect=lambda q, cands, top_k: cands[:top_k]
     )
 
-    with _patch_collections_meta(pipeline, [col_a, col_b]):
-        with patch(
-            "archon_search.pipeline.tokenize_and_generate_ngrams",
-            return_value=["authservice", "paymentservice"],
-        ):
-            result = await pipeline.search_many(
-                "AuthService PaymentService",
-                [col_a, col_b],
-                graph_mode="local",
-            )
+    with _patch_collections_meta(pipeline, [col_a, col_b]), patch(
+        "archon_search.pipeline.tokenize_and_generate_ngrams",
+        return_value=["authservice", "paymentservice"],
+    ):
+        result = await pipeline.search_many(
+            "AuthService PaymentService",
+            [col_a, col_b],
+            graph_mode="local",
+        )
 
     assert isinstance(result, SearchPipelineResult)
     assert result.graph_expansion_applied is True
@@ -288,16 +286,15 @@ async def test_search_many_local_mixed_match(connected_store, col_name):
         side_effect=lambda q, cands, top_k: cands[:top_k]
     )
 
-    with _patch_collections_meta(pipeline, [col_a, col_b]):
-        with patch(
-            "archon_search.pipeline.tokenize_and_generate_ngrams",
-            return_value=["authservice"],
-        ):
-            result = await pipeline.search_many(
-                "AuthService query",
-                [col_a, col_b],
-                graph_mode="local",
-            )
+    with _patch_collections_meta(pipeline, [col_a, col_b]), patch(
+        "archon_search.pipeline.tokenize_and_generate_ngrams",
+        return_value=["authservice"],
+    ):
+        result = await pipeline.search_many(
+            "AuthService query",
+            [col_a, col_b],
+            graph_mode="local",
+        )
 
     assert isinstance(result, SearchPipelineResult)
     # Collection A produced community chunks; overall graph_expansion_applied=True
@@ -355,16 +352,15 @@ async def test_search_many_local_one_leg_all_stale_falls_back(connected_store, c
         side_effect=lambda q, cands, top_k: cands[:top_k]
     )
 
-    with _patch_collections_meta(pipeline, [col_a, col_b]):
-        with patch(
-            "archon_search.pipeline.tokenize_and_generate_ngrams",
-            return_value=["authservice", "paymentservice"],
-        ):
-            result = await pipeline.search_many(
-                "AuthService PaymentService",
-                [col_a, col_b],
-                graph_mode="local",
-            )
+    with _patch_collections_meta(pipeline, [col_a, col_b]), patch(
+        "archon_search.pipeline.tokenize_and_generate_ngrams",
+        return_value=["authservice", "paymentservice"],
+    ):
+        result = await pipeline.search_many(
+            "AuthService PaymentService",
+            [col_a, col_b],
+            graph_mode="local",
+        )
 
     assert isinstance(result, SearchPipelineResult)
     # No exception raised
@@ -418,9 +414,8 @@ async def test_search_many_local_no_entities_all_legs_hybrid(connected_store, co
     )
     pipeline._reranker.rerank_candidates = AsyncMock(side_effect=lambda q, cands, top_k: cands[:top_k])
 
-    with _patch_collections_meta(pipeline, [col_a, col_b]):
-        with patch("archon_search.pipeline.tokenize_and_generate_ngrams", return_value=["some", "entity"]):
-            result = await pipeline.search_many("some entity", [col_a, col_b], graph_mode="local")
+    with _patch_collections_meta(pipeline, [col_a, col_b]), patch("archon_search.pipeline.tokenize_and_generate_ngrams", return_value=["some", "entity"]):
+        result = await pipeline.search_many("some entity", [col_a, col_b], graph_mode="local")
 
     assert isinstance(result, SearchPipelineResult)
     assert result.graph_expansion_applied is False, "graph_expansion_applied must be False when no entities matched"

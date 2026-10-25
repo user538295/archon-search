@@ -21,7 +21,6 @@ from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

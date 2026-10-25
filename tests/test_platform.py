@@ -207,6 +207,5 @@ class TestGetSearchService:
 
         from archon_search.platform.runtime import get_search_service
 
-        with patch.object(_platform, "system", return_value="FreeBSD"):
-            with pytest.raises(NotImplementedError, match="FreeBSD"):
-                get_search_service()
+        with patch.object(_platform, "system", return_value="FreeBSD"), pytest.raises(NotImplementedError, match="FreeBSD"):
+            get_search_service()

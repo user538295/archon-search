@@ -16,7 +16,7 @@ Tests:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -25,7 +25,6 @@ import pytest
 from archon_search.config import GraphConfig
 from archon_search.graph_types import Community
 from archon_search.pipeline import GraphCommunitiesNotBuiltError, SearchPipelineResult
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -82,7 +81,7 @@ def _make_community(
         community_id=community_id,
         entity_ids=["entity-1"],
         representative_chunk_ids=chunk_ids or ["chunk-1"],
-        built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        built_at=datetime(2024, 1, 1, tzinfo=UTC),
         summary_text=None,
     )
 
@@ -423,18 +422,17 @@ async def test_naive_mode_routed_through_dispatch(connected_store, col_name):
         pipeline,
         "_search_graph_mode",
         new=AsyncMock(return_value="test query expanded"),
-    ) as mock_dispatch:
-        with patch.object(
-            pipeline,
-            "_search_standard",
-            new=AsyncMock(return_value=dummy_result),
-        ):
-            result = await pipeline.search(
-                "test query",
-                col_name,
-                embedder=pipeline._global_embedder,
-                graph_mode="naive",
-            )
+    ) as mock_dispatch, patch.object(
+        pipeline,
+        "_search_standard",
+        new=AsyncMock(return_value=dummy_result),
+    ):
+        result = await pipeline.search(
+            "test query",
+            col_name,
+            embedder=pipeline._global_embedder,
+            graph_mode="naive",
+        )
 
     mock_dispatch.assert_awaited_once()
     # First positional arg must be "naive"
@@ -463,26 +461,24 @@ async def test_naive_plus_rag_fusion_uses_original_query_for_variants(connected_
     rag_gen.generate_variants = AsyncMock(return_value=["variant query"])
     rag_config = RAGFusionConfig(enabled=True)
 
-    with patch.object(pipeline.store, "has_vector_index", new=AsyncMock(return_value=True)):
-        with patch.object(
-            pipeline._global_embedder,
-            "embed_one",
-            new=AsyncMock(return_value=[0.1] * 4),
-        ):
-            with patch.object(
-                pipeline.store,
-                "hybrid_search_with_trace",
-                new=AsyncMock(return_value=[]),
-            ):
-                await pipeline.search(
-                    "original",
-                    col_name,
-                    embedder=pipeline._global_embedder,
-                    graph_mode="naive",
-                    rag_fusion=True,
-                    rag_fusion_generator=rag_gen,
-                    rag_fusion_config=rag_config,
-                )
+    with patch.object(pipeline.store, "has_vector_index", new=AsyncMock(return_value=True)), patch.object(
+        pipeline._global_embedder,
+        "embed_one",
+        new=AsyncMock(return_value=[0.1] * 4),
+    ), patch.object(
+        pipeline.store,
+        "hybrid_search_with_trace",
+        new=AsyncMock(return_value=[]),
+    ):
+        await pipeline.search(
+            "original",
+            col_name,
+            embedder=pipeline._global_embedder,
+            graph_mode="naive",
+            rag_fusion=True,
+            rag_fusion_generator=rag_gen,
+            rag_fusion_config=rag_config,
+        )
 
     # RAG Fusion variants must be generated from the ORIGINAL (unexpanded) query
     rag_gen.generate_variants.assert_awaited_once_with("original")
@@ -627,7 +623,7 @@ async def test_pipeline_global_mode_real_communities(tmp_path, monkeypatch):
         community_id="test-comm-1",
         entity_ids=["entity-1"],
         representative_chunk_ids=[chunk_id],
-        built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        built_at=datetime(2024, 1, 1, tzinfo=UTC),
         summary_text=None,
     )
     await graph_store.write_communities(col, [community], ns="default")

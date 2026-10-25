@@ -17,6 +17,7 @@ import asyncio
 import json
 import secrets
 import textwrap
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -107,7 +108,7 @@ def _inject_namespace_data(client, col: str, namespace: str, doc_text: str) -> N
     pipeline.get_all_collections_meta(namespace) finds the collection.
     """
     import hashlib
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from archon_search._types import ChunkRecord, normalize_iso_utc
     from archon_search.collection_meta import CollectionMeta
@@ -122,7 +123,7 @@ def _inject_namespace_data(client, col: str, namespace: str, doc_text: str) -> N
         text=doc_text,
         vector=[0.0] * _EMBEDDING_DIM,
         source_path=source_path,
-        indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+        indexed_at=normalize_iso_utc(datetime.now(UTC)),
         acl=None,
     )
     meta = CollectionMeta(
@@ -253,7 +254,7 @@ def test_toml_namespace_scope_honoured(tmp_path, monkeypatch) -> None:
         monkeypatch,
         mcp_enabled=True,
         namespaces={toml_token: "ns-b"},  # TOML-style namespace token
-    ) as (client, _cfg, api_key):
+    ) as (client, _cfg, _api_key):
         # Inject data in two namespaces
         _inject_namespace_data(client, "toml-col-a", "ns-a", "content in namespace a")
         _inject_namespace_data(client, "toml-col-b", "ns-b", "content in namespace b")

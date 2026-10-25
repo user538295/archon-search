@@ -7,18 +7,24 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
-from archon_search.types import ExportJob, ImportJob, MigrationJob, MigrationKind, ReindexJob
+from archon_search.types import (
+    ExportJob,
+    ImportJob,
+    MigrationJob,
+    MigrationKind,
+    ReindexJob,
+)
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @pytest.fixture()

@@ -108,9 +108,8 @@ async def test_llm_summary_failure_falls_back_to_mmr(caplog):
     with patch(
         "archon_search.community_builder._run_leiden_partition_sync",
         return_value=[["a", "b"], ["c", "d"]],
-    ):
-        with caplog.at_level(logging.WARNING, logger="archon_search.community_builder"):
-            communities = await builder.build("test-col", ns="default")
+    ), caplog.at_level(logging.WARNING, logger="archon_search.community_builder"):
+        communities = await builder.build("test-col", ns="default")
 
     # Both communities should have MMR representatives despite LLM failure
     assert len(communities) == 2

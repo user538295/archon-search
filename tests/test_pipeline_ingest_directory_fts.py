@@ -17,7 +17,6 @@ import pytest
 
 from archon_search.store import ChunkIngestResult
 
-
 # ---------------------------------------------------------------------------
 # Mock helpers
 # ---------------------------------------------------------------------------
@@ -61,6 +60,7 @@ class FakeStore:
     _config = SearchConfig()
 
     def __init__(self, *, plan_a: bool = True) -> None:
+        self.assert_collection_access = AsyncMock(return_value=None)
         self._plan_a = plan_a
         self.optimize_fts = AsyncMock(return_value=None)
         self.rebuild_fts_index = AsyncMock(return_value=None)
@@ -200,8 +200,8 @@ def test_ingest_directory_fallback_to_rebuild_on_optimize_failure(tmp_path: Any)
             warning_records.append(record)
 
     handler = CapturingHandler(level=logging.WARNING)
-    pipeline_logger = logging.getLogger("archon_search.pipeline")
-    pipeline_logger.addHandler(handler)
+    store_logger = logging.getLogger("archon_search.store")
+    store_logger.addHandler(handler)
     try:
         asyncio.run(
             pipeline.ingest_directory(
@@ -211,13 +211,38 @@ def test_ingest_directory_fallback_to_rebuild_on_optimize_failure(tmp_path: Any)
             )
         )
     finally:
-        pipeline_logger.removeHandler(handler)
+        store_logger.removeHandler(handler)
 
     store.rebuild_fts_index.assert_called_once()
     assert any(
         "fallback" in r.getMessage().lower() or "rebuild" in r.getMessage().lower()
         for r in warning_records
     ), f"Expected fallback warning; got: {[r.getMessage() for r in warning_records]!r}"
+
+
+def test_ingest_directory_first_ingest_without_fts_index_builds_it_without_warning(
+    tmp_path: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """First batch into a new collection: no FTS index yet is the designed path, not a failure.
+
+    rebuild_fts_index creates the index and nothing at WARNING or above is logged."""
+    from archon_search.store import FTSIndexNotFoundError
+
+    store = FakeStore(plan_a=True)
+    store.optimize_fts = AsyncMock(side_effect=FTSIndexNotFoundError("no FTS index"))
+    pipeline = make_pipeline(store)
+
+    for i in range(2):
+        (tmp_path / f"doc{i}.md").write_text(f"# Document {i}\n\n" + f"Content {i}. " * 30)
+
+    with caplog.at_level(logging.DEBUG, logger="archon_search.store"):
+        asyncio.run(
+            pipeline.ingest_directory(tmp_path, "mycol", embedder=pipeline._global_embedder)
+        )
+
+    store.rebuild_fts_index.assert_called_once()
+    noisy = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert not noisy, f"first ingest must not warn; got {[r.getMessage() for r in noisy]!r}"
 
 
 # ---------------------------------------------------------------------------

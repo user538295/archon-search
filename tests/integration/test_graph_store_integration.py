@@ -12,6 +12,7 @@ Run with:
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 
 import pytest
 
@@ -187,7 +188,7 @@ def test_reingest_same_document_edges_not_duplicated(tmp_path) -> None:
 def test_graph_tables_preserve_edges_after_document_deletion(tmp_path) -> None:
     """Graph tables are NOT pruned when a search store document is deleted (E1a behaviour)."""
     import hashlib
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from archon_search._types import ChunkRecord, normalize_iso_utc
     from archon_search.graph_store import GraphStore
@@ -215,7 +216,7 @@ def test_graph_tables_preserve_edges_after_document_deletion(tmp_path) -> None:
                 text="Some text from doc1",
                 vector=[0.0] * _EMBEDDING_DIM,
                 source_path=source_path,
-                indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+                indexed_at=normalize_iso_utc(datetime.now(UTC)),
                 acl=None,
             )
             await ss.ingest_chunks(col, [chunk])

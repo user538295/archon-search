@@ -375,13 +375,12 @@ class TestFanoutCapTruncatesAndWarns:
         result = _make_pipeline_result([_make_search_result("result text")])
         app.state.pipeline.search_many = AsyncMock(return_value=result)
 
-        with caplog.at_level(logging.WARNING):
-            with TestClient(app) as client:
-                resp = client.post(
-                    "/v1/chat/completions",
-                    json=_chat_body("archon-search", "query"),
-                    headers=_auth_headers(),
-                )
+        with caplog.at_level(logging.WARNING), TestClient(app) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json=_chat_body("archon-search", "query"),
+                headers=_auth_headers(),
+            )
 
         assert resp.status_code == 200
         # Omitted collections: col-d, col-e
@@ -408,13 +407,12 @@ class TestFanoutCapExactBoundaryPasses:
         result = _make_pipeline_result([_make_search_result("result text")])
         app.state.pipeline.search_many = AsyncMock(return_value=result)
 
-        with caplog.at_level(logging.WARNING):
-            with TestClient(app) as client:
-                resp = client.post(
-                    "/v1/chat/completions",
-                    json=_chat_body("archon-search", "query"),
-                    headers=_auth_headers(),
-                )
+        with caplog.at_level(logging.WARNING), TestClient(app) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json=_chat_body("archon-search", "query"),
+                headers=_auth_headers(),
+            )
 
         assert resp.status_code == 200
         # No WARNING about truncation
@@ -706,7 +704,7 @@ class TestChatCompletionsDirectCollection:
         doc = tmp_path / "content.txt"
         doc.write_text("The archon retrieval system supports hybrid search.")
 
-        with make_real_app(tmp_path, monkeypatch, openai_shim_enabled=True) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, openai_shim_enabled=True) as (client, _cfg, api_key):
             headers = {"Authorization": f"Bearer {api_key}"}
             ingest_file_via_path(client, "my-col", str(doc), api_key=api_key)
 
@@ -737,7 +735,7 @@ class TestChatCompletionsRouterPath:
         doc_b = tmp_path / "doc_b.txt"
         doc_b.write_text("Beta content about vector search systems.")
 
-        with make_real_app(tmp_path, monkeypatch, openai_shim_enabled=True) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, openai_shim_enabled=True) as (client, _cfg, api_key):
             headers = {"Authorization": f"Bearer {api_key}"}
             ingest_file_via_path(client, "col-alpha", str(doc_a), api_key=api_key)
             ingest_file_via_path(client, "col-beta", str(doc_b), api_key=api_key)
@@ -757,8 +755,9 @@ class TestChatCompletionsRouterPath:
 class TestNamespaceIsolationReturns404:
     def test_namespace_isolation_returns_404(self, tmp_path, monkeypatch):
         """Query ns2-col with ns1 token → get_collection_meta returns None → 404 OpenAI error."""
-        from tests.integration.conftest import ingest_file_via_path, make_real_app
         import secrets
+
+        from tests.integration.conftest import ingest_file_via_path, make_real_app
 
         ns1_key = secrets.token_hex(32)
         ns2_key = secrets.token_hex(32)
@@ -768,7 +767,7 @@ class TestNamespaceIsolationReturns404:
             monkeypatch,
             openai_shim_enabled=True,
             namespaces={ns1_key: "ns1", ns2_key: "ns2"},
-        ) as (client, cfg, api_key):
+        ) as (client, _cfg, _api_key):
             # api_key is the default-ns key; use ns2_key to ingest into ns2
             doc = tmp_path / "ns2_doc.txt"
             doc.write_text("NS2 content.")
@@ -812,13 +811,12 @@ class TestAllCollectionsExcludedReturnsEmpty200:
 
         app.state.pipeline.search_many = AsyncMock(return_value=result)
 
-        with caplog.at_level(logging.WARNING):
-            with TestClient(app) as client:
-                resp = client.post(
-                    "/v1/chat/completions",
-                    json=_chat_body("archon-search", "query"),
-                    headers=_auth_headers(),
-                )
+        with caplog.at_level(logging.WARNING), TestClient(app) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json=_chat_body("archon-search", "query"),
+                headers=_auth_headers(),
+            )
 
         assert resp.status_code == 200
         body = resp.json()

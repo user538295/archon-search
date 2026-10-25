@@ -90,7 +90,7 @@ output_dir = "{tmp_path / 'backups'}"
     ):
         # Seed pre-existing archives under the namespace directory.
         ns_dir = Path(cfg.backup.output_dir) / "default"
-        a1, a2, a3 = _seeded_archives(ns_dir, COL)
+        _a1, _a2, _a3 = _seeded_archives(ns_dir, COL)
 
         # Also write a non-matching manual-export file that must survive.
         manual = ns_dir / f"{COL}-manual-export.tar.gz"

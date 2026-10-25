@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -26,7 +26,7 @@ def _chunk(doc_id: str, idx: int, text: str) -> ChunkRecord:
         text=text,
         vector=[float(idx % 4)] * _DIM,
         source_path=f"/tmp/{doc_id[:8]}.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -131,11 +131,11 @@ async def test_description_generator_samples_from_larger_pool(
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from archon_search.chunker import DocumentChunker
+    from archon_search.embedder import Embedder, EmbedderBackend
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.store import ChunkIngestResult
-    from archon_search.embedder import Embedder, EmbedderBackend
     from archon_search.reranker import Reranker, RerankerBackend
+    from archon_search.store import ChunkIngestResult
 
     class _MockEmbedder(EmbedderBackend):
         model_name = "mock"
@@ -151,6 +151,7 @@ async def test_description_generator_samples_from_larger_pool(
             return [0.5] * len(pairs)
 
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(

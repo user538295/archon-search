@@ -40,7 +40,13 @@ import pytest
 
 import archon_search.jobs.scheduler as _scheduler_module
 from tests._cold_model_builds import install_cold_embedder_build
-from tests.integration.conftest import ingest_doc, make_real_app, search, wait_for_job_done
+from tests.integration.conftest import (
+    REAL_APP_DATA_SUBDIR,
+    ingest_doc,
+    make_real_app,
+    search,
+    wait_for_job_done,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("s288")]
 
@@ -86,8 +92,8 @@ def test_s288_imported_collection_search_matches_source(
         archive = Path(wait_for_job_done(client, export.json()["job_id"], what="export").result["archive_path"])
 
     # --- copy the archive into the isolated target's data dir, like the report ---
-    target_exports = target_dir / "exports"
-    target_exports.mkdir()
+    target_exports = target_dir / REAL_APP_DATA_SUBDIR / "exports" / "default"
+    target_exports.mkdir(parents=True)
     target_archive = target_exports / archive.name
     shutil.copy(archive, target_archive)
 

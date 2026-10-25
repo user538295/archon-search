@@ -10,12 +10,10 @@ they execute fast and remain hermetic.
 from __future__ import annotations
 
 import ast
-from pathlib import Path
-
 
 # tomllib is stdlib >= 3.11
 import tomllib
-
+from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = PACKAGE_ROOT / "pyproject.toml"

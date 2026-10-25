@@ -1,20 +1,19 @@
-"""Tripwire over textual + AST patterns; reviewers must inspect every `# noqa: durable-write` line. Known bypasses NOT detected by current rules: `open(path, 'w')` + `f.write()`, `pathlib.Path.open('w')`, `shutil.copy*`, `tempfile.NamedTemporaryFile(delete=False)` + `os.link`. Reviewers must spot these in PR review; patch the detector when an instance is discovered in the wild. Note: telemetry/writer.py's `_append` opens its persistent per-date fd via `os.open(...O_CREAT...)`, which the AST detector flags; that one line carries a justified `# noqa: durable-write` (rotate-only fsync per ADR-06). No other telemetry carve-out exists."""
+"""Tripwire over textual + AST patterns; reviewers must inspect every `# durable-write-exempt` line. Known bypasses NOT detected by current rules: `open(path, 'w')` + `f.write()`, `pathlib.Path.open('w')`, `shutil.copy*`, `tempfile.NamedTemporaryFile(delete=False)` + `os.link`. Reviewers must spot these in PR review; patch the detector when an instance is discovered in the wild. Note: telemetry/writer.py's `_append` opens its persistent per-date fd via `os.open(...O_CREAT...)`, which the AST detector flags; that one line carries a justified `# durable-write-exempt` (rotate-only fsync per ADR-06). No other telemetry carve-out exists."""
 
 import ast
 import re
 from pathlib import Path
-
 
 ARCHON_SEARCH_PKG = Path(__file__).parent.parent / "archon_search"
 
 # The durable-write helper itself is the sanctioned home for these patterns.
 HELPER_FILENAME = "_durable_io.py"
 
-NOQA_MARKER = "# noqa: durable-write"
+NOQA_MARKER = "# durable-write-exempt"
 
 EXPLAINER = (
     "Raw durable write detected — route through archon_search/_durable_io.py "
-    "(atomic_write_json/atomic_write_bytes), or add '# noqa: durable-write' "
+    "(atomic_write_json/atomic_write_bytes), or add '# durable-write-exempt' "
     "with justification if this write is intentionally out of A7 scope."
 )
 

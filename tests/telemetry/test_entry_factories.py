@@ -176,7 +176,7 @@ def test_factories_emit_uuid_query_id(factory_name: str) -> None:
 def test_factories_emit_utc_z_timestamp(factory_name: str) -> None:
     entry = _make_entry(factory_name)
     assert entry.timestamp.endswith("Z")
-    parsed = datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(entry.timestamp)
     assert parsed.tzinfo is not None
     assert parsed.utcoffset() == timedelta(0)
     # Should round-trip back to UTC

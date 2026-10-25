@@ -25,10 +25,10 @@ from archon_search.key_manager import (
     KeyRecord,
     KeyRotationInputError,
     KeyStore,
+    RotationOutcome,
     rotate_and_persist_default_key,
     validate_rotation_grace,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,7 +43,7 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _rotate(tmp_path: Path, store: KeyStore, current_token: str, grace_seconds: int) -> Coroutine[Any, Any, dict]:
+def _rotate(tmp_path: Path, store: KeyStore, current_token: str, grace_seconds: int) -> Coroutine[Any, Any, RotationOutcome]:
     """Rotate *store*'s default key from *current_token*, writing the key file under *tmp_path*."""
     return rotate_and_persist_default_key(
         store,
@@ -69,21 +69,18 @@ class TestRotateDefaultKey:
 
         # Seed an existing managed key that matches the "current default"
         seed = asyncio.run(store.create(ns="default", label="old-default", expires_at=None))
-        old_token = seed["token"]
-        old_key_id = seed["id"]
+        old_token = seed.token
+        old_key_id = seed.id
 
         result = asyncio.run(_rotate(tmp_path, store, old_token, 0))
 
-        assert "new_key_id" in result
-        assert "new_token" in result
-        assert "old_record" in result
+        assert isinstance(result, RotationOutcome)
+        assert isinstance(result.new_key_id, str)
+        assert isinstance(result.new_token, str)
+        assert result.new_key_id != old_key_id
+        assert result.new_token != old_token
 
-        assert isinstance(result["new_key_id"], str)
-        assert isinstance(result["new_token"], str)
-        assert result["new_key_id"] != old_key_id
-        assert result["new_token"] != old_token
-
-        old_record = result["old_record"]
+        old_record = result.old_record
         assert old_record is not None
         assert isinstance(old_record, KeyRecord)
         assert old_record.id == old_key_id
@@ -93,8 +90,8 @@ class TestRotateDefaultKey:
         """Old key status=revoked in keys.json when grace_seconds=0 (S6)."""
         store = _make_store(tmp_path)
         seed = asyncio.run(store.create(ns="default", label=None, expires_at=None))
-        old_token = seed["token"]
-        old_key_id = seed["id"]
+        old_token = seed.token
+        old_key_id = seed.id
 
         asyncio.run(_rotate(tmp_path, store, old_token, 0))
 
@@ -108,8 +105,8 @@ class TestRotateDefaultKey:
         """Old key gets expires_at = now + grace when grace_seconds > 0 (S15)."""
         store = _make_store(tmp_path)
         seed = asyncio.run(store.create(ns="default", label=None, expires_at=None))
-        old_token = seed["token"]
-        old_key_id = seed["id"]
+        old_token = seed.token
+        old_key_id = seed.id
 
         grace = 60
         before = datetime.now(UTC)
@@ -137,9 +134,9 @@ class TestRotateDefaultKey:
         # No existing keys.json or no matching record
         result = asyncio.run(_rotate(tmp_path, store, "deadbeef" * 8, 0))
 
-        assert result["new_token"] is not None
-        assert result["new_key_id"] is not None
-        assert result["old_record"] is None
+        assert result.new_token is not None
+        assert result.new_key_id is not None
+        assert result.old_record is None
 
         # New record should be in keys.json
         records = asyncio.run(store.load())
@@ -150,11 +147,11 @@ class TestRotateDefaultKey:
         """After a rotation, the new key is present and active in keys.json."""
         store = _make_store(tmp_path)
         seed = asyncio.run(store.create(ns="default", label=None, expires_at=None))
-        old_token = seed["token"]
+        old_token = seed.token
 
         result = asyncio.run(_rotate(tmp_path, store, old_token, 0))
-        new_key_id = result["new_key_id"]
-        new_token = result["new_token"]
+        new_key_id = result.new_key_id
+        new_token = result.new_token
 
         records = asyncio.run(store.load())
         new_records = [r for r in records if r.id == new_key_id]
@@ -178,7 +175,7 @@ class TestRotateDefaultKey:
         unrelated_token = "aabbccdd" * 8  # does not match any record
         result = asyncio.run(_rotate(tmp_path, store, unrelated_token, 0))
 
-        assert result["old_record"] is None
+        assert result.old_record is None
 
         records = asyncio.run(store.load())
         # Two records: the original unrelated key (still active) + the new rotated key
@@ -187,8 +184,8 @@ class TestRotateDefaultKey:
         assert statuses == {"active"}
 
         ids = {r.id for r in records}
-        assert existing["id"] in ids
-        assert result["new_key_id"] in ids
+        assert existing.id in ids
+        assert result.new_key_id in ids
 
     def test_rotate_new_key_namespace_is_default(self, tmp_path: Path) -> None:
         """The new key created by a rotation has namespace='default'."""
@@ -197,7 +194,7 @@ class TestRotateDefaultKey:
         result = asyncio.run(_rotate(tmp_path, store, "ff" * 32, 0))
 
         records = asyncio.run(store.load())
-        new_records = [r for r in records if r.id == result["new_key_id"]]
+        new_records = [r for r in records if r.id == result.new_key_id]
         assert len(new_records) == 1
         assert new_records[0].namespace == "default"
 
@@ -206,7 +203,7 @@ class TestRotateDefaultKey:
         store = _make_store(tmp_path)
         before = datetime.now(UTC)
         result = asyncio.run(_rotate(tmp_path, store, "aa" * 32, MAX_ROTATE_GRACE_SECONDS))
-        expires_at = result["old_record"].expires_at
+        expires_at = result.old_record.expires_at
         assert expires_at >= before + timedelta(seconds=MAX_ROTATE_GRACE_SECONDS)
 
     def test_validate_rotation_grace_rejects_a_grace_that_would_overflow_datetime(self) -> None:
@@ -226,20 +223,20 @@ class TestRotateDefaultKey:
         """
         store = _make_store(tmp_path)
         seed = asyncio.run(store.create(ns="default", label=None, expires_at=None))
-        old_token = seed["token"]
-        old_key_id = seed["id"]
+        old_token = seed.token
+        old_key_id = seed.id
 
         result1 = asyncio.run(_rotate(tmp_path, store, old_token, 0))
         result2 = asyncio.run(_rotate(tmp_path, store, old_token, 0))
 
-        assert result2["old_record"] is None
+        assert result2.old_record is None
 
         records = asyncio.run(store.load())
         old_recs = [r for r in records if r.id == old_key_id]
         assert len(old_recs) == 1
         assert old_recs[0].status == "revoked"  # unchanged from first rotate
 
-        new_ids = {result1["new_key_id"], result2["new_key_id"]}
+        new_ids = {result1.new_key_id, result2.new_key_id}
         assert new_ids.issubset({r.id for r in records if r.status == "active"})
 
     def test_rotate_skips_synthetic_record_with_matching_hash(self, tmp_path: Path) -> None:
@@ -269,7 +266,7 @@ class TestRotateDefaultKey:
         result = asyncio.run(_rotate(tmp_path, store, synthetic_token, 0))
 
         # old_record must be None — synthetic records are never matched by rotate
-        assert result["old_record"] is None
+        assert result.old_record is None
 
         # Synthetic record must remain active (not revoked)
         records = asyncio.run(store.load())
@@ -286,12 +283,12 @@ class TestRotateDefaultKey:
 
         # First rotation: no prior key in keys.json
         result1 = asyncio.run(_rotate(tmp_path, store, "aa" * 32, 0))
-        assert result1["old_record"] is None
+        assert result1.old_record is None
 
         # Second rotation: uses token from first rotation as current_token
-        result2 = asyncio.run(_rotate(tmp_path, store, result1["new_token"], 0))
-        assert result2["old_record"] is not None
-        assert result2["old_record"].id == result1["new_key_id"]
+        result2 = asyncio.run(_rotate(tmp_path, store, result1.new_token, 0))
+        assert result2.old_record is not None
+        assert result2.old_record.id == result1.new_key_id
 
         records = asyncio.run(store.load())
         # 2 records: first rotation's key (revoked) + second rotation's new key (active)
@@ -300,8 +297,8 @@ class TestRotateDefaultKey:
         active = [r for r in records if r.status == "active"]
         assert len(revoked) == 1
         assert len(active) == 1
-        assert revoked[0].id == result1["new_key_id"]
-        assert active[0].id == result2["new_key_id"]
+        assert revoked[0].id == result1.new_key_id
+        assert active[0].id == result2.new_key_id
 
     def test_rotate_unmanaged_key_with_grace_synthesizes_active_record(
         self, tmp_path: Path
@@ -318,7 +315,7 @@ class TestRotateDefaultKey:
 
         result = asyncio.run(_rotate(tmp_path, store, unmanaged_token, 3600))
 
-        old_record = result["old_record"]
+        old_record = result.old_record
         assert old_record is not None, "grace record must be synthesized (S133)"
         assert old_record.status == "active"
         assert old_record.expires_at is not None
@@ -345,15 +342,15 @@ class TestRotateDefaultKey:
         """
         store = _make_store(tmp_path)
         seed = asyncio.run(store.create(ns="default", label=None, expires_at=None))
-        old_token = seed["token"]
-        old_key_id = seed["id"]
+        old_token = seed.token
+        old_key_id = seed.id
 
         # First rotation revokes the managed key (grace=0).
         asyncio.run(_rotate(tmp_path, store, old_token, 0))
         # Retry with the same (now-revoked) token, this time with grace>0.
         result2 = asyncio.run(_rotate(tmp_path, store, old_token, 3600))
 
-        assert result2["old_record"] is None, "revoked key must not be resurrected"
+        assert result2.old_record is None, "revoked key must not be resurrected"
         records = asyncio.run(store.load())
         old_recs = [r for r in records if r.id == old_key_id]
         assert len(old_recs) == 1
@@ -379,8 +376,8 @@ class TestRotateGraceIntegration:
 
         # Create a key and treat its token as the "current default"
         seed = asyncio.run(store.create(ns="default", label=None, expires_at=None))
-        old_token = seed["token"]
-        old_key_id = seed["id"]
+        old_token = seed.token
+        old_key_id = seed.id
 
         grace_seconds = 30
         asyncio.run(_rotate(tmp_path, store, old_token, grace_seconds))

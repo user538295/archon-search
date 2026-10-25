@@ -15,14 +15,13 @@ Run with:
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -76,7 +75,7 @@ def test_e2j_view_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     Asserts:
     - HTTP 200
     - Content-Type: text/html
-    - api_key appears (JSON-encoded) in the response body
+    - a view token (not the api_key) appears (JSON-encoded) in the response body
     - id="network-container" appears in the response body (graph container placeholder)
     """
     install_graph_engine_stub(monkeypatch)
@@ -90,10 +89,9 @@ def test_e2j_view_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
     assert resp.status_code == 200
     assert "text/html" in resp.headers.get("content-type", "")
-    # Token must be present JSON-encoded (json.dumps adds surrounding quotes)
-    assert json.dumps(api_key) in resp.text, (
-        f"Expected token {api_key!r} (JSON-encoded) in response body"
-    )
+    # The page embeds a short-lived view token (JSON-encoded), never the caller's API key
+    assert '"gv1.' in resp.text, "Expected a view token (JSON-encoded) in response body"
+    assert api_key not in resp.text
     # Graph container area must be present
     assert "network-container" in resp.text, (
         "Expected network-container graph area in response body"
@@ -113,7 +111,7 @@ def test_e2j_view_graph_disabled_422(tmp_path: Path, monkeypatch: pytest.MonkeyP
         lambda: _STUB_HTML,
     )
     # graph_enabled=False is the default in make_real_app
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, _cfg, api_key):
         resp = client.get("/graph/testcol/view", headers=_auth(api_key))
 
     assert resp.status_code == 422
@@ -135,7 +133,7 @@ def test_e2j_view_no_auth_401(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         "archon_search.server.routes_graph._load_viewer_html",
         lambda: _STUB_HTML,
     )
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, _api_key):
         resp = client.get("/graph/testcol/view")
 
     assert resp.status_code == 401
@@ -156,7 +154,7 @@ def test_e2j_view_collection_not_found_404(tmp_path: Path, monkeypatch: pytest.M
         "archon_search.server.routes_graph._load_viewer_html",
         lambda: _STUB_HTML,
     )
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         # No collection seeded — "nonexistent-col" does not exist
         resp = client.get("/graph/nonexistent-col/view", headers=_auth(api_key))
 
@@ -189,10 +187,11 @@ def test_e2j_view_no_external_urls(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     body = resp.text
 
-    # S12 — token substitution verified against the real HTML template
-    assert json.dumps(api_key) in body, (
-        f"Expected token {api_key!r} (JSON-encoded via json.dumps) in real HTML body"
+    # S12 — token substitution verified against the real HTML template: a view token, never the API key
+    assert re.search(r'const token\s*=\s*"gv1\.[A-Za-z0-9_.-]+";', body), (
+        "Expected a JSON-encoded view token in the real HTML body"
     )
+    assert api_key not in body, "the caller's API key must never be embedded in the page"
 
     # Real HTML must contain the network-container placeholder (vis-network creates canvas in JS)
     assert 'id="network-container"' in body, (

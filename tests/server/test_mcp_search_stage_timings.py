@@ -9,12 +9,10 @@ import pytest
 
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
-from archon_search.observability import correlation_id as _correlation_id, record_stage
+from archon_search.observability import correlation_id as _correlation_id
+from archon_search.observability import record_stage
 from archon_search.pipeline import SearchPipelineResult
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
-
-
-
 
 # ---------------------------------------------------------------------------
 # Helpers

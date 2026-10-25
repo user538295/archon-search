@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from tests.integration.conftest import make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 

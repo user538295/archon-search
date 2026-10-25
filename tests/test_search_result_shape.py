@@ -8,7 +8,6 @@ import dataclasses
 
 from archon_search._types import SearchResult
 
-
 _EXPECTED_FIELDS = {
     "doc_id",
     "chunk_id",

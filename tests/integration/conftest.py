@@ -23,10 +23,11 @@ import json
 import sys
 import time
 import types
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -44,6 +45,9 @@ _SHARED_GRAPH_MODEL_CACHE = Path.home() / ".archon-search" / "models" / "graph" 
 
 #: File name of the ``make_real_app`` job store, under the test's ``tmp_path``.
 JOBS_FILE_NAME = "jobs.json"
+
+#: Private data-dir subdirectory of ``make_real_app``: ingest refuses paths under the data dir, so corpora live beside it.
+REAL_APP_DATA_SUBDIR = "data"
 
 
 def _reuse_shared_graph_model_cache(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -138,7 +142,11 @@ def make_real_app(
 
     api_key = secrets.token_hex(32)
     # Env vars must be set before load_config so _apply_env_overrides picks them up.
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    # The data dir is a private subdirectory: ingest refuses paths under it, and tests write their corpora in
+    # ``tmp_path`` itself.
+    data_dir = tmp_path / REAL_APP_DATA_SUBDIR
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", api_key)
 
     if toml_content is not None:
@@ -169,6 +177,10 @@ def make_real_app(
 
     if namespaces is not None:
         cfg.namespaces = namespaces
+        # A namespace token is a non-admin key: it may ingest a server path only when the operator set
+        # ``[ingest].allowed_roots``. Tests write their corpora in ``tmp_path``, so that is the root.
+        if not cfg.ingest.allowed_roots:
+            cfg.ingest.allowed_roots = [str(tmp_path)]
 
     if hyde_enabled:
         cfg.hyde.enabled = True

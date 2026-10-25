@@ -8,7 +8,6 @@ import pytest
 from archon_search._types import ChunkRecord
 from archon_search.chunker import DocumentChunker
 
-
 _LONG_TEXT = " ".join([f"This is sentence number {i} in a long document." for i in range(200)])
 
 # Required kwargs for chunker.chunk() after Task 3.2; tests that don't care

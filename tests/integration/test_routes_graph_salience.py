@@ -29,13 +29,13 @@ import math
 import secrets
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 # Embedding dimension produced by the embedder stub (see tests/_search_stubs.py).
 _STUB_EMBEDDING_DIM = 384
@@ -122,7 +122,7 @@ async def _seed_namespace_collection(
                 text=f"seed content {i}",
                 vector=[0.0] * _STUB_EMBEDDING_DIM,
                 source_path=f"/fake/{collection}.txt",
-                indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+                indexed_at=normalize_iso_utc(datetime.now(UTC)),
             )
             for i in range(chunk_count)
         ]
@@ -193,7 +193,7 @@ def test_get_graph_tfidf_echoes_salience_mode(
     """
     install_graph_engine_stub(monkeypatch)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc_file = tmp_path / "doc-tfidf-echo.txt"
         doc_file.write_text("hello world test content for tfidf echo", encoding="utf-8")
         ingest_file_via_path(client, "col-tfidf-echo", str(doc_file), api_key=api_key)
@@ -288,7 +288,7 @@ def test_get_graph_frequency_ranks_ubiquitous_above_domain_specific(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """frequency mode: U (10 chunks) ranks above D (3 chunks)."""
-    with _make_rank_fixture(tmp_path, monkeypatch) as (client, cfg, api_key, _d, _u):
+    with _make_rank_fixture(tmp_path, monkeypatch) as (client, _cfg, api_key, _d, _u):
         resp_freq = client.get("/graph/col-rank-a?salience=frequency", headers=_auth(api_key))
         assert resp_freq.status_code == 200, (
             f"Frequency request failed: {resp_freq.status_code} {resp_freq.text}"
@@ -327,7 +327,7 @@ def test_get_graph_tfidf_ranks_domain_specific_above_ubiquitous(
       TF cancels (same total_chunk_count denominator) →
         expected_ratio = (3 × log(4)) / (10 × log(4/3))
     """
-    with _make_rank_fixture(tmp_path, monkeypatch) as (client, cfg, api_key, _d, _u):
+    with _make_rank_fixture(tmp_path, monkeypatch) as (client, _cfg, api_key, _d, _u):
         resp_tfidf = client.get("/graph/col-rank-a?salience=tfidf", headers=_auth(api_key))
         assert resp_tfidf.status_code == 200, (
             f"TF-IDF request failed: {resp_tfidf.status_code} {resp_tfidf.text}"
@@ -377,7 +377,7 @@ def test_get_graph_frequency_default_echoes_salience_mode(
     """
     install_graph_engine_stub(monkeypatch)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc_file = tmp_path / "doc-freq-default.txt"
         doc_file.write_text("frequency default mode test document", encoding="utf-8")
         ingest_file_via_path(client, "col-freq-default", str(doc_file), api_key=api_key)
@@ -410,7 +410,7 @@ def test_get_graph_explicit_frequency_identical_to_default(
     """
     install_graph_engine_stub(monkeypatch)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc_file = tmp_path / "doc-explicit-freq.txt"
         doc_file.write_text("explicit frequency equals default test", encoding="utf-8")
         ingest_file_via_path(client, "col-explicit-freq", str(doc_file), api_key=api_key)
@@ -442,7 +442,7 @@ def test_get_graph_invalid_salience_422(
     """
     install_graph_engine_stub(monkeypatch)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc_file = tmp_path / "doc-invalid-sal.txt"
         doc_file.write_text("invalid salience test document", encoding="utf-8")
         ingest_file_via_path(client, "col-invalid-sal", str(doc_file), api_key=api_key)
@@ -557,7 +557,7 @@ def test_get_graph_tfidf_graph_disabled_422(
     graph.enabled=false.
     """
     # graph_enabled=False (default) — no graph-engine stub needed
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, _cfg, api_key):
         response = client.get("/graph/any-collection?salience=tfidf", headers=_auth(api_key))
 
         assert response.status_code == 422, (
@@ -610,7 +610,7 @@ def test_get_graph_tfidf_namespace_idf_isolation(
         monkeypatch,
         graph_enabled=True,
         namespaces={key_a: "ns-a", key_b: "ns-b"},
-    ) as (client, cfg, api_key):
+    ) as (client, cfg, _api_key):
         # --- Create 3 collections in ns-A (directly via store, to set namespace correctly) ---
         # Uses direct store seeding rather than ingest_file_via_path — this predates the
         # ddc78995 fix and is kept as-is since refactoring it is out of scope here.
@@ -709,7 +709,7 @@ def test_get_graph_tfidf_unknown_collection_returns_404(
     """
     install_graph_engine_stub(monkeypatch)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         response = client.get(
             "/graph/collection-does-not-exist?salience=tfidf", headers=_auth(api_key)
         )
@@ -769,7 +769,7 @@ def test_cross_collection_route_tfidf_graphml_returns_xml(
     """
     install_graph_engine_stub(monkeypatch)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         for col_name in ("col-cc-gml-a", "col-cc-gml-b"):
             col_file = tmp_path / f"{col_name}.txt"
             col_file.write_text(f"tfidf graphml cross collection test for {col_name}", encoding="utf-8")
@@ -807,7 +807,7 @@ def test_cross_collection_tfidf_echoes_salience_mode(
     """
     install_graph_engine_stub(monkeypatch)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         for col_name in ("t2-tfidf-echo-a", "t2-tfidf-echo-b"):
             col_file = tmp_path / f"{col_name}.txt"
             col_file.write_text(f"tfidf echo test content for {col_name}", encoding="utf-8")
@@ -839,7 +839,7 @@ def test_cross_collection_invalid_salience_422(
     """
     install_graph_engine_stub(monkeypatch)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         for col_name in ("t2-inv-a", "t2-inv-b"):
             col_file = tmp_path / f"{col_name}.txt"
             col_file.write_text(f"invalid salience test for {col_name}", encoding="utf-8")
@@ -880,7 +880,7 @@ def test_cross_collection_frequency_default_echoes_salience_mode(
     """
     install_graph_engine_stub(monkeypatch)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         for col_name in ("t2-freq-def-a", "t2-freq-def-b"):
             col_file = tmp_path / f"{col_name}.txt"
             col_file.write_text(f"frequency default test for {col_name}", encoding="utf-8")
@@ -969,7 +969,7 @@ def test_cross_collection_graph_disabled_422(
     graph.enabled=false.
     """
     # graph_enabled=False (default) — no graph-engine stub needed
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, _cfg, api_key):
         response = client.get(
             "/graph/cross-collection?collections=any-a,any-b",
             headers=_auth(api_key),

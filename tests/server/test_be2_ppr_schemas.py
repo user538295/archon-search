@@ -13,9 +13,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from archon_search.server.routes_search import SearchRequest, SearchResponse
 from archon_search.server.routes_explain import ExplainRequest, ExplainResponse
-
+from archon_search.server.routes_search import SearchRequest, SearchResponse
 
 # ---------------------------------------------------------------------------
 # SearchRequest
@@ -108,6 +107,7 @@ def test_mcpValidModes_includesPpr() -> None:
 def test_mcpSearchWithContext_rejectionMessage_includesPpr() -> None:
     """search_with_context rejection message for graph_mode lists 'ppr' explicitly."""
     import inspect
+
     from archon_search.server import mcp as mcp_module
     source = inspect.getsource(mcp_module)
     # The specific rejection string at the search_with_context guard must include 'ppr'

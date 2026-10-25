@@ -12,6 +12,7 @@ This module:
 """
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -19,7 +20,6 @@ import pytest
 
 from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
 from archon_search.eval.fixtures import EvalCorpus, load_eval_corpus
-
 
 CORPUS_ROOT = Path(__file__).resolve().parent
 
@@ -326,7 +326,5 @@ def build_communities_for_eval(eval_tmp_lancedb_root: Path):
     yield lancedb_root, graph_stores
 
     # Cleanup
-    try:
+    with contextlib.suppress(Exception):
         asyncio.run(graph_store.disconnect())
-    except Exception:
-        pass

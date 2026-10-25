@@ -18,7 +18,6 @@ import pytest
 
 from archon_search.config import ConfigError, GraphConfig, SearchConfig, load_config
 
-
 # ---------------------------------------------------------------------------
 # Default value assertions
 # ---------------------------------------------------------------------------
@@ -104,6 +103,7 @@ def test_graph_config_snapshot(tmp_path: Path) -> None:
         "community_summary_chunks": 3,
         "max_global_candidates": 100,
         "max_inspection_nodes": 5000,
+        "max_cross_collection_collections": 8,
         "max_inspection_edges": 25000,
         "gc_rebuild_communities": True,
         "gc_rebuild_cpu_priority": "low",

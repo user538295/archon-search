@@ -1,8 +1,8 @@
 """Tests for archon_search.hyde — TDD for HyDEGenerator."""
 from __future__ import annotations
 
-import asyncio
 import hashlib
+import hmac
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search.config import HyDEConfig
-
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -68,12 +67,17 @@ def test_fingerprint_different_queries() -> None:
     assert _query_fingerprint("query A") != _query_fingerprint("query B")
 
 
-def test_fingerprint_matches_sha256() -> None:
+def test_fingerprint_is_the_keyed_hmac_not_bare_sha256(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HyDE's log fingerprint is the shared keyed one (tests/test_privacy_fingerprint.py covers the keying)."""
+    from archon_search import _privacy
     from archon_search.hyde import _query_fingerprint
 
+    salt = b"s" * 32
+    monkeypatch.setattr(_privacy, "_fingerprint_key", salt)
     query = "test query"
-    expected = hashlib.sha256(query.encode()).hexdigest()[:16]
-    assert _query_fingerprint(query) == expected
+
+    assert _query_fingerprint(query) == hmac.digest(salt, query.encode(), "sha256").hex()[:16]
+    assert _query_fingerprint(query) != hashlib.sha256(query.encode()).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +184,7 @@ async def test_generate_timeout_fallback(
     mock_anthropic_mod = MagicMock()
     mock_client = MagicMock()
     mock_client.messages = MagicMock()
-    mock_client.messages.create = AsyncMock(side_effect=asyncio.TimeoutError())
+    mock_client.messages.create = AsyncMock(side_effect=TimeoutError())
     mock_anthropic_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
     mock_anthropic_mod.APIError = Exception
 
@@ -327,7 +331,7 @@ async def test_rate_limit_skip_includes_llama_cpp_hyde() -> None:
     mock_provider = MagicMock()
     mock_provider.generate_hypothetical_doc = AsyncMock(return_value="hypothesis text")
 
-    from archon_search.hyde import HyDEGenerator  # noqa: PLC0415
+    from archon_search.hyde import HyDEGenerator
 
     gen = HyDEGenerator(config, provider=mock_provider)
 
@@ -355,7 +359,7 @@ async def test_fingerprint_no_raw_query(
     mock_anthropic_mod = MagicMock()
     mock_client = MagicMock()
     mock_client.messages = MagicMock()
-    mock_client.messages.create = AsyncMock(side_effect=asyncio.TimeoutError())
+    mock_client.messages.create = AsyncMock(side_effect=TimeoutError())
     mock_anthropic_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
     mock_anthropic_mod.APIError = Exception
 

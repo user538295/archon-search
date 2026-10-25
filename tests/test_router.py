@@ -9,7 +9,6 @@ import pytest
 from archon_search.collection_meta import CollectionMeta
 from archon_search.router import MultiCollectionRouter
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1110,10 +1109,10 @@ def test_weight_zero_equals_centroid() -> None:
     centroid_result = {m.name: s for m, s in router_centroid._score_collections(q, [col_a, col_b])}
     hybrid_result = {m.name: s for m, s in router_hybrid_w0._score_collections(q, [col_a, col_b])}
 
-    for name in centroid_result:
-        assert centroid_result[name] is not None
+    for name, centroid_score in centroid_result.items():
+        assert centroid_score is not None
         assert hybrid_result[name] is not None
-        assert abs(centroid_result[name] - hybrid_result[name]) < 1e-9  # type: ignore[operator]
+        assert abs(centroid_score - hybrid_result[name]) < 1e-9  # type: ignore[operator]
 
 
 def test_weight_one_pure_description_embedding() -> None:

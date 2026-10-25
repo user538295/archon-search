@@ -15,9 +15,9 @@ Scenario: BE-11 graph inspection MCP tools
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from archon_search.acl import ChunkVisibility
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
-
-
 
 
 def _make_app(
@@ -122,6 +122,7 @@ def test_mcp_get_graph_summary_shape() -> None:
     meta = MagicMock()
     meta.chunk_count = 100
     pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.store.get_chunk_visibility = AsyncMock(return_value=ChunkVisibility())
 
     graph_store = AsyncMock()
 
@@ -142,9 +143,8 @@ def test_mcp_get_graph_summary_shape() -> None:
         "archon_search.graph_inspector.inspect_collection",
         new_callable=AsyncMock,
         side_effect=mock_inspect,
-    ):
-        with patch("archon_search.server.mcp._get_request_namespace", return_value="default"):
-            result = asyncio.run(get_graph_tool("test-collection"))
+    ), patch("archon_search.server.mcp._get_request_namespace", return_value="default"):
+        result = asyncio.run(get_graph_tool("test-collection"))
 
     # Verify result is a dict with required fields
     assert isinstance(result, dict), f"Expected dict, got {type(result)}: {result}"

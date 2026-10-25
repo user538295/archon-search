@@ -65,6 +65,7 @@ def _run_ppr_gate(k_expr: str, *, timeout: int = 300) -> None:
             text=True,
             timeout=timeout,
             env=child_env,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         pytest.fail(

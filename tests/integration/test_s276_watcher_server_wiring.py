@@ -68,7 +68,7 @@ def test_watcher_manager_is_started_when_watch_enabled(
         "watch = true\n"
     )
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
         resp = client.get("/status", headers=headers)
         assert resp.status_code == 200, f"GET /status failed: {resp.text}"
@@ -107,7 +107,11 @@ async def test_watcher_ingested_new_file_is_tagged_watcher(tmp_path: Path) -> No
     from archon_search.embedder import Embedder
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+    from archon_search.progress import (
+        CollectionProgress,
+        IndexingStateStore,
+        IndexingStatus,
+    )
     from archon_search.reranker import Reranker
     from archon_search.store import SearchStore
     from archon_search.sync import SearchCollectionSync
@@ -211,7 +215,11 @@ async def test_sync_collection_genuine_chunk_size_change_is_tagged_reindex(
     from archon_search.embedder import Embedder
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+    from archon_search.progress import (
+        CollectionProgress,
+        IndexingStateStore,
+        IndexingStatus,
+    )
     from archon_search.reranker import Reranker
     from archon_search.store import SearchStore
     from archon_search.sync import SearchCollectionSync

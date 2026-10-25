@@ -19,7 +19,11 @@ from archon_search import parser as archon_parser
 from archon_search.jobs import maintenance_loop
 from archon_search.jobs import store as job_store
 from archon_search.server import _ingest_lock, routes_explain, routes_export
-from archon_search.sync import collection_drop_deferred_detail, collection_sync_busy_detail, collection_sync_failed_detail
+from archon_search.sync import (
+    collection_drop_deferred_detail,
+    collection_sync_busy_detail,
+    collection_sync_failed_detail,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _BREAKING_MD = _REPO_ROOT / "BREAKING.md"

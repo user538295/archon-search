@@ -7,7 +7,6 @@ import pytest
 
 from archon_search.config import ConfigError, GraphConfig, load_config
 
-
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------

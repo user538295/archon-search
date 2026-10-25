@@ -7,10 +7,11 @@ import math
 import os
 from collections.abc import Callable, Iterable
 from contextlib import nullcontext
+from datetime import UTC
 from pathlib import Path
 from typing import Any, NamedTuple
 from unittest import mock
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.responses import JSONResponse
@@ -31,7 +32,19 @@ from archon_search.server._ingest_lock import (
 from archon_search.server.app import create_app
 from archon_search.store import CollectionLockNotHeldError, StoreBusyError
 from archon_search.sync import path_to_collection_name
-from archon_search.types import CommunityRebuildJob, DeleteJob, ExportJob, ImportJob, IngestJob, IngestOptions, MetadataReindexJob, MigrationJob, MigrationKind, ReindexJob, SyncJob
+from archon_search.types import (
+    CommunityRebuildJob,
+    DeleteJob,
+    ExportJob,
+    ImportJob,
+    IngestJob,
+    IngestOptions,
+    MetadataReindexJob,
+    MigrationJob,
+    MigrationKind,
+    ReindexJob,
+    SyncJob,
+)
 from tests._collection_lock_stub import with_locked_collection_meta
 from tests._parked_lock import parked_waiters, reaping, until_parked
 
@@ -406,6 +419,7 @@ def test_remove_collection_deletes_config_and_data(
 
     # Fix 9: wire a mock search_store and assert drop_collection was called
     import asyncio as _asyncio
+
     from archon_search.collection_meta import CollectionMeta as _CM
     _meta = _CM(name=path_to_collection_name(str(src)), namespace="default")
     mock_search_store = MagicMock()
@@ -429,7 +443,7 @@ def test_remove_collection_deletes_config_and_data(
     assert str(src) not in updated_config.collections
 
     # LanceDB drop was called
-    mock_search_store.drop_collection.assert_called_once_with(name, _locked_by_caller=True)
+    mock_search_store.drop_collection.assert_called_once_with(name, namespace="default", _locked_by_caller=True)
 
 
 def test_remove_unknown_collection_returns_404(client: TestClient) -> None:
@@ -961,10 +975,10 @@ def test_routes_get_collection_namespace(tmp_path: Path, tmp_store: JobStore) ->
 
 
 def _make_app_with_mock_store(
-    cfg: "SearchConfig",
-    tmp_store: "JobStore",
-    mock_store: "MagicMock",
-) -> "TestClient":
+    cfg: SearchConfig,
+    tmp_store: JobStore,
+    mock_store: MagicMock,
+) -> TestClient:
     """Helper: create app with a pre-wired mock search_store."""
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -1041,6 +1055,7 @@ def test_add_collection_writes_stub_meta(
 ) -> None:
     """Successful POST /collections/ writes a stub meta row before ingest completes."""
     import asyncio as _asyncio
+
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "myproject"
@@ -1162,7 +1177,9 @@ def test_add_collection_job_has_correct_namespace(
     mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
-    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+    # POST /collections/ is admin-only: the caller is an admin key of namespace ``caller_ns``.
+    admin_token = _asyncio.run(app.state.key_store.create(caller_ns, None, None, admin=True)).token
+    c = TestClient(app, headers={"Authorization": f"Bearer {admin_token}"})
 
     with patch("archon_search.server.routes_collections.asyncio.create_task",
                side_effect=lambda coro: (coro.close(), MagicMock())[1]):
@@ -1221,6 +1238,7 @@ def test_remove_collection_deletes_meta_row(
 ) -> None:
     """Successful DELETE calls delete_collection_meta with the correct name + namespace."""
     import asyncio as _asyncio
+
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "myproject"
@@ -1261,6 +1279,7 @@ def test_remove_collection_success_drops_table_and_meta(
 ) -> None:
     """Successful DELETE calls both drop_collection AND delete_collection_meta; meta absent after."""
     import asyncio as _asyncio
+
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "myproject"
@@ -1302,7 +1321,7 @@ def test_remove_collection_success_drops_table_and_meta(
     response = c.delete(f"/collections/{name}")
 
     assert response.status_code == 200
-    mock_store.drop_collection.assert_called_once_with(name, _locked_by_caller=True)
+    mock_store.drop_collection.assert_called_once_with(name, namespace=caller_ns, _locked_by_caller=True)
     mock_store.delete_collection_meta.assert_called_once_with(name, caller_ns)
     assert deleted["done"] is True
 
@@ -1318,6 +1337,7 @@ def test_delete_collection_503_when_lock_held(
     lock_timeout_s = 0.1
     monkeypatch.setattr("archon_search.constants.INGEST_LOCK_TIMEOUT_S", lock_timeout_s)
     import asyncio as _asyncio
+
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "locked_col"
@@ -1387,6 +1407,7 @@ def test_delete_acquires_lock_before_drop(
 ) -> None:
     """DELETE /collections/{name} calls acquire_collection_lock_or_503 before drop_collection."""
     import asyncio as _asyncio
+
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "ordered_col"
@@ -1445,6 +1466,7 @@ def test_delete_collection_lock_released_on_exception(
 ) -> None:
     """Lock is released even when delete_collection_meta raises."""
     import asyncio as _asyncio
+
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "exc_col"
@@ -1891,7 +1913,7 @@ def test_delete_collection_names_an_active_job_rather_than_a_jobless_writer(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """With both a job and a jobless writer on the collection, the refusal names the job (its id is actionable)."""
-    app, client, mock_search_store, name, src = _ingest_guard_app(tmp_path, tmp_store)
+    _app, client, mock_search_store, name, _src = _ingest_guard_app(tmp_path, tmp_store)
     mock_search_store.has_active_writer = MagicMock(return_value=True)
     tmp_store.create_job(_ingest_job("both-writers-job", JobStatus.RUNNING, name))
 
@@ -1903,7 +1925,7 @@ def test_delete_collection_names_an_active_job_rather_than_a_jobless_writer(
 
 
 def test_delete_collection_200_when_no_writer_is_registered(tmp_path: Path, tmp_store: JobStore) -> None:
-    app, client, mock_search_store, name, src = _ingest_guard_app(tmp_path, tmp_store)
+    app, client, mock_search_store, name, _src = _ingest_guard_app(tmp_path, tmp_store)
 
     response = client.delete(f"/collections/{name}")
 
@@ -2016,7 +2038,7 @@ def test_delete_config_only_collection_drops_a_meta_row_created_while_it_waited_
     assert response.status_code == 200, response.text
     assert response.json() == {"name": name, "deleted": True}
     assert held_at_read == [False, True], "the second meta read must run under the collection lock"
-    mock_search_store.drop_collection.assert_awaited_once_with(name, _locked_by_caller=True)
+    mock_search_store.drop_collection.assert_awaited_once_with(name, namespace=ANY, _locked_by_caller=True)
     mock_search_store.delete_collection_meta.assert_awaited_once_with(name, "default")
     mock_search_store.discard_lock.assert_called_once_with(name)
     assert app.state.config.collections == []
@@ -2707,7 +2729,7 @@ def _rewrite_migration_job_is_created(effect: _RestartEffect) -> None:
 
 
 def _delete_drops_the_collection(effect: _RestartEffect) -> None:
-    effect.search_store.drop_collection.assert_awaited_once_with(effect.name, _locked_by_caller=True)
+    effect.search_store.drop_collection.assert_awaited_once_with(effect.name, namespace=ANY, _locked_by_caller=True)
     assert effect.name not in effect.meta_rows
 
 
@@ -3675,7 +3697,10 @@ def test_drop_path_from_config_restore_skips_an_entry_already_present(
 
 
 def _drop_failed_body() -> dict[str, str]:
-    from archon_search.server.routes_collections import COLLECTION_DROP_FAILED_CODE, COLLECTION_DROP_FAILED_DETAIL
+    from archon_search.server.routes_collections import (
+        COLLECTION_DROP_FAILED_CODE,
+        COLLECTION_DROP_FAILED_DETAIL,
+    )
 
     return {"detail": COLLECTION_DROP_FAILED_DETAIL, "code": COLLECTION_DROP_FAILED_CODE}
 
@@ -3730,7 +3755,7 @@ def test_remove_collection_meta_delete_failure_keeps_config_removal(
     assert response.status_code == 500
     assert response.json() == _drop_failed_body()
     assert _SECRET_EXC_TEXT not in response.text
-    mock_store.drop_collection.assert_awaited_once_with(name, _locked_by_caller=True)
+    mock_store.drop_collection.assert_awaited_once_with(name, namespace=ANY, _locked_by_caller=True)
     assert app.state.config.collections == []
     assert app.state.config.pinned_collections == []
     on_disk = load_config(Path(app.state.config_path))
@@ -4000,7 +4025,7 @@ def test_add_collection_rejects_dotdot_path(
 def test_add_collection_uses_validator_returned_path(
     tmp_path: Path, tmp_store: JobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Handler must use the path returned by validate_ingest_path, not re-resolve body.path."""
+    """Handler must use the path returned by validate_ingest_source, not re-resolve body.path."""
     import asyncio as _asyncio
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -4018,11 +4043,11 @@ def test_add_collection_uses_validator_returned_path(
     # result, never re-validate (a second call could raise after the lock is held).
     validated: list[str] = []
 
-    def _sentinel_validator(raw: str) -> Path:
+    def _sentinel_validator(raw: str, policy: object, *, admin: bool) -> Path:
         validated.append(raw)
         return Path("/sentinel/value")
 
-    monkeypatch.setattr("archon_search.server.routes_collections.validate_ingest_path", _sentinel_validator)
+    monkeypatch.setattr("archon_search.server.routes_collections.validate_ingest_source", _sentinel_validator)
 
     # Capture the IngestRequest passed to either ingest task variant.
     # The handler branches to _default_ingest_task_with_lock when lock_result is not None.
@@ -4079,7 +4104,10 @@ def test_add_collection_ingest_body_keeps_the_submitted_path(
     """The ingest job's not-found text must echo the caller's raw path, not the server's resolution of it."""
     import asyncio as _asyncio
 
-    from archon_search.server.routes_jobs import INGEST_PATH_NOT_FOUND_PREFIX, IngestPathNotFoundError
+    from archon_search.server.routes_jobs import (
+        INGEST_PATH_NOT_FOUND_PREFIX,
+        IngestPathNotFoundError,
+    )
 
     submitted, resolved = submitted_path(tmp_path, monkeypatch)
     cfg = SearchConfig()
@@ -4291,6 +4319,7 @@ def test_create_collection_returns_503_on_lock_timeout(
 ) -> None:
     """POST /collections/ returns 503 with Retry-After when update_collection_meta raises StoreBusyError."""
     import asyncio as _asyncio
+
     from archon_search.store import StoreBusyError
 
     src = tmp_path / "myproject"
@@ -4380,7 +4409,7 @@ def _make_patch_app(
     count_chunks: int = 5,
     validate_model_dim: int = 384,
     validate_model_raises: Exception | None = None,
-) -> "tuple[TestClient, MagicMock]":
+) -> tuple[TestClient, MagicMock]:
     """Helper: build an app with a mock search_store wired for PATCH tests."""
     src = tmp_path / "docs"
     src.mkdir(exist_ok=True)
@@ -5202,10 +5231,10 @@ def test_patch_nonexistent_collection_returns_404(
 
 def _make_post_app(
     tmp_path: Path,
-    tmp_store: "JobStore",
+    tmp_store: JobStore,
     *,
     validate_raises: Exception | None = None,
-) -> "tuple[object, MagicMock]":
+) -> tuple[object, MagicMock]:
     """Helper: app + mock_store for POST /collections/ embedding_model tests."""
     import asyncio as _asyncio
 
@@ -5239,7 +5268,7 @@ def _make_post_app(
 
 
 def test_create_collection_with_embedding_model(
-    tmp_path: Path, tmp_store: "JobStore"
+    tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/ with embedding_model stores it as active_embedding_model in stub meta."""
     from archon_search.collection_meta import CollectionMeta
@@ -5248,15 +5277,14 @@ def test_create_collection_with_embedding_model(
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
-    with validate_patch:
-        with patch(
-            "archon_search.server.routes_collections.asyncio.create_task",
-            side_effect=lambda coro: (coro.close(), MagicMock())[1],
-        ):
-            response = c.post(
-                "/collections/",
-                json={"path": str(src), "embedding_model": "model-X"},
-            )
+    with validate_patch, patch(
+        "archon_search.server.routes_collections.asyncio.create_task",
+        side_effect=lambda coro: (coro.close(), MagicMock())[1],
+    ):
+        response = c.post(
+            "/collections/",
+            json={"path": str(src), "embedding_model": "model-X"},
+        )
 
     assert response.status_code == 202
     mock_store.update_collection_meta.assert_called_once()
@@ -5269,12 +5297,12 @@ def test_create_collection_with_embedding_model(
 
 
 def test_create_collection_without_embedding_model_uses_global(
-    tmp_path: Path, tmp_store: "JobStore"
+    tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/ without embedding_model uses config.embedding_model as active."""
     from archon_search.collection_meta import CollectionMeta
 
-    app, mock_store, validate_patch, src = _make_post_app(tmp_path, tmp_store)
+    app, mock_store, _validate_patch, src = _make_post_app(tmp_path, tmp_store)
     cfg: SearchConfig = app.state.config
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
@@ -5293,12 +5321,12 @@ def test_create_collection_without_embedding_model_uses_global(
 
 
 def test_create_collection_unknown_model_returns_422(
-    tmp_path: Path, tmp_store: "JobStore"
+    tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/ with unknown embedding_model returns 422."""
     from archon_search.model_validation import ModelValidationError
 
-    app, mock_store, validate_patch, src = _make_post_app(
+    app, _mock_store, validate_patch, src = _make_post_app(
         tmp_path, tmp_store, validate_raises=ModelValidationError("unknown model")
     )
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -5319,7 +5347,7 @@ def test_create_collection_unknown_model_returns_422(
 
 
 def test_get_collection_returns_active_embedding_model(
-    tmp_path: Path, tmp_store: "JobStore"
+    tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET /collections/{name} returns active_embedding_model from meta, not global config."""
     from archon_search.collection_meta import CollectionMeta
@@ -5350,7 +5378,7 @@ def test_get_collection_returns_active_embedding_model(
 
 
 def test_get_collection_pending_null_before_patch(
-    tmp_path: Path, tmp_store: "JobStore"
+    tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET /collections/{name} returns pending_embedding_model=null before any PATCH."""
     from archon_search.collection_meta import CollectionMeta
@@ -5382,7 +5410,7 @@ def test_get_collection_pending_null_before_patch(
 
 
 def test_get_collection_reflects_patch_state(
-    tmp_path: Path, tmp_store: "JobStore"
+    tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET after PATCH: active unchanged, pending set, needs_reindex=true."""
     from archon_search.collection_meta import CollectionMeta
@@ -5420,7 +5448,7 @@ def test_get_collection_reflects_patch_state(
 
 
 def test_get_collection_reflects_reindex_completion(
-    tmp_path: Path, tmp_store: "JobStore"
+    tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """After reindex completes: active promoted, pending=null, needs_reindex=false."""
     from archon_search.collection_meta import CollectionMeta
@@ -5465,7 +5493,7 @@ def test_get_collection_reflects_reindex_completion(
 
 
 def test_list_collections_includes_active_embedding_model(
-    tmp_path: Path, tmp_store: "JobStore"
+    tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET /collections/ response includes active_embedding_model in each entry."""
     from archon_search.collection_meta import CollectionMeta
@@ -5498,7 +5526,7 @@ def test_list_collections_includes_active_embedding_model(
 
 
 def test_list_collections_includes_needs_reindex(
-    tmp_path: Path, tmp_store: "JobStore"
+    tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET /collections/ includes needs_reindex in each entry."""
     from archon_search.collection_meta import CollectionMeta
@@ -5570,7 +5598,7 @@ def test_reindex_endpoint_sets_reindex_job_id(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST reindex sets meta.reindex_job_id before spawning the task."""
-    c, name, meta, mock_store = _make_reindex_app(tmp_path, tmp_store)
+    c, name, _meta, mock_store = _make_reindex_app(tmp_path, tmp_store)
 
     with patch("archon_search.server.routes_collections.asyncio.create_task",
                side_effect=lambda coro: (coro.close(), MagicMock())[1]):
@@ -5593,7 +5621,7 @@ def test_reindex_endpoint_captures_pending_model(
     """ReindexJob gets target_embedding_model from meta.pending_embedding_model."""
     from archon_search.types import ReindexJob
 
-    c, name, meta, mock_store = _make_reindex_app(
+    c, name, _meta, _mock_store = _make_reindex_app(
         tmp_path, tmp_store, {"pending_embedding_model": "model-X"}
     )
 
@@ -5614,7 +5642,7 @@ def test_reindex_endpoint_data_only_sets_null_target(
     """When pending_embedding_model is None, job has target_embedding_model=None."""
     from archon_search.types import ReindexJob
 
-    c, name, meta, mock_store = _make_reindex_app(
+    c, name, _meta, _mock_store = _make_reindex_app(
         tmp_path, tmp_store, {"pending_embedding_model": None}
     )
 
@@ -5633,14 +5661,14 @@ def test_reindex_endpoint_returns_409_on_active_reindex(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST returns 409 when meta.reindex_job_id points to a RUNNING job."""
-    from archon_search.types import ReindexJob
-    from archon_search.jobs.model import JobStatus
-
     # Pre-create a RUNNING ReindexJob in tmp_store
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc).isoformat()
+    from archon_search.jobs.model import JobStatus
+    from archon_search.types import ReindexJob
+
+    now = datetime.now(UTC).isoformat()
     running_job = ReindexJob(
         job_id=str(uuid.uuid4()),
         status=JobStatus.RUNNING,
@@ -5651,7 +5679,7 @@ def test_reindex_endpoint_returns_409_on_active_reindex(
     )
     tmp_store.create_job(running_job)
 
-    c, name, meta, mock_store = _make_reindex_app(
+    c, name, _meta, _mock_store = _make_reindex_app(
         tmp_path, tmp_store, {"reindex_job_id": running_job.job_id}
     )
 
@@ -5667,13 +5695,13 @@ def test_reindex_endpoint_returns_409_on_pending_reindex(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST returns 409 when meta.reindex_job_id points to a PENDING job."""
-    from archon_search.types import ReindexJob
-    from archon_search.jobs.model import JobStatus
-
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc).isoformat()
+    from archon_search.jobs.model import JobStatus
+    from archon_search.types import ReindexJob
+
+    now = datetime.now(UTC).isoformat()
     pending_job = ReindexJob(
         job_id=str(uuid.uuid4()),
         status=JobStatus.PENDING,
@@ -5684,7 +5712,7 @@ def test_reindex_endpoint_returns_409_on_pending_reindex(
     )
     tmp_store.create_job(pending_job)
 
-    c, name, meta, mock_store = _make_reindex_app(
+    c, name, _meta, _mock_store = _make_reindex_app(
         tmp_path, tmp_store, {"reindex_job_id": pending_job.job_id}
     )
 
@@ -5699,13 +5727,13 @@ def test_reindex_endpoint_clears_stale_reindex_job_id_and_proceeds(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST proceeds when meta.reindex_job_id points to a DONE (terminal) job."""
-    from archon_search.types import ReindexJob
-    from archon_search.jobs.model import JobStatus
-
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc).isoformat()
+    from archon_search.jobs.model import JobStatus
+    from archon_search.types import ReindexJob
+
+    now = datetime.now(UTC).isoformat()
     done_job = ReindexJob(
         job_id=str(uuid.uuid4()),
         status=JobStatus.DONE,
@@ -5716,7 +5744,7 @@ def test_reindex_endpoint_clears_stale_reindex_job_id_and_proceeds(
     )
     tmp_store.create_job(done_job)
 
-    c, name, meta, mock_store = _make_reindex_app(
+    c, name, _meta, _mock_store = _make_reindex_app(
         tmp_path, tmp_store, {"reindex_job_id": done_job.job_id}
     )
 
@@ -5735,7 +5763,7 @@ def test_reindex_endpoint_creates_reindex_job_not_ingest_job(
     """POST /collections/{name}/reindex stores a ReindexJob (not a plain IngestJob)."""
     from archon_search.types import ReindexJob
 
-    c, name, meta, mock_store = _make_reindex_app(tmp_path, tmp_store)
+    c, name, _meta, _mock_store = _make_reindex_app(tmp_path, tmp_store)
 
     with patch("archon_search.server.routes_collections.asyncio.create_task",
                side_effect=lambda coro: (coro.close(), MagicMock())[1]):
@@ -5756,11 +5784,12 @@ def _make_migrations_pending_app(
     tmp_path: Path,
     tmp_store: JobStore,
     *,
-    meta_override: "CollectionMeta | None" = None,
+    meta_override: CollectionMeta | None = None,
     pending_migrations_result: list | None = None,
-) -> "tuple[TestClient, str, MagicMock]":
+) -> tuple[TestClient, str, MagicMock]:
     """Helper: create a TestClient wired for migrations/pending tests."""
     import os
+
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "docs"
@@ -5791,8 +5820,8 @@ def _make_migrations_pending_app(
 def test_get_migrations_pending_200(tmp_path: Path, tmp_store: JobStore) -> None:
     """GET /collections/{name}/migrations/pending returns 200 with pending migrations."""
     from archon_search.collection_meta import CollectionMeta
-    from archon_search.types import MigrationKind, MigrationSpec
     from archon_search.sync import path_to_collection_name as _ptn
+    from archon_search.types import MigrationKind, MigrationSpec
 
     src = tmp_path / "docs"
     src.mkdir(exist_ok=True)
@@ -5827,7 +5856,7 @@ def test_get_migrations_pending_200(tmp_path: Path, tmp_store: JobStore) -> None
 
 def test_get_migrations_pending_empty(tmp_path: Path, tmp_store: JobStore) -> None:
     """GET /collections/{name}/migrations/pending returns 200 with empty list when schema is current."""
-    c, name, mock_store = _make_migrations_pending_app(tmp_path, tmp_store, pending_migrations_result=[])
+    c, name, _mock_store = _make_migrations_pending_app(tmp_path, tmp_store, pending_migrations_result=[])
 
     response = c.get(f"/collections/{name}/migrations/pending")
 
@@ -5874,6 +5903,7 @@ def test_get_migrations_pending_in_config_no_meta_returns_404(
 ) -> None:
     """GET /collections/{name}/migrations/pending returns 404 when collection is in config but has no meta (cross-namespace access)."""
     import os
+
     from archon_search.sync import path_to_collection_name as _ptn
 
     src = tmp_path / "docs"
@@ -5933,8 +5963,8 @@ def test_get_migrations_pending_multiple_specs_order_preserved(
 ) -> None:
     """GET /collections/{name}/migrations/pending returns all specs in order."""
     from archon_search.collection_meta import CollectionMeta
-    from archon_search.types import MigrationKind, MigrationSpec
     from archon_search.sync import path_to_collection_name as _ptn
+    from archon_search.types import MigrationKind, MigrationSpec
 
     src = tmp_path / "docs"
     src.mkdir(exist_ok=True)
@@ -5946,7 +5976,7 @@ def test_get_migrations_pending_multiple_specs_order_preserved(
         MigrationSpec(name="rebuild_embeddings", kind=MigrationKind.REWRITE, description="rewrite vecs", introduced_at=1),
     ]
 
-    c, name, mock_store = _make_migrations_pending_app(
+    c, name, _mock_store = _make_migrations_pending_app(
         tmp_path, tmp_store,
         meta_override=meta,
         pending_migrations_result=specs,
@@ -5968,8 +5998,8 @@ def test_get_migrations_pending_export_rebuild_kind(
 ) -> None:
     """GET /collections/{name}/migrations/pending includes export_rebuild migrations with correct kind."""
     from archon_search.collection_meta import CollectionMeta
-    from archon_search.types import MigrationKind, MigrationSpec
     from archon_search.sync import path_to_collection_name as _ptn
+    from archon_search.types import MigrationKind, MigrationSpec
 
     src = tmp_path / "docs"
     src.mkdir(exist_ok=True)
@@ -5982,7 +6012,7 @@ def test_get_migrations_pending_export_rebuild_kind(
         introduced_at=1,
     )
 
-    c, name, mock_store = _make_migrations_pending_app(
+    c, name, _mock_store = _make_migrations_pending_app(
         tmp_path, tmp_store,
         meta_override=meta,
         pending_migrations_result=[spec],
@@ -6006,14 +6036,15 @@ def test_get_migrations_pending_export_rebuild_kind(
 
 
 def _make_migrate_app(
-    tmp_path: "Path",
-    tmp_store: "JobStore",
+    tmp_path: Path,
+    tmp_store: JobStore,
     *,
-    meta_override: "CollectionMeta | None" = None,
+    meta_override: CollectionMeta | None = None,
     pending_migrations_result: list | None = None,
-) -> "tuple[TestClient, str, MagicMock]":
+) -> tuple[TestClient, str, MagicMock]:
     """Helper: create a TestClient wired for POST /migrate tests."""
     import os
+
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "docs"
@@ -6102,7 +6133,7 @@ def test_post_migrate_applies_only_in_place_specs_when_mixed_pending(
         introduced_at=1,
     )
 
-    c, name, mock_store = _make_migrate_app_with_reindex(
+    c, name, _mock_store = _make_migrate_app_with_reindex(
         tmp_path, tmp_store,
         meta_override=meta,
         pending_migrations_result=[in_place_spec, rewrite_spec],
@@ -6232,6 +6263,7 @@ def test_post_migrate_in_place_404_meta_miss(
 ) -> None:
     """POST /collections/{name}/migrate returns 404 when in config but meta missing (cross-namespace gate)."""
     import os
+
     from archon_search.sync import path_to_collection_name as _ptn
 
     src = tmp_path / "docs"
@@ -6350,7 +6382,7 @@ def test_job_response_migration_fields_populated() -> None:
     """JobResponse from a MigrationJob serializes migrations_applied and backup_confirmed correctly."""
     from archon_search.jobs.model import job_to_dict
     from archon_search.server.schemas import JobResponse
-    from archon_search.types import MigrationJob, MigrationKind, JobStatus
+    from archon_search.types import JobStatus, MigrationJob, MigrationKind
 
     job = MigrationJob(
         job_id="job-002",
@@ -6376,7 +6408,7 @@ def test_job_response_backup_confirmed_false_not_coerced_to_none() -> None:
     """backup_confirmed=False is preserved as False, not coerced to None."""
     from archon_search.jobs.model import job_to_dict
     from archon_search.server.schemas import JobResponse
-    from archon_search.types import MigrationJob, MigrationKind, JobStatus
+    from archon_search.types import JobStatus, MigrationJob, MigrationKind
 
     job = MigrationJob(
         job_id="job-003",
@@ -6401,7 +6433,7 @@ def test_job_response_migrations_applied_empty_list_not_coerced_to_none() -> Non
     """migrations_applied=[] is preserved as empty list, not coerced to None."""
     from archon_search.jobs.model import job_to_dict
     from archon_search.server.schemas import JobResponse
-    from archon_search.types import MigrationJob, MigrationKind, JobStatus
+    from archon_search.types import JobStatus, MigrationJob, MigrationKind
 
     job = MigrationJob(
         job_id="job-004",
@@ -6428,19 +6460,20 @@ def test_job_response_migrations_applied_empty_list_not_coerced_to_none() -> Non
 
 
 def _make_migrate_app_with_reindex(
-    tmp_path: "Path",
-    tmp_store: "JobStore",
+    tmp_path: Path,
+    tmp_store: JobStore,
     *,
-    meta_override: "CollectionMeta | None" = None,
+    meta_override: CollectionMeta | None = None,
     pending_migrations_result: list | None = None,
-    reindex_job: "object | None" = None,
-) -> "tuple[TestClient, str, MagicMock]":
+    reindex_job: object | None = None,
+) -> tuple[TestClient, str, MagicMock]:
     """Helper: create a TestClient wired for POST /migrate rewrite tests.
 
     ``reindex_job`` can be injected into ``tmp_store`` to simulate an active
     ``ReindexJob``; the real ``JobStore`` is passed so the route can look it up.
     """
     import os
+
     from archon_search.collection_meta import CollectionMeta as _CollectionMeta
 
     src = tmp_path / "docs"
@@ -6490,7 +6523,7 @@ def test_post_migrate_rewrite_returns_202_with_job_id(
         introduced_at=1,
     )
 
-    c, name, mock_store = _make_migrate_app_with_reindex(
+    c, name, _mock_store = _make_migrate_app_with_reindex(
         tmp_path, tmp_store,
         meta_override=meta,
         pending_migrations_result=[spec],
@@ -6529,7 +6562,7 @@ def test_post_migrate_rewrite_422_without_backup_confirmed(
         introduced_at=1,
     )
 
-    c, name, mock_store = _make_migrate_app_with_reindex(
+    c, name, _mock_store = _make_migrate_app_with_reindex(
         tmp_path, tmp_store,
         meta_override=meta,
         pending_migrations_result=[spec],
@@ -6563,7 +6596,7 @@ def test_post_migrate_export_rebuild_422_not_implemented(
         introduced_at=1,
     )
 
-    c, name, mock_store = _make_migrate_app_with_reindex(
+    c, name, _mock_store = _make_migrate_app_with_reindex(
         tmp_path, tmp_store,
         meta_override=meta,
         pending_migrations_result=[spec],
@@ -6611,7 +6644,7 @@ def test_post_migrate_409_if_reindex_job_running(
         namespace="default",
     )
 
-    c, name, mock_store = _make_migrate_app_with_reindex(
+    c, name, _mock_store = _make_migrate_app_with_reindex(
         tmp_path, tmp_store,
         meta_override=meta,
         pending_migrations_result=[spec],
@@ -6656,7 +6689,7 @@ def test_post_migrate_409_if_reindex_job_queued(
         namespace="default",
     )
 
-    c, name, mock_store = _make_migrate_app_with_reindex(
+    c, name, _mock_store = _make_migrate_app_with_reindex(
         tmp_path, tmp_store,
         meta_override=meta,
         pending_migrations_result=[spec],
@@ -6678,10 +6711,14 @@ async def test_migration_task_marks_failed_on_apply_rewrite_exception(tmp_path: 
     The caller (route or scheduler) is responsible for transitioning the job to
     RUNNING before invoking _migration_task; we simulate that here.
     """
-    from archon_search.jobs.store import JobStore
-    from archon_search.types import MigrationKind, MigrationSpec, JobStatus
-    from archon_search.server.routes_collections import MIGRATION_FAILED_DETAIL, _migration_task
     from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.routes_collections import (
+        MIGRATION_FAILED_DETAIL,
+        _migration_task,
+    )
+    from archon_search.types import JobStatus, MigrationKind, MigrationSpec
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     queued_job = job_store.create_migration(collection="my-col", kind=MigrationKind.REWRITE, backup_confirmed=True)
@@ -6741,10 +6778,11 @@ async def test_migration_task_spec_none_fetches_pending_and_uses_first_rewrite(t
 
     This exercises the scheduler resume path where the job arrives already RUNNING.
     """
-    from archon_search.jobs.store import JobStore
-    from archon_search.types import MigrationKind, MigrationSpec, JobStatus
-    from archon_search.server.routes_collections import _migration_task
     from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.routes_collections import _migration_task
+    from archon_search.types import JobStatus, MigrationKind, MigrationSpec
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     queued_job = job_store.create_migration(collection="my-col", kind=MigrationKind.REWRITE, backup_confirmed=True)
@@ -6778,10 +6816,11 @@ async def test_migration_task_spec_none_no_rewrite_pending_marks_failed(
     expected failure is logged as a warning, without a traceback.
     """
     import logging
-    from archon_search.jobs.store import JobStore
-    from archon_search.types import MigrationKind, JobStatus
-    from archon_search.server.routes_collections import _migration_task
     from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.routes_collections import _migration_task
+    from archon_search.types import JobStatus, MigrationKind
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     queued_job = job_store.create_migration(collection="my-col", kind=MigrationKind.REWRITE, backup_confirmed=True)
@@ -6861,7 +6900,7 @@ def test_list_collections_surfaces_stored_description(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET /collections/ returns the stored description, not a hardcoded ""."""
-    c, name = _app_with_meta_store(tmp_path, tmp_store, description="A handbook about widgets.")
+    c, _name = _app_with_meta_store(tmp_path, tmp_store, description="A handbook about widgets.")
 
     response = c.get("/collections/")
     assert response.status_code == 200
@@ -6879,7 +6918,7 @@ def test_list_collections_description_falls_back_to_empty_when_none(
     ``col_meta.description`` would surface ``None``, which the ``str``-typed
     ``CollectionSummary.description`` rejects with a 500.
     """
-    c, name = _app_with_meta_store(tmp_path, tmp_store, description=None)
+    c, _name = _app_with_meta_store(tmp_path, tmp_store, description=None)
 
     response = c.get("/collections/")
     assert response.status_code == 200
@@ -7004,7 +7043,7 @@ def test_reindex_metadata_returns_202_running(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/{name}/reindex-metadata → 202 + RUNNING JobResponse."""
-    c, name, meta, mock_store = _make_reindex_metadata_app(tmp_path, tmp_store)
+    c, name, _meta, _mock_store = _make_reindex_metadata_app(tmp_path, tmp_store)
 
     with patch("archon_search.server.routes_collections.asyncio.create_task",
                side_effect=lambda coro: (coro.close(), MagicMock())[1]):
@@ -7020,7 +7059,7 @@ def test_reindex_metadata_404_collection_not_in_config(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/{name}/reindex-metadata → 404 when collection absent from config."""
-    c, name, meta, mock_store = _make_reindex_metadata_app(
+    c, name, _meta, _mock_store = _make_reindex_metadata_app(
         tmp_path, tmp_store, in_config=False
     )
 
@@ -7033,7 +7072,7 @@ def test_reindex_metadata_404_meta_row_absent(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/{name}/reindex-metadata → 404 when meta row is absent."""
-    c, name, meta, mock_store = _make_reindex_metadata_app(
+    c, name, _meta, _mock_store = _make_reindex_metadata_app(
         tmp_path, tmp_store, has_meta=False
     )
 
@@ -7050,11 +7089,12 @@ def test_reindex_metadata_409_duplicate_submission(
 
     CANCELLING counts: DELETE /jobs/{id} does not stop the running task.
     """
-    from archon_search.types import MetadataReindexJob, JobKind
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc).isoformat()
+    from archon_search.types import JobKind, MetadataReindexJob
+
+    now = datetime.now(UTC).isoformat()
     running_job = MetadataReindexJob(
         job_id=str(uuid.uuid4()),
         status=active_status,
@@ -7066,7 +7106,7 @@ def test_reindex_metadata_409_duplicate_submission(
     )
     tmp_store.create_job(running_job)
 
-    c, name, meta, mock_store = _make_reindex_metadata_app(
+    c, name, _meta, _mock_store = _make_reindex_metadata_app(
         tmp_path, tmp_store, meta_kwargs={"metadata_reindex_job_id": running_job.job_id}
     )
 
@@ -7106,7 +7146,7 @@ def test_reindex_metadata_task_done_path_and_flag_forwarding(
 
     # Update the mock_store's reindex_metadata BEFORE making the request so
     # the task picks it up when it runs.
-    c, name, meta, mock_store = _make_reindex_metadata_app(tmp_path, tmp_store)
+    c, name, _meta, mock_store = _make_reindex_metadata_app(tmp_path, tmp_store)
     mock_store.reindex_metadata = AsyncMock(return_value=result_obj)
 
     # Do NOT patch asyncio.create_task — let the task actually run.
@@ -7164,7 +7204,7 @@ def test_reindex_metadata_task_failed_path(
     T5: FAILED branch (except Exception) is exercised.
     T4: id is cleared in finally even on failure, so a re-submit returns 202.
     """
-    c, name, meta, mock_store = _make_reindex_metadata_app(tmp_path, tmp_store)
+    c, name, _meta, mock_store = _make_reindex_metadata_app(tmp_path, tmp_store)
     mock_store.reindex_metadata = AsyncMock(side_effect=OSError("table dropped"))
 
     response = c.post(f"/collections/{name}/reindex-metadata", json={})
@@ -7238,7 +7278,10 @@ def test_reindex_metadata_task_done_write_failure_ends_failed_after_clearing_the
 ) -> None:
     """A failing DONE write leaves the job FAILED with the sanitized detail (not RUNNING forever), after the meta
     pointer was cleared; the log tells the failed DONE write apart from a failed reindex."""
-    from archon_search.server.routes_collections import METADATA_REINDEX_FAILED_DETAIL, _reindex_metadata_task
+    from archon_search.server.routes_collections import (
+        METADATA_REINDEX_FAILED_DETAIL,
+        _reindex_metadata_task,
+    )
 
     job = tmp_store.create_metadata_reindex(collection="col")
     meta = CollectionMeta(name="col", namespace="default", metadata_reindex_job_id=job.job_id)
@@ -7312,12 +7355,13 @@ def test_reindex_metadata_stale_job_id_clears_and_returns_202(
     would never run and would otherwise answer 409 forever. Such a job is also marked FAILED, so it
     becomes terminal (evictable, deletable).
     """
-    from archon_search.types import MetadataReindexJob, JobKind
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
+
+    from archon_search.types import JobKind, MetadataReindexJob
 
     # Create a job in a status that will never run again.
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     done_job = MetadataReindexJob(
         job_id=str(uuid.uuid4()),
         status=stale_status,
@@ -7330,7 +7374,7 @@ def test_reindex_metadata_stale_job_id_clears_and_returns_202(
     tmp_store.create_job(done_job)
 
     # Point meta at the DONE job — simulates stale id after a previous run.
-    c, name, meta, mock_store = _make_reindex_metadata_app(
+    c, name, _meta, _mock_store = _make_reindex_metadata_app(
         tmp_path, tmp_store, meta_kwargs={"metadata_reindex_job_id": done_job.job_id}
     )
 

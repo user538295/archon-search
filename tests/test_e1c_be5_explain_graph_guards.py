@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tests.integration.conftest import make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -77,7 +77,7 @@ def test_explain_route_graph_not_enabled_local_returns_422(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """POST /explain with graph_mode='local' + graph disabled → 422 plain string detail."""
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         resp = client.post(
             "/explain",
             json={"query": "test query", "collection": "test-col", "graph_mode": "local"},
@@ -95,7 +95,7 @@ def test_explain_route_graph_not_enabled_global_returns_422(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """POST /explain with graph_mode='global' + graph disabled → 422 plain string detail."""
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         resp = client.post(
             "/explain",
             json={"query": "test query", "collection": "test-col", "graph_mode": "global"},
@@ -127,7 +127,7 @@ def test_explain_route_communities_not_built_returns_422(
 
     install_graph_engine_stub(monkeypatch, empty=True)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         pipeline = client.app.state.pipeline
         client.app.state.embedder_cache = None
 
@@ -173,7 +173,7 @@ def test_explain_route_communities_not_built_global_returns_422(
 
     install_graph_engine_stub(monkeypatch, empty=True)
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         pipeline = client.app.state.pipeline
         client.app.state.embedder_cache = None
 
@@ -220,7 +220,7 @@ def test_explain_route_communities_not_built_multi_collection_fanout_path_return
     """
     from archon_search.pipeline import GraphCommunitiesNotBuiltError
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         pipeline = client.app.state.pipeline
         # Mock pipeline.explain to raise GraphCommunitiesNotBuiltError on the multi-collection path
         pipeline.explain = AsyncMock(
@@ -305,7 +305,7 @@ def test_explain_route_graph_mode_with_single_collection_not_rejected(
     graph_mode + body.collection (singular) is the normal single-collection graph path.
     With graph disabled, the graph_not_enabled guard fires — but NOT the S14 guard.
     """
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         resp = client.post(
             "/explain",
             json={"query": "test query", "collection": "test-col", "graph_mode": "naive"},

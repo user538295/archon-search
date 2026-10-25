@@ -347,6 +347,7 @@ def test_configure_logging_directory_failure_does_not_crash(tmp_path, monkeypatc
 
     monkeypatch.setattr(Path, "mkdir", fail_mkdir)
     cfg = _make_config(tmp_path)
+    cfg.log_file = str(tmp_path / "missing-dir" / "test.log")  # the directory must be created, so mkdir is reached
     # Should not raise
     configure_logging(cfg)
     logger = logging.getLogger("archon_search")
@@ -450,7 +451,7 @@ def test_configure_logging_idempotent_closes_old_handler(tmp_path):
     cfg = _make_config(tmp_path)
     configure_logging(cfg)
     logger = logging.getLogger("archon_search")
-    old_handler = [h for h in logger.handlers if isinstance(h, TimedRotatingFileHandler)][0]
+    old_handler = next(h for h in logger.handlers if isinstance(h, TimedRotatingFileHandler))
     old_stream = old_handler.stream
     configure_logging(cfg)
     assert old_stream.closed is True
@@ -460,7 +461,7 @@ def test_configure_logging_transition_file_to_empty(tmp_path):
     cfg = _make_config(tmp_path)
     configure_logging(cfg)
     logger = logging.getLogger("archon_search")
-    old_handler = [h for h in logger.handlers if isinstance(h, TimedRotatingFileHandler)][0]
+    old_handler = next(h for h in logger.handlers if isinstance(h, TimedRotatingFileHandler))
     old_stream = old_handler.stream
 
     cfg2 = SearchConfig()
@@ -504,7 +505,7 @@ def test_configure_logging_json_exception_is_valid_json(tmp_path):
     try:
         raise ValueError("test error")
     except ValueError:
-        logger.error("caught exception", exc_info=True)
+        logger.exception("caught exception")
     logger.handlers[0].flush()
     lines = [l for l in (tmp_path / "test.log").read_text().splitlines() if l.strip()]
     assert lines
@@ -519,16 +520,16 @@ def test_configure_logging_json_timestamp_is_utc(tmp_path):
 
     cfg = _make_config(tmp_path, log_format="json")
     configure_logging(cfg)
-    before = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    before = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
     logger = logging.getLogger("archon_search")
     logger.debug("timestamp check")
     logger.handlers[0].flush()
-    after = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0) + datetime.timedelta(seconds=1)
+    after = datetime.datetime.now(datetime.UTC).replace(microsecond=0) + datetime.timedelta(seconds=1)
     lines = [l for l in (tmp_path / "test.log").read_text().splitlines() if l.strip()]
     parsed = json.loads(lines[0])
     ts_str = parsed["timestamp"]
     # datefmt is "%Y-%m-%dT%H:%M:%SZ" — parse it back as UTC
-    ts = datetime.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    ts = datetime.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.UTC)
     assert before <= ts <= after, f"Timestamp {ts_str!r} not in UTC range [{before}, {after}]"
 
 
@@ -821,3 +822,31 @@ def test_container_env_formatter_parity_with_file_handler_json(tmp_path, monkeyp
     assert file_fmt._fmt == stderr_fmt._fmt
     assert file_fmt.datefmt == stderr_fmt.datefmt
     assert file_fmt.converter is stderr_fmt.converter is time.gmtime
+
+
+def test_private_log_handler_closes_the_fd_when_restricting_it_fails(tmp_path, monkeypatch):
+    import os
+
+    from archon_search import logging_setup
+
+    opened: list[int] = []
+    real_open = os.open
+
+    def tracking_open(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+
+    def failing_restrict(fd):
+        raise OSError("fchmod refused")
+
+    monkeypatch.setattr(logging_setup.os, "open", tracking_open)
+    monkeypatch.setattr(logging_setup, "restrict_fd_to_owner", failing_restrict)
+    handler = logging_setup._PrivateTimedRotatingFileHandler(str(tmp_path / "a.log"), delay=True)
+
+    with pytest.raises(OSError, match="fchmod refused"):
+        handler._open()
+
+    assert len(opened) == 1
+    with pytest.raises(OSError):  # EBADF: the descriptor was closed, not leaked
+        os.fstat(opened[0])

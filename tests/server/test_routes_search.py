@@ -1143,8 +1143,7 @@ def test_search_handler_multi_collection_emits_search_multi_telemetry(tmp_path: 
 
 def test_openapi_language_field_not_nullable(tmp_path):
     """SearchResultSchema.language must not be nullable in OpenAPI schema."""
-    app, _ = _make_app(tmp_path)
-    sync_client = TestClient(app)
+    _app, sync_client = _make_app(tmp_path)  # the returned client carries the bearer token: /openapi.json is authenticated
     resp = sync_client.get("/openapi.json")
     schema = resp.json()
     search_result = schema.get("components", {}).get("schemas", {}).get("SearchResultSchema", {})
@@ -1254,7 +1253,7 @@ def test_search_hyde_is_skipped_while_the_embedder_is_cold(tmp_path: Path) -> No
 
 def test_search_hyde_still_runs_once_the_embedder_is_warm(tmp_path: Path) -> None:
     """The gate is warmth-conditional — a warm embedder keeps HyDE fully enabled."""
-    app, client, generator = _make_hyde_app(tmp_path, embedder_is_warm=True)
+    _app, client, generator = _make_hyde_app(tmp_path, embedder_is_warm=True)
 
     response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
 

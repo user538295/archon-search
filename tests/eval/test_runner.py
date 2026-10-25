@@ -20,7 +20,6 @@ from archon_search.eval.runner import (
     validate_routing_contract,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1023,20 +1022,20 @@ def _make_metrics(
 
 
 def _make_quality_floors(**overrides) -> EvalQualityFloors:
-    defaults: dict[str, float | None] = dict(
-        recall_at_1=0.60,
-        recall_at_3=0.75,
-        recall_at_5=0.80,
-        mrr=0.65,
-        ndcg_at_5=0.70,
-        ndcg_at_10=0.72,
-        routing_accuracy=None,
-        graph_mrr=None,
-        graph_naive_recall_at_5=None,
-        graph_local_recall_at_5=None,
-        graph_global_recall_at_5=None,
-        graph_negative_control_recall_at_5=None,
-    )
+    defaults: dict[str, float | None] = {
+        "recall_at_1": 0.60,
+        "recall_at_3": 0.75,
+        "recall_at_5": 0.80,
+        "mrr": 0.65,
+        "ndcg_at_5": 0.70,
+        "ndcg_at_10": 0.72,
+        "routing_accuracy": None,
+        "graph_mrr": None,
+        "graph_naive_recall_at_5": None,
+        "graph_local_recall_at_5": None,
+        "graph_global_recall_at_5": None,
+        "graph_negative_control_recall_at_5": None,
+    }
     defaults.update(overrides)
     return EvalQualityFloors(**defaults)
 
@@ -1412,8 +1411,9 @@ def test_run_router_for_query_accepts_strategy_param() -> None:
     """_run_router_for_query accepts strategy='centroid' without raising."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock, patch
-    from archon_search.eval.runner import _run_router_for_query
+
     from archon_search.collection_meta import CollectionMeta
+    from archon_search.eval.runner import _run_router_for_query
 
     mock_pipeline = MagicMock()
     mock_embedder = MagicMock()
@@ -1438,8 +1438,9 @@ def test_run_router_for_query_returns_full_ranked_order() -> None:
     """With 3 collections, shortlist_size=3, confidence_threshold=0.0, all 3 names returned in score order."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock, patch
-    from archon_search.eval.runner import _run_router_for_query
+
     from archon_search.collection_meta import CollectionMeta
+    from archon_search.eval.runner import _run_router_for_query
 
     mock_pipeline = MagicMock()
     mock_embedder = MagicMock()
@@ -1607,8 +1608,8 @@ async def test_hybrid_router_receives_metas_with_populated_description_embedding
     state with descriptions populated.
     """
     import archon_search.router as router_mod
-    from archon_search.eval import runner as runner_mod
     from archon_search.collection_meta import CollectionMeta
+    from archon_search.eval import runner as runner_mod
 
     corpus_root = tmp_path / "corpus_root"
     corpus_root.mkdir()

@@ -42,7 +42,7 @@ def test_noqa_suppresses_violation(tmp_path: Path) -> None:
     _write(
         tmp_path / "mod.py",
         "from pathlib import Path\n\n\ndef save(path: Path, data):\n"
-        "    path.write_text(data)  # noqa: durable-write\n",
+        "    path.write_text(data)  # durable-write-exempt\n",
     )
     violations = find_violations(tmp_path)
     assert violations == [], violations
@@ -75,7 +75,7 @@ def test_os_open_o_creat_noqa_on_token_line_suppresses(tmp_path: Path) -> None:
         "import os\n\n\ndef save(path, data):\n"
         "    fd = os.open(\n"
         "        path,\n"
-        "        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,  # noqa: durable-write\n"
+        "        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,  # durable-write-exempt\n"
         "        0o600,\n"
         "    )\n"
         "    return fd\n",
@@ -89,7 +89,7 @@ def test_os_open_o_creat_noqa_on_call_line_suppresses(tmp_path: Path) -> None:
     _write(
         tmp_path / "mod.py",
         "import os\n\n\ndef save(path, data):\n"
-        "    fd = os.open(  # noqa: durable-write\n"
+        "    fd = os.open(  # durable-write-exempt\n"
         "        path,\n"
         "        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,\n"
         "        0o600,\n"

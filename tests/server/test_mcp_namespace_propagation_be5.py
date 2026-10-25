@@ -8,23 +8,23 @@ Mechanism (ADR 17, which partially supersedes ADR 09's K-1 sketch):
   APIKeyMiddleware writes request.state.namespace before call_next, so any tool that
   calls _get_request_namespace() → get_http_request().state.namespace sees the
   authenticated namespace. Outside an HTTP request get_http_request() raises
-  RuntimeError and _get_request_namespace() falls back to DEFAULT_NAMESPACE.
+  RuntimeError and _get_request_namespace() refuses the call (it never serves it as the default namespace).
 
 Scenarios completed: S8 (namespace propagation correct for all tool closures), C4.
 """
 from __future__ import annotations
 
 import asyncio
+import types
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from tests._collection_lock_stub import with_locked_collection_meta
 from tests._fastmcp_stub import stubbed_fastmcp
-
-
 
 # ---------------------------------------------------------------------------
 # Helpers: a fake Request for get_http_request(), and a patch of
@@ -405,7 +405,7 @@ async def test_export_collection_uses_resolved_namespace(tmp_path, monkeypatch) 
         fn = app.tools["export_collection"]
 
     with _patch_namespace("ns-export"):
-        await fn(collection="col1", output_path=str(tmp_path / "exports"))
+        await fn(collection="col1")
 
     # store.get_collection_meta must have been called with namespace="ns-export"
     store.get_collection_meta.assert_called_once()
@@ -451,7 +451,8 @@ async def test_import_collection_uses_resolved_namespace(tmp_path, monkeypatch) 
     cfg.embedding_model = "BAAI/bge-small-en-v1.5"
 
     # Create a valid tar.gz archive inside the data dir (so validate_export_path passes)
-    archive_path = tmp_path / "col1.tar.gz"
+    archive_path = tmp_path / "exports" / "ns-import" / "col1.tar.gz"
+    archive_path.parent.mkdir(parents=True)
     manifest = {
         "collection": "col1",
         "active_embedding_model": "BAAI/bge-small-en-v1.5",
@@ -488,13 +489,14 @@ async def test_import_collection_uses_resolved_namespace(tmp_path, monkeypatch) 
     with (
         stubbed_fastmcp(),
         # Bypass archive member validation so we can focus on namespace threading
-        patch("archon_search.server.mcp.validate_archive_members"),
+        patch("archon_search.server.mcp.validate_archive_file"),
         # Bypass ImportArchiveReader so we control the manifest returned
         patch(
             "archon_search.server.mcp.ImportArchiveReader",
             return_value=MagicMock(
                 read_manifest=MagicMock(return_value={
                     "collection": "col1",
+                    "namespace": "ns-import",
                     "active_embedding_model": "BAAI/bge-small-en-v1.5",
                     "schema_version": EXPORT_SCHEMA_VERSION,
                 })
@@ -727,21 +729,19 @@ async def test_resolve_embedder_skips_meta_fetch_when_meta_provided() -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_get_request_namespace_falls_back_to_default
+# test_get_request_namespace_refuses_without_an_http_request
 # ---------------------------------------------------------------------------
 
 
-def test_get_request_namespace_falls_back_to_default() -> None:
-    """_get_request_namespace() returns DEFAULT_NAMESPACE when no request is active.
+@pytest.mark.usefixtures("real_mcp_auth_context")
+def test_get_request_namespace_refuses_without_an_http_request() -> None:
+    """A tool call with no authenticated request is refused: it never falls back to DEFAULT_NAMESPACE.
 
     Exercised end to end through a real tool closure: list_collections runs with
     _get_request_namespace NOT patched and no HTTP request context, so the real
-    get_http_request() raises RuntimeError and the tool must receive DEFAULT_NAMESPACE.
+    get_http_request() raises RuntimeError and the call is refused before the pipeline is touched.
     """
-    from unittest.mock import AsyncMock, MagicMock
-
     import archon_search.server.mcp as mcp_module
-    from archon_search.constants import DEFAULT_NAMESPACE
 
     pipeline = MagicMock()
     pipeline.get_all_collections_meta = AsyncMock(return_value=[])
@@ -750,17 +750,10 @@ def test_get_request_namespace_falls_back_to_default() -> None:
         app = mcp_module.create_app(pipeline, "default", writer=None)
         fn = app.tools["list_collections"]
 
-    # Do NOT patch _get_request_namespace — let it fall back naturally.
-    # Since no HTTP request context is active, it should return DEFAULT_NAMESPACE.
-    asyncio.run(fn())
+    with pytest.raises(ToolError, match=mcp_module.NO_AUTH_CONTEXT_DETAIL):
+        asyncio.run(fn())
 
-    pipeline.get_all_collections_meta.assert_called_once()
-    call_args = pipeline.get_all_collections_meta.call_args
-    ns_passed = call_args.args[0] if call_args.args else call_args.kwargs.get("namespace")
-    assert ns_passed == DEFAULT_NAMESPACE, (
-        f"Without an active HTTP request, _get_request_namespace() must return "
-        f"DEFAULT_NAMESPACE={DEFAULT_NAMESPACE!r}, got {ns_passed!r}"
-    )
+    pipeline.get_all_collections_meta.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -806,10 +799,9 @@ def test_get_request_namespace_returns_state_namespace() -> None:
 
 
 def test_get_request_namespace_propagates_non_runtime_errors() -> None:
-    """Only RuntimeError ("no active HTTP request") falls back to DEFAULT_NAMESPACE.
+    """Only RuntimeError ("no active HTTP request") is turned into a refusal.
 
-    Any other failure inside get_http_request() is a real fault and must surface
-    instead of silently serving the request from the default namespace.
+    Any other failure inside get_http_request() is a real fault and must surface as itself.
     """
     import archon_search.server.mcp as mcp_module
 
@@ -824,31 +816,30 @@ def test_get_request_namespace_propagates_non_runtime_errors() -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_get_request_namespace_defaults_when_state_lacks_namespace
+# test_get_request_namespace_refuses_when_state_lacks_namespace
 # ---------------------------------------------------------------------------
 
 
-def test_get_request_namespace_defaults_when_state_lacks_namespace() -> None:
-    """An active request whose state carries no namespace resolves to DEFAULT_NAMESPACE.
+@pytest.mark.parametrize(
+    "state",
+    [types.SimpleNamespace(), types.SimpleNamespace(namespace=""), types.SimpleNamespace(namespace=None)],
+    ids=["missing", "empty", "none"],
+)
+def test_get_request_namespace_refuses_when_state_lacks_namespace(state: types.SimpleNamespace) -> None:
+    """An active request whose state carries no usable namespace is refused, never served as DEFAULT_NAMESPACE.
 
-    get_http_request() succeeds here, so the fallback comes from
-    getattr(req.state, "namespace", DEFAULT_NAMESPACE), not from the RuntimeError path.
+    get_http_request() succeeds here, so the refusal comes from the identity check, not from the
+    RuntimeError path.
     """
-    import types
-
     import archon_search.server.mcp as mcp_module
-    from archon_search.constants import DEFAULT_NAMESPACE
-
-    request_without_namespace = types.SimpleNamespace(state=types.SimpleNamespace())
 
     with patch(
         "archon_search.server.mcp.get_http_request",
-        return_value=request_without_namespace,
-    ) as fake_get_http_request:
-        resolved = mcp_module._get_request_namespace()
+        return_value=types.SimpleNamespace(state=state),
+    ) as fake_get_http_request, pytest.raises(ToolError, match=mcp_module.NO_AUTH_CONTEXT_DETAIL):
+        mcp_module._get_request_namespace()
 
     fake_get_http_request.assert_called_once_with()
-    assert resolved == DEFAULT_NAMESPACE
 
 
 # ---------------------------------------------------------------------------
@@ -856,14 +847,15 @@ def test_get_request_namespace_defaults_when_state_lacks_namespace() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fastmcp_get_http_request_raises_runtime_error_outside_request() -> None:
-    """Upstream contract the DEFAULT_NAMESPACE fallback relies on.
+def test_fastmcp_get_http_request_raises_runtime_error_outside_request(real_mcp_auth_context: None) -> None:
+    """Upstream contract the fail-closed refusal relies on.
 
-    _get_request_namespace() catches only RuntimeError from
-    fastmcp.server.dependencies.get_http_request(). This is the FastMCP-upgrade guard
-    ADR 17 names (it replaces ADR 09's private _current_http_request import test): it
-    fails in CI if archon_search.server.mcp stops using the public get_http_request, or
-    if FastMCP changes the exception raised outside an HTTP request.
+    _get_request_identity() maps the RuntimeError that
+    fastmcp.server.dependencies.get_http_request() raises outside an HTTP request to a refused
+    call. This is the FastMCP-upgrade guard ADR 17 names (it replaces ADR 09's private
+    _current_http_request import test): it fails in CI if archon_search.server.mcp stops using the
+    public get_http_request, or if FastMCP changes the exception raised outside an HTTP request
+    (which would turn "refused" into an unhandled error or, worse, a served call).
     """
     from fastmcp.server.dependencies import get_http_request
 

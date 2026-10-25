@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -46,7 +46,7 @@ def _make_chunk(doc_id: str, idx: int, source_path: str):
         text=f"chunk number {idx}",
         vector=[0.0] * _EMBEDDING_DIM,
         source_path=source_path,
-        indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+        indexed_at=normalize_iso_utc(datetime.now(UTC)),
         acl=None,
     )
 

@@ -13,7 +13,7 @@ def test_search_results_carry_reranker_score(tmp_path, monkeypatch):
     doc = tmp_path / "test_doc.md"
     doc.write_text("Archon search is a hybrid retrieval server with vector and full-text search.")
 
-    with make_real_app(tmp_path / "app", monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path / "app", monkeypatch) as (client, _cfg, api_key):
         col = "s343col"
         headers = {"Authorization": f"Bearer {api_key}"}
 

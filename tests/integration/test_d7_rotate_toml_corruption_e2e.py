@@ -28,7 +28,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.integration.conftest import make_real_app
+from tests.integration.conftest import REAL_APP_DATA_SUBDIR, make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -123,9 +123,9 @@ def test_e2e_rotate_grace_window(tmp_path, monkeypatch):
     - Assert old token is rejected AFTER the grace window expires (by patching datetime.now
       in key_manager so active_keys() filters the expired token out).
     """
-    import archon_search.key_manager as km_mod
-
     from fastapi.testclient import TestClient
+
+    import archon_search.key_manager as km_mod
     from archon_search.key_manager import get_key_file
 
     grace = 30
@@ -168,7 +168,7 @@ def test_e2e_rotate_grace_window(tmp_path, monkeypatch):
         )
 
         expires_raw = body2["old_key_expires_at"]
-        expires_dt = datetime.fromisoformat(expires_raw.replace("Z", "+00:00"))
+        expires_dt = datetime.fromisoformat(expires_raw)
         assert before_rotate + timedelta(seconds=grace) <= expires_dt <= after_rotate + timedelta(seconds=grace), (
             f"old_key_expires_at={expires_dt} must be within [{before_rotate + timedelta(seconds=grace)}, "
             f"{after_rotate + timedelta(seconds=grace)}]"
@@ -258,7 +258,7 @@ def test_e2e_rotate_grace_first_rotation_of_default_key(tmp_path, monkeypatch):
             "old_key_expires_at must be ~now+grace when grace_seconds > 0 (S133)"
         )
         expires_dt = datetime.fromisoformat(
-            body["old_key_expires_at"].replace("Z", "+00:00")
+            body["old_key_expires_at"]
         )
         assert (
             before + timedelta(seconds=grace)
@@ -411,12 +411,13 @@ def test_e2e_corruption_degradation(tmp_path, monkeypatch, caplog):
     - The managed key store is empty (graceful fallback to empty).
     - An ERROR log is emitted describing the JSON parse failure (S17).
     """
+    from fastapi.testclient import TestClient
+
     from archon_search.config import SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.key_manager import ENV_VAR
     from archon_search.server.app import create_app
-    from fastapi.testclient import TestClient
 
     api_key = secrets.token_hex(32)
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
@@ -438,28 +439,27 @@ def test_e2e_corruption_degradation(tmp_path, monkeypatch, caplog):
     # App must start without raising despite corrupted keys.json.
     app = create_app(cfg, job_store, scheduler=scheduler)
 
-    with caplog.at_level(logging.ERROR, logger="archon_search.key_manager"):
-        with TestClient(app) as client:
-            # Default env-var key must still work (S17 requirement).
-            auth_resp = client.get("/collections", headers=_auth(api_key))
-            assert auth_resp.status_code == 200, (
-                f"Default key must work after corrupted keys.json startup (S17); "
-                f"got {auth_resp.status_code}: {auth_resp.text}"
-            )
+    with caplog.at_level(logging.ERROR, logger="archon_search.key_manager"), TestClient(app) as client:
+        # Default env-var key must still work (S17 requirement).
+        auth_resp = client.get("/collections", headers=_auth(api_key))
+        assert auth_resp.status_code == 200, (
+            f"Default key must work after corrupted keys.json startup (S17); "
+            f"got {auth_resp.status_code}: {auth_resp.text}"
+        )
 
-            # Managed key store falls back to empty — GET /keys returns an empty list.
-            list_resp = client.get("/keys", headers=_auth(api_key))
-            assert list_resp.status_code == 200, list_resp.text
-            body = list_resp.json()
-            # The managed keys list may be empty or contain only TOML synthetics;
-            # no managed keys from the corrupted file should appear.
-            assert isinstance(body["keys"], list), "GET /keys must return a list even after corruption"
+        # Managed key store falls back to empty — GET /keys returns an empty list.
+        list_resp = client.get("/keys", headers=_auth(api_key))
+        assert list_resp.status_code == 200, list_resp.text
+        body = list_resp.json()
+        # The managed keys list may be empty or contain only TOML synthetics;
+        # no managed keys from the corrupted file should appear.
+        assert isinstance(body["keys"], list), "GET /keys must return a list even after corruption"
 
-            managed_from_file = [k for k in body["keys"] if k["id"] is not None]
-            assert managed_from_file == [], (
-                f"No managed keys from the corrupted file should be loaded; "
-                f"got managed entries: {managed_from_file}"
-            )
+        managed_from_file = [k for k in body["keys"] if k["id"] is not None]
+        assert managed_from_file == [], (
+            f"No managed keys from the corrupted file should be loaded; "
+            f"got managed entries: {managed_from_file}"
+        )
 
     # S17: ERROR log must be emitted describing the JSON parse failure.
     error_messages = [r.message for r in caplog.records if r.levelno >= logging.ERROR]
@@ -481,7 +481,7 @@ def test_e2e_token_not_stored_in_keys_json(tmp_path, monkeypatch):
     is never persisted in keys.json (the plaintext is only returned once in the
     POST /keys response).
     """
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, default_api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, default_api_key):
         create_resp = client.post(
             "/keys",
             headers=_auth(default_api_key),
@@ -493,7 +493,7 @@ def test_e2e_token_not_stored_in_keys_json(tmp_path, monkeypatch):
         raw_token = create_resp.json()["token"]
 
         # Read keys.json from disk directly (bypassing the API).
-        keys_json_path: Path = tmp_path / "keys.json"
+        keys_json_path: Path = tmp_path / REAL_APP_DATA_SUBDIR / "keys.json"
         assert keys_json_path.exists(), (
             "keys.json must exist after POST /keys"
         )

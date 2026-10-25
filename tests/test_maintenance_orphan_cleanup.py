@@ -28,7 +28,6 @@ from archon_search.constants import (
 )
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
@@ -168,9 +167,8 @@ async def test_orphan_cleanup_skips_url_source_path(
 
     loop = _make_loop(tmp_path, search_store=ss)
 
-    with patch("archon_search.jobs.maintenance_loop.Path") as mock_path_cls:
-        with caplog.at_level(logging.DEBUG, logger="archon_search.jobs.maintenance_loop"):
-            await loop._run_orphan_cleanup("docs", "default")
+    with patch("archon_search.jobs.maintenance_loop.Path") as mock_path_cls, caplog.at_level(logging.DEBUG, logger="archon_search.jobs.maintenance_loop"):
+        await loop._run_orphan_cleanup("docs", "default")
 
     # Path must never have been instantiated with URL strings (spec: Path.exists() never called).
     called_with_urls = [
@@ -836,7 +834,11 @@ async def test_orphan_cleanup_derives_doc_id_off_the_event_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The sweep's blocking ``Path.resolve`` runs in a worker thread: the event loop keeps ticking meanwhile."""
-    from tests.test_store_async_blocking_io import _assert_loop_was_free, _LoopProbe, _run_with_heartbeat
+    from tests.test_store_async_blocking_io import (
+        _assert_loop_was_free,
+        _LoopProbe,
+        _run_with_heartbeat,
+    )
 
     missing_file = tmp_path / "missing.md"
     local_doc_id = _local_doc_id(missing_file)

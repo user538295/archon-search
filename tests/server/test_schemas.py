@@ -92,10 +92,10 @@ def test_indexing_state_response_empty_collections() -> None:
 
 
 def test_health_response_construction() -> None:
-    """HealthResponse(status=..., version=...) succeeds and has correct fields."""
-    response = HealthResponse(status="running", version="1.0.0")
+    """HealthResponse(status=...) succeeds; it carries no version (the probe is unauthenticated)."""
+    response = HealthResponse(status="running")
     assert response.status == "running"
-    assert response.version == "1.0.0"
+    assert not hasattr(response, "version")
 
 
 def test_status_response_with_collection_entries() -> None:

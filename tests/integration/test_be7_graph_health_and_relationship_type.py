@@ -14,12 +14,13 @@ Tests:
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -182,7 +183,7 @@ async def _seed_collection_meta(
 ) -> None:
     """Create a collection table and meta row with the given namespace."""
     import hashlib
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from archon_search._types import ChunkRecord, normalize_iso_utc
     from archon_search.collection_meta import CollectionMeta
@@ -201,7 +202,7 @@ async def _seed_collection_meta(
                 text="Kubernetes and K8s are synonyms",
                 vector=[0.0] * _STUB_EMBEDDING_DIM,
                 source_path=f"/fake/{collection}.txt",
-                indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+                indexed_at=normalize_iso_utc(datetime.now(UTC)),
             )
         ]
         await store.ingest_chunks(collection, chunks)
@@ -280,7 +281,7 @@ def test_count_synonym_edges_filter_discriminates_edge_types(
     install_graph_engine_stub(monkeypatch, empty=True)
     col = "be7-filter-discrimination"
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (_client, cfg, _api_key):
         db_path = cfg.db_path
 
         asyncio.run(_seed_collection_meta(db_path, col))

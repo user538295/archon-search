@@ -12,7 +12,7 @@ Scenarios covered: C2, S4, S14
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,7 +22,6 @@ from fastapi.testclient import TestClient
 from archon_search.config import GraphConfig, SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
-
 
 # ---------------------------------------------------------------------------
 # Unit tests — StatusCollectionEntry schema
@@ -120,7 +119,7 @@ def test_get_status_includes_community_count(tmp_path: Path) -> None:
     The status builder must call graph_store.get_community_stats(collection) for each
     collection and surface the result in the per-collection StatusCollectionEntry.
     """
-    built_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    built_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     client = _make_client(
         tmp_path,
         graph_enabled=True,
@@ -146,7 +145,7 @@ def test_status_last_built_at_shows_before_reingest(tmp_path: Path) -> None:
     the last ingest.  After a new document is ingested without rebuilding communities,
     the timestamp must remain unchanged — signalling staleness to the operator.
     """
-    built_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    built_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     client = _make_client(
         tmp_path,
         graph_enabled=True,
@@ -276,8 +275,8 @@ def test_get_status_community_stats_called_per_collection(tmp_path: Path) -> Non
 
     app.state.config.graph.enabled = True
 
-    built_at_a = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
-    built_at_b = datetime(2026, 2, 15, 9, 0, 0, tzinfo=timezone.utc)
+    built_at_a = datetime(2026, 1, 1, 10, 0, 0, tzinfo=UTC)
+    built_at_b = datetime(2026, 2, 15, 9, 0, 0, tzinfo=UTC)
 
     # Return distinct stats keyed on the collection name argument.
     stats_by_col = {col_a: (7, built_at_a), col_b: (2, built_at_b)}

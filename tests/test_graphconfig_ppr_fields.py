@@ -1,9 +1,9 @@
 """Tests for BE-1: ppr_damping, ppr_top_entities, naive_max_expansion_terms in GraphConfig."""
-import pytest
 from pathlib import Path
 
-from archon_search.config import ConfigError, GraphConfig, load_config
+import pytest
 
+from archon_search.config import ConfigError, GraphConfig, load_config
 
 # ---------------------------------------------------------------------------
 # Unit tests — no marks needed

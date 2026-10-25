@@ -29,9 +29,9 @@ import pytest
 pytest.importorskip("tree_sitter")
 pytest.importorskip("tree_sitter_python")
 
-import archon_search.defref_extractor as defref_extractor_module  # noqa: E402
-from archon_search.defref_extractor import DefRefExtractor  # noqa: E402
-from archon_search.graph_types import RelationshipType  # noqa: E402
+import archon_search.defref_extractor as defref_extractor_module
+from archon_search.defref_extractor import DefRefExtractor
+from archon_search.graph_types import RelationshipType
 
 pytestmark = pytest.mark.integration
 

@@ -1,13 +1,13 @@
 """Tests for BE-1: store schema migrations for TTL and Scoping (E2a)."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
 import pytest
 
-from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
 from archon_search._types import DocumentInfo, normalize_iso_utc
+from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
 
 # ---------------------------------------------------------------------------
 # Unit tests
@@ -607,7 +607,7 @@ async def test_list_documents_on_pre_e2a_store_returns_empty_scopes(tmp_path):
         # No scopes column
     ])
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = normalize_iso_utc(now)
     doc_id = "b" * 64
 

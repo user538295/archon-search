@@ -25,9 +25,13 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from _docling_stubs import (
+    DOCLING_OCR_TIMEOUT_S,
+    InlineExecutor,
+    docling_stubbed,
+    reset_parser_worker_globals,  # noqa: F401 — autouse fixture
+)
 
-from _docling_stubs import DOCLING_OCR_TIMEOUT_S, InlineExecutor, docling_stubbed
-from _docling_stubs import reset_parser_worker_globals  # noqa: F401 — autouse fixture
 from archon_search.constants import DEFAULT_DOCLING_MAX_TASKS_PER_CHILD
 from archon_search.parser import DocumentParser, ParseError, _worker_initializer
 
@@ -104,7 +108,7 @@ def _live_worker_pids(parser: DocumentParser) -> set[int]:
 
 
 def _make_icon(path: Path, size: int, label: str) -> Path:
-    from PIL import Image, ImageDraw  # noqa: PLC0415 — transitive dep, keep collection cheap
+    from PIL import Image, ImageDraw
 
     img = Image.new("RGB", (size, size), (250, 250, 250))
     draw = ImageDraw.Draw(img)

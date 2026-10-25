@@ -9,7 +9,11 @@ from unittest import mock
 
 import pytest
 
-from archon_search._durable_io import DurabilityUnconfirmedError, atomic_write_bytes, atomic_write_json
+from archon_search._durable_io import (
+    DurabilityUnconfirmedError,
+    atomic_write_bytes,
+    atomic_write_json,
+)
 
 
 class TestAtomicWriteJson:
@@ -45,11 +49,12 @@ class TestAtomicWriteJson:
         path = tmp_path / "data.json"
         tmp = path.with_suffix(path.suffix + ".tmp")
 
-        with mock.patch("os.fsync", side_effect=OSError(errno.EIO, "io")), mock.patch(
-            "os.replace"
-        ) as replace_mock:
-            with pytest.raises(OSError) as excinfo:
-                atomic_write_json(path, {"k": "v"})
+        with (
+            mock.patch("os.fsync", side_effect=OSError(errno.EIO, "io")),
+            mock.patch("os.replace") as replace_mock,
+            pytest.raises(OSError) as excinfo,
+        ):
+            atomic_write_json(path, {"k": "v"})
 
         assert excinfo.value.errno == errno.EIO
         assert not tmp.exists()
@@ -59,9 +64,11 @@ class TestAtomicWriteJson:
         path = tmp_path / "data.json"
         tmp = path.with_suffix(path.suffix + ".tmp")
 
-        with mock.patch("os.replace", side_effect=OSError(errno.EXDEV, "xdev")):
-            with pytest.raises(OSError) as excinfo:
-                atomic_write_json(path, {"k": "v"})
+        with (
+            mock.patch("os.replace", side_effect=OSError(errno.EXDEV, "xdev")),
+            pytest.raises(OSError) as excinfo,
+        ):
+            atomic_write_json(path, {"k": "v"})
 
         assert excinfo.value.errno == errno.EXDEV
         assert not tmp.exists()
@@ -80,9 +87,8 @@ class TestAtomicWriteJson:
         path = tmp_path / "data.json"
 
         fsync_mock = mock.Mock(side_effect=OSError(errno.EIO, "io"))
-        with mock.patch("os.fsync", fsync_mock):
-            with pytest.raises(OSError):
-                atomic_write_json(path, {"k": "v"})
+        with mock.patch("os.fsync", fsync_mock), pytest.raises(OSError):
+            atomic_write_json(path, {"k": "v"})
 
         assert fsync_mock.call_count == 1
 
@@ -113,11 +119,13 @@ class TestAtomicWriteJson:
 
         # First fsync (file) succeeds; second fsync (parent dir) raises.
         fsync_mock = mock.Mock(side_effect=[None, OSError(errno.EIO, "dir")])
-        with mock.patch("os.fsync", fsync_mock), mock.patch(
-            "os.open", side_effect=record_open
-        ), mock.patch("os.close", side_effect=record_close):
-            with pytest.raises(OSError) as excinfo:
-                atomic_write_json(path, {"new": True})
+        with (
+            mock.patch("os.fsync", fsync_mock),
+            mock.patch("os.open", side_effect=record_open),
+            mock.patch("os.close", side_effect=record_close),
+            pytest.raises(OSError) as excinfo,
+        ):
+            atomic_write_json(path, {"new": True})
 
         # (a) the OSError propagates out of the function, typed as "written, durability unconfirmed".
         assert excinfo.value.errno == errno.EIO
@@ -186,11 +194,12 @@ class TestAtomicWriteBytes:
         path = tmp_path / "blob.bin"
         tmp = path.with_suffix(path.suffix + ".tmp")
 
-        with mock.patch("os.fsync", side_effect=OSError(errno.EIO, "io")), mock.patch(
-            "os.replace"
-        ) as replace_mock:
-            with pytest.raises(OSError) as excinfo:
-                atomic_write_bytes(path, b"data")
+        with (
+            mock.patch("os.fsync", side_effect=OSError(errno.EIO, "io")),
+            mock.patch("os.replace") as replace_mock,
+            pytest.raises(OSError) as excinfo,
+        ):
+            atomic_write_bytes(path, b"data")
 
         assert excinfo.value.errno == errno.EIO
         assert not tmp.exists()
@@ -200,9 +209,11 @@ class TestAtomicWriteBytes:
         path = tmp_path / "blob.bin"
         tmp = path.with_suffix(path.suffix + ".tmp")
 
-        with mock.patch("os.replace", side_effect=OSError(errno.EXDEV, "xdev")):
-            with pytest.raises(OSError) as excinfo:
-                atomic_write_bytes(path, b"data")
+        with (
+            mock.patch("os.replace", side_effect=OSError(errno.EXDEV, "xdev")),
+            pytest.raises(OSError) as excinfo,
+        ):
+            atomic_write_bytes(path, b"data")
 
         assert excinfo.value.errno == errno.EXDEV
         assert not tmp.exists()
@@ -211,9 +222,11 @@ class TestAtomicWriteBytes:
         path = tmp_path / "blob.bin"
         tmp = path.with_suffix(path.suffix + ".tmp")
 
-        with mock.patch("os.replace", side_effect=TypeError("not a path")):
-            with pytest.raises(TypeError):
-                atomic_write_bytes(path, b"secret")
+        with (
+            mock.patch("os.replace", side_effect=TypeError("not a path")),
+            pytest.raises(TypeError),
+        ):
+            atomic_write_bytes(path, b"secret")
 
         assert not tmp.exists()
         assert not path.exists()
@@ -255,11 +268,13 @@ class TestAtomicWriteBytes:
 
         # First fsync (file) succeeds; second fsync (parent dir) raises.
         fsync_mock = mock.Mock(side_effect=[None, OSError(errno.EIO, "dir")])
-        with mock.patch("os.fsync", fsync_mock), mock.patch(
-            "os.open", side_effect=record_open
-        ), mock.patch("os.close", side_effect=record_close):
-            with pytest.raises(OSError) as excinfo:
-                atomic_write_bytes(path, b"new")
+        with (
+            mock.patch("os.fsync", fsync_mock),
+            mock.patch("os.open", side_effect=record_open),
+            mock.patch("os.close", side_effect=record_close),
+            pytest.raises(OSError) as excinfo,
+        ):
+            atomic_write_bytes(path, b"new")
 
         # (a) the OSError propagates out of the function, typed as "written, durability unconfirmed".
         assert excinfo.value.errno == errno.EIO
@@ -279,20 +294,23 @@ class TestDurabilityAndCleanup:
     @pytest.mark.parametrize("write", [atomic_write_json, atomic_write_bytes])
     def test_pre_replace_failure_is_not_durability_unconfirmed(self, tmp_path, write):
         payload = {"k": "v"} if write is atomic_write_json else b"data"
-        with mock.patch("os.replace", side_effect=OSError(errno.EXDEV, "xdev")):
-            with pytest.raises(OSError) as excinfo:
-                write(tmp_path / "data.bin", payload)
+        with (
+            mock.patch("os.replace", side_effect=OSError(errno.EXDEV, "xdev")),
+            pytest.raises(OSError) as excinfo,
+        ):
+            write(tmp_path / "data.bin", payload)
 
         assert not isinstance(excinfo.value, DurabilityUnconfirmedError)
 
     @pytest.mark.parametrize("write", [atomic_write_json, atomic_write_bytes])
     def test_cleanup_oserror_never_replaces_the_original_exception(self, tmp_path, write):
         payload = {"k": "v"} if write is atomic_write_json else b"data"
-        with mock.patch("os.replace", side_effect=OSError(errno.EXDEV, "xdev")), mock.patch(
-            "os.unlink", side_effect=PermissionError(errno.EACCES, "cleanup denied")
-        ) as unlink:
-            with pytest.raises(OSError) as excinfo:
-                write(tmp_path / "data.bin", payload)
+        with (
+            mock.patch("os.replace", side_effect=OSError(errno.EXDEV, "xdev")),
+            mock.patch("os.unlink", side_effect=PermissionError(errno.EACCES, "cleanup denied")) as unlink,
+            pytest.raises(OSError) as excinfo,
+        ):
+            write(tmp_path / "data.bin", payload)
 
         unlink.assert_called_once()
         assert excinfo.value.errno == errno.EXDEV
@@ -303,9 +321,11 @@ class TestDurabilityAndCleanup:
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text("not ours")
 
-        with mock.patch("builtins.open", side_effect=PermissionError(errno.EACCES, "denied")):
-            with pytest.raises(PermissionError):
-                atomic_write_json(path, {"k": "v"})
+        with (
+            mock.patch("os.open", side_effect=PermissionError(errno.EACCES, "denied")),
+            pytest.raises(PermissionError),
+        ):
+            atomic_write_json(path, {"k": "v"})
 
         assert tmp.read_text() == "not ours"
 
@@ -380,3 +400,25 @@ class TestFsyncTree:
             "directories must be fsynced deepest-first so a child entry is "
             f"durable before its parent; got order {order}"
         )
+
+
+class TestAtomicWriteBytesExclusive:
+    def test_replace_false_creates_a_missing_file(self, tmp_path):
+        path = tmp_path / "key.env"
+        atomic_write_bytes(path, b"first", replace=False)
+        assert path.read_bytes() == b"first"
+        assert not (tmp_path / "key.env.tmp").exists()
+
+    def test_replace_false_never_overwrites_and_removes_its_temp_file(self, tmp_path):
+        path = tmp_path / "key.env"
+        path.write_bytes(b"winner")
+        with pytest.raises(FileExistsError):
+            atomic_write_bytes(path, b"loser", replace=False)
+        assert path.read_bytes() == b"winner"
+        assert not (tmp_path / "key.env.tmp").exists()
+
+    def test_replace_true_still_overwrites(self, tmp_path):
+        path = tmp_path / "key.env"
+        path.write_bytes(b"old")
+        atomic_write_bytes(path, b"new")
+        assert path.read_bytes() == b"new"

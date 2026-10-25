@@ -9,7 +9,6 @@ import pytest
 from archon_search.config import GraphConfig
 from archon_search.graph_types import GraphExtractionResult, GraphMention
 
-
 # ---------------------------------------------------------------------------
 # Helper — build a minimal SearchPipeline with optional graph components
 # ---------------------------------------------------------------------------
@@ -235,7 +234,7 @@ async def test_ingest_writes_mentions_then_reingest_is_idempotent(
     tmp_path, monkeypatch, col_name
 ):
     """Ingest a file, check mention count; re-ingest the same file; check count unchanged (idempotent)."""
-    from tests.integration.conftest import make_real_app, ingest_file_via_path
+    from tests.integration.conftest import ingest_file_via_path, make_real_app
 
     # Create a dummy document
     corpus_path = tmp_path / "corpus"

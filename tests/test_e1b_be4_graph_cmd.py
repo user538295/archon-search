@@ -27,10 +27,10 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from _cli_server_stub import server_reported_stopped
 from click.testing import CliRunner
 
 from archon_search.cli.graph_cmd import graph_cmd
-from _cli_server_stub import server_reported_stopped
 
 
 def _response(status_code: int, json_body: dict, text: str = "") -> MagicMock:

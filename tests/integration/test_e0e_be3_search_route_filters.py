@@ -48,7 +48,7 @@ def test_post_search_multi_collection_with_file_type_filter(
         "# Python module\ndef setup():\n    '''Setup configuration.'''\n    pass\n" * 5
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col_a = "be3-md-col"
         col_b = "be3-py-col"
 
@@ -104,7 +104,7 @@ def test_post_search_multi_collection_no_filters_applied_filters_null(
     doc_b = tmp_path / "doc_b.md"
     doc_b.write_text("# Collection Beta\n\nContent for beta collection.\n" * 5)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col_a = "be3-null-a"
         col_b = "be3-null-b"
 
@@ -145,7 +145,7 @@ def test_post_search_multi_collection_all_empty_after_filter(
     py_file = tmp_path / "file.py"
     py_file.write_text("# Python\ndef run():\n    '''Run the program.'''\n    pass\n" * 5)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col_a = "be3-empty-a"
         col_b = "be3-empty-b"
 
@@ -197,7 +197,7 @@ def test_post_search_applied_filters_datetime_serialization(
     doc = tmp_path / "dated.md"
     doc.write_text("# Dated Document\n\nContent for datetime serialization test.\n" * 5)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "be3-datetime"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
@@ -228,7 +228,7 @@ def test_post_search_applied_filters_datetime_serialization(
             f"got: {indexed_after!r}"
         )
         # must carry a UTC indicator
-        assert indexed_after.endswith("Z") or indexed_after.endswith("+00:00"), (
+        assert indexed_after.endswith(("Z", "+00:00")), (
             f"expected UTC indicator ('Z' or '+00:00') in applied_filters.indexed_after, "
             f"got: {indexed_after!r}"
         )

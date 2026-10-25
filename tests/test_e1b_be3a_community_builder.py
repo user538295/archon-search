@@ -147,7 +147,10 @@ def test_max_community_size_split():
 
 
 def test_max_community_size_split_depth_limit(caplog):
-    from archon_search.community_builder import _split_oversized_communities, _MAX_SPLIT_DEPTH
+    from archon_search.community_builder import (
+        _MAX_SPLIT_DEPTH,
+        _split_oversized_communities,
+    )
 
     A, B, C = "node-a", "node-b", "node-c"
     nodes = [make_node(A), make_node(B), make_node(C)]
@@ -155,11 +158,13 @@ def test_max_community_size_split_depth_limit(caplog):
     edges = [make_edge(A, B), make_edge(B, C)]
 
     # Even though max_size=2 and group has 3, at depth=_MAX_SPLIT_DEPTH it must accept
-    with patch("archon_search.community_builder._run_leiden_partition_sync") as mock_leiden:
-        with caplog.at_level(logging.WARNING, logger="archon_search.community_builder"):
-            result = _split_oversized_communities(
-                [[A, B, C]], nodes_by_id, edges, max_size=2, resolution=1.0, depth=_MAX_SPLIT_DEPTH
-            )
+    with (
+        patch("archon_search.community_builder._run_leiden_partition_sync") as mock_leiden,
+        caplog.at_level(logging.WARNING, logger="archon_search.community_builder"),
+    ):
+        result = _split_oversized_communities(
+            [[A, B, C]], nodes_by_id, edges, max_size=2, resolution=1.0, depth=_MAX_SPLIT_DEPTH
+        )
 
     # Should return the group unchanged (accepted as-is)
     assert result == [[A, B, C]]
@@ -181,9 +186,8 @@ def test_leidenalg_absent_raises():
     nodes = [make_node(A), make_node(B)]
     edges = [make_edge(A, B)]
 
-    with patch.dict(sys.modules, {"leidenalg": None, "igraph": None}):
-        with pytest.raises(ImportError, match="leidenalg"):
-            _run_leiden_partition_sync(nodes, edges, resolution=1.0)
+    with patch.dict(sys.modules, {"leidenalg": None, "igraph": None}), pytest.raises(ImportError, match="leidenalg"):
+        _run_leiden_partition_sync(nodes, edges, resolution=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -316,11 +320,10 @@ def test_split_oversized_cannot_split_single_group_returns_with_warning(caplog):
     with patch(
         "archon_search.community_builder._run_leiden_partition_sync",
         return_value=[[A, B, C]],
-    ):
-        with caplog.at_level(logging.WARNING, logger="archon_search.community_builder"):
-            result = _split_oversized_communities(
-                [[A, B, C]], nodes_by_id, edges, max_size=2, resolution=1.0, depth=0
-            )
+    ), caplog.at_level(logging.WARNING, logger="archon_search.community_builder"):
+        result = _split_oversized_communities(
+            [[A, B, C]], nodes_by_id, edges, max_size=2, resolution=1.0, depth=0
+        )
 
     assert result == [[A, B, C]]
     assert any(record.levelno >= logging.WARNING for record in caplog.records)

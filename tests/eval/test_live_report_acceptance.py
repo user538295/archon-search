@@ -3,20 +3,21 @@
 These tests do not require model weights and run in the PR eval suite.
 """
 
-import pytest
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from archon_search.eval.types import EvalMetrics
+import pytest
+
 from archon_search.eval.runner import (
-    EvalReport,
-    EvalThresholds,
     EvalBaseline,
-    EvalQualityFloors,
     EvalLatencyCeilings,
+    EvalQualityFloors,
+    EvalReport,
     EvalRuntimeConfig,
+    EvalThresholds,
 )
+from archon_search.eval.types import EvalMetrics
 
 if TYPE_CHECKING:
     from archon_search.eval.live_report import LiveEvalReport
@@ -151,36 +152,36 @@ def test_load_live_thresholds_malformed_toml(tmp_path: Path) -> None:
 
 
 def _make_metrics(**overrides) -> EvalMetrics:
-    defaults = dict(
-        recall_at_1=0.70,
-        recall_at_3=0.80,
-        recall_at_5=0.85,
-        mrr=0.75,
-        ndcg_at_5=0.78,
-        ndcg_at_10=0.80,
-        reranker_lift=0.05,
-        routing_accuracy=None,
-        latency_p50_ms=25.0,
-        latency_p95_ms=80.0,
-        routing_mrr_centroid=None,
-        routing_mrr_hybrid=None,
-        routing_precision_at_1_centroid=None,
-        routing_precision_at_1_hybrid=None,
-    )
+    defaults = {
+        "recall_at_1": 0.70,
+        "recall_at_3": 0.80,
+        "recall_at_5": 0.85,
+        "mrr": 0.75,
+        "ndcg_at_5": 0.78,
+        "ndcg_at_10": 0.80,
+        "reranker_lift": 0.05,
+        "routing_accuracy": None,
+        "latency_p50_ms": 25.0,
+        "latency_p95_ms": 80.0,
+        "routing_mrr_centroid": None,
+        "routing_mrr_hybrid": None,
+        "routing_precision_at_1_centroid": None,
+        "routing_precision_at_1_hybrid": None,
+    }
     defaults.update(overrides)
     return EvalMetrics(**defaults)
 
 
 def _make_floors(**overrides) -> EvalQualityFloors:
-    defaults: dict = dict(
-        recall_at_1=0.60,
-        recall_at_3=0.70,
-        recall_at_5=0.75,
-        mrr=0.65,
-        ndcg_at_5=0.68,
-        ndcg_at_10=0.70,
-        routing_accuracy=None,
-    )
+    defaults: dict = {
+        "recall_at_1": 0.60,
+        "recall_at_3": 0.70,
+        "recall_at_5": 0.75,
+        "mrr": 0.65,
+        "ndcg_at_5": 0.68,
+        "ndcg_at_10": 0.70,
+        "routing_accuracy": None,
+    }
     defaults.update(overrides)
     return EvalQualityFloors(**defaults)
 
@@ -471,9 +472,9 @@ def test_build_live_report_with_baseline() -> None:
 
 def _make_live_report() -> "LiveEvalReport":
     """Build a synthetic LiveEvalReport for serialisation tests."""
-    from archon_search.eval.live_report import LiveEvalReport, MetricVerdict
+    from datetime import UTC, datetime
 
-    from datetime import datetime, UTC
+    from archon_search.eval.live_report import LiveEvalReport, MetricVerdict
 
     eval_report = _make_report(thresholds=_make_thresholds())
     verdicts = [
@@ -513,7 +514,10 @@ def test_report_generation_format(tmp_path: Path) -> None:
     import json
     import re
 
-    from archon_search.eval.live_report import write_live_report_json, write_live_report_markdown
+    from archon_search.eval.live_report import (
+        write_live_report_json,
+        write_live_report_markdown,
+    )
 
     r = _make_live_report()
     json_path = tmp_path / "report.json"

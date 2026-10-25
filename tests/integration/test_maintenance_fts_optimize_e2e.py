@@ -19,9 +19,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import archon_search.jobs.scheduler as _scheduler_module
 import pytest
 
+import archon_search.jobs.scheduler as _scheduler_module
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
@@ -64,7 +64,7 @@ def test_fts_optimized_at_appears_in_health(
 
     with make_real_app(tmp_path, monkeypatch, maintenance_enabled=True) as (
         client,
-        cfg,
+        _cfg,
         api_key,
     ):
         # Step 2: ingest the document (creates FTS index via rebuild_fts_index)

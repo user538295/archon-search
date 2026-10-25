@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import math
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from archon_search._types import ChunkRecord
-from archon_search.constants import INGEST_LOCK_TIMEOUT_S
+from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S
 from archon_search.store import SearchStore, StoreBusyError
 
 _DIM = 4
@@ -36,7 +36,7 @@ def _chunk(col_seed: str = "x") -> ChunkRecord:
         text="hello",
         vector=[0.0] * _DIM,
         source_path=f"/tmp/{col_seed}.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
         ingested_by="cli",
         file_type="md",
     )
@@ -172,13 +172,13 @@ async def test_drop_collection_removes_lock_entry(
     await connected_store.ensure_collection(col, _DIM)
     connected_store.lock_for(col)
     assert col in connected_store._collection_locks
-    await connected_store.drop_collection(col)
+    await connected_store.drop_collection(col, namespace=DEFAULT_NAMESPACE)
     assert col not in connected_store._collection_locks
 
     # Idempotency: dropping a collection without a lock entry must not raise.
     other = f"test-{uuid.uuid4().hex[:8]}"
     await connected_store.ensure_collection(other, _DIM)
-    await connected_store.drop_collection(other)  # no lock_for() called
+    await connected_store.drop_collection(other, namespace=DEFAULT_NAMESPACE)  # no lock_for() called
 
 
 @pytest.mark.integration
@@ -194,7 +194,7 @@ async def test_drop_collection_locked_by_caller_keeps_held_lock_entry(
     held = connected_store.lock_for(col)
     await held.acquire()
 
-    await connected_store.drop_collection(col, _locked_by_caller=True)
+    await connected_store.drop_collection(col, namespace=DEFAULT_NAMESPACE, _locked_by_caller=True)
 
     assert connected_store.lock_for(col) is held
     assert held.locked()
@@ -269,7 +269,7 @@ async def test_drop_collection_keeps_lock_entry_while_a_waiter_is_queued(tmp_pat
     mock_db.drop_table = AsyncMock(side_effect=_drop_while_a_waiter_queues)
     store._db = mock_db
 
-    await store.drop_collection("col")
+    await store.drop_collection("col", namespace=DEFAULT_NAMESPACE)
     lock_after_drop = store.lock_for("col")
     await waiters[0]
 
@@ -287,7 +287,7 @@ async def test_drop_collection_missing_table_discards_its_own_lock_entry(tmp_pat
     store._db = mock_db
 
     with pytest.raises(KeyError):
-        await store.drop_collection("ghost")
+        await store.drop_collection("ghost", namespace=DEFAULT_NAMESPACE)
 
     assert "ghost" not in store._collection_locks
 
@@ -301,7 +301,7 @@ async def test_drop_collection_missing_table_discards_its_own_lock_entry(tmp_pat
 @pytest.mark.parametrize(
     "mutator, call",
     [
-        ("drop_table", lambda store: store.drop_collection("old-name")),
+        ("drop_table", lambda store: store.drop_collection("old-name", namespace=DEFAULT_NAMESPACE)),
         ("rename_table", lambda store: store.rename_collection("old-name", "new-name")),
     ],
 )
@@ -344,14 +344,16 @@ async def test_collection_mutation_holds_lock(
 
 def _make_rest_client(tmp_path: Path) -> TestClient:
     import os
+
     from archon_search.config import SearchConfig
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
+    from tests._collection_access_stub import allow_collection_access
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     jobs = JobStore(path=tmp_path / "jobs.json")
-    app = create_app(config, jobs)
+    app = allow_collection_access(create_app(config, jobs))
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 

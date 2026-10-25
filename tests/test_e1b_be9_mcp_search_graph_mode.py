@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 from tests._fastmcp_stub import stub_mcp_tool
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

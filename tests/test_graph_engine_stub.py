@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-import archon_search.graph_extractor as graph_extractor
+from archon_search import graph_extractor
 from tests._graph_engine_stub import install_graph_engine_stub
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent

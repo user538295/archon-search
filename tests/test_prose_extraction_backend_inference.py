@@ -17,13 +17,13 @@ import pytest
 
 from archon_search.graph_types import EntityType, RelationshipType
 from archon_search.prose_extraction_backend import (
+    _ENTITY_LABEL_DESCRIPTIONS,
+    _RELATION_LABEL_DESCRIPTIONS,
+    _TRUNCATION_LOG_MESSAGE,
     GRAPH_NER_SUB_BATCH_SIZE,
     GRAPH_NER_TOKEN_WINDOW_WORDS,
     ExtractedRelation,
     ProseExtractionBackend,
-    _ENTITY_LABEL_DESCRIPTIONS,
-    _RELATION_LABEL_DESCRIPTIONS,
-    _TRUNCATION_LOG_MESSAGE,
 )
 from tests._graph_engine_stub import RecordingGlinerModel
 

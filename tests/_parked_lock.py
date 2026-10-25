@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Set
+from collections.abc import AsyncIterator
+from collections.abc import Set as AbstractSet
 
 import pytest
 
@@ -29,7 +30,7 @@ async def until_parked(lock: asyncio.Lock, waiters: int = 1) -> None:
 
 
 @contextlib.asynccontextmanager
-async def reaping(tasks: Set[asyncio.Task[object]]) -> AsyncIterator[None]:
+async def reaping(tasks: AbstractSet[asyncio.Task[object]]) -> AsyncIterator[None]:
     """On exit — a failed assertion included — cancel and await whichever of *tasks* is still running, so no parked
     task outlives its test."""
     try:

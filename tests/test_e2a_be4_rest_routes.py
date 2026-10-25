@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -25,11 +25,8 @@ from archon_search.server.schemas import (
     PatchCollectionBody,
 )
 from archon_search.sync import path_to_collection_name
-
 from tests._collection_lock_stub import with_locked_collection_meta
 from tests.integration.conftest import make_real_app
-
-UTC = timezone.utc
 
 # ---------------------------------------------------------------------------
 # Named constants (avoid magic numbers)
@@ -340,7 +337,7 @@ def test_patch_collection_default_ttl_forward_only(
     col = path_to_collection_name(str(col_path))
 
     toml = f'[collections]\ncollections = ["{col_path!s}"]\n'
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
         store = client.app.state.search_store
 
         # Inject 5 chunks with no expires_at (also creates collection meta)
@@ -382,7 +379,7 @@ def test_get_expiring_returns_correct_window(
 
     col = "be4-expiring-window"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         store = client.app.state.search_store
 
         import hashlib
@@ -423,7 +420,7 @@ def test_get_expiring_excludes_already_expired(
 
     col = "be4-already-expired"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         store = client.app.state.search_store
 
         import hashlib
@@ -465,7 +462,7 @@ def test_get_expiring_chunks_cursor_pagination(
 
     col = "be4-expiring-pagination"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         store = client.app.state.search_store
 
         import hashlib
@@ -534,7 +531,7 @@ def test_patch_collection_default_ttl_new_ingest_picks_it_up(
     doc_file.write_text("hello world for BE-4 TTL pickup test", encoding="utf-8")
 
     toml = f'[collections]\ncollections = ["{col_path!s}"]\n'
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
         store = client.app.state.search_store
         # Create collection meta so PATCH can find it
         asyncio.run(
@@ -635,7 +632,7 @@ def test_get_expiring_chunks_cursor_tiebreak_same_expires_at(
 
     col = "be4-tiebreak-col"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         store = client.app.state.search_store
 
         import hashlib

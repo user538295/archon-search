@@ -44,7 +44,13 @@ async def _seed_typed_and_related_to_twin(db_path: str, collection: str, ns: str
     a non-zero co-occurrence weight and survive into the inspection response."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.graph_store import GraphStore
-    from archon_search.graph_types import EntityType, GraphEdge, GraphMention, GraphNode, RelationshipType
+    from archon_search.graph_types import (
+        EntityType,
+        GraphEdge,
+        GraphMention,
+        GraphNode,
+        RelationshipType,
+    )
     from archon_search.store import SearchStore
 
     store = SearchStore(db_path)

@@ -1,15 +1,15 @@
 """Integration tests for BE-2: GET /graph/{collection}/view route.
 
 Tests (all integration-marked, real app via make_real_app):
-  - test_view_token_injected_in_response
+  - test_view_embeds_a_view_token_not_the_api_key
   - test_view_returns_html_content_type
   - test_view_invalid_token_returns_401
   - test_view_no_auth_returns_401_with_www_authenticate
-  - test_view_query_param_token_happy_path
-  - test_view_query_param_invalid_token_returns_401
-  - test_view_query_param_keystore_revoked_token_returns_401
-  - test_view_query_param_legacy_revoked_token_returns_401
-  - test_view_query_param_wrong_namespace_returns_404
+  - test_view_query_param_api_key_is_rejected
+  - test_view_query_param_invalid_view_token_returns_401
+  - test_view_keystore_revoked_token_returns_401
+  - test_view_legacy_revoked_token_returns_401
+  - test_view_wrong_namespace_returns_404
   - test_view_header_takes_priority_over_query_param
 
 Run with:
@@ -26,8 +26,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import REAL_APP_DATA_SUBDIR, make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -91,16 +91,15 @@ class TestViewHappyPath:
         assert resp.status_code == 200
         assert "text/html" in resp.headers.get("content-type", "")
 
-    def test_view_token_injected_in_response(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The Bearer token literal appears verbatim (JSON-encoded) in the response body."""
+    def test_view_embeds_a_view_token_not_the_api_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The page defines ``const token`` as a short-lived view token; the caller's API key is never in it."""
         install_graph_engine_stub(monkeypatch)
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
             asyncio.run(_seed_collection(cfg.db_path, "testcol"))
             resp = client.get("/graph/testcol/view", headers=_auth(api_key))
         assert resp.status_code == 200
-        assert json.dumps(api_key) in resp.text, (
-            f"Expected token {api_key!r} (JSON-encoded) in body"
-        )
+        assert api_key not in resp.text
+        assert 'const token = "gv1.' in resp.text
 
 
 class TestViewAuthErrors:
@@ -114,7 +113,7 @@ class TestViewAuthErrors:
     def test_view_invalid_token_returns_401(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Invalid Authorization: Bearer <bad> → 401 with WWW-Authenticate: Bearer."""
         install_graph_engine_stub(monkeypatch)
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, _api_key):
             resp = client.get(
                 "/graph/testcol/view",
                 headers={"Authorization": "Bearer invalidtoken"},
@@ -127,13 +126,15 @@ class TestViewAuthErrors:
     ) -> None:
         """No auth header and no ?token= → 401 with WWW-Authenticate: Bearer."""
         install_graph_engine_stub(monkeypatch)
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, _api_key):
             resp = client.get("/graph/testcol/view")
         assert resp.status_code == 401
         assert resp.headers.get("WWW-Authenticate") == "Bearer"
 
 
-class TestViewQueryParamToken:
+class TestViewCredentialRules:
+    """The viewer takes its credential from the Authorization header or a view token — never the API key in the URL."""
+
     @pytest.fixture(autouse=True)
     def _stub_html(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
@@ -141,35 +142,34 @@ class TestViewQueryParamToken:
             lambda: _STUB_HTML,
         )
 
-    def test_view_query_param_token_happy_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Valid ?token=<raw> query param → 200 text/html with token in body."""
+    def test_view_query_param_api_key_is_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """?token=<valid api key> → 401: the real key is never accepted from a URL."""
         install_graph_engine_stub(monkeypatch)
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
             asyncio.run(_seed_collection(cfg.db_path, "testcol"))
             resp = client.get(f"/graph/testcol/view?token={api_key}")
-        assert resp.status_code == 200
-        assert "text/html" in resp.headers.get("content-type", "")
-        assert json.dumps(api_key) in resp.text
-
-    def test_view_query_param_invalid_token_returns_401(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Invalid ?token=<bad> → 401 with WWW-Authenticate: Bearer."""
-        install_graph_engine_stub(monkeypatch)
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
-            resp = client.get("/graph/testcol/view?token=badtoken")
         assert resp.status_code == 401
         assert resp.headers.get("WWW-Authenticate") == "Bearer"
 
-    def test_view_query_param_keystore_revoked_token_returns_401(
+    def test_view_query_param_invalid_view_token_returns_401(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Invalid ?view_token=<bad> → 401 with WWW-Authenticate: Bearer."""
+        install_graph_engine_stub(monkeypatch)
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, _api_key):
+            resp = client.get("/graph/testcol/view?view_token=badtoken")
+        assert resp.status_code == 401
+        assert resp.headers.get("WWW-Authenticate") == "Bearer"
+
+    def test_view_keystore_revoked_token_returns_401(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A KeyStore-managed token after revocation → 401."""
         install_graph_engine_stub(monkeypatch)
         from archon_search.key_manager import KeyStore
 
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
-            key_store = KeyStore(path=tmp_path / "keys.json")
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, _api_key):
+            key_store = KeyStore(path=tmp_path / REAL_APP_DATA_SUBDIR / "keys.json")
 
             async def _create_and_revoke() -> str:
                 result = await key_store.create(
@@ -177,24 +177,24 @@ class TestViewQueryParamToken:
                     label="test-key",
                     expires_at=None,
                 )
-                raw_token = result["token"]
+                raw_token = result.token
                 records = await key_store.load()
                 assert records, "Expected at least one key record"
                 await key_store.revoke(records[0].id)
                 return raw_token
 
             raw_token = asyncio.run(_create_and_revoke())
-            resp = client.get(f"/graph/testcol/view?token={raw_token}")
+            resp = client.get("/graph/testcol/view", headers=_auth(raw_token))
         assert resp.status_code == 401
         assert resp.headers.get("WWW-Authenticate") == "Bearer"
 
-    def test_view_query_param_legacy_revoked_token_returns_401(
+    def test_view_legacy_revoked_token_returns_401(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Legacy api_key marked revoked in keys.json → 401 on ?token= path."""
+        """Legacy api_key marked revoked in keys.json → 401."""
         install_graph_engine_stub(monkeypatch)
 
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
             # Write a revoked record matching api_key into keys.json
             token_hash = hashlib.sha256(api_key.encode()).hexdigest()
             revoked_record = {
@@ -206,18 +206,18 @@ class TestViewQueryParamToken:
                 "expires_at": None,
                 "status": "revoked",
             }
-            keys_path = tmp_path / "keys.json"
+            keys_path = tmp_path / REAL_APP_DATA_SUBDIR / "keys.json"
             keys_path.write_bytes(json.dumps([revoked_record]).encode())
 
-            resp = client.get(f"/graph/testcol/view?token={api_key}")
+            resp = client.get("/graph/testcol/view", headers=_auth(api_key))
         assert resp.status_code == 401
         assert resp.headers.get("WWW-Authenticate") == "Bearer"
 
-    def test_view_query_param_wrong_namespace_returns_404(
+    def test_view_wrong_namespace_returns_404(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """?token= from namespace ns-a, collection only in ns-b → 404 (negative).
-        ?token= from namespace ns-b, collection in ns-b → 200 (positive control).
+        """A key from namespace ns-a, collection only in ns-b → 404 (negative).
+        A key from namespace ns-b, collection in ns-b → 200 (positive control).
         """
         install_graph_engine_stub(monkeypatch)
         key_a = secrets.token_hex(32)
@@ -228,17 +228,17 @@ class TestViewQueryParamToken:
             monkeypatch,
             graph_enabled=True,
             namespaces={key_a: "ns-a", key_b: "ns-b"},
-        ) as (client, cfg, api_key):
+        ) as (client, cfg, _api_key):
             # Seed a collection in namespace ns-b
             asyncio.run(_seed_collection(cfg.db_path, "col-b", ns="ns-b"))
 
-            # Negative: token from ns-a cannot access col-b (in ns-b)
-            resp_negative = client.get(f"/graph/col-b/view?token={key_a}")
-            assert resp_negative.status_code == 404, "ns-a token must not see ns-b collection"
+            # Negative: a key from ns-a cannot access col-b (in ns-b)
+            resp_negative = client.get("/graph/col-b/view", headers=_auth(key_a))
+            assert resp_negative.status_code == 404, "ns-a key must not see ns-b collection"
 
-            # Positive: token from ns-b CAN access col-b
-            resp_positive = client.get(f"/graph/col-b/view?token={key_b}")
-            assert resp_positive.status_code == 200, "ns-b token must see ns-b collection"
+            # Positive: a key from ns-b CAN access col-b
+            resp_positive = client.get("/graph/col-b/view", headers=_auth(key_b))
+            assert resp_positive.status_code == 200, "ns-b key must see ns-b collection"
 
     def test_view_header_takes_priority_over_query_param(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

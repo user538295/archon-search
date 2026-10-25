@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from archon_search.acl import (
+    ChunkVisibility,
     apply_acl_filter,
     is_acl_allowed,
     is_acl_namespace_valid,
@@ -13,7 +14,6 @@ from archon_search.acl import (
     read_acl_sidecar,
     resolve_acl,
 )
-
 
 # ---------------------------------------------------------------------------
 # is_acl_namespace_valid
@@ -46,22 +46,24 @@ def test_is_acl_namespace_valid_rejects_empty() -> None:
 
 
 def test_parse_acl_value_none() -> None:
-    acl, warnings = parse_acl_value(None, "doc.md")
+    acl, _warnings = parse_acl_value(None, "doc.md")
     assert acl is None
 
 
-def test_parse_acl_value_int_defaults_open_with_warning(caplog: pytest.LogCaptureFixture) -> None:
+def test_parse_acl_value_int_fails_closed_with_warning(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="archon_search"):
         result, warnings = parse_acl_value(42, "doc.md")
-    assert result is None
+    assert result == []
     assert "invalid type" in caplog.text.lower() or "int" in caplog.text
+    assert "chunk denied" in warnings[0]
 
 
-def test_parse_acl_value_bool_defaults_open_with_warning(caplog: pytest.LogCaptureFixture) -> None:
+def test_parse_acl_value_bool_fails_closed_with_warning(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="archon_search"):
         result, warnings = parse_acl_value(True, "doc.md")
-    assert result is None
+    assert result == []
     assert any("bool" in r.message or "invalid type" in r.message.lower() for r in caplog.records)
+    assert "chunk denied" in warnings[0]
 
 
 # ---------------------------------------------------------------------------
@@ -84,12 +86,28 @@ def test_parse_acl_value_strips_whitespace() -> None:
     assert acl == ["tenantA", "tenantB"]
 
 
-def test_parse_acl_value_invalid_names_dropped_with_warning(
+def test_parse_acl_value_all_invalid_string_fails_closed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="archon_search"):
         result, warnings = parse_acl_value("!!!bad!!!", "doc.md")
+    assert result == []
+    assert "chunk denied" in warnings[0]
+
+
+@pytest.mark.parametrize("raw", [{"team": "a"}, 1.5, object()])
+def test_parse_acl_value_other_invalid_types_fail_closed(raw: object) -> None:
+    result, warnings = parse_acl_value(raw, "doc.md")
+    assert result == []
+    assert any("chunk denied" in w for w in warnings)
+
+
+@pytest.mark.parametrize("raw", ["", "   ", ",", "\n"])
+def test_parse_acl_value_empty_string_stays_open(raw: str) -> None:
+    """A blank scalar declares no restriction (mirrors an empty sidecar)."""
+    result, warnings = parse_acl_value(raw, "doc.md")
     assert result is None
+    assert warnings == []
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +120,17 @@ def test_parse_acl_value_list() -> None:
     assert acl == ["tenantA", "tenantB"]
 
 
-def test_parse_acl_value_all_invalid_defaults_open() -> None:
-    result, _ = parse_acl_value(["!!!bad1!!!", "!!!bad2!!!"], "doc.md")
-    assert result is None
+def test_parse_acl_value_all_invalid_list_fails_closed() -> None:
+    result, warnings = parse_acl_value(["!!!bad1!!!", "!!!bad2!!!"], "doc.md")
+    assert result == []
+    assert any("chunk denied" in w for w in warnings)
+
+
+@pytest.mark.parametrize("raw", [[42], [None, 42], [{"a": 1}, True]])
+def test_parse_acl_value_only_non_string_elements_fails_closed(raw: list[object]) -> None:
+    result, warnings = parse_acl_value(raw, "doc.md")
+    assert result == []
+    assert any("chunk denied" in w for w in warnings)
 
 
 def test_parse_acl_value_empty_list_returns_deny_all() -> None:
@@ -114,14 +140,14 @@ def test_parse_acl_value_empty_list_returns_deny_all() -> None:
 
 def test_parse_acl_value_mixed_valid_and_invalid(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result, warnings = parse_acl_value(["tenantA", "!!!bad!!!", "tenantB"], "doc.md")
+        result, _warnings = parse_acl_value(["tenantA", "!!!bad!!!", "tenantB"], "doc.md")
     assert result == ["tenantA", "tenantB"]
     assert caplog.records  # a warning was emitted
 
 
 def test_parse_acl_value_list_with_nonstring_elements(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result, warnings = parse_acl_value([42, "tenantA", None], "doc.md")
+        result, _warnings = parse_acl_value([42, "tenantA", None], "doc.md")
     assert result == ["tenantA"]
     assert caplog.records  # a warning was emitted
 
@@ -156,14 +182,15 @@ def test_parse_acl_value_deny_all_mixed_with_valid_drops_deny_all(
     assert caplog.records
 
 
-def test_parse_acl_value_deny_all_mixed_with_invalid_fails_open(
+def test_parse_acl_value_deny_all_mixed_with_invalid_fails_closed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """deny-all + only invalid names → fail-open (None), not deny-all."""
+    """deny-all + only invalid names → deny-all ([]), never open."""
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result, _ = parse_acl_value("deny-all,!!!bad!!!", "doc.md")
-    assert result is None
+        result, warnings = parse_acl_value("deny-all,!!!bad!!!", "doc.md")
+    assert result == []
     assert caplog.records
+    assert any("chunk denied" in w for w in warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +203,7 @@ def test_read_acl_sidecar_namespace_list(tmp_path: pytest.TempPathFactory) -> No
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns1\nns2\n")
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    acl_entries, _source, _sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == ["ns1", "ns2"]
     assert warnings == []
 
@@ -186,7 +213,7 @@ def test_read_acl_sidecar_deny_all_sentinel(tmp_path: pytest.TempPathFactory) ->
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("deny-all\n")
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    acl_entries, _source, _sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == []
     assert warnings == []
 
@@ -196,7 +223,7 @@ def test_read_acl_sidecar_deny_all_case_insensitive(tmp_path: pytest.TempPathFac
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("DENY-ALL\n")
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    acl_entries, _source, _sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == []
     assert warnings == []
 
@@ -206,7 +233,7 @@ def test_read_acl_sidecar_empty_returns_none(tmp_path: pytest.TempPathFactory) -
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("   \n\n  \n")
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    acl_entries, _source, _sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries is None
     assert warnings == []
 
@@ -214,7 +241,7 @@ def test_read_acl_sidecar_empty_returns_none(tmp_path: pytest.TempPathFactory) -
 def test_read_acl_sidecar_absent_returns_none(tmp_path: pytest.TempPathFactory) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text("")
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    acl_entries, _source, _sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries is None
     assert warnings == []
 
@@ -227,8 +254,8 @@ def test_read_acl_sidecar_size_limit(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"ns1\n" * 20000)  # > 64 KB
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
-    assert acl_entries is None
+        acl_entries, _source, _sidecar_path, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
     assert len(warnings) == 1
     assert caplog.records
 
@@ -238,7 +265,7 @@ def test_read_acl_sidecar_bom_stripped(tmp_path: pytest.TempPathFactory) -> None
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"\xef\xbb\xbfns1\n")  # UTF-8 BOM + ns1
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    acl_entries, _source, _sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == ["ns1"]
     assert warnings == []
 
@@ -251,12 +278,12 @@ def test_read_acl_sidecar_invalid_lines_dropped(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns1\n!!!bad!!!\n")
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+        acl_entries, _source, _sidecar_path, _warnings = read_acl_sidecar(doc)
     assert acl_entries == ["ns1"]
     assert caplog.records
 
 
-def test_read_acl_sidecar_symlink_returns_none(
+def test_read_acl_sidecar_symlink_fails_closed(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     doc = tmp_path / "doc.md"
@@ -266,8 +293,8 @@ def test_read_acl_sidecar_symlink_returns_none(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.symlink_to(real_file)
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
-    assert acl_entries is None
+        acl_entries, _source, _sidecar_path, _warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
     assert caplog.records
 
 
@@ -279,12 +306,12 @@ def test_read_acl_sidecar_deny_all_with_trailing_lines(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("deny-all\nns1\nns2\n")
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+        acl_entries, _source, _sidecar_path, _warnings = read_acl_sidecar(doc)
     assert acl_entries == []
     assert caplog.records
 
 
-def test_read_acl_sidecar_invalid_utf8_returns_none(
+def test_read_acl_sidecar_invalid_utf8_fails_closed(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     doc = tmp_path / "doc.md"
@@ -292,9 +319,97 @@ def test_read_acl_sidecar_invalid_utf8_returns_none(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"\xff\xfe invalid bytes")
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
-    assert acl_entries is None
+        acl_entries, _source, _sidecar_path, _warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
     assert caplog.records
+
+
+def test_read_acl_sidecar_utf16_notepad_file_fails_closed(tmp_path: Path) -> None:
+    """A Windows-Notepad UTF-16 sidecar must not silently open the document."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_bytes("team-a\n".encode("utf-16"))
+    acl_entries, source, _sidecar_path, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
+    assert source == "sidecar"
+    assert "chunk denied" in warnings[0]
+
+
+def test_read_acl_sidecar_unreadable_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An OSError while reading the sidecar denies the document instead of crashing or opening it."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("team-a\n")
+    original_read_bytes = Path.read_bytes
+
+    def _read_bytes(self: Path) -> bytes:
+        if self == sidecar:
+            raise PermissionError(13, "Permission denied")
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _read_bytes)
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
+    assert source == "sidecar"
+    assert sidecar_path == sidecar
+    assert "unreadable" in warnings[0].lower()
+    assert "chunk denied" in warnings[0]
+
+
+def test_read_acl_sidecar_dangling_symlink_fails_closed(tmp_path: Path) -> None:
+    """A dangling symlink does not 'exist' yet still declares a sidecar: deny, never open."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    (tmp_path / "doc.md.acl").symlink_to(tmp_path / "missing.acl")
+    acl_entries, source, _path, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
+    assert source == "sidecar"
+    assert "symlink" in warnings[0].lower()
+
+
+def test_read_acl_sidecar_directory_fails_closed(tmp_path: Path) -> None:
+    """A directory named <doc>.acl is a declared but unreadable sidecar: deny."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    (tmp_path / "doc.md.acl").mkdir()
+    acl_entries, source, _path, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
+    assert source == "sidecar"
+    assert "unreadable" in warnings[0].lower()
+
+
+def test_read_acl_sidecar_partially_valid_keeps_valid_names(tmp_path: Path) -> None:
+    """Narrowing, not widening: one valid line keeps its restriction (invalid lines dropped)."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    (tmp_path / "doc.md.acl").write_text("team-a\n!!!bad!!!\n")
+    acl_entries, _source, _path, warnings = read_acl_sidecar(doc)
+    assert acl_entries == ["team-a"]
+    assert len(warnings) == 1
+
+
+def test_read_acl_sidecar_symlink_target_is_never_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The symlink check precedes any read: the sidecar is denied without being opened."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    real_file = tmp_path / "real.acl"
+    real_file.write_text("team-a\n")
+    (tmp_path / "doc.md.acl").symlink_to(real_file)
+
+    def _never_read(self: Path) -> bytes:
+        raise AssertionError(f"symlink sidecar {self} must not be read")
+
+    monkeypatch.setattr(Path, "read_bytes", _never_read)
+    acl_entries, _source, _path, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
+    assert "symlink" in warnings[0].lower()
+    assert "chunk denied" in warnings[0]
 
 
 # ---------------------------------------------------------------------------
@@ -421,13 +536,13 @@ def test_apply_acl_filter_all_denied() -> None:
 def test_read_acl_sidecar_oversized_returns_warning(
     tmp_path: Path,
 ) -> None:
-    """Sidecar > 64 KB must return (None, source, sidecar_path, [warning_str]) naming the file and limit."""
+    """Sidecar > 64 KB must return ([], source, sidecar_path, [warning_str]) naming the file and limit."""
     doc = tmp_path / "doc.md"
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"ns1\n" * 20000)  # > 64 KB
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
-    assert acl_entries is None
+    acl_entries, _source, _sidecar_path, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
     assert len(warnings) == 1
     assert "64" in warnings[0]  # mentions the limit
     assert str(sidecar) in warnings[0] or sidecar.name in warnings[0]  # names the file
@@ -441,7 +556,7 @@ def test_read_acl_sidecar_normal_returns_no_warning(
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns1\nns2\n")
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    acl_entries, _source, _sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == ["ns1", "ns2"]
     assert warnings == []
 
@@ -452,7 +567,7 @@ def test_read_acl_sidecar_absent_returns_no_warning(
     """No sidecar must return (None, None, None, []) with empty warnings."""
     doc = tmp_path / "doc.md"
     doc.write_text("")
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    acl_entries, _source, _sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries is None
     assert warnings == []
 
@@ -495,13 +610,13 @@ def test_resolve_acl_frontmatter_path_returns_result(
 def test_resolve_acl_oversized_sidecar_propagates_warning(
     tmp_path: Path,
 ) -> None:
-    """resolve_acl() must propagate the oversized-sidecar warning from read_acl_sidecar()."""
+    """resolve_acl() must propagate the oversized-sidecar warning and deny the document."""
     doc = tmp_path / "doc.md"
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"ns1\n" * 20000)  # > 64 KB
     result = resolve_acl(doc, None)
-    assert result.acl is None
+    assert result.acl == []
     assert len(result.warnings) == 1
     assert "64" in result.warnings[0]
 
@@ -512,17 +627,17 @@ def test_resolve_acl_oversized_sidecar_propagates_warning(
 
 
 def test_parse_acl_bool_returns_warning() -> None:
-    """parse_acl_value with bool returns (None, [non-empty warning]) (S4a/S4e)."""
+    """parse_acl_value with bool returns ([], [non-empty warning]) (S4a/S4e)."""
     acl, warnings = parse_acl_value(True, "doc.md")
-    assert acl is None
+    assert acl == []
     assert len(warnings) >= 1
     assert any(warnings), "warnings list must contain non-empty strings"
 
 
 def test_parse_acl_other_type_returns_warning() -> None:
-    """parse_acl_value with an int returns (None, [non-empty warning]) (S4a)."""
+    """parse_acl_value with an int returns ([], [non-empty warning]) (S4a)."""
     acl, warnings = parse_acl_value(42, "doc.md")
-    assert acl is None
+    assert acl == []
     assert len(warnings) >= 1
     assert any(warnings), "warnings list must contain non-empty strings"
 
@@ -546,9 +661,9 @@ def test_parse_acl_invalid_namespace_names_returns_warning() -> None:
 
 
 def test_parse_acl_deny_all_mixed_invalid_returns_warning() -> None:
-    """deny-all plus only invalid entries → (None, [non-empty warning]) (S4d)."""
+    """deny-all plus only invalid entries → ([], [non-empty warning]) (S4d)."""
     acl, warnings = parse_acl_value("deny-all,!!!bad!!!", "doc.md")
-    assert acl is None
+    assert acl == []
     assert len(warnings) >= 1
     assert any(warnings)
 
@@ -561,15 +676,15 @@ def test_parse_acl_deny_all_mixed_invalid_returns_warning() -> None:
 def test_read_sidecar_symlink_returns_warning(
     tmp_path: Path,
 ) -> None:
-    """symlink sidecar yields (None, source, sidecar_path, [non-empty warning]) (S4b)."""
+    """symlink sidecar yields ([], source, sidecar_path, [non-empty warning]) (S4b)."""
     doc = tmp_path / "doc.md"
     doc.write_text("")
     real_file = tmp_path / "real.acl"
     real_file.write_text("ns1\n")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.symlink_to(real_file)
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
-    assert acl_entries is None
+    acl_entries, source, _sidecar_path, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
     assert source == "sidecar"
     assert len(warnings) >= 1
     assert any(warnings), "warnings must be non-empty for symlink sidecar"
@@ -579,13 +694,13 @@ def test_read_sidecar_symlink_returns_warning(
 def test_read_sidecar_utf8_failure_returns_warning(
     tmp_path: Path,
 ) -> None:
-    """non-UTF-8 sidecar bytes yield (None, source, sidecar_path, [non-empty warning]) (S4c)."""
+    """non-UTF-8 sidecar bytes yield ([], source, sidecar_path, [non-empty warning]) (S4c)."""
     doc = tmp_path / "doc.md"
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"\xff\xfe invalid bytes")
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
-    assert acl_entries is None
+    acl_entries, source, _sidecar_path, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
     assert source == "sidecar"
     assert len(warnings) >= 1
     assert any(warnings), "warnings must be non-empty for UTF-8 decode failure"
@@ -600,9 +715,9 @@ def test_read_sidecar_invalid_namespace_returns_warning(
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("!!!bad!!!\n")
-    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
-    # All entries invalid → fail-open (None)
-    assert acl_entries is None
+    acl_entries, source, _sidecar_path, warnings = read_acl_sidecar(doc)
+    # All entries invalid → fail-closed ([])
+    assert acl_entries == []
     assert source == "sidecar"
     assert len(warnings) >= 1
     assert any(warnings), "warnings must be non-empty for invalid namespace in sidecar"
@@ -620,3 +735,47 @@ def test_ingest_result_warnings_default_empty() -> None:
 
     result = IngestResult(doc_id="abc123", chunks_created=1, status="ok")
     assert result.warnings == []
+
+
+# ---------------------------------------------------------------------------
+# ChunkVisibility — the per-collection hidden chunk / document sets
+# ---------------------------------------------------------------------------
+
+
+def _rows() -> list[tuple[str, str, list[str] | None]]:
+    return [
+        ("open", "open-0", None),
+        ("team-a-only", "team-a-only-0", ["team-a"]),
+        ("team-b-only", "team-b-only-0", ["team-b"]),
+        ("denied", "denied-0", []),
+        ("mixed", "mixed-0", ["team-a"]),
+        ("mixed", "mixed-1", None),
+    ]
+
+
+def test_chunk_visibility_hides_chunks_the_namespace_may_not_read() -> None:
+    visibility = ChunkVisibility.from_chunk_acls(_rows(), "team-b")
+    assert visibility.hidden_chunk_ids == {"team-a-only-0", "denied-0", "mixed-0"}
+    assert visibility.chunk_visible("open-0")
+    assert visibility.chunk_visible("team-b-only-0")
+    assert not visibility.chunk_visible("mixed-0")
+    assert visibility.chunk_visible("unknown-chunk"), "a chunk without a stored ACL (deleted, stale) hides nothing"
+
+
+def test_chunk_visibility_hides_only_documents_with_no_visible_chunk() -> None:
+    visibility = ChunkVisibility.from_chunk_acls(_rows(), "team-b")
+    assert visibility.hidden_doc_ids == {"team-a-only", "denied"}
+    assert visibility.doc_visible("mixed"), "one visible chunk keeps the document visible"
+    assert visibility.doc_visible("unknown-doc")
+
+
+def test_chunk_visibility_matches_search_rule_for_every_namespace() -> None:
+    for namespace in ("team-a", "team-b", "team-c", ""):
+        visibility = ChunkVisibility.from_chunk_acls(_rows(), namespace)
+        for _doc, chunk_id, acl in _rows():
+            assert visibility.chunk_visible(chunk_id) == is_acl_allowed(acl, namespace)
+
+
+def test_chunk_visibility_default_hides_nothing() -> None:
+    visibility = ChunkVisibility()
+    assert visibility.chunk_visible("any") and visibility.doc_visible("any")

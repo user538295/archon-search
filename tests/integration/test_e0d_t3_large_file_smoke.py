@@ -25,7 +25,7 @@ def test_large_file_ingests_without_error_when_guard_disabled(tmp_path, monkeypa
     large_file.write_text("# Large Document\n\n" + ("word " * 100 + "\n\n") * 2_000)
 
     async def _run() -> None:
-        store, pipeline = await make_real_pipeline(tmp_path, monkeypatch)
+        _store, pipeline = await make_real_pipeline(tmp_path, monkeypatch)
         # ponytail: max_file_mb defaults to 0; no need to pass it explicitly
         result = await pipeline.ingest_file(
             large_file,

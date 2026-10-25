@@ -8,7 +8,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -31,7 +31,7 @@ def _chunk(**overrides) -> ChunkRecord:
         text=overrides.pop("text", "hello world"),
         vector=overrides.pop("vector", [0.0] * _DIM),
         source_path=overrides.pop("source_path", "/tmp/x.md"),
-        indexed_at=overrides.pop("indexed_at", datetime.now(timezone.utc).isoformat()),
+        indexed_at=overrides.pop("indexed_at", datetime.now(UTC).isoformat()),
         **overrides,
     )
 
@@ -101,7 +101,7 @@ async def test_ingest_does_not_silently_rewrite_to_legacy(
 async def test_updated_at_is_utc_iso8601_with_offset(
     connected_store: SearchStore, col_name: str
 ) -> None:
-    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+    ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC).isoformat()
     assert ts.endswith("+00:00")
     chunk = _chunk(updated_at=ts, ingested_by="cli")
     await connected_store.ensure_collection(col_name, _DIM)

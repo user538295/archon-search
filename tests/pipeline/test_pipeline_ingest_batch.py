@@ -11,12 +11,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from archon_search._types import ChunkRecord
+from archon_search.chunker import DocumentChunker
 from archon_search.config import SearchConfig
 from archon_search.constants import _INGEST_CHUNK_BATCH_SIZE as _BATCH_SIZE
-from archon_search.store import ChunkIngestResult
-from archon_search.chunker import DocumentChunker
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
+from archon_search.store import ChunkIngestResult
 
 from .conftest import make_embedder, make_reranker
 
@@ -38,6 +38,7 @@ def _make_records(n: int, doc_id: str = "test-doc-id") -> list[ChunkRecord]:
 def _make_mock_store(ingest_side_effects=None) -> MagicMock:
     """Return a MagicMock store wired to work with SearchPipeline."""
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store._config = SearchConfig()
     store.supports_incremental_fts_delete = True
 
@@ -111,7 +112,7 @@ async def test_ingest_file_splits_into_two_batches(tmp_path: Path):
     second_call_kwargs = store.ingest_chunks.call_args_list[1].kwargs
 
     assert first_call_kwargs.get("_is_continuation") is False or \
-           first_call_kwargs.get("_is_continuation") == False  # noqa: E712
+           first_call_kwargs.get("_is_continuation") == False
     assert second_call_kwargs.get("_is_continuation") is True
 
     first_call_chunks = store.ingest_chunks.call_args_list[0].args[1]
@@ -119,8 +120,8 @@ async def test_ingest_file_splits_into_two_batches(tmp_path: Path):
 
     assert len(first_call_chunks) == _BATCH_SIZE
     assert len(second_call_chunks) == 600 - _BATCH_SIZE
-    assert set(c.chunk_id for c in first_call_chunks).isdisjoint(
-        set(c.chunk_id for c in second_call_chunks)
+    assert {c.chunk_id for c in first_call_chunks}.isdisjoint(
+        {c.chunk_id for c in second_call_chunks}
     )
 
 
@@ -142,7 +143,7 @@ async def test_ingest_file_single_batch_unchanged(tmp_path: Path):
     assert result.status == "ok"
     assert store.ingest_chunks.call_count == 1
     assert store.ingest_chunks.call_args.kwargs.get("_is_continuation") is False or \
-           store.ingest_chunks.call_args.kwargs.get("_is_continuation") == False  # noqa: E712
+           store.ingest_chunks.call_args.kwargs.get("_is_continuation") == False
 
 
 @pytest.mark.asyncio

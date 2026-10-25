@@ -1,7 +1,6 @@
 """Tests for telemetry emission in POST /route handler"""
 from __future__ import annotations
 
-import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,7 +12,6 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
-
 
 # ---------------------------------------------------------------------------
 # Minimal test app fixture
@@ -95,12 +93,14 @@ def test_route_handler_logs_entry_on_success() -> None:
         decomposer=True,
     )
 
-    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with patch("archon_search.server.routes_route.path_to_collection_name", return_value="col_a"):
-            # Override pinned_collections to have one entry so col_a is pinned
-            app.state.config.pinned_collections = ["/some/path"]
-            with TestClient(app) as client:
-                resp = client.post("/route", json={"query": "what is archon?"})
+    with (
+        patch("archon_search.server.routes_route._build_router", return_value=fake_router),
+        patch("archon_search.server.routes_route.path_to_collection_name", return_value="col_a"),
+    ):
+        # Override pinned_collections to have one entry so col_a is pinned
+        app.state.config.pinned_collections = ["/some/path"]
+        with TestClient(app) as client:
+            resp = client.post("/route", json={"query": "what is archon?"})
 
     assert resp.status_code == 200
     writer.enqueue.assert_called_once()
@@ -164,11 +164,10 @@ def test_route_handler_logs_error_entry_on_timeout() -> None:
     writer = _make_mock_writer()
     app = _make_test_app(writer)
 
-    fake_router = _FakeColRouter(raise_on_get=asyncio.TimeoutError())
+    fake_router = _FakeColRouter(raise_on_get=TimeoutError())
 
-    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with TestClient(app) as client:
-            resp = client.post("/route", json={"query": "hello"})
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router), TestClient(app) as client:
+        resp = client.post("/route", json={"query": "hello"})
 
     assert resp.status_code == 504
     writer.enqueue.assert_called_once()
@@ -190,10 +189,12 @@ def test_route_handler_logs_error_entry_on_internal_exception(caplog: pytest.Log
 
     fake_router = _FakeColRouter(raise_on_get=RuntimeError("boom"))
 
-    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with caplog.at_level(logging.ERROR, logger="archon.search"):
-            with TestClient(app, raise_server_exceptions=False) as client:
-                resp = client.post("/route", json={"query": "hello"})
+    with (
+        patch("archon_search.server.routes_route._build_router", return_value=fake_router),
+        caplog.at_level(logging.ERROR, logger="archon.search"),
+        TestClient(app, raise_server_exceptions=False) as client,
+    ):
+        resp = client.post("/route", json={"query": "hello"})
 
     assert resp.status_code == 500
     writer.enqueue.assert_called_once()
@@ -218,9 +219,8 @@ def test_route_handler_query_text_never_in_factory_args() -> None:
 
     fake_router = _FakeColRouter(pre_context="ctx", routable=["c"], decomposer=False)
 
-    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with TestClient(app) as client:
-            resp = client.post("/route", json={"query": sentinel})
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router), TestClient(app) as client:
+        resp = client.post("/route", json={"query": sentinel})
 
     assert resp.status_code == 200
     writer.enqueue.assert_called_once()
@@ -239,10 +239,9 @@ def test_route_handler_no_entries_when_writer_none() -> None:
 
     fake_router = _FakeColRouter(pre_context="ctx", routable=[], decomposer=False)
 
-    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with TestClient(app) as client:
-            # Success path — should not raise even with no writer
-            resp = client.post("/route", json={"query": "hello"})
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router), TestClient(app) as client:
+        # Success path — should not raise even with no writer
+        resp = client.post("/route", json={"query": "hello"})
 
     assert resp.status_code == 200
 
@@ -256,17 +255,15 @@ def test_route_handler_no_entries_when_writer_none() -> None:
     assert resp.status_code == 400
 
     # Timeout path — should not raise with writer=None
-    timeout_router = _FakeColRouter(raise_on_get=asyncio.TimeoutError())
-    with patch("archon_search.server.routes_route._build_router", return_value=timeout_router):
-        with TestClient(app) as client:
-            resp = client.post("/route", json={"query": "hello"})
+    timeout_router = _FakeColRouter(raise_on_get=TimeoutError())
+    with patch("archon_search.server.routes_route._build_router", return_value=timeout_router), TestClient(app) as client:
+        resp = client.post("/route", json={"query": "hello"})
     assert resp.status_code == 504
 
     # Internal exception path — should not raise with writer=None
     crash_router = _FakeColRouter(raise_on_get=RuntimeError("crash"))
-    with patch("archon_search.server.routes_route._build_router", return_value=crash_router):
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.post("/route", json={"query": "hello"})
+    with patch("archon_search.server.routes_route._build_router", return_value=crash_router), TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.post("/route", json={"query": "hello"})
     assert resp.status_code == 500
 
 
@@ -300,10 +297,12 @@ def test_route_handler_enqueue_raises_does_not_affect_response(
 
     fake_router = _FakeColRouter(pre_context="ctx", routable=["c"], decomposer=False)
 
-    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with caplog.at_level(logging.WARNING, logger="archon.search"):
-            with TestClient(app) as client:
-                resp = client.post("/route", json={"query": "hello"})
+    with (
+        patch("archon_search.server.routes_route._build_router", return_value=fake_router),
+        caplog.at_level(logging.WARNING, logger="archon.search"),
+        TestClient(app) as client,
+    ):
+        resp = client.post("/route", json={"query": "hello"})
 
     assert resp.status_code == 200
     writer.enqueue.assert_called_once()
@@ -318,12 +317,14 @@ def test_route_handler_enqueue_raises_on_timeout_still_returns_504(
     writer.enqueue.side_effect = RuntimeError("disk full")
     app = _make_test_app(writer)
 
-    fake_router = _FakeColRouter(raise_on_get=asyncio.TimeoutError())
+    fake_router = _FakeColRouter(raise_on_get=TimeoutError())
 
-    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with caplog.at_level(logging.WARNING, logger="archon.search"):
-            with TestClient(app) as client:
-                resp = client.post("/route", json={"query": "hello"})
+    with (
+        patch("archon_search.server.routes_route._build_router", return_value=fake_router),
+        caplog.at_level(logging.WARNING, logger="archon.search"),
+        TestClient(app) as client,
+    ):
+        resp = client.post("/route", json={"query": "hello"})
 
     assert resp.status_code == 504
     writer.enqueue.assert_called_once()
@@ -340,10 +341,12 @@ def test_route_handler_enqueue_raises_on_exception_still_returns_500(
 
     fake_router = _FakeColRouter(raise_on_get=RuntimeError("crash"))
 
-    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with caplog.at_level(logging.WARNING, logger="archon.search"):
-            with TestClient(app, raise_server_exceptions=False) as client:
-                resp = client.post("/route", json={"query": "hello"})
+    with (
+        patch("archon_search.server.routes_route._build_router", return_value=fake_router),
+        caplog.at_level(logging.WARNING, logger="archon.search"),
+        TestClient(app, raise_server_exceptions=False) as client,
+    ):
+        resp = client.post("/route", json={"query": "hello"})
 
     assert resp.status_code == 500
     writer.enqueue.assert_called_once()
@@ -363,9 +366,8 @@ def test_route_handler_query_text_never_in_error_entry_args() -> None:
 
     fake_router = _FakeColRouter(raise_on_get=RuntimeError("internal boom"))
 
-    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.post("/route", json={"query": sentinel})
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router), TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.post("/route", json={"query": sentinel})
 
     assert resp.status_code == 500
     writer.enqueue.assert_called_once()
@@ -388,9 +390,8 @@ def test_route_handler_non_400_http_exception_produces_no_telemetry() -> None:
     with patch(
         "archon_search.server.routes_route._build_router",
         side_effect=_HTTPException(status_code=503, detail="service unavailable"),
-    ):
-        with TestClient(app) as client:
-            resp = client.post("/route", json={"query": "hello"})
+    ), TestClient(app) as client:
+        resp = client.post("/route", json={"query": "hello"})
 
     assert resp.status_code == 503
     writer.enqueue.assert_not_called()
@@ -440,9 +441,8 @@ def test_route_telemetry_has_correlation_id() -> None:
 
     fake_router = _FakeColRouter(pre_context="ctx", routable=["col_b"], decomposer=False)
 
-    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with TestClient(app) as client:
-            resp = client.post("/route", json={"query": "hello"})
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router), TestClient(app) as client:
+        resp = client.post("/route", json={"query": "hello"})
 
     assert resp.status_code == 200
     writer.enqueue.assert_called_once()
@@ -458,9 +458,8 @@ def test_route_telemetry_correlation_id_not_query() -> None:
 
     fake_router = _FakeColRouter(pre_context="ctx", routable=[], decomposer=False)
 
-    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with TestClient(app) as client:
-            resp = client.post("/route", json={"query": "my secret query"})
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router), TestClient(app) as client:
+        resp = client.post("/route", json={"query": "my secret query"})
 
     assert resp.status_code == 200
     writer.enqueue.assert_called_once()

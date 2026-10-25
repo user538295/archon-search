@@ -1,12 +1,21 @@
-"""Routing latency benchmark: in-process MultiCollectionRouter vs HTTP POST /route.
+"""Routing latency benchmark: HTTP POST /route against a running server.
 
-Run manually (requires a running archon-search server):
-    cd packages/archon-search
-    uv run pytest tests/benchmark_routing_latency.py -v -s
+Run manually (requires a running archon-search server and its API key):
+    export ARCHON_SEARCH_API_KEY=<the running server's key>
+    uv run pytest tests/benchmark_routing_latency.py -n 0 -v -s
+
+``-n 0`` is required: tests/conftest.py overwrites ARCHON_SEARCH_API_KEY with the suite's test key
+after recording the exported one, and xdist workers inherit the overwritten value, so under the
+default ``-n 8`` every request is a 401 and the run fails with "0/100 succeeded".
 
 Targets: p50 ≤ 30ms, p95 ≤ 150ms over localhost.
 If p95 > 150ms, consider co-located embedder mode (the host application embeds locally and passes
 the vector to POST /route) and record the decision in Documentation/ADRs/.
+
+There is deliberately no in-process comparison: ``MultiCollectionRouter`` only has collection
+metadata when the server seeds it from its LanceDB store (one process owns that store), and its
+own metadata fetch POSTs unauthenticated JSON-RPC to the server root, which answers 401 (no key)
+or 404 (key), so an in-process run measured an empty router and reported a meaningless overhead.
 """
 from __future__ import annotations
 
@@ -16,6 +25,8 @@ import time
 
 import httpx
 import pytest
+
+from tests.conftest import ORIGINAL_ARCHON_SEARCH_API_KEY as SERVER_API_KEY
 
 _SERVER_URL = "http://127.0.0.1:8765"
 _QUERY = "How do I configure the search embedding model and chunk size?"
@@ -50,7 +61,8 @@ def _print_stats(label: str, latencies: list[float]) -> None:
 
 async def _measure_http(iterations: int, warmup: int) -> list[float]:
     latencies: list[float] = []
-    async with httpx.AsyncClient(base_url=_SERVER_URL, timeout=30.0) as client:
+    headers = {"Authorization": f"Bearer {SERVER_API_KEY}"}
+    async with httpx.AsyncClient(base_url=_SERVER_URL, headers=headers, timeout=30.0) as client:
         for _ in range(warmup):
             await client.post("/route", json={"query": _QUERY})
 
@@ -64,45 +76,10 @@ async def _measure_http(iterations: int, warmup: int) -> list[float]:
     return latencies
 
 
-async def _measure_inprocess(iterations: int, warmup: int) -> list[float]:
-    from archon_search.config import load_config
-    from archon_search.embedder import Embedder, ModelEmbedder
-    from archon_search.router import MultiCollectionRouter
-
-    config = load_config()
-    # Reuse the embedder across iterations (matches server-side app.state.embedder caching).
-    backend = ModelEmbedder(config.embedding_model, device=config.device)
-    embedder = Embedder(backend)
-
-    def _make_router() -> MultiCollectionRouter:
-        # Create a fresh router per call to match server-side per-request router creation.
-        return MultiCollectionRouter(
-            search_url=f"http://{config.host}:{config.port}",
-            embedder=embedder,
-            shortlist_size=config.routing_shortlist_size,
-            confidence_threshold=config.routing_confidence_threshold,
-            embedding_model=config.embedding_model,
-        )
-
-    pinned: list[str] = []
-
-    for _ in range(warmup):
-        await _make_router().get_pre_context(_QUERY, pinned, config.routing_shortlist_size)
-
-    latencies: list[float] = []
-    for _ in range(iterations):
-        router = _make_router()
-        start = time.perf_counter()
-        await router.get_pre_context(_QUERY, pinned, config.routing_shortlist_size)
-        latencies.append((time.perf_counter() - start) * 1000)
-
-    return latencies
-
-
 @pytest.mark.benchmark
 @pytest.mark.xdist_group("benchmark")
 def test_routing_latency_harness_runs() -> None:
-    """Benchmark routing latency: in-process MultiCollectionRouter vs HTTP POST /route.
+    """Benchmark routing latency: HTTP POST /route against a running server.
 
     Requires a running archon-search server at http://127.0.0.1:8765.
     Auto-skipped in CI when the server is not reachable.
@@ -116,20 +93,19 @@ def test_routing_latency_harness_runs() -> None:
             "archon-search server not running — "
             "start with 'archon-search start' before running this benchmark"
         )
+    if SERVER_API_KEY is None:
+        pytest.skip(
+            "ARCHON_SEARCH_API_KEY is not exported — POST /route needs the running server's API key "
+            "(export ARCHON_SEARCH_API_KEY=<key> before running this benchmark)"
+        )
 
     http_latencies = asyncio.run(_measure_http(_ITERATIONS, _WARMUP))
-    inprocess_latencies = asyncio.run(_measure_inprocess(_ITERATIONS, _WARMUP))
 
     print()
     _print_stats("HTTP POST /route", http_latencies)
-    _print_stats("In-process MultiCollectionRouter (fresh router, metadata refetched)", inprocess_latencies)
 
-    if http_latencies and inprocess_latencies:
+    if http_latencies:
         http_p95 = _percentile(http_latencies, 95)
-        ip_p95 = _percentile(inprocess_latencies, 95)
-        overhead = http_p95 - ip_p95
-        print(f"\nHTTP transport overhead (p95): {overhead:.1f} ms")
-
         if http_p95 > 150:
             print(
                 "\n⚠  p95 > 150 ms threshold exceeded.\n"

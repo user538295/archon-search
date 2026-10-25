@@ -1,14 +1,13 @@
 """Tests for extended chunk metadata schema ."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 from archon_search._types import ChunkRecord
 from archon_search.store import SearchStore, parse_metadata, validate_metadata
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -28,7 +27,7 @@ def _make_chunk(
     ingested_by: str = "archon-search-cli",
     updated_at: str = "",
 ) -> ChunkRecord:
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     return ChunkRecord(
         doc_id=doc_id,
         chunk_id=chunk_id or f"{doc_id}-000000",
@@ -111,7 +110,7 @@ async def test_ingested_chunk_has_indexed_at(tmp_path):
         assert ts, "indexed_at should not be empty"
         # Must parse as ISO-8601
         dt = datetime.fromisoformat(ts)
-        assert dt.tzinfo is not None or ts.endswith("Z") or "+" in ts or ts.endswith("+00:00")
+        assert dt.tzinfo is not None or ts.endswith(("Z", "+00:00")) or "+" in ts
     finally:
         await store.disconnect()
 
@@ -295,7 +294,7 @@ async def test_existing_chunk_missing_new_field_defaults_null(tmp_path):
     table = await db.create_table(collection, schema=old_schema, exist_ok=True)
 
     doc_id = "d" * 64
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await table.add([{
         "doc_id": doc_id,
         "chunk_id": f"{doc_id}-000000",

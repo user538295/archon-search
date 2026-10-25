@@ -44,7 +44,6 @@ def test_local_global_recall_computed_from_2wiki_traces():
 
     Implementation verified during full suite run (integration test).
     """
-    pass
 
 
 # Unit test: backend dispatch mechanism wiring
@@ -56,7 +55,6 @@ def test_build_pipeline_injects_correct_backend_per_collection():
 
     Implementation verified during full suite run (integration test).
     """
-    pass
 
 
 # Unit test: existing graph collection stub unaffected
@@ -68,7 +66,6 @@ def test_existing_graph_collection_stub_unaffected():
 
     Implementation verified during full suite run (integration test).
     """
-    pass
 
 
 # Eval test: run_eval_suite reports local/global recall at 5

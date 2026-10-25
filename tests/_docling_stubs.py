@@ -16,7 +16,7 @@ import concurrent.futures
 import contextlib
 import sys
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, ClassVar, Self
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -45,7 +45,7 @@ class InlineExecutor:
     submitted work inline, in the calling process — never spawns a real worker that would
     import real docling."""
 
-    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    calls: ClassVar[list[tuple[tuple[Any, ...], dict[str, Any]]]] = []
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         type(self).calls.append((args, kwargs))
@@ -54,17 +54,17 @@ class InlineExecutor:
         future: concurrent.futures.Future = concurrent.futures.Future()
         try:
             future.set_result(fn(*args, **kwargs))
-        except BaseException as exc:  # noqa: BLE001 — mirror the real executor's contract
+        except BaseException as exc:  # noqa: BLE001 — mirrors ProcessPoolExecutor: any worker exception, incl. BaseException, is delivered via the Future
             future.set_exception(exc)
         return future
 
     def shutdown(self, *args: Any, **kwargs: Any) -> None:
         return None
 
-    def __enter__(self) -> InlineExecutor:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> bool:
+    def __exit__(self, *args: object) -> bool:
         return False
 
 
@@ -97,6 +97,5 @@ def docling_stubbed(mock_docling: MagicMock) -> Iterator[None]:
     Resets ``InlineExecutor.calls`` on entry so each use starts from a clean slate.
     """
     InlineExecutor.calls = []
-    with patch.dict(sys.modules, dict.fromkeys(DOCLING_MODULES, mock_docling)):
-        with patch("archon_search.parser.ProcessPoolExecutor", InlineExecutor):
-            yield
+    with patch.dict(sys.modules, dict.fromkeys(DOCLING_MODULES, mock_docling)), patch("archon_search.parser.ProcessPoolExecutor", InlineExecutor):
+        yield

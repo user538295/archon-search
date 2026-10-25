@@ -38,14 +38,14 @@ def install_stubs() -> None:
     if "chonkie" not in sys.modules:
         _chonkie = types.ModuleType("chonkie")
 
-        class _FakeChunk:  # noqa: D101
+        class _FakeChunk:
             def __init__(self, text: str, token_count: int, start_index: int, end_index: int) -> None:
                 self.text = text
                 self.token_count = token_count
                 self.start_index = start_index
                 self.end_index = end_index
 
-        class _FakeRecursiveChunker:  # noqa: D101
+        class _FakeRecursiveChunker:
             def __init__(self, tokenizer: str = "gpt2", chunk_size: int = 512, **kwargs: object) -> None:
                 self._chunk_size = max(1, chunk_size)
 

@@ -27,7 +27,6 @@ from archon_search.jobs.store import JobStore
 from archon_search.pipeline import ExplainPipelineResult, SearchPipelineResult
 from archon_search.server.app import create_app
 
-
 # ---------------------------------------------------------------------------
 # App / pipeline mock helpers
 # ---------------------------------------------------------------------------
@@ -222,9 +221,8 @@ def test_search_request_scope_filter_with_graph_mode_422(tmp_path: Path) -> None
     config.db_path = str(tmp_path / "search")
     config.graph.enabled = True  # enable graph so the graph.enabled guard doesn't fire first
     job_store = JobStore(path=tmp_path / "jobs.json")
-    with patch("archon_search.chunker.DocumentChunker.__init__", return_value=None):
-        with patch("archon_search.server.app._check_graph_deps"):
-            app = create_app(config, job_store)
+    with patch("archon_search.chunker.DocumentChunker.__init__", return_value=None), patch("archon_search.server.app._check_graph_deps"):
+        app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     client = TestClient(
         app, raise_server_exceptions=False, headers={"Authorization": f"Bearer {key}"}
@@ -258,9 +256,8 @@ def test_explain_request_scope_filter_with_graph_mode_422(tmp_path: Path) -> Non
     config.db_path = str(tmp_path / "search")
     config.graph.enabled = True  # enable graph so the graph.enabled guard doesn't fire first
     job_store = JobStore(path=tmp_path / "jobs.json")
-    with patch("archon_search.chunker.DocumentChunker.__init__", return_value=None):
-        with patch("archon_search.server.app._check_graph_deps"):
-            app = create_app(config, job_store)
+    with patch("archon_search.chunker.DocumentChunker.__init__", return_value=None), patch("archon_search.server.app._check_graph_deps"):
+        app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     client = TestClient(
         app, raise_server_exceptions=False, headers={"Authorization": f"Bearer {key}"}
@@ -293,18 +290,17 @@ def test_explain_scope_filter_with_graph_mode_422_e2e(tmp_path: Path, monkeypatc
     """E2E: POST /explain with scope_filter + graph_mode returns 422 (real app, real HTTP)."""
     from tests.integration.conftest import make_real_app
 
-    with patch("archon_search.server.app._check_graph_deps"):
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
-            response = client.post(
-                "/explain",
-                json={
-                    "collection": "col",
-                    "query": "hello",
-                    "scope_filter": "user:alice",
-                    "graph_mode": "naive",
-                },
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
+    with patch("archon_search.server.app._check_graph_deps"), make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
+        response = client.post(
+            "/explain",
+            json={
+                "collection": "col",
+                "query": "hello",
+                "scope_filter": "user:alice",
+                "graph_mode": "naive",
+            },
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
 
     assert response.status_code == 422
     detail = response.json()["detail"]
@@ -346,7 +342,7 @@ def test_get_documents_includes_scopes_per_document(tmp_path: Path, monkeypatch)
 
     col = "test-scopes-col"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         # Write a file with scoped chunks into tmp_path
@@ -402,7 +398,7 @@ def test_get_documents_scopes_are_deduplicated_set_union(tmp_path: Path, monkeyp
 
     col = "test-dedup-scopes-col"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         # Write a multi-paragraph doc (parser will produce multiple chunks)

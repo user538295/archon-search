@@ -357,7 +357,7 @@ def test_route_filters_pinned_by_namespace(tmp_path: Path) -> None:
     meta_a = CollectionMeta(name=name_a, namespace="tenantA")
     meta_b = CollectionMeta(name=name_b, namespace="tenantB")
 
-    app, mock_store = _make_app_with_namespaces(
+    app, _mock_store = _make_app_with_namespaces(
         tmp_path,
         pinned_paths=[path_a, path_b],
         namespaces={key_a: "tenantA", key_b: "tenantB"},
@@ -384,7 +384,7 @@ def test_route_includes_pinned_for_correct_namespace(tmp_path: Path) -> None:
     name_a = path_to_collection_name(path_a)
     meta_a = CollectionMeta(name=name_a, namespace="tenantA")
 
-    app, mock_store = _make_app_with_namespaces(
+    app, _mock_store = _make_app_with_namespaces(
         tmp_path,
         pinned_paths=[path_a],
         namespaces={key_a: "tenantA"},
@@ -411,7 +411,7 @@ def test_route_no_pinned_for_namespace(tmp_path: Path) -> None:
     name_x = path_to_collection_name(path_x)
     meta_x = CollectionMeta(name=name_x, namespace="tenantB")
 
-    app, mock_store = _make_app_with_namespaces(
+    app, _mock_store = _make_app_with_namespaces(
         tmp_path,
         pinned_paths=[path_x],
         namespaces={key_a: "tenantA"},

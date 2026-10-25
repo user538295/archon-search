@@ -638,6 +638,152 @@ def test_graph_gc_methods_real_lancedb(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Emptied collection: the last document's mentions are gone, nodes/edges leaked
+# ---------------------------------------------------------------------------
+
+_OTHER_COL = "other-col"
+_OTHER_NS = "tenant-b"
+
+
+async def _seed_collection(
+    store: GraphStore, collection: str, ns: str, *names: str
+) -> tuple[list[GraphNode], GraphEdge]:
+    """Write nodes for *names*, one edge between the first two, and a mention per node."""
+    nodes = [
+        GraphNode(
+            id=make_stable_entity_id(EntityType.concept.value, name),
+            entity_name=name,
+            entity_type=EntityType.concept,
+            source_doc_id="doc-1",
+            collection_name=collection,
+        )
+        for name in names
+    ]
+    edge = _edge(nodes[0], nodes[1])
+    await store.ensure_graph_tables(collection, ns=ns)
+    await store.write_graph(collection, nodes, [edge], ns=ns)
+    await store.write_mentions(
+        collection,
+        [_mention(n.id, f"{collection}-chunk-{i}", doc_id="doc-1") for i, n in enumerate(nodes)],
+        ns=ns,
+    )
+    return nodes, edge
+
+
+def test_gc_removes_orphans_when_collection_has_no_live_chunks(tmp_path: Path) -> None:
+    """Last document deleted: mentions pruned to empty, nodes/edges must still be collected.
+
+    Reproduces the leak behind the former xfail in
+    test_e2d_t1_shared_entity_survives_partial_delete: with zero live chunks the
+    mentions table is empty and the default call skips as undeterminable.
+    """
+
+    async def _run() -> None:
+        store = GraphStore(tmp_path)
+        await store.connect()
+        try:
+            nodes, _ = await _seed_collection(store, _COL, _NS, "Alice", "Google")
+            await store.prune_stale_mentions(_COL, frozenset(), _NS)
+
+            result = await store.delete_orphan_nodes_and_edges(_COL, _NS, no_live_chunks=True)
+
+            assert result.orphan_nodes_removed == len(nodes)
+            assert result.orphan_edges_removed == 1
+            assert result.communities_invalidated is True
+            assert await store.node_count(_COL, _NS) == 0
+            assert await store.edge_count(_COL, _NS) == 0
+        finally:
+            await store.disconnect()
+
+    asyncio.run(_run())
+
+
+def test_gc_empty_mentions_still_skips_without_no_live_chunks_assertion(tmp_path: Path) -> None:
+    """Default behaviour is unchanged: an empty mentions table alone is not proof of emptiness."""
+
+    async def _run() -> None:
+        store = GraphStore(tmp_path)
+        await store.connect()
+        try:
+            await _seed_collection(store, _COL, _NS, "Alice", "Google")
+            await store.prune_stale_mentions(_COL, frozenset(), _NS)
+
+            result = await store.delete_orphan_nodes_and_edges(_COL, _NS)
+
+            assert result == GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
+            assert await store.node_count(_COL, _NS) == 2
+        finally:
+            await store.disconnect()
+
+    asyncio.run(_run())
+
+
+def test_gc_emptied_collection_leaves_other_collections_and_namespaces_intact(tmp_path: Path) -> None:
+    """Clearing one emptied (ns, collection) must not touch any sibling collection or namespace."""
+
+    async def _run() -> None:
+        store = GraphStore(tmp_path)
+        await store.connect()
+        try:
+            await _seed_collection(store, _COL, _NS, "Alice", "Google")
+            sibling_col_nodes, sibling_col_edge = await _seed_collection(
+                store, _OTHER_COL, _NS, "Alice", "Google"
+            )
+            sibling_ns_nodes, sibling_ns_edge = await _seed_collection(
+                store, _COL, _OTHER_NS, "Alice", "Google"
+            )
+            await store.prune_stale_mentions(_COL, frozenset(), _NS)
+
+            await store.delete_orphan_nodes_and_edges(_COL, _NS, no_live_chunks=True)
+
+            assert await store.node_count(_COL, _NS) == 0
+            assert await store.edge_count(_COL, _NS) == 0
+            for collection, ns, nodes, edge in (
+                (_OTHER_COL, _NS, sibling_col_nodes, sibling_col_edge),
+                (_COL, _OTHER_NS, sibling_ns_nodes, sibling_ns_edge),
+            ):
+                assert {n.id for n in await store.get_all_nodes(collection, ns=ns)} == {
+                    n.id for n in nodes
+                }
+                assert [e.id for e in await store.get_all_edges(collection, ns=ns)] == [edge.id]
+        finally:
+            await store.disconnect()
+
+    asyncio.run(_run())
+
+
+def test_gc_emptied_collection_preserves_defref_exempt_nodes(tmp_path: Path) -> None:
+    """File-derived def/ref nodes keep the exemption they have in a normal GC pass."""
+
+    async def _run() -> None:
+        store = GraphStore(tmp_path)
+        await store.connect()
+        try:
+            await _seed_collection(store, _COL, _NS, "Alice", "Google")
+            caller = _node("caller_fn", EntityType.code_symbol)
+            callee = _node("callee_fn", EntityType.code_symbol)
+            defref_edge = GraphEdge(
+                id=make_stable_edge_id(caller.id, callee.id, RelationshipType.calls.value),
+                source_node_id=caller.id,
+                target_node_id=callee.id,
+                relationship_type=RelationshipType.calls,
+                source_doc_id="doc-abc",
+                extraction_method="extracted",
+            )
+            await store.write_graph(_COL, [caller, callee], [defref_edge], ns=_NS)
+            await store.prune_stale_mentions(_COL, frozenset(), _NS)
+
+            await store.delete_orphan_nodes_and_edges(_COL, _NS, no_live_chunks=True)
+
+            assert {n.id for n in await store.get_all_nodes(_COL, ns=_NS)} == {caller.id, callee.id}
+            assert [e.id for e in await store.get_all_edges(_COL, ns=_NS)] == [defref_edge.id]
+        finally:
+            await store.disconnect()
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
 # Fix C1-I-1: empty mentions table → safe early-exit (no whole-graph deletion)
 # ---------------------------------------------------------------------------
 

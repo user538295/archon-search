@@ -13,9 +13,7 @@ import pytest
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search.pipeline import ExplainPipelineResult
-
 from tests.integration.conftest import make_real_app, make_real_pipeline
-
 
 # ---------------------------------------------------------------------------
 # Helpers

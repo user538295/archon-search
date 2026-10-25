@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC
 
 import pytest
 
@@ -116,7 +117,7 @@ def _inject_namespace_data(client, col: str, namespace: str, doc_text: str) -> N
     meta row, as the meta write path goes through a separate code path.
     """
     import hashlib
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from archon_search._types import ChunkRecord, normalize_iso_utc
     from archon_search.collection_meta import CollectionMeta
@@ -131,7 +132,7 @@ def _inject_namespace_data(client, col: str, namespace: str, doc_text: str) -> N
         text=doc_text,
         vector=[0.0] * _EMBEDDING_DIM,
         source_path=source_path,
-        indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+        indexed_at=normalize_iso_utc(datetime.now(UTC)),
         acl=None,
     )
     meta = CollectionMeta(

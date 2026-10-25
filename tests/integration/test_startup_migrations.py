@@ -39,7 +39,7 @@ def test_startup_migrations_schema_version_column_present(tmp_path, monkeypatch)
     asyncio.run(_seed())
 
     # Boot the app — lifespan calls _run_startup_migrations() which adds the column.
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, _api_key):
         resp = client.get("/health")
         assert resp.status_code == 200
 

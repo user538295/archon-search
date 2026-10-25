@@ -15,12 +15,17 @@ import pytest
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import PARSE_ERROR_CODE, ChunkRecord, IngestResult
+from archon_search.embedder import Embedder
 from archon_search.parser import PARSE_FAILED_DETAIL
 from archon_search.store import ChunkIngestResult
-from archon_search.embedder import Embedder
 
-from .conftest import MockEmbedderBackend, MockRerankerBackend, make_embedder, make_reranker, make_pipeline
-
+from .conftest import (
+    MockEmbedderBackend,
+    MockRerankerBackend,
+    make_embedder,
+    make_pipeline,
+    make_reranker,
+)
 
 
 @pytest.mark.asyncio
@@ -185,6 +190,9 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
     captured_records: list[ChunkRecord] = []
 
     class CapturingStore:
+        async def assert_collection_access(self, *a: Any, **kw: Any) -> None:
+            pass
+
         from archon_search.config import SearchConfig
         _config = SearchConfig()
 
@@ -245,6 +253,9 @@ async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_na
     captured_records: list[ChunkRecord] = []
 
     class CapturingStore:
+        async def assert_collection_access(self, *a: Any, **kw: Any) -> None:
+            pass
+
         from archon_search.config import SearchConfig
         _config = SearchConfig()
 
@@ -515,6 +526,9 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
     rebuild_called = False
 
     class TrackingStore:
+        async def assert_collection_access(self, *a: Any, **kw: Any) -> None:
+            pass
+
         async def ensure_collection(self, *a: Any, **kw: Any) -> None:
             pass
 
@@ -850,11 +864,14 @@ async def test_ingest_directory_sets_described_at_doc_count_on_success(
 async def test_ingest_file_records_parse_embed_persist(tmp_path):
     """ingest_file records parse, embed, and persist stages when a recorder is bound."""
     from archon_search.chunker import DocumentChunker
+    from archon_search.observability import bind_stage_recorder
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.observability import bind_stage_recorder
 
     class StubStore:
+        async def assert_collection_access(self, *a: Any, **kw: Any) -> None:
+            pass
+
         @property
         def supports_incremental_fts_delete(self) -> bool:
             return True
@@ -904,9 +921,9 @@ async def test_ingest_file_records_parse_embed_persist(tmp_path):
 async def test_pipeline_noop_when_unbound(tmp_path):
     """Pipeline methods run without error when no recorder is bound; ContextVar stays None."""
     from archon_search.chunker import DocumentChunker
+    from archon_search.observability import _stage_recorder
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.observability import _stage_recorder
 
     search_candidate = ScoredSearchCandidate(
         doc_id="b" * 64,
@@ -922,6 +939,9 @@ async def test_pipeline_noop_when_unbound(tmp_path):
     )
 
     class StubStore:
+        async def assert_collection_access(self, *a: Any, **kw: Any) -> None:
+            pass
+
         @property
         def supports_incremental_fts_delete(self) -> bool:
             return True
@@ -981,6 +1001,7 @@ async def test_pipeline_noop_when_unbound(tmp_path):
 @pytest.mark.asyncio
 async def test_create_pipeline_wires_all_components():
     from unittest.mock import MagicMock
+
     from archon_search.pipeline import create_pipeline
 
     cfg = MagicMock()
@@ -1113,6 +1134,7 @@ async def test_create_pipeline_passes_context_window_max(tmp_path: Path) -> None
 @pytest.mark.asyncio
 async def test_create_pipeline_does_not_auto_connect():
     from unittest.mock import MagicMock
+
     from archon_search.pipeline import create_pipeline
 
     cfg = MagicMock()
@@ -1196,6 +1218,7 @@ async def test_ingest_async_progress_callback(connected_store, col_name, tmp_pat
 def test_create_pipeline_no_history_collection_param() -> None:
     """SearchPipeline.__init__ must NOT accept history_collection parameter."""
     import inspect
+
     from archon_search.pipeline import SearchPipeline
 
     sig = inspect.signature(SearchPipeline.__init__)
@@ -1207,6 +1230,7 @@ def test_create_pipeline_no_history_collection_param() -> None:
 def test_create_pipeline_factory_no_history_collection_param() -> None:
     """create_pipeline() must NOT pass history_collection to SearchPipeline."""
     import inspect
+
     from archon_search.pipeline import create_pipeline
 
     sig = inspect.signature(create_pipeline)
@@ -1218,6 +1242,7 @@ def test_create_pipeline_factory_no_history_collection_param() -> None:
 def test_ragpipeline_has_no_history_collection_attr() -> None:
     """SearchPipeline instance must NOT have _history_collection attribute."""
     from unittest.mock import MagicMock
+
     from archon_search.embedder import Embedder
     from archon_search.pipeline import SearchPipeline
     from archon_search.reranker import Reranker
@@ -1240,6 +1265,7 @@ def test_create_pipeline_uses_expanded_db_path() -> None:
     """create_pipeline() with a tilde db_path must produce a fully-expanded store._db_path."""
     from pathlib import Path
     from unittest.mock import MagicMock, patch
+
     from archon_search.pipeline import create_pipeline
 
     cfg = MagicMock()
@@ -1540,12 +1566,12 @@ async def test_ingest_directory_namespace_param(tmp_path) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.chunker import DocumentChunker
+    from archon_search.config import SearchConfig
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
-    from archon_search.config import SearchConfig
-
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
@@ -1575,7 +1601,7 @@ async def test_ingest_directory_namespace_param(tmp_path) -> None:
 
     # update_description must be called with namespace="tenantA"
     store.update_description.assert_awaited_once()
-    args, kwargs = store.update_description.call_args
+    _args, kwargs = store.update_description.call_args
     assert kwargs.get("namespace") == "tenantA"
 
 
@@ -1585,13 +1611,13 @@ async def test_ingest_directory_default_namespace(tmp_path) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.chunker import DocumentChunker
+    from archon_search.config import SearchConfig
     from archon_search.constants import DEFAULT_NAMESPACE
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
-    from archon_search.config import SearchConfig
-
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
@@ -1661,9 +1687,11 @@ async def test_recompute_collection_meta_namespace_param(tmp_path) -> None:
 def _make_stub_store_for_embedding_tests(existing_meta=None):  # type: ignore[no-untyped-def]
     """Return a store mock suitable for description tests."""
     from unittest.mock import AsyncMock, MagicMock
+
     from archon_search.config import SearchConfig
 
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
@@ -1708,7 +1736,7 @@ async def test_ingest_calls_update_description_with_generated_desc(tmp_path) -> 
         await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
 
     store.update_description.assert_awaited_once()
-    args, kwargs = store.update_description.call_args
+    args, _kwargs = store.update_description.call_args
     # First positional arg is collection, second is description
     assert args[1] == "test desc"
 
@@ -1723,9 +1751,11 @@ async def test_ingest_description_none_passes_none_to_update_description(tmp_pat
 
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for null description test.\n" * 5)
 
-    with patch("archon_search.pipeline.generate_description", return_value=None):
-        with patch.object(pipeline._global_embedder, "embed_one", new_callable=AsyncMock) as mock_embed:
-            await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
+    with (
+        patch("archon_search.pipeline.generate_description", return_value=None),
+        patch.object(pipeline._global_embedder, "embed_one", new_callable=AsyncMock) as mock_embed,
+    ):
+        await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
 
     mock_embed.assert_not_awaited()
     store.update_description.assert_awaited_once()
@@ -1773,6 +1803,7 @@ async def test_recompute_populates_description_embedding() -> None:
     existing_meta = CollectionMeta(name="my-col", description="some desc", needs_recompute=True)
 
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4], [0.3, 0.4, 0.5, 0.6]])
     store.count_documents = AsyncMock(return_value=2)
@@ -1811,6 +1842,7 @@ async def test_recompute_no_description_embedding_when_description_none() -> Non
     existing_meta = CollectionMeta(name="my-col", description=None, needs_recompute=True)
 
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
     store.count_documents = AsyncMock(return_value=1)
@@ -1877,6 +1909,7 @@ async def test_ingest_file_returns_error_on_delete_store_busy(tmp_path) -> None:
     from archon_search.store import StoreBusyError
 
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(side_effect=StoreBusyError(timeout_s=0.1))
     store.ingest_chunks = AsyncMock()
@@ -1906,6 +1939,7 @@ async def test_ingest_file_returns_error_on_delete_store_busy(tmp_path) -> None:
 def _make_mock_store_for_b5() -> MagicMock:
     """Build a MagicMock store suitable for B5 task 5.2 tests."""
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=2, needs_recompute=False))
@@ -2077,6 +2111,7 @@ async def test_description_reads_from_store_not_accumulator(tmp_path) -> None:
     from archon_search.pipeline import SearchPipeline
 
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=3, needs_recompute=False))
@@ -2134,6 +2169,7 @@ async def test_centroid_incremental_path_always_used(tmp_path) -> None:
     from archon_search.pipeline import SearchPipeline
 
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=2, needs_recompute=False))
@@ -2592,6 +2628,7 @@ def _make_mock_store_c1(existing_meta=None):  # type: ignore[no-untyped-def]
     from archon_search.config import SearchConfig
 
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
@@ -2610,8 +2647,8 @@ async def test_ingest_directory_preserves_active_embedding_model(tmp_path) -> No
     """After BE-3, ingest_directory uses the B5 path (update_description) and does NOT
     call update_collection_meta. C1 fields (active_embedding_model, etc.) are preserved
     inside the store via the incremental update path."""
-    from archon_search.collection_meta import CollectionMeta
     from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
@@ -2710,8 +2747,8 @@ async def test_ingest_directory_passes_generated_description_to_update_descripti
 async def test_ingest_directory_preserves_all_c1_fields(tmp_path) -> None:
     """After BE-3, ingest_directory calls update_description (B5 path) and does NOT
     call update_collection_meta. C1 fields are preserved inside the store."""
-    from archon_search.collection_meta import CollectionMeta
     from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
@@ -2751,6 +2788,7 @@ async def test_recompute_collection_meta_preserves_active_embedding_model() -> N
 
     existing_meta = CollectionMeta(name="col", active_embedding_model="model-X", needs_recompute=True)
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
     store.count_documents = AsyncMock(return_value=1)
@@ -2788,6 +2826,7 @@ async def test_recompute_collection_meta_preserves_all_c1_fields() -> None:
         needs_recompute=True,
     )
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
     store.count_documents = AsyncMock(return_value=1)
@@ -2820,6 +2859,7 @@ async def test_recompute_collection_meta_uses_global_embedder_for_description() 
 
     existing_meta = CollectionMeta(name="col", description="desc text", needs_recompute=True)
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
     store.count_documents = AsyncMock(return_value=1)
@@ -2867,6 +2907,7 @@ def test_no_embedding_model_attribute_accesses() -> None:
         ],
         capture_output=True,
         text=True,
+        check=False,
     )
     lines = [
         line for line in result.stdout.splitlines()
@@ -2898,6 +2939,7 @@ def test_no_underscore_embedder_anywhere() -> None:
         ],
         capture_output=True,
         text=True,
+        check=False,
     )
     lines = [
         line for line in result.stdout.splitlines()
@@ -2918,6 +2960,7 @@ def _make_mock_store_for_c2(*, plan_b: bool = False) -> MagicMock:
     ``optimize_fts``.  Under Plan A (default), ``optimize_fts`` is called.
     """
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(
@@ -3044,11 +3087,12 @@ async def test_ingest_file_language_unknown(tmp_path) -> None:
 
 def test_search_pipeline_constructor_accepts_language_detector() -> None:
     """SearchPipeline constructor must accept language_detector and language_detection_confidence_threshold."""
+    from unittest.mock import MagicMock
+
     from archon_search.chunker import DocumentChunker
+    from archon_search.language_detector import LanguageDetector
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.language_detector import LanguageDetector
-    from unittest.mock import MagicMock
 
     store = MagicMock()
     detector = MagicMock(spec=LanguageDetector)
@@ -3071,10 +3115,11 @@ def test_search_pipeline_constructor_accepts_language_detector() -> None:
 
 def test_search_pipeline_constructor_defaults_no_detector() -> None:
     """SearchPipeline without language_detector defaults to None detector and 0.7 threshold."""
+    from unittest.mock import MagicMock
+
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from unittest.mock import MagicMock
 
     store = MagicMock()
 
@@ -3094,9 +3139,9 @@ def test_search_pipeline_constructor_defaults_no_detector() -> None:
 
 def test_create_pipeline_passes_language_detector_when_multilingual() -> None:
     """create_pipeline() instantiates LanguageDetector when config.multilingual=True (mocked)."""
-    from archon_search.pipeline import create_pipeline
     from archon_search.config import SearchConfig
     from archon_search.language_detector import LanguageDetector
+    from archon_search.pipeline import create_pipeline
 
     cfg = SearchConfig(multilingual=True)
 
@@ -3115,9 +3160,9 @@ def test_create_pipeline_passes_language_detector_when_multilingual() -> None:
 
 def test_create_pipeline_no_language_detector_when_not_multilingual() -> None:
     """create_pipeline() does not instantiate LanguageDetector when config.multilingual=False."""
-    from archon_search.pipeline import create_pipeline
     from archon_search.config import SearchConfig
     from archon_search.language_detector import LanguageDetector
+    from archon_search.pipeline import create_pipeline
 
     cfg = SearchConfig(multilingual=False)
 
@@ -3471,9 +3516,9 @@ async def test_ingest_pdf_assigns_page_start_to_chunks(tmp_path) -> None:
 async def test_ingest_pdf_cross_page_chunk_has_page_end(tmp_path) -> None:
     """A chunk that straddles a page boundary has both _page_start and _page_end (and they differ)."""
     from archon_search.chunker import DocumentChunker
+    from archon_search.enricher import PAGE_BREAK_MARKER
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.enricher import PAGE_BREAK_MARKER
 
     store = _make_mock_store_for_c2()
 
@@ -3634,9 +3679,9 @@ async def test_ingest_pdf_with_language_detection_uses_cleaned_text(tmp_path) ->
 async def test_ingest_pdf_metadata_survives_store_roundtrip(connected_store, col_name, tmp_path) -> None:
     """Full ingest → hybrid_search_with_trace round-trip: _page_start is present in search result metadata."""
     from archon_search.chunker import DocumentChunker
+    from archon_search.enricher import PAGE_BREAK_MARKER
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.enricher import PAGE_BREAK_MARKER
 
     pipeline = SearchPipeline(
         store=connected_store,
@@ -3694,10 +3739,11 @@ async def test_pipeline_list_documents_cursor_passes_through(connected_store, co
     from unittest.mock import AsyncMock, MagicMock
 
     from archon_search._types import DocumentInfo
-    from archon_search.collection_meta import CollectionMeta
     from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
+
     from .conftest import make_embedder, make_reranker
 
     doc = DocumentInfo(doc_id="a" * 64, source_path="/p.md", chunk_count=1, indexed_at="2026-01-01T00:00:00")
@@ -3716,8 +3762,10 @@ async def test_pipeline_list_documents_cursor_passes_through(connected_store, co
         top_k_return=5,
     )
 
-    items, next_cursor, total = await pipeline.list_documents("col-x", limit=50, cursor="some-cursor")
+    items, next_cursor, total = await pipeline.list_documents(
+        "col-x", limit=50, cursor="some-cursor", namespace="default"
+    )
     assert items == [doc]
     assert next_cursor is None
     assert total == 1
-    store.list_documents.assert_awaited_once_with("col-x", 50, cursor="some-cursor")
+    store.list_documents.assert_awaited_once_with("col-x", 50, cursor="some-cursor", namespace="default")

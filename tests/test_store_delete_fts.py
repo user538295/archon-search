@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,7 +17,6 @@ import pytest
 
 from archon_search._types import ChunkRecord
 from archon_search.store import FTSIndexNotFoundError, SearchStore
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -37,7 +36,7 @@ def _chunk(doc_id: str, idx: int, text: str = "hello world") -> ChunkRecord:
         text=text,
         vector=[float(idx + 1)] * _DIM,
         source_path=f"/tmp/{doc_id[:8]}.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -245,7 +244,7 @@ def test_delete_document_exception_before_count_does_not_raise_unbound(tmp_path:
     Ensures ``count`` is initialized to 0 before the try block so that
     FTS maintenance guard (`if count > 0`) never sees an unbound name.
     """
-    store, mock_db, mock_table = _make_store_with_mock_db(tmp_path, count=1)
+    store, _mock_db, mock_table = _make_store_with_mock_db(tmp_path, count=1)
 
     # Simulate a DB error before count_rows is reached
     mock_table.count_rows = AsyncMock(side_effect=RuntimeError("simulated DB error"))

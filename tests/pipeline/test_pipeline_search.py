@@ -14,12 +14,17 @@ import pytest
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, DocumentInfo, SearchResult
-from archon_search.embedder import Embedder
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
+from archon_search.embedder import Embedder
 from archon_search.reranker import Reranker
 
-from .conftest import MockEmbedderBackend, MockRerankerBackend, make_embedder, make_reranker, make_pipeline
-
+from .conftest import (
+    MockEmbedderBackend,
+    MockRerankerBackend,
+    make_embedder,
+    make_pipeline,
+    make_reranker,
+)
 
 # ===========================================================================
 # Basic search / search_with_context / delete / list_collections
@@ -129,9 +134,9 @@ async def test_pipeline_ingest_file_fts_searchable(connected_store, col_name, tm
 async def test_search_with_context_records_context_stage(tmp_path):
     """search_with_context records the 'context' stage when a recorder is bound."""
     from archon_search.chunker import DocumentChunker
+    from archon_search.observability import bind_stage_recorder
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.observability import bind_stage_recorder
 
     search_candidate = ScoredSearchCandidate(
         doc_id="a" * 64,
@@ -342,6 +347,7 @@ def test_pipeline_context_window_max_defaults_to_default_constant() -> None:
 async def test_search_uses_provided_query_vector() -> None:
     """search() uses caller-provided query_vector; embed_one must NOT be called."""
     from unittest.mock import AsyncMock, patch
+
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline, SearchPipelineResult
@@ -384,6 +390,7 @@ async def test_search_uses_provided_query_vector() -> None:
 async def test_search_embeds_when_no_query_vector() -> None:
     """search() calls embed_one when query_vector is None (pre-C4 behaviour)."""
     from unittest.mock import AsyncMock, patch
+
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
@@ -498,7 +505,7 @@ def _make_scored_candidate(
     text: str = "chunk text",
     rrf_score: float = 0.5,
     reranker_score: float | None = None,
-) -> "ScoredSearchCandidate":
+) -> ScoredSearchCandidate:
     from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 
     return ScoredSearchCandidate(
@@ -526,8 +533,8 @@ async def test_eval_trace_returns_pre_and_post_rerank_results(tmp_path):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from archon_search.chunker import DocumentChunker
-    from archon_search.eval.types import EvalSearchResult
     from archon_search.eval._tracing import collect_search_trace
+    from archon_search.eval.types import EvalSearchResult
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
@@ -609,43 +616,6 @@ async def test_eval_trace_uses_service_query_path_with_trace_enabled(tmp_path):
     # Verify reranker trace was called with return_depth
     rerank_mock.assert_awaited_once()
     assert rerank_mock.call_args.args[2] == 3  # return_depth
-
-
-@pytest.mark.asyncio
-async def test_eval_trace_does_not_call_private_rerank_with_trace(tmp_path):
-    """collect_search_trace reranks via rerank_candidates, not the private alias."""
-    from unittest.mock import AsyncMock, MagicMock, patch
-
-    from archon_search.chunker import DocumentChunker
-    from archon_search.eval._tracing import collect_search_trace
-    from archon_search.parser import DocumentParser
-    from archon_search.pipeline import SearchPipeline
-
-    doc_id = "c" * 64
-    pre_candidates = [_make_scored_candidate(doc_id, f"{doc_id}-000000")]
-
-    pipeline = SearchPipeline(
-        store=MagicMock(),
-        embedder=make_embedder(),
-        reranker=make_reranker(),
-        chunker=DocumentChunker(chunk_size=128),
-        parser=DocumentParser(),
-        top_k_retrieve=10,
-        top_k_return=5,
-    )
-
-    alias_spy = AsyncMock(side_effect=pipeline._reranker._rerank_with_trace)
-
-    with (
-        patch("archon_search.eval._tracing._hybrid_search_with_trace", new=AsyncMock(return_value=pre_candidates)),
-        patch.object(pipeline._reranker, "_rerank_with_trace", new=alias_spy),
-    ):
-        await collect_search_trace(
-            pipeline, "my query", "test-col",
-            candidate_depth=15, return_depth=3, metric_depth=5,
-        )
-
-    alias_spy.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1081,7 +1051,7 @@ async def test_list_documents_correct_namespace_succeeds() -> None:
     assert next_cursor is None
     assert total == 1
     store.get_collection_meta.assert_awaited_once_with("col-a", namespace="tenantA")
-    store.list_documents.assert_awaited_once_with("col-a", 100, cursor=None)
+    store.list_documents.assert_awaited_once_with("col-a", 100, cursor=None, namespace="tenantA")
 
 
 @pytest.mark.asyncio
@@ -1151,7 +1121,7 @@ async def test_delete_document_correct_namespace_succeeds() -> None:
 # ===========================================================================
 
 
-def _make_search_result(n: int, acl: list[str] | None = None) -> "ScoredSearchCandidate":
+def _make_search_result(n: int, acl: list[str] | None = None) -> ScoredSearchCandidate:
     """Build a minimal ScoredSearchCandidate for filter/ACL tests."""
     doc_id = f"{'a' * 63}{n % 10}"
     return ScoredSearchCandidate(
@@ -1402,6 +1372,7 @@ async def test_pipeline_warns_when_filter_alone_causes_under_delivery(caplog) ->
 async def test_pipeline_warns_when_store_returns_zero_results_with_filters(caplog) -> None:
     """WARNING fires when store returns 0 results with active filters (zero-result boundary)."""
     import logging
+
     from archon_search.chunker import DocumentChunker
     from archon_search.filters import SearchFilters
     from archon_search.parser import DocumentParser
@@ -1709,9 +1680,9 @@ async def test_search_with_context_forwards_query_vector() -> None:
 @pytest.mark.asyncio
 async def test_search_uses_passed_embedder(connected_store, col_name, tmp_path):
     """search() embeds with the passed embedder, not self._global_embedder."""
-    from archon_search.pipeline import SearchPipeline
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
 
     pipeline = SearchPipeline(
         store=connected_store,
@@ -1745,9 +1716,9 @@ async def test_search_uses_passed_embedder(connected_store, col_name, tmp_path):
 @pytest.mark.asyncio
 async def test_search_does_not_call_global_embedder(connected_store, col_name, tmp_path):
     """search() must NOT call self._global_embedder.embed_one."""
-    from archon_search.pipeline import SearchPipeline
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
 
     pipeline = SearchPipeline(
         store=connected_store,
@@ -1823,6 +1794,7 @@ async def test_search_with_context_uses_passed_embedder() -> None:
 def test_search_many_signature_unchanged() -> None:
     """search_many() must NOT have an embedder parameter."""
     import inspect
+
     from archon_search.pipeline import SearchPipeline
     sig = inspect.signature(SearchPipeline.search_many)
     assert "embedder" not in sig.parameters, (
@@ -1832,8 +1804,8 @@ def test_search_many_signature_unchanged() -> None:
 
 def test_telemetry_entry_no_query_parameter() -> None:
     """No factory method in archon_search/telemetry/entry.py accepts a 'query' parameter."""
-    import inspect
     import importlib
+    import inspect
     entry_mod = importlib.import_module("archon_search.telemetry.entry")
     for name, obj in inspect.getmembers(entry_mod, inspect.isclass):
         for method_name, method in inspect.getmembers(obj, predicate=inspect.isfunction):

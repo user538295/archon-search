@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call
@@ -18,11 +18,17 @@ from unittest.mock import AsyncMock, MagicMock, call
 import pytest
 
 from archon_search.config import MaintenanceConfig
-from archon_search.jobs.maintenance_loop import RETRY_DISPATCH_FAILED_DETAIL, MaintenanceLoop
-from archon_search.jobs.store import NOT_STARTED_BEFORE_RESTART_DETAIL, PROCESS_RESTART_ERROR, JobStore
+from archon_search.jobs.maintenance_loop import (
+    RETRY_DISPATCH_FAILED_DETAIL,
+    MaintenanceLoop,
+)
+from archon_search.jobs.store import (
+    NOT_STARTED_BEFORE_RESTART_DETAIL,
+    PROCESS_RESTART_ERROR,
+    JobStore,
+)
 from archon_search.types import IngestJob, IngestOptions, JobStatus, ReindexJob
 from tests._internal_error_leak import LEAK_NEEDLE
-
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -86,7 +92,7 @@ def _make_failed_ingest_job(
 
     *fields* sets any other ``IngestJob`` field (``source``, ``error``, ...).
     """
-    created = created_at or (datetime.now(timezone.utc) - timedelta(hours=age_hours)).isoformat()
+    created = created_at or (datetime.now(UTC) - timedelta(hours=age_hours)).isoformat()
     return IngestJob(
         job_id=job_id or f"job-{source_path[-8:]}",
         status=status,
@@ -107,7 +113,7 @@ def _make_done_ingest_job(
     namespace: str = "default",
 ) -> IngestJob:
     """Create a DONE IngestJob for reset-on-done testing."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     return IngestJob(
         job_id=f"done-{source_path[-8:]}",
         status=JobStatus.DONE,
@@ -228,8 +234,8 @@ async def test_retry_skips_jobs_with_empty_source_path(
     job = IngestJob(
         job_id="pre-d5-job",
         status=JobStatus.FAILED,
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
         namespace="default",
         source_path="",  # pre-D5 job has no source path
         collection="docs",
@@ -392,7 +398,7 @@ async def test_retry_reenqueues_into_job_store(
 @pytest.mark.asyncio
 async def test_retry_deduplication_multiple_failed_jobs_same_path(tmp_path: Path) -> None:
     """Two FAILED jobs for same path should only trigger ONE re-enqueue per pass."""
-    created_at = datetime.now(timezone.utc).isoformat()  # one timestamp: the tie-break, not the clock, picks one
+    created_at = datetime.now(UTC).isoformat()  # one timestamp: the tie-break, not the clock, picks one
     job1 = _make_failed_ingest_job("/data/file.txt", collection="docs", namespace="ns1", created_at=created_at)
     job2 = _make_failed_ingest_job(
         "/data/file.txt", collection="docs", namespace="ns1", created_at=created_at, job_id="job-2"
@@ -678,7 +684,7 @@ async def test_retry_age_is_measured_from_the_original_failure(tmp_path: Path) -
 @pytest.mark.asyncio
 async def test_retry_latest_job_tie_prefers_the_settled_outcome(tmp_path: Path) -> None:
     """On equal created_at a DONE job, not the FAILED one, is the latest: the FAILED job is not retried."""
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = datetime.now(UTC).isoformat()
     failed = _make_failed_ingest_job("/data/file.txt", job_id="zzz", created_at=created_at)
     done = _make_failed_ingest_job("/data/file.txt", status=JobStatus.DONE, job_id="aaa", created_at=created_at)
     js = MagicMock()
@@ -759,7 +765,7 @@ async def test_retry_job_that_crashed_the_process_is_expired_never_retried(tmp_p
 
 def _seed_jobs_file(jobs_path: Path, *rows: dict[str, Any]) -> None:
     """Write raw job rows as a server (this one or an older one) would have saved them."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     base = {"created_at": now, "updated_at": now, "result": None, "error": None, "namespace": "default",
             "source": "user", "collection": "docs", "job_type": "ingest"}
     jobs_path.write_text(json.dumps([{**base, **row} for row in rows]))
@@ -1046,7 +1052,7 @@ async def test_retry_attempts_of_an_older_submission_do_not_count(tmp_path: Path
 async def test_retry_ignores_a_failed_subclass_job_with_a_source_path(tmp_path: Path) -> None:
     """Only plain ingest jobs are retried: a FAILED reindex job that carries a source_path and options is neither
     retried nor expired."""
-    created = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    created = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
     reindex = ReindexJob(
         job_id="reindex", status=JobStatus.FAILED, created_at=created, updated_at=created,
         source_path="/data/file.txt", collection="docs", ingest_options=_OPTIONS,

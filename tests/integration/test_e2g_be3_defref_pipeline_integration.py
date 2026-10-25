@@ -19,10 +19,10 @@ import pytest
 pytest.importorskip("tree_sitter")
 pytest.importorskip("tree_sitter_python")
 
-from archon_search.config import GraphConfig  # noqa: E402
-from archon_search.defref_extractor import DefRefExtractor  # noqa: E402
-from archon_search.graph_store import GraphStore  # noqa: E402
-from archon_search.graph_types import RelationshipType  # noqa: E402
+from archon_search.config import GraphConfig
+from archon_search.defref_extractor import DefRefExtractor
+from archon_search.graph_store import GraphStore
+from archon_search.graph_types import RelationshipType
 from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration

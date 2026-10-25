@@ -20,9 +20,13 @@ import pytest
 
 from archon_search._types import SearchResult
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
-from archon_search.pipeline import METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL, SearchPipelineResult
-from tests._hyde_stubs import hyde_enabled_config, stub_hyde_generator
+from archon_search.pipeline import (
+    METADATA_STORE_UNAVAILABLE_CODE,
+    METADATA_STORE_UNAVAILABLE_DETAIL,
+    SearchPipelineResult,
+)
 from tests._fastmcp_stub import stubbed_fastmcp
+from tests._hyde_stubs import hyde_enabled_config, stub_hyde_generator
 
 
 def _make_result(metadata: dict[str, str] | None = None, language: str = "") -> SearchResult:
@@ -107,8 +111,8 @@ async def test_mcp_search_tool_schema_advertises_language_field() -> None:
 @pytest.mark.asyncio
 async def test_mcp_search_forwards_filters_to_pipeline() -> None:
     """All filter kwargs hydrate a SearchFilters instance and reach pipeline.search."""
-    from archon_search.filters import SearchFilters
     import archon_search.server.mcp as mcp_module
+    from archon_search.filters import SearchFilters
 
     result = _make_result(metadata={"k": "v"})
     pipeline_result = SearchPipelineResult(results=[result], acl_filtered=False)
@@ -147,8 +151,8 @@ async def test_mcp_search_forwards_filters_to_pipeline() -> None:
 @pytest.mark.asyncio
 async def test_mcp_search_with_context_forwards_filters_to_pipeline() -> None:
     """Filter kwargs reach pipeline.search_with_context as a SearchFilters instance."""
-    from archon_search.filters import SearchFilters
     import archon_search.server.mcp as mcp_module
+    from archon_search.filters import SearchFilters
 
     pipeline = MagicMock()
     pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
@@ -772,6 +776,7 @@ async def test_mcp_search_tool_returns_expansion_fields_on_hyde_failure() -> Non
 async def test_mcp_search_tool_expansion_used_true_on_hyde_success() -> None:
     """MCP search tool returns expansion_used=True when HyDE succeeds."""
     import numpy as np
+
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()

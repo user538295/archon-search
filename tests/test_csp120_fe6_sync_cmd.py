@@ -7,10 +7,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import httpx
+from _cli_server_stub import server_reported_stopped
 from click.testing import CliRunner
 
 from archon_search.cli.sync import sync
-from _cli_server_stub import server_reported_stopped
 
 
 def _make_resp(status_code: int, json_body: dict | None = None, text: str = "") -> MagicMock:

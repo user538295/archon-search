@@ -118,7 +118,7 @@ def test_search_hyde_ollama_fallback_on_timeout(
         # After startup, replace the provider's _get_client to raise TimeoutError
         provider = client.app.state.hyde_generator._provider
         mock_client = MagicMock()
-        mock_client.chat = AsyncMock(side_effect=asyncio.TimeoutError("simulated timeout"))
+        mock_client.chat = AsyncMock(side_effect=TimeoutError("simulated timeout"))
         monkeypatch.setattr(provider, "_get_client", lambda: mock_client)
 
         resp = client.post(
@@ -163,7 +163,7 @@ def test_search_rag_fusion_ollama_fallback_on_timeout(
         # After startup, replace the provider's _get_client to raise TimeoutError
         provider = client.app.state.rag_fusion_generator._provider
         mock_client = MagicMock()
-        mock_client.chat = AsyncMock(side_effect=asyncio.TimeoutError("simulated timeout"))
+        mock_client.chat = AsyncMock(side_effect=TimeoutError("simulated timeout"))
         monkeypatch.setattr(provider, "_get_client", lambda: mock_client)
 
         resp = client.post(
@@ -228,7 +228,9 @@ def test_search_hyde_ollama_rag_fusion_anthropic_independent(
         )
 
         # RAG Fusion should use AnthropicQueryExpansionProvider
-        from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider
+        from archon_search.providers.anthropic_provider import (
+            AnthropicQueryExpansionProvider,
+        )
         assert isinstance(rag_provider, AnthropicQueryExpansionProvider), (
             f"RAG Fusion should use AnthropicQueryExpansionProvider, got: {type(rag_provider)}"
         )
@@ -268,7 +270,7 @@ def test_factory_injects_correct_provider_type(
     from archon_search.query_expansion_protocol import QueryExpansionProvider
 
     # --- Default (anthropic) provider path ---
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, _api_key):
         hyde_provider = client.app.state.hyde_generator._provider
         rag_provider = client.app.state.rag_fusion_generator._provider
 
@@ -292,7 +294,7 @@ def test_factory_injects_correct_provider_type(
     )
     ollama_tmp = tmp_path / "ollama_sub"
     ollama_tmp.mkdir()
-    with make_real_app(ollama_tmp, monkeypatch, toml_content=toml) as (client2, cfg2, api_key2):
+    with make_real_app(ollama_tmp, monkeypatch, toml_content=toml) as (client2, _cfg2, _api_key2):
         ollama_hyde_provider = client2.app.state.hyde_generator._provider
         ollama_rag_provider = client2.app.state.rag_fusion_generator._provider
 
@@ -360,7 +362,9 @@ def test_non_ollama_provider_respects_rate_limit(monkeypatch: pytest.MonkeyPatch
     """
     from archon_search.config import HyDEConfig
     from archon_search.hyde import HyDEGenerator
-    from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider
+    from archon_search.providers.anthropic_provider import (
+        AnthropicQueryExpansionProvider,
+    )
 
     # Ensure the API key guard in the provider passes — without this, the result
     # would be None because of the missing key, not because of the rate limit.
@@ -410,7 +414,7 @@ def test_ollama_base_url_passthrough(
         f'ollama_base_url = "{custom_url}"\n'
     )
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, _api_key):
         hyde_provider = client.app.state.hyde_generator._provider
 
         from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
@@ -444,7 +448,7 @@ def test_openai_provider_starts_app_successfully(
         'ollama_base_url = "http://localhost:11434"\n'
     )
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, _api_key):
         resp = client.get("/health")
         assert resp.status_code == 200
 
@@ -462,9 +466,11 @@ def test_rag_fusion_non_ollama_provider_respects_rate_limit(
     Covers the `if not _is_ollama:` branch in rag_fusion.py that would be
     bypassed if _is_ollama were ever erroneously True for Anthropic providers.
     """
-    from archon_search.config import RAGFusionConfig  # noqa: PLC0415
-    from archon_search.providers.anthropic_provider import AnthropicQueryExpansionProvider  # noqa: PLC0415
-    from archon_search.rag_fusion import RAGFusionGenerator  # noqa: PLC0415
+    from archon_search.config import RAGFusionConfig
+    from archon_search.providers.anthropic_provider import (
+        AnthropicQueryExpansionProvider,
+    )
+    from archon_search.rag_fusion import RAGFusionGenerator
 
     mock_provider = MagicMock(spec=AnthropicQueryExpansionProvider)
     mock_provider.decompose_query = AsyncMock(return_value=["q1", "q2"])

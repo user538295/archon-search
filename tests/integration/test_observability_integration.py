@@ -26,9 +26,20 @@ from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests.integration.conftest import (
+    REAL_APP_DATA_SUBDIR,
+    ingest_file_via_path,
+    make_real_app,
+)
 
 pytestmark = pytest.mark.integration
+
+
+def _private_data_dir(tmp_path: Path) -> Path:
+    """The app's data dir: a subdirectory, because ingest refuses paths under it and the corpora sit in ``tmp_path``."""
+    data_dir = tmp_path / REAL_APP_DATA_SUBDIR
+    data_dir.mkdir(exist_ok=True)
+    return data_dir
 
 
 # ---------------------------------------------------------------------------
@@ -74,14 +85,15 @@ def test_correlation_id_appears_in_log_jsonl(
     """
     import secrets
 
+    from fastapi.testclient import TestClient
+
     from archon_search.config import SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
-    from fastapi.testclient import TestClient
 
     api_key = secrets.token_hex(32)
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(_private_data_dir(tmp_path)))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", api_key)
 
     log_file = tmp_path / "archon.log"
@@ -216,14 +228,15 @@ def test_explain_stage_timings_ms_in_response_body(
     """
     import secrets
 
+    from fastapi.testclient import TestClient
+
     from archon_search.config import ObservabilityConfig, SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
-    from fastapi.testclient import TestClient
 
     api_key = secrets.token_hex(32)
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(_private_data_dir(tmp_path)))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", api_key)
 
     cfg = SearchConfig()
@@ -299,14 +312,15 @@ def test_explain_stage_timings_rerank_key_present(
     """
     import secrets
 
+    from fastapi.testclient import TestClient
+
     from archon_search.config import ObservabilityConfig, SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
-    from fastapi.testclient import TestClient
 
     api_key = secrets.token_hex(32)
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(_private_data_dir(tmp_path)))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", api_key)
 
     cfg = SearchConfig()
@@ -370,14 +384,15 @@ def test_explain_explicit_single_collection_returns_200_with_context(
     """
     import secrets
 
+    from fastapi.testclient import TestClient
+
     from archon_search.config import ObservabilityConfig, SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
-    from fastapi.testclient import TestClient
 
     api_key = secrets.token_hex(32)
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(_private_data_dir(tmp_path)))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", api_key)
 
     cfg = SearchConfig()
@@ -452,14 +467,15 @@ def test_lifespan_telemetry_drains_on_app_shutdown_with_real_writer(
     """
     import secrets
 
+    from fastapi.testclient import TestClient
+
     from archon_search.config import SearchConfig, TelemetryConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
-    from fastapi.testclient import TestClient
 
     api_key = secrets.token_hex(32)
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(_private_data_dir(tmp_path)))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", api_key)
 
     telemetry_log_dir = tmp_path / "search-logs"
@@ -545,14 +561,15 @@ def test_telemetry_entry_does_not_contain_raw_query_string(
     """
     import secrets
 
+    from fastapi.testclient import TestClient
+
     from archon_search.config import SearchConfig, TelemetryConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
-    from fastapi.testclient import TestClient
 
     api_key = secrets.token_hex(32)
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(_private_data_dir(tmp_path)))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", api_key)
 
     telemetry_log_dir = tmp_path / "search-logs"

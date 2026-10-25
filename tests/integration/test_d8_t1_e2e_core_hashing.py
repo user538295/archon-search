@@ -746,7 +746,7 @@ def test_e2e_toggle_continuity_visible_in_jsonl(
 
     # Session 1: hashing OFF
     with make_real_app(tmp_path, monkeypatch, telemetry_enabled=True) as (
-        client1, cfg, api_key1
+        client1, _cfg, api_key1
     ):
         _ingest_and_poll(client1, "col-toggle", text_file, api_key1)
         headers1 = {"Authorization": f"Bearer {api_key1}"}

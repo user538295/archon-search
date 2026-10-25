@@ -19,6 +19,7 @@ mocked pipeline used by the BE-3 tests.
 from __future__ import annotations
 
 from pathlib import Path
+
 import pytest
 
 from tests._hyde_stubs import rest_hyde_generating
@@ -54,7 +55,7 @@ def test_e2e_search_expansion_failure_warning(
     )
     col = "e0b-t1-expansion-warning"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
         # Force generation to return None — simulates all HyDE failure modes (timeout,
@@ -105,7 +106,7 @@ def test_e2e_search_no_expansion_requested(
     )
     col = "e0b-t1-no-expansion"
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
         resp = client.post(

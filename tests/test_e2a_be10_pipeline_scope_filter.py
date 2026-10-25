@@ -13,7 +13,6 @@ import pytest
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -302,7 +301,7 @@ async def test_explain_scope_filter_forwarded_through_all_internal_paths():
 @pytest.mark.asyncio
 async def test_graph_mode_defensive_assertion_fires_search_graph_mode():
     """_search_graph_mode raises AssertionError when scope_filter is non-None."""
-    pipeline, store, embedder = _make_mock_pipeline()
+    pipeline, _store, _embedder = _make_mock_pipeline()
 
     with pytest.raises(AssertionError, match="scope_filter must be None in graph-mode paths"):
         await pipeline._search_graph_mode(
@@ -314,7 +313,7 @@ async def test_graph_mode_defensive_assertion_fires_search_graph_mode():
 @pytest.mark.asyncio
 async def test_graph_mode_defensive_assertion_fires_explain_naive():
     """_explain_naive_graph_candidates raises AssertionError when scope_filter is non-None."""
-    pipeline, store, embedder = _make_mock_pipeline()
+    pipeline, _store, embedder = _make_mock_pipeline()
 
     with pytest.raises(AssertionError, match="scope_filter must be None in graph-mode paths"):
         await pipeline._explain_naive_graph_candidates(
@@ -327,7 +326,7 @@ async def test_graph_mode_defensive_assertion_fires_explain_naive():
 @pytest.mark.asyncio
 async def test_graph_mode_defensive_assertion_fires_explain_merge_and_rank():
     """_explain_merge_and_rank asserts scope_filter is None (graph-mode invariant)."""
-    pipeline, store, embedder = _make_mock_pipeline()
+    pipeline, _store, embedder = _make_mock_pipeline()
     dummy_candidate = _make_candidate()
 
     with pytest.raises(AssertionError, match="scope_filter must be None in graph-mode paths"):

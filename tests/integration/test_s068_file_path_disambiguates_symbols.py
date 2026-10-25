@@ -72,7 +72,7 @@ def _ingest_dup_corpus(tmp_path: Path, monkeypatch):
     (code_dir / "helpers_b.py").write_text(_HELPERS_B, encoding="utf-8")
 
     cm = make_real_app(tmp_path, monkeypatch, graph_enabled=True)
-    client, cfg, api_key = cm.__enter__()
+    client, _cfg, api_key = cm.__enter__()
     collection = "code-dup"
     ingest_file_via_path(client, collection, str(code_dir / "helpers_a.py"), api_key=api_key)
     ingest_file_via_path(client, collection, str(code_dir / "helpers_b.py"), api_key=api_key)

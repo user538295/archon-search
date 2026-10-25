@@ -21,9 +21,9 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import archon_search.jobs.scheduler as _scheduler_module
 import pytest
 
+import archon_search.jobs.scheduler as _scheduler_module
 from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
@@ -56,7 +56,7 @@ def test_maintenance_trigger_and_status_reflect_run(
 
     with make_real_app(tmp_path, monkeypatch, maintenance_enabled=True) as (
         client,
-        cfg,
+        _cfg,
         api_key,
     ):
         # Step 2: POST /maintenance/trigger
@@ -123,7 +123,7 @@ def test_maintenance_trigger_already_triggered(
 
     with make_real_app(tmp_path, monkeypatch, maintenance_enabled=True) as (
         client,
-        cfg,
+        _cfg,
         api_key,
     ):
         loop = client.app.state.maintenance_loop

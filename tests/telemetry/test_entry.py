@@ -10,7 +10,6 @@ from pydantic import ValidationError
 
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
-
 # ---------------------------------------------------------------------------
 # FilterFlags unit tests
 # ---------------------------------------------------------------------------

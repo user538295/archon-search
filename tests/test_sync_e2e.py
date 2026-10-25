@@ -5,6 +5,7 @@ with the model-backend stubs from conftest.py.  No HTTP involved.
 """
 from __future__ import annotations
 
+import asyncio
 
 import pytest
 
@@ -15,7 +16,6 @@ from archon_search.progress import (
     IndexingStatus,
 )
 from archon_search.sync import SearchCollectionSync
-
 
 # ---------------------------------------------------------------------------
 # Helpers shared across tests
@@ -375,7 +375,6 @@ class TestS15_3_FileModifiedIncrementalUpdate:
     @pytest.mark.asyncio
     async def test_sync_reindexes_on_file_change(self, connected_store, tmp_path):
         """Modify a file's mtime after first sync → second sync detects change → result.updated."""
-        import time
 
         source_dir = tmp_path / "evolving"
         source_dir.mkdir()
@@ -392,7 +391,7 @@ class TestS15_3_FileModifiedIncrementalUpdate:
         assert result1.errors == []
 
         # Simulate file modification: update content + ensure new mtime
-        time.sleep(0.01)
+        await asyncio.sleep(0.01)
         doc.write_text("# Evolving\n\nUpdated content.\n" * 5)
         # Force a distinct mtime by updating it explicitly
         new_mtime = doc.stat().st_mtime + 1.0

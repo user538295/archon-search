@@ -23,8 +23,11 @@ from archon_search._diagnostics import (
     TraversalStep,
 )
 from archon_search.graph_types import Community, EntityType, GraphNode
-from archon_search.pipeline import ExplainPipelineResult, GraphCommunitiesNotBuiltError, SearchPipeline
-
+from archon_search.pipeline import (
+    ExplainPipelineResult,
+    GraphCommunitiesNotBuiltError,
+    SearchPipeline,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers

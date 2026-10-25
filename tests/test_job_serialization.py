@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 from archon_search.jobs.model import job_to_dict
@@ -22,32 +22,32 @@ from archon_search.types import ExportJob, ImportJob, IngestJob, JobStatus
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _make_export(**kw: object) -> ExportJob:
-    defaults: dict = dict(
-        job_id="j-export",
-        status=JobStatus.QUEUED,
-        created_at=_now(),
-        updated_at=_now(),
-        collection="col1",
-        output_path="",
-        tmp_path="/tmp/.export-abc.jsonl.tmp",
-    )
+    defaults: dict = {
+        "job_id": "j-export",
+        "status": JobStatus.QUEUED,
+        "created_at": _now(),
+        "updated_at": _now(),
+        "collection": "col1",
+        "output_path": "",
+        "tmp_path": "/tmp/.export-abc.jsonl.tmp",
+    }
     defaults.update(kw)
     return ExportJob(**defaults)  # type: ignore[arg-type]
 
 
 def _make_import(**kw: object) -> ImportJob:
-    defaults: dict = dict(
-        job_id="j-import",
-        status=JobStatus.QUEUED,
-        created_at=_now(),
-        updated_at=_now(),
-        collection="col1",
-        archive_path="/tmp/archive.tar.gz",
-    )
+    defaults: dict = {
+        "job_id": "j-import",
+        "status": JobStatus.QUEUED,
+        "created_at": _now(),
+        "updated_at": _now(),
+        "collection": "col1",
+        "archive_path": "/tmp/archive.tar.gz",
+    }
     defaults.update(kw)
     return ImportJob(**defaults)  # type: ignore[arg-type]
 
@@ -133,16 +133,15 @@ def test_lancedb_version_in_manifest() -> None:
 
 
 def test_lancedb_version_null_on_package_not_found(
-    caplog: "logging.LogCaptureFixture",
+    caplog: logging.LogCaptureFixture,
 ) -> None:
     from archon_search.jobs import export_archive
 
     def _raise(name: str) -> str:
         raise importlib.metadata.PackageNotFoundError(name)
 
-    with patch.object(importlib.metadata, "version", _raise):
-        with caplog.at_level(logging.WARNING, logger=export_archive.__name__):
-            version = export_archive.get_lancedb_version()
+    with patch.object(importlib.metadata, "version", _raise), caplog.at_level(logging.WARNING, logger=export_archive.__name__):
+        version = export_archive.get_lancedb_version()
 
     assert version is None
     assert any("lancedb version" in rec.message.lower() for rec in caplog.records)

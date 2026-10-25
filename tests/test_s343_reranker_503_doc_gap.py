@@ -134,13 +134,13 @@ def test_no_shipped_doc_maps_explain_503_to_the_reranker() -> None:
         ("heading claim", "### POST /explain returns 503 when the reranker is down\n"),
         (
             "table row under a nested heading",
-            "### POST /explain\n#### Error responses\n\n"
-            "| Status | Meaning |\n|---|---|\n| 503 | The reranker cross-encoder is not ready |\n",
+            ("### POST /explain\n#### Error responses\n\n"
+            "| Status | Meaning |\n|---|---|\n| 503 | The reranker cross-encoder is not ready |\n"),
         ),
         (
             "module heading kept across a fenced block",
-            "### `routes_explain.py`\n\n```bash\n# curl the endpoint\n```\n\n"
-            "| 503 | The reranker is not ready |\n",
+            ("### `routes_explain.py`\n\n```bash\n# curl the endpoint\n```\n\n"
+            "| 503 | The reranker is not ready |\n"),
         ),
     ],
 )

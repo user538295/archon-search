@@ -4,7 +4,12 @@ import pytest
 
 pytest.importorskip("textual")
 
-from examples.textual_calibration import DEVICES, TICK_MAX, CalibrationScreen, CalibrationView
+from examples.textual_calibration import (
+    DEVICES,
+    TICK_MAX,
+    CalibrationScreen,
+    CalibrationView,
+)
 from examples.textual_core_matrix import CoreScreen, CoreView, WizardApp
 from examples.textual_design import PALETTE
 

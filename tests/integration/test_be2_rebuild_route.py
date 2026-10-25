@@ -33,9 +33,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tests.integration.conftest import make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
 from tests._job_store_faults import JOB_WRITE_FAILURES
+from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -157,7 +157,7 @@ def test_rebuild_route_returns_202_running_job(tmp_path: Path, monkeypatch: pyte
 def test_rebuild_route_404_unknown_collection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Unknown collection -> 404, error echoed."""
     install_graph_engine_stub(monkeypatch, empty=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         resp = client.post("/graph/no-such-collection/rebuild-communities", headers=_auth(api_key))
 
     assert resp.status_code == 404
@@ -226,7 +226,7 @@ def test_rebuild_route_422_when_graph_store_none(tmp_path: Path, monkeypatch: py
 def test_rebuild_route_401_missing_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing or invalid Bearer token -> 401 (middleware, no route-level auth)."""
     install_graph_engine_stub(monkeypatch, empty=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, _api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
 
         no_auth_resp = client.post("/graph/testcol/rebuild-communities")
@@ -781,7 +781,10 @@ def test_rebuild_route_job_write_failure_returns_sanitized_500_and_never_runs(
     import archon_search.server._collection_job as collection_job_mod
     import archon_search.server.routes_graph as routes_graph_mod
     from archon_search.types import CommunityRebuildJob
-    from tests._job_store_faults import assert_error_logged_with_traceback, failing_job_writes
+    from tests._job_store_faults import (
+        assert_error_logged_with_traceback,
+        failing_job_writes,
+    )
 
     install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):

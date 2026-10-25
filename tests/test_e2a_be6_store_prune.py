@@ -15,7 +15,6 @@ import pytest
 
 from archon_search._types import normalize_iso_utc
 
-
 # ---------------------------------------------------------------------------
 # Unit: MaintenanceConfig.prune_expired_chunks default and TOML round-trip
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ import struct
 import tarfile
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -31,8 +31,15 @@ from archon_search.constants import (
     INLINE_CHUNK_METADATA_KEY,
     INLINE_CHUNK_METADATA_VALUE,
 )
-from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderNotReadyError
-from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION, ArchiveRejectedError, quote_archive_value
+from archon_search.embedder_cache import (
+    EMBEDDER_NOT_READY_DETAIL,
+    EmbedderNotReadyError,
+)
+from archon_search.jobs.export_archive import (
+    EXPORT_SCHEMA_VERSION,
+    ArchiveRejectedError,
+    quote_archive_value,
+)
 from archon_search.jobs.store import JobStore
 from archon_search.server import _job_warmup
 from archon_search.server._ingest_lock import (
@@ -90,7 +97,7 @@ def _chunk(doc_id: str, idx: int, text: str = "hello world") -> ChunkRecord:
         text=text,
         vector=[float(idx % 4 + 0.1)] * _DIM,
         source_path=f"/tmp/{doc_id[:8]}.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -128,6 +135,7 @@ def _make_archive(
     corrupt_index: int | None = None,
     doc_overrides: dict[int, dict[str, object]] | None = None,
     blank_line_before: int | None = None,
+    namespace: str = DEFAULT_NAMESPACE,
 ) -> None:
     """Build a minimal valid .tar.gz archive with the given chunks.
 
@@ -160,7 +168,8 @@ def _make_archive(
         "archon_search_version": "test",
         "schema_version": schema_version,
         "collection": collection,
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "namespace": namespace,
+        "exported_at": datetime.now(UTC).isoformat(),
         "doc_count": len(chunks),
         "active_embedding_model": active_embedding_model,
         "description": "",
@@ -248,6 +257,12 @@ async def _seed_collection(
     await search_store.ensure_collection(col_name, _DIM)
     await search_store.ingest_chunks(col_name, chunks)
     return chunks
+
+
+async def _delete_collection(search_store: SearchStore, col_name: str) -> None:
+    """What ``DELETE /collections/{name}`` leaves behind: neither the table nor its meta row."""
+    await search_store.drop_collection(col_name, namespace=DEFAULT_NAMESPACE)
+    await search_store.delete_collection_meta(col_name, DEFAULT_NAMESPACE)
 
 
 async def search_store_seed_partial(
@@ -1117,9 +1132,9 @@ class _ImportRunner:
         assert requeued is not None, "only a FAILED import can be resumed"
         return await self.run(job, **store_overrides)
 
-    async def all_stored_chunk_ids(self, collection: str) -> list[str]:
+    async def all_stored_chunk_ids(self, collection: str, namespace: str = DEFAULT_NAMESPACE) -> list[str]:
         """Every stored chunk_id, sorted, duplicates kept — a re-appended chunk shows up twice."""
-        return sorted([r["chunk_id"] async for r in self.search_store.list_chunks_raw(collection, DEFAULT_NAMESPACE)])
+        return sorted([r["chunk_id"] async for r in self.search_store.list_chunks_raw(collection, namespace)])
 
     async def crash_after_first_checkpoint(
         self,
@@ -1143,7 +1158,7 @@ class _ImportRunner:
         self.config.jobs.checkpoint_interval = checkpoint_interval
         chunks = [_chunk(_doc_id(), i) for i in range(n_docs)]
         archive_path = tmp_path / f"{collection}.tar.gz"
-        _make_archive(archive_path, collection, chunks)
+        _make_archive(archive_path, collection, chunks, namespace=namespace)
         job = _make_import_job(
             collection, str(archive_path), self.job_store,
             force_overwrite=force_overwrite, on_error=on_error, namespace=namespace,
@@ -1163,7 +1178,8 @@ class _ImportRunner:
     ) -> None:
         """*finished* is DONE, stored each of *chunks* exactly once, and counts them all as imported, none skipped."""
         assert finished.status == JobStatus.DONE, f"Expected DONE, got {finished.status}: {finished.error}"
-        assert await self.all_stored_chunk_ids(collection) == sorted(c.chunk_id for c in chunks), message
+        stored = await self.all_stored_chunk_ids(collection, finished.namespace)
+        assert stored == sorted(c.chunk_id for c in chunks), message
         assert (finished.result["imported"], finished.result["skipped"]) == (len(chunks), 0), (
             f"unexpected counts: {finished.result}"
         )
@@ -1392,7 +1408,7 @@ async def test_import_resume_restarts_when_partial_collection_is_gone(
     """A resume whose partial collection was deleted imports the whole archive, not only the tail."""
     col = "resume-collection-gone"
     import_job, chunks, _ = await import_runner.crash_after_first_checkpoint(tmp_path, col)
-    await import_runner.search_store.drop_collection(col)
+    await _delete_collection(import_runner.search_store, col)
     assert await import_runner.search_store.count_chunks(col, DEFAULT_NAMESPACE) == 0
 
     finished = await import_runner.resume(import_job)
@@ -1652,7 +1668,7 @@ async def _import_newer_archive_sharing_first_doc(
     """
     newer_chunks = [chunks[0], *(_chunk(_doc_id(), i) for i in range(1, len(chunks)))]
     archive_path = tmp_path / f"{collection}-newer-{namespace}.tar.gz"
-    _make_archive(archive_path, collection, newer_chunks)
+    _make_archive(archive_path, collection, newer_chunks, namespace=namespace)
     job = _make_import_job(collection, str(archive_path), runner.job_store, force_overwrite=True, namespace=namespace)
     finished = await runner.run(job)
     assert finished.status == JobStatus.DONE, f"the newer import must succeed: {finished.status}: {finished.error}"
@@ -1668,7 +1684,7 @@ async def _recreate_foreign_collection(
     runner: _ImportRunner, tmp_path: Path, col: str, chunks: list[ChunkRecord], archive_path: Path,
 ) -> None:
     """Someone deletes the collection and creates another under its name, with more rows than the checkpoint."""
-    await runner.search_store.drop_collection(col)
+    await _delete_collection(runner.search_store, col)
     await _seed_collection(runner.search_store, col, _CRASH_COMMITTED_DOCS)
 
 
@@ -1680,7 +1696,7 @@ async def _reingest_same_chunk_ids(
     chunk_ids derive from the source path and chunk index, so only the archived indexed_at marks a row as the one
     this job imported.
     """
-    await runner.search_store.drop_collection(col)
+    await _delete_collection(runner.search_store, col)
     reingested = [dataclasses.replace(c, indexed_at=f"{c.indexed_at}-reingested") for c in chunks[:_CRASH_COMMITTED_DOCS]]
     await search_store_seed_partial(runner.search_store, col, reingested)
 
@@ -1704,7 +1720,7 @@ async def _keep_only_meta_row(
 ) -> None:
     """The chunks are gone but the meta row survived: the delete route drops the table first, then the meta row."""
     await runner.search_store.update_collection_meta(CollectionMeta(name=col))
-    await runner.search_store.drop_collection(col)
+    await runner.search_store.drop_collection(col, namespace=DEFAULT_NAMESPACE)
 
 
 def _later_import(namespace: str) -> _Tamper:
@@ -1724,8 +1740,8 @@ _LOST_OWNERSHIP_TAMPERS = [
     pytest.param(_keep_only_meta_row, "fail", id="meta-row-only"),
     # The newer archive shares the first doc, so only the revoked claim tells the collection is no longer the job's.
     pytest.param(_later_import(DEFAULT_NAMESPACE), "fail", id="later-import-same-namespace"),
-    # Chunk tables are shared across namespaces, so another namespace's claim revokes the job's too.
-    pytest.param(_later_import("other-ns"), "fail", id="later-import-other-namespace"),
+    # Another namespace cannot overwrite the collection at all (SecReview #2): see
+    # tests/integration/test_secfix_cross_namespace_write.py.
 ]
 
 
@@ -1788,7 +1804,7 @@ async def test_import_resume_revoked_by_later_import_restarts_once_collection_is
     import_job, chunks, _ = await import_runner.crash_after_first_checkpoint(tmp_path, col, force_overwrite=force_overwrite)
     newer_job, _ = await _import_newer_archive_sharing_first_doc(import_runner, tmp_path, col, chunks, namespace=DEFAULT_NAMESPACE)
     assert _stored_import_job(import_runner.job_store, import_job).collection_claim_revoked, "the later claim must revoke"
-    await import_runner.search_store.drop_collection(col)
+    await _delete_collection(import_runner.search_store, col)
 
     finished = await import_runner.resume(import_job)
 
@@ -1862,7 +1878,7 @@ async def test_import_resume_continues_past_an_earlier_claim_by_another_import(
     _make_archive(older_archive, col, [_chunk(_doc_id(), 0)])
     older = await import_runner.run(_make_import_job(col, str(older_archive), import_runner.job_store))
     assert older.status == JobStatus.DONE, f"the older import must succeed: {older.status}: {older.error}"
-    await import_runner.search_store.drop_collection(col)
+    await _delete_collection(import_runner.search_store, col)
     import_job, chunks, _ = await import_runner.crash_after_first_checkpoint(tmp_path, col)
     assert _stored_import_job(import_runner.job_store, older).collection_claim_revoked, "the crashed job's claim must revoke"
 
@@ -1906,7 +1922,7 @@ async def test_import_claim_revokes_other_imports_before_its_own_claim_write(
     The other way round, a crash in between would leave two unrevoked claims on one collection.
     """
     col = "claim-order"
-    import_job, chunks, _ = await import_runner.crash_after_first_checkpoint(tmp_path, col)
+    import_job, _chunks, _ = await import_runner.crash_after_first_checkpoint(tmp_path, col)
     newer_archive = tmp_path / f"{col}-newer.tar.gz"
     _make_archive(newer_archive, col, [_chunk(_doc_id(), 0)])
     newer_job = _make_import_job(col, str(newer_archive), import_runner.job_store, force_overwrite=True)
@@ -2224,7 +2240,7 @@ async def test_import_restart_crashing_before_its_first_checkpoint_resumes_compl
     col = "restart-crash-before-checkpoint"
     import_job, chunks, _ = await import_runner.crash_after_first_checkpoint(tmp_path, col)
     search_store = import_runner.search_store
-    await search_store.drop_collection(col)
+    await _delete_collection(search_store, col)
 
     restart = _CrashOnCall(search_store.ingest_chunks, crash_at=1, after_commit=True)
     restarted = await import_runner.resume(import_job, ingest_chunks=restart)
@@ -2310,7 +2326,7 @@ def _add_job(
     collection: str,
     namespace: str = DEFAULT_NAMESPACE,
 ) -> IngestJob:
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     return job_store.create_job(job_class(
         job_id=str(uuid.uuid4()), status=status, created_at=now, updated_at=now, namespace=namespace,
         collection=collection,
@@ -2466,9 +2482,9 @@ async def test_import_force_overwrite_drops_the_table_and_meta_row_under_the_col
     search_store = import_runner.search_store
     held: dict[str, bool] = {}
 
-    async def drop(name: str, *, _locked_by_caller: bool = False) -> None:
+    async def drop(name: str, *, namespace: str, _locked_by_caller: bool = False) -> None:
         held["drop"] = search_store.lock_for(name).locked() and _locked_by_caller
-        await SearchStore.drop_collection(search_store, name, _locked_by_caller=_locked_by_caller)
+        await SearchStore.drop_collection(search_store, name, namespace=namespace, _locked_by_caller=_locked_by_caller)
 
     async def delete_meta(name: str, namespace: str) -> None:
         held["delete_meta"] = search_store.lock_for(name).locked()

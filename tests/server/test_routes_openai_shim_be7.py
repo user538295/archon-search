@@ -428,7 +428,7 @@ class TestStreamingReturnsSSEEvents:
         doc = tmp_path / "content.txt"
         doc.write_text("The archon retrieval system supports hybrid search.")
 
-        with make_real_app(tmp_path, monkeypatch, openai_shim_enabled=True) as (client, cfg, api_key):
+        with make_real_app(tmp_path, monkeypatch, openai_shim_enabled=True) as (client, _cfg, api_key):
             headers = {"Authorization": f"Bearer {api_key}"}
             ingest_file_via_path(client, "my-col", str(doc), api_key=api_key)
 

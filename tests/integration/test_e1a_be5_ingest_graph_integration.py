@@ -71,8 +71,13 @@ def _make_embedder():
 @pytest.mark.asyncio
 async def test_ingest_file_graph_entities_written(tmp_path: Path, monkeypatch):
     """Real GraphStore: ingest writes nodes and edges from stub extractor."""
+    from archon_search.graph_types import (
+        EntityType,
+        RelationshipType,
+        make_stable_edge_id,
+        make_stable_entity_id,
+    )
     from archon_search.store import SearchStore
-    from archon_search.graph_types import EntityType, RelationshipType, make_stable_entity_id, make_stable_edge_id
 
     db_path = str(tmp_path / "search")
     store = SearchStore(db_path)
@@ -138,8 +143,8 @@ async def test_ingest_file_graph_entities_written(tmp_path: Path, monkeypatch):
 @pytest.mark.asyncio
 async def test_ingest_after_graph_disable_skips_extraction_preserves_tables(tmp_path: Path):
     """Second ingest without graph skips extractor but tables from first ingest are preserved."""
-    from archon_search.store import SearchStore
     from archon_search.graph_types import EntityType, make_stable_entity_id
+    from archon_search.store import SearchStore
 
     db_path = str(tmp_path / "search")
     store = SearchStore(db_path)
@@ -204,8 +209,13 @@ async def test_ingest_after_graph_disable_skips_extraction_preserves_tables(tmp_
 @pytest.mark.asyncio
 async def test_ingest_two_docs_merges_graph(tmp_path: Path):
     """Two ingests with a stub extractor: graph merges nodes by stable ID."""
+    from archon_search.graph_types import (
+        EntityType,
+        RelationshipType,
+        make_stable_edge_id,
+        make_stable_entity_id,
+    )
     from archon_search.store import SearchStore
-    from archon_search.graph_types import EntityType, RelationshipType, make_stable_entity_id, make_stable_edge_id
 
     db_path = str(tmp_path / "search")
     store = SearchStore(db_path)

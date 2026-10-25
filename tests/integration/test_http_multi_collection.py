@@ -54,7 +54,7 @@ def test_e2e_multi_collection_search_full_stack(
         "# Corpus Beta\n\nThis document belongs to collection beta.\n" * 6
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col_a = "mc-alpha"
         col_b = "mc-beta"
 
@@ -102,7 +102,7 @@ def test_e2e_multi_collection_missing_collection_returns_404(
     doc = tmp_path / "existing.md"
     doc.write_text("# Existing document\n\nReal content here.\n" * 4)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         existing_col = "mc-existing"
         ingest_file_via_path(client, existing_col, str(doc), api_key=api_key)
 
@@ -135,7 +135,7 @@ def test_explain_request_rerank_false_multi_collections_is_422(
     for multi-collection explain in v1. This test exercises the validation at
     the HTTP layer.
     """
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         resp = client.post(
             "/explain",
             json={
@@ -173,7 +173,7 @@ def test_explain_multi_collection_rerank_true_returns_200(
         "# Corpus Beta\n\nThis document belongs to collection beta.\n" * 6
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col_a = "exp-alpha"
         col_b = "exp-beta"
 
@@ -212,7 +212,7 @@ def test_search_single_collection_via_collections_list_returns_200(
     doc = tmp_path / "single_col.md"
     doc.write_text("# Single Collection\n\nContent for single collection boundary test.\n" * 6)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "mc-single"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 

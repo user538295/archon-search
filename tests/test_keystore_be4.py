@@ -17,7 +17,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
@@ -121,6 +120,7 @@ def test_post_keys_creates_key(tmp_path, monkeypatch):
 def test_post_keys_with_expires_at_echoed(tmp_path, monkeypatch):
     """POST /keys with expires_at returns 201; expires_at echoed and persisted (C2-TEST-2)."""
     import json as _json
+
     from fastapi.testclient import TestClient
 
     app, api_key = _make_app(tmp_path, monkeypatch)
@@ -147,6 +147,7 @@ def test_post_keys_with_expires_at_echoed(tmp_path, monkeypatch):
 def test_post_keys_with_label_echoed(tmp_path, monkeypatch):
     """POST /keys with label returns 201; label echoed and persisted (C1-TEST-1, C2-TEST-1)."""
     import json as _json
+
     from fastapi.testclient import TestClient
 
     app, api_key = _make_app(tmp_path, monkeypatch)
@@ -216,7 +217,7 @@ def test_post_keys_invalid_namespace_422(tmp_path, monkeypatch):
                 f"Expected 422 for namespace {bad_ns!r}, got {resp.status_code}: {resp.text}"
             )
             body = resp.json()
-            assert "detail" in body and body["detail"], (
+            assert body.get("detail"), (
                 f"Expected non-empty detail for namespace {bad_ns!r}, got {body}"
             )
 
@@ -225,7 +226,7 @@ def test_post_keys_requires_auth(tmp_path, monkeypatch):
     """Unauthenticated POST /keys returns 401."""
     from fastapi.testclient import TestClient
 
-    app, api_key = _make_app(tmp_path, monkeypatch)
+    app, _api_key = _make_app(tmp_path, monkeypatch)
     with TestClient(app) as client:
         resp = client.post(
             "/keys",

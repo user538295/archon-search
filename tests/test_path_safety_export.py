@@ -13,7 +13,6 @@ from archon_search._path_safety import (
     validate_export_path,
 )
 
-
 # ---------------------------------------------------------------------------
 # validate_export_path
 # ---------------------------------------------------------------------------
@@ -104,9 +103,8 @@ def test_validate_archive_members_extra_member(tmp_path: Path) -> None:
         ],
         tmp_path,
     )
-    with tarfile.open(archive, "r:gz") as tf:
-        with pytest.raises(PathUnsafeError) as exc_info:
-            validate_archive_members(tf)
+    with tarfile.open(archive, "r:gz") as tf, pytest.raises(PathUnsafeError) as exc_info:
+        validate_archive_members(tf)
     assert exc_info.value.reason == "unsafe_tar_member"
 
 
@@ -117,9 +115,8 @@ def test_validate_archive_members_traversal_name(tmp_path: Path) -> None:
         info = tarfile.TarInfo(name="../../etc/passwd")
         info.size = 0
         tf.addfile(info, io.BytesIO(b""))
-    with tarfile.open(archive, "r:gz") as tf:
-        with pytest.raises(PathUnsafeError) as exc_info:
-            validate_archive_members(tf)
+    with tarfile.open(archive, "r:gz") as tf, pytest.raises(PathUnsafeError) as exc_info:
+        validate_archive_members(tf)
     assert exc_info.value.reason == "unsafe_tar_member"
 
 
@@ -130,25 +127,22 @@ def test_validate_archive_members_absolute_name(tmp_path: Path) -> None:
         info = tarfile.TarInfo(name="/etc/passwd")
         info.size = 0
         tf.addfile(info, io.BytesIO(b""))
-    with tarfile.open(archive, "r:gz") as tf:
-        with pytest.raises(PathUnsafeError) as exc_info:
-            validate_archive_members(tf)
+    with tarfile.open(archive, "r:gz") as tf, pytest.raises(PathUnsafeError) as exc_info:
+        validate_archive_members(tf)
     assert exc_info.value.reason == "unsafe_tar_member"
 
 
 def test_validate_archive_members_only_manifest(tmp_path: Path) -> None:
     """A tar with only manifest.json (missing documents.jsonl) raises PathUnsafeError."""
     archive = _build_tar([("manifest.json", b"{}")], tmp_path)
-    with tarfile.open(archive, "r:gz") as tf:
-        with pytest.raises(PathUnsafeError) as exc_info:
-            validate_archive_members(tf)
+    with tarfile.open(archive, "r:gz") as tf, pytest.raises(PathUnsafeError) as exc_info:
+        validate_archive_members(tf)
     assert exc_info.value.reason == "unsafe_tar_member"
 
 
 def test_validate_archive_members_only_documents(tmp_path: Path) -> None:
     """A tar with only documents.jsonl (missing manifest.json) raises PathUnsafeError."""
     archive = _build_tar([("documents.jsonl", b"")], tmp_path)
-    with tarfile.open(archive, "r:gz") as tf:
-        with pytest.raises(PathUnsafeError) as exc_info:
-            validate_archive_members(tf)
+    with tarfile.open(archive, "r:gz") as tf, pytest.raises(PathUnsafeError) as exc_info:
+        validate_archive_members(tf)
     assert exc_info.value.reason == "unsafe_tar_member"

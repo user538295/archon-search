@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import secrets
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -178,10 +177,10 @@ class TestMiddlewareTimingSafeCompareDigest:
         key_store = _mock_key_store([record])
         app = _mini_app_with_keystore(key_store)
 
-        hmac_calls: list[tuple[str, str]] = []
+        hmac_calls: list[tuple[bytes, bytes]] = []
         real_compare = hmac.compare_digest
 
-        def tracking_compare(a: str, b: str) -> bool:
+        def tracking_compare(a: bytes, b: bytes) -> bool:
             hmac_calls.append((a, b))
             return real_compare(a, b)
 
@@ -194,14 +193,14 @@ class TestMiddlewareTimingSafeCompareDigest:
         # At least one call must have been made for the managed key
         assert len(hmac_calls) >= 1, "hmac.compare_digest was not called"
 
-        # Both arguments must be 64-char hex strings (SHA-256 digests)
+        # Both arguments are the UTF-8 bytes of a 64-char hex string (SHA-256 digest): bytes, so a
+        # non-ASCII token cannot make compare_digest raise TypeError.
         for a_arg, b_arg in hmac_calls:
-            assert len(a_arg) == 64 and all(c in "0123456789abcdef" for c in a_arg), (
-                f"First arg is not a 64-char hex string: {a_arg!r}"
-            )
-            assert len(b_arg) == 64 and all(c in "0123456789abcdef" for c in b_arg), (
-                f"Second arg is not a 64-char hex string: {b_arg!r}"
-            )
+            assert isinstance(a_arg, bytes) and isinstance(b_arg, bytes)
+            for arg in (a_arg, b_arg):
+                assert len(arg) == 64 and all(chr(c) in "0123456789abcdef" for c in arg), (
+                    f"Argument is not the bytes of a 64-char hex string: {arg!r}"
+                )
 
         # The managed-key loop exits on first match — with one record, exactly one hmac call
         assert len(hmac_calls) == 1, (
@@ -228,14 +227,14 @@ class TestMiddlewareTomlLoopNoEarlyExit:
         namespaces = {KEY_A: "tenantA", KEY_B: "tenantB"}
         app = _mini_app_with_keystore(key_store, api_key="z" * 64, namespaces=namespaces)
 
-        secrets_calls: list[tuple[str, str]] = []
-        real_compare = secrets.compare_digest
+        compare_calls: list[tuple[bytes, bytes]] = []
+        real_compare = hmac.compare_digest
 
-        def tracking_compare(a: str, b: str) -> bool:
-            secrets_calls.append((a, b))
+        def tracking_compare(a: bytes, b: bytes) -> bool:
+            compare_calls.append((a, b))
             return real_compare(a, b)
 
-        with patch("archon_search.server.middleware_auth.secrets.compare_digest", side_effect=tracking_compare):
+        with patch("archon_search.server.middleware_auth.hmac.compare_digest", side_effect=tracking_compare):
             client = TestClient(app, raise_server_exceptions=False)
             # KEY_A is the first namespace key; the loop must continue to KEY_B
             resp = client.get("/protected", headers={"Authorization": f"Bearer {KEY_A}"})
@@ -244,8 +243,8 @@ class TestMiddlewareTomlLoopNoEarlyExit:
         assert resp.json()["namespace"] == "tenantA"
 
         # Both namespace entries must have been compared (no early exit)
-        assert len(secrets_calls) >= 2, (
-            f"Expected >= 2 secrets.compare_digest calls (all namespace entries), got {len(secrets_calls)}"
+        assert len(compare_calls) >= 2, (
+            f"Expected >= 2 hmac.compare_digest calls (all namespace entries), got {len(compare_calls)}"
         )
 
 
@@ -415,7 +414,7 @@ class TestMiddlewareManagedKeyFullRequest:
 
         key_store = KeyStore(path=tmp_path / "keys.json")
         result = asyncio.run(key_store.create(ns="int-ns", label=None, expires_at=None))
-        raw_token = result["token"]
+        raw_token = result.token
 
         app = _mini_app_with_keystore(key_store, api_key="z" * 64)
         client = TestClient(app, raise_server_exceptions=False)

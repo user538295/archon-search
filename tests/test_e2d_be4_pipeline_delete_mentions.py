@@ -2,14 +2,11 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unittest.mock import patch
-
 from archon_search.config import GraphConfig
-
 
 # ---------------------------------------------------------------------------
 # Helper — build a minimal SearchPipeline with optional graph components
@@ -193,12 +190,11 @@ async def test_pipeline_delete_document_graph_hook_skipped_when_collection_not_f
     mock_graph_store.delete_mentions_by_doc = AsyncMock()
     pipeline = _make_pipeline(connected_store, graph_store=mock_graph_store)
     # Patch get_collection_meta to return None (collection not found); async method requires AsyncMock
-    with patch.object(pipeline.store, "get_collection_meta", new_callable=AsyncMock, return_value=None):
-        with pytest.raises(ValueError, match="not found"):
-            await pipeline.delete_document(
-                "a" * 64,  # valid 64-char doc_id format
-                "nonexistent_collection",
-                namespace="default",
-            )
+    with patch.object(pipeline.store, "get_collection_meta", new_callable=AsyncMock, return_value=None), pytest.raises(ValueError, match="not found"):
+        await pipeline.delete_document(
+            "a" * 64,  # valid 64-char doc_id format
+            "nonexistent_collection",
+            namespace="default",
+        )
     # Graph hook must NOT have been called — ValueError raised before reaching the hook
     mock_graph_store.delete_mentions_by_doc.assert_not_called()

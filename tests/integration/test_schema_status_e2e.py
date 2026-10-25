@@ -186,7 +186,7 @@ def test_nonempty_collection_not_behind_on_first_ingest(tmp_path, monkeypatch) -
 
     from archon_search.store import STORE_SCHEMA_VERSION
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         col_path = tmp_path / "s377_docs"

@@ -4,8 +4,6 @@ from __future__ import annotations
 import inspect
 import math
 
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -160,7 +158,7 @@ def test_eval_backends_have_stable_tie_breaking() -> None:
 
 def test_eval_reranker_ranks_exact_match_highest() -> None:
     """Reranker places the exact-token-match document at rank 1."""
-    EvalEmbedderBackend, EvalRerankerBackend = _import_backends()
+    _EvalEmbedderBackend, EvalRerankerBackend = _import_backends()
     reranker = EvalRerankerBackend()
 
     query = "python async programming coroutines"

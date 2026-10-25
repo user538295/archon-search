@@ -5,8 +5,7 @@ Unit tests (no real app, mock pipeline/config):
   - test_view_no_auth_checked_before_graph_disabled
   - test_view_unknown_collection_returns_404
   - test_view_collection_name_is_json_encoded
-  - test_middleware_graph_view_token_param_is_exempt
-  - test_middleware_exact_path_scope
+  - TestMiddlewareGraphViewAuth / TestMiddlewareExemptionEndToEnd (Bearer header or view token; ?token= is gone)
 
 Run with:
     uv run pytest tests/server/test_routes_graph_view.py -n0 -v --no-cov
@@ -67,7 +66,7 @@ def _make_stub_app(
     app.state.config = config
     app.state.pipeline = pipeline
     app.state.api_key = api_key
-    app.state.namespaces = {}
+    app.state.graph_view_secret = b"s" * 32
     app.state.key_store = None
 
     app.include_router(router)
@@ -96,11 +95,11 @@ class TestViewGuardOrder:
         assert "graph" in resp.json()["detail"].lower()
 
     def test_view_no_auth_checked_before_graph_disabled(self) -> None:
-        """Invalid ?token= + graph disabled → 401, NOT 422. Auth is checked first."""
+        """Invalid ?view_token= + graph disabled → 401, NOT 422. Auth is checked first."""
         app = _make_stub_app(graph_enabled=False)
         with patch("archon_search.server.routes_graph._load_viewer_html", return_value=b"<canvas __ARCHON_COLLECTION__ __ARCHON_TOKEN__ __ARCHON_MAX_NODES__ __ARCHON_MAX_EDGES__>"):
             client = TestClient(app, raise_server_exceptions=False)
-            resp = client.get("/graph/test-col/view?token=badtoken")
+            resp = client.get("/graph/test-col/view?view_token=badtoken")
         assert resp.status_code == 401
         assert resp.headers.get("WWW-Authenticate") == "Bearer"
 
@@ -155,34 +154,17 @@ class TestViewGuardOrder:
 # ---------------------------------------------------------------------------
 
 
-class TestMiddlewareGraphViewExemption:
-    """Test that the middleware graph-view ?token= exemption works correctly."""
+class TestMiddlewareGraphViewAuth:
+    """The viewer page needs a Bearer header or a view token."""
 
-    def test_middleware_graph_view_token_param_is_exempt(self) -> None:
-        """GET /graph/test-col/view?token=abc bypasses header-presence check."""
-        from archon_search.server.middleware_auth import _GRAPH_VIEW_RE
-
-        # Verify the regex matches the graph view path
-        assert _GRAPH_VIEW_RE.match("/graph/test-col/view") is not None
-        assert _GRAPH_VIEW_RE.match("/graph/test-col/view/") is None  # no trailing slash
-        assert _GRAPH_VIEW_RE.match("/graph/col/view") is not None
-
-    def test_middleware_graph_view_no_token_not_exempt(self) -> None:
-        """GET /graph/test-col/view without ?token= is NOT exempt (requires Bearer)."""
+    def test_middleware_graph_view_without_credentials_is_401(self) -> None:
+        """GET /graph/test-col/view with no header and no view token is NOT served (requires Bearer)."""
         app = _make_stub_app()
         with patch("archon_search.server.routes_graph._load_viewer_html", return_value=b"<canvas __ARCHON_COLLECTION__ __ARCHON_TOKEN__ __ARCHON_MAX_NODES__ __ARCHON_MAX_EDGES__>"):
             client = TestClient(app, raise_server_exceptions=False)
             resp = client.get("/graph/test-col/view")  # no token, no header
         assert resp.status_code == 401
         assert resp.headers.get("WWW-Authenticate") == "Bearer"
-
-    def test_middleware_exact_path_scope(self) -> None:
-        """A request to /other/view?token=abc is NOT exempt (path must be /graph/{col}/view)."""
-        from archon_search.server.middleware_auth import _GRAPH_VIEW_RE
-
-        assert _GRAPH_VIEW_RE.match("/other/view") is None
-        assert _GRAPH_VIEW_RE.match("/graph/view") is None  # too short — missing collection segment
-        assert _GRAPH_VIEW_RE.match("/graph/col1/col2/view") is None  # extra segment
 
 
 # ---------------------------------------------------------------------------
@@ -191,54 +173,50 @@ class TestMiddlewareGraphViewExemption:
 
 
 class TestMiddlewareExemptionEndToEnd:
-    """Test middleware exemption behavior with real HTTP requests through APIKeyMiddleware."""
+    """Authentication of the viewer page through the real APIKeyMiddleware: header or view token, never the API key in the URL."""
 
     _STUB_HTML = b"<canvas __ARCHON_COLLECTION__ __ARCHON_TOKEN__ __ARCHON_MAX_NODES__ __ARCHON_MAX_EDGES__>"
 
-    def test_graph_view_token_no_header_is_exempt(self) -> None:
-        """?token= + no Authorization header → middleware passes through (exempt)."""
-        app = _make_stub_app()
-        with patch(
-            "archon_search.server.routes_graph._load_viewer_html",
-            return_value=self._STUB_HTML,
-        ):
-            client = TestClient(app, raise_server_exceptions=False)
-            # Valid token in ?token=, no Authorization header → middleware exempts, handler validates
-            resp = client.get(f"/graph/test-col/view?token={VALID_KEY}")
-        # Middleware does NOT return 401 (exempted) — handler runs and validates the token
-        assert resp.status_code != 401 or resp.headers.get("WWW-Authenticate") is None, (
-            "Middleware must not 401 an exempt ?token= path before the handler runs"
-        )
+    def _client(self, app: FastAPI) -> TestClient:
+        return TestClient(app, raise_server_exceptions=False)
 
-    def test_graph_view_with_authorization_header_not_exempt(self) -> None:
-        """Valid Authorization header + ?token=invalid → header takes priority, NOT exempt."""
+    def test_api_key_in_the_query_string_is_not_accepted(self) -> None:
+        """?token=<valid api key> + no Authorization header → 401: the key never authenticates from a URL."""
         app = _make_stub_app()
-        with patch(
-            "archon_search.server.routes_graph._load_viewer_html",
-            return_value=self._STUB_HTML,
-        ):
-            client = TestClient(app, raise_server_exceptions=False)
-            # Valid header present → middleware validates header, not exempt even with ?token=
-            resp = client.get(
+        with patch("archon_search.server.routes_graph._load_viewer_html", return_value=self._STUB_HTML):
+            resp = self._client(app).get(f"/graph/test-col/view?token={VALID_KEY}")
+        assert resp.status_code == 401
+        assert resp.headers.get("WWW-Authenticate") == "Bearer"
+
+    def test_view_token_in_the_query_string_opens_the_page_and_the_page_embeds_a_view_token(self) -> None:
+        from archon_search.server.graph_view_token import mint_view_token
+
+        app = _make_stub_app()
+        view_token = mint_view_token(app.state.graph_view_secret, "default", "test-col")
+        with patch("archon_search.server.routes_graph._load_viewer_html", return_value=self._STUB_HTML):
+            resp = self._client(app).get(f"/graph/test-col/view?view_token={view_token}")
+        assert resp.status_code == 200
+        assert VALID_KEY not in resp.text
+        assert '"gv1.' in resp.text
+
+    def test_authorization_header_takes_priority_over_the_query_string(self) -> None:
+        """Valid Authorization header + a bogus query token → the header authenticates; the query is ignored."""
+        app = _make_stub_app()
+        with patch("archon_search.server.routes_graph._load_viewer_html", return_value=self._STUB_HTML):
+            resp = self._client(app).get(
                 "/graph/test-col/view?token=invalid",
                 headers={"Authorization": f"Bearer {VALID_KEY}"},
             )
-        # Valid header → middleware accepts → handler runs → 200
         assert resp.status_code == 200
+        assert VALID_KEY not in resp.text, "the page must embed a view token, never the caller's API key"
 
-    def test_graph_view_invalid_header_with_token_not_exempt(self) -> None:
-        """Invalid Authorization header + ?token= → middleware rejects (header present → not exempt)."""
+    def test_invalid_header_with_a_query_token_is_rejected(self) -> None:
+        """Invalid Authorization header + ?token= → 401."""
         app = _make_stub_app()
-        with patch(
-            "archon_search.server.routes_graph._load_viewer_html",
-            return_value=self._STUB_HTML,
-        ):
-            client = TestClient(app, raise_server_exceptions=False)
-            # Invalid header + valid ?token= → middleware rejects (header present, not exempt)
-            resp = client.get(
+        with patch("archon_search.server.routes_graph._load_viewer_html", return_value=self._STUB_HTML):
+            resp = self._client(app).get(
                 f"/graph/test-col/view?token={VALID_KEY}",
                 headers={"Authorization": "Bearer invalid-token"},
             )
-        # Middleware rejects invalid header → 401
         assert resp.status_code == 401
         assert resp.headers.get("WWW-Authenticate") == "Bearer"

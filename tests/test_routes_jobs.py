@@ -7,7 +7,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -23,10 +23,17 @@ from archon_search._types import IngestResult
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import MaintenanceConfig, SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
-from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderNotReadyError
+from archon_search.embedder_cache import (
+    EMBEDDER_NOT_READY_DETAIL,
+    EmbedderNotReadyError,
+)
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.model import JobStatus, job_to_dict
-from archon_search.jobs.store import NOT_STARTED_BEFORE_RESTART_DETAIL, PROCESS_RESTART_ERROR, JobStore
+from archon_search.jobs.store import (
+    NOT_STARTED_BEFORE_RESTART_DETAIL,
+    PROCESS_RESTART_ERROR,
+    JobStore,
+)
 from archon_search.server.app import create_app
 from archon_search.server.routes_jobs import (
     INGEST_FAILED_DETAIL,
@@ -48,8 +55,20 @@ from archon_search.types import (
     ReindexJob,
     SyncJob,
 )
-from tests._internal_error_leak import LEAK_NEEDLE, assert_logged_with_traceback, permission_error
+from tests._collection_access_stub import allow_collection_access_everywhere
+from tests._internal_error_leak import (
+    LEAK_NEEDLE,
+    assert_logged_with_traceback,
+    permission_error,
+)
 from tests._parked_lock import parked_waiters, reaping, until_parked
+
+
+@pytest.fixture(autouse=True)
+def _stores_grant_collection_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These apps never run their lifespan, so their store is not connected: ownership is not under test here."""
+    allow_collection_access_everywhere(monkeypatch)
+
 
 
 def _running_ingest_job(job_id: str) -> IngestJob:
@@ -487,7 +506,7 @@ def test_ingest_rejects_dotdot_path(client: TestClient) -> None:
 def test_ingest_uses_validator_returned_path(
     tmp_path: Path, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Handler must forward the Path returned by validate_ingest_path to the ingest task."""
+    """Handler must forward the Path returned by validate_ingest_source to the ingest task."""
     store = JobStore(path=tmp_path / "jobs.json")
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
@@ -496,8 +515,8 @@ def test_ingest_uses_validator_returned_path(
 
     # Patch the validator in the route module namespace to return a sentinel path.
     monkeypatch.setattr(
-        "archon_search.server.routes_jobs.validate_ingest_path",
-        lambda raw: Path("/sentinel/value"),
+        "archon_search.server.routes_jobs.validate_ingest_source",
+        lambda raw, policy, *, admin: Path("/sentinel/value"),
     )
 
     # Capture the IngestRequest passed to whichever ingest task variant the handler uses.
@@ -702,7 +721,10 @@ def test_delete_job_transition_non_oserror_returns_sanitized_500(
     the cancel did not happen."""
     import logging
 
-    from tests._job_store_faults import assert_error_logged_with_traceback, failing_job_writes
+    from tests._job_store_faults import (
+        assert_error_logged_with_traceback,
+        failing_job_writes,
+    )
 
     job = tmp_store.create()
     tmp_store.update(job.job_id, status=JobStatus.RUNNING)
@@ -738,7 +760,7 @@ def test_delete_job_on_legacy_queued_row_of_a_kind_nothing_schedules_is_the_idem
     terminal row's idempotent 200 — not the ``500`` ``Unknown job status: QUEUED`` (``409`` for a sync) it answered
     while the row stayed QUEUED."""
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     legacy = job_cls(job_id="legacy-queued", status=JobStatus.QUEUED, created_at=now, updated_at=now, collection="c")
     JobStore(path=jobs_path).create_job(legacy)
     config = SearchConfig()
@@ -1273,6 +1295,7 @@ def _ingest_app_with_lock(tmp_path: Path, job_store: JobStore, auth_headers: dic
     lock = asyncio.Lock()
     search_store = MagicMock()
     search_store.lock_for = MagicMock(return_value=lock)
+    search_store.assert_collection_access = AsyncMock()
     app.state.search_store = search_store
     return TestClient(app, headers=auth_headers, raise_server_exceptions=False), lock
 
@@ -1282,7 +1305,7 @@ def test_ingest_lock_timeout_503_creates_no_job(
 ) -> None:
     """A 503 lock timeout on POST /ingest returns the store-busy body with Retry-After and must not leave a
     PENDING job behind that nothing ever runs."""
-    import archon_search.constants as constants
+    from archon_search import constants
 
     client, _lock = _ingest_app_with_lock(tmp_path, tmp_store, auth_headers)
 

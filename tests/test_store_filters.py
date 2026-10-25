@@ -5,13 +5,12 @@ TDD: all tests written before implementation.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from archon_search.filters import SearchFilters
-
 
 # ---------------------------------------------------------------------------
 # LIKE simulator (oracle for Hypothesis property test)
@@ -136,7 +135,7 @@ def test_build_where_source_path_prefix_with_special_chars():
 
 def test_build_where_indexed_after_normalized_to_fixed_width():
     from archon_search.store_filters import build_where
-    dt = datetime(2024, 3, 15, 10, 30, 0, tzinfo=timezone.utc)
+    dt = datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
     predicate = build_where(SearchFilters(indexed_after=dt))
     # Fixed-width UTC format: YYYY-MM-DDTHH:MM:SS.ffffffZ
     assert "2024-03-15T10:30:00.000000Z" in predicate
@@ -145,7 +144,7 @@ def test_build_where_indexed_after_normalized_to_fixed_width():
 
 def test_build_where_combined_filters_anded():
     from archon_search.store_filters import build_where
-    dt = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    dt = datetime(2024, 1, 1, tzinfo=UTC)
     predicate = build_where(SearchFilters(file_type="py", indexed_after=dt))
     assert " AND " in predicate
     assert "file_type" in predicate
@@ -172,7 +171,7 @@ def test_build_where_handles_every_search_filters_field():
         if f not in {"include_metadata", "source_path_glob"}
     }
 
-    dt = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    dt = datetime(2024, 6, 1, tzinfo=UTC)
     for field_name in sql_fields:
         if field_name in ("indexed_after", "indexed_before"):
             filters = SearchFilters(**{field_name: dt})
@@ -192,7 +191,7 @@ def test_build_where_handles_every_search_filters_field():
 
 def test_build_where_indexed_before_normalized_to_fixed_width():
     from archon_search.store_filters import build_where
-    dt = datetime(2024, 3, 15, 10, 30, 0, tzinfo=timezone.utc)
+    dt = datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
     predicate = build_where(SearchFilters(indexed_before=dt))
     assert "2024-03-15T10:30:00.000000Z" in predicate
     assert "indexed_at <=" in predicate
@@ -259,8 +258,8 @@ def test_build_where_language_sql_safe():
 
 def test_build_where_scope_empty_string_not_added() -> None:
     """scope_filter='' (empty string) → no scope clause added (defensive guard)."""
-    from archon_search.store_filters import build_where
     from archon_search.filters import SearchFilters
+    from archon_search.store_filters import build_where
 
     result = build_where(SearchFilters(), scope_filter="")
     assert "list_has" not in result
@@ -269,8 +268,8 @@ def test_build_where_scope_empty_string_not_added() -> None:
 
 def test_build_where_all_sql_filters():
     from archon_search.store_filters import build_where
-    dt_after = datetime(2024, 1, 1, tzinfo=timezone.utc)
-    dt_before = datetime(2024, 12, 31, tzinfo=timezone.utc)
+    dt_after = datetime(2024, 1, 1, tzinfo=UTC)
+    dt_before = datetime(2024, 12, 31, tzinfo=UTC)
     predicate = build_where(SearchFilters(
         file_type="py",
         source_path_prefix="/src",

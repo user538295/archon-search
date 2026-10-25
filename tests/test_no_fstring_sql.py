@@ -185,8 +185,8 @@ def test_scan_reports_pattern_id_and_line_number() -> None:
         ),
         (
             "updates_sql_kwarg",
-            'table.update(\n    where=w,\n    updates_sql={\n        "cnt": {"z": 0},\n'
-            '        "n": f"n+{d}",\n    },\n)\n',
+            ('table.update(\n    where=w,\n    updates_sql={\n        "cnt": {"z": 0},\n'
+            '        "n": f"n+{d}",\n    },\n)\n'),
         ),
         (
             "add_columns_sql",

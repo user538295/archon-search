@@ -63,7 +63,7 @@ def _poll_job(client, job_id: str, headers: dict, timeout_s: float = 15.0) -> di
 def test_fresh_collection_add_then_search_and_reindex_succeed(tmp_path, monkeypatch):
     """S07/S14/S15/S20/S22 happy path on a CLEAN data dir — proves no product defect."""
     corpus = _make_corpus(tmp_path)
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}", "X-Ingested-By": "cli"}
 
         # S07 / S14: collection add (POST /collections/) -> 202

@@ -24,10 +24,10 @@ Scenario S7 (test_e2d_t1_shared_entity_survives_partial_delete):
   POST /maintenance/trigger → GC pass runs.
   GET /graph/{collection} → E must be absent.
 
-  NOTE: The final assertion (E absent after D2 delete + GC) requires:
-    - BE-5: GraphStore.delete_orphan_nodes_and_edges
-    - BE-7: MaintenanceLoop._run_graph_gc policy
-  These tasks are not yet implemented. That assertion WILL FAIL until both are done.
+  NOTE: a collection whose last document was deleted has an empty mentions table; the GC
+  pass (MaintenanceLoop._run_graph_gc) detects the zero live chunks and passes
+  no_live_chunks=True so GraphStore.delete_orphan_nodes_and_edges removes E instead of
+  skipping the emptied table.
 
 Run with:
     uv run pytest tests/integration/test_e2d_t1_graph_namespace_isolation.py -n0 -v --no-cov
@@ -42,8 +42,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -283,7 +283,7 @@ def test_e2d_t1_delete_removes_mentions_namespace_isolated(
         monkeypatch,
         graph_enabled=True,
         namespaces={key_a: "nsa", key_b: "nsb"},
-    ) as (client, cfg, _default_key):
+    ) as (_client, cfg, _default_key):
 
         # Step 1+2: Seed identical graph data (same doc_id, entity_id, chunk_ids) for
         # BOTH namespaces using the SAME collection name.
@@ -369,10 +369,9 @@ def test_e2d_t1_shared_entity_survives_partial_delete(
     survives because D2 still has a mention row. When D2 is also deleted, E's node
     becomes an orphan; the next GC maintenance pass must remove it from the nodes table.
 
-    NOTE: The final assertion ("node E absent" after D2 delete + GC) requires:
-      - BE-5: GraphStore.delete_orphan_nodes_and_edges
-      - BE-7: MaintenanceLoop._run_graph_gc
-    These are NOT yet implemented. The final assertion WILL FAIL until both are done.
+    The final assertion ("node E absent" after D2 delete + GC) relies on
+    MaintenanceLoop._run_graph_gc passing no_live_chunks=True to
+    GraphStore.delete_orphan_nodes_and_edges for a collection with zero live chunks.
 
     Steps:
     1. HTTP-ingest two files (D1, D2) with graph enabled.
@@ -386,7 +385,6 @@ def test_e2d_t1_shared_entity_survives_partial_delete(
     6. Delete D2 (remove vector chunks + graph mention rows for doc_id_d2).
     7. POST /maintenance/trigger again; poll until a NEW pass completes.
     8. GET /graph/{col} → assert "Alice" absent.
-       (Requires BE-5 + BE-7 — WILL FAIL until GC is implemented.)
     """
     install_graph_engine_stub(monkeypatch)
 
@@ -487,12 +485,9 @@ def test_e2d_t1_shared_entity_survives_partial_delete(
         # Step 7: POST /maintenance/trigger again; wait for a NEW pass to complete.
         _trigger_and_poll_maintenance(client, api_key, prev_last_run_at=first_run_at)
 
-        # Step 8: GET /graph/{col} → "Alice" must be ABSENT (GC removed the orphan node).
-        # NOTE: This assertion requires BE-5 (delete_orphan_nodes_and_edges) and
-        # BE-7 (MaintenanceLoop._run_graph_gc). Those tasks are not yet implemented.
-        # The conditional pytest.xfail() below converts a missing implementation into
-        # an XFAIL result (not a test failure). When BE-5 and BE-7 land, alice_after_gc
-        # will be None, the if-block is skipped, and the test passes green naturally.
+        # Step 8: GET /graph/{col} → "Alice" must be ABSENT. The collection is now empty, so
+        # _run_graph_gc passes no_live_chunks=True and the GC pass removes the orphan nodes
+        # even though the mentions table has no rows left.
         resp_after_gc = client.get(f"/graph/{col}", headers=_auth(api_key))
         assert resp_after_gc.status_code == 200, (
             f"GET /graph/{col} after GC failed: {resp_after_gc.status_code} "
@@ -502,20 +497,8 @@ def test_e2d_t1_shared_entity_survives_partial_delete(
         alice_after_gc = next(
             (n for n in nodes_after_gc if n["entity_name"] == "Alice"), None
         )
-        if alice_after_gc is not None:
-            # Alice should be present as an orphan node (chunk_count==0) — not as a live node.
-            # If chunk_count > 0, that means mention cleanup itself is broken, not just GC.
-            assert alice_after_gc.get("chunk_count") == 0, (
-                f"'Alice' is present with chunk_count={alice_after_gc.get('chunk_count')} > 0 "
-                "after both D1 and D2 were deleted. This means mention deletion is broken "
-                "(delete_mentions_by_doc did not remove all mention rows). "
-                "Expected Alice to be an orphan node with chunk_count==0, pending BE-5 GC removal."
-            )
-            pytest.xfail(
-                "Node 'Alice' still present in graph nodes table after both documents "
-                "deleted and GC maintenance pass ran. "
-                "Orphan node cleanup requires BE-5 (GraphStore.delete_orphan_nodes_and_edges) "
-                "and BE-7 (MaintenanceLoop._run_graph_gc) — neither is implemented yet. "
-                "This test will pass automatically once both tasks are done."
-            )
-        # When BE-5 + BE-7 land, alice_after_gc will be None here and the if-block above is skipped.
+        assert alice_after_gc is None, (
+            f"'Alice' is still present (chunk_count={alice_after_gc and alice_after_gc.get('chunk_count')}) "
+            "after both D1 and D2 were deleted and a GC pass ran: the emptied collection's "
+            f"graph leaked. All nodes: {[n['entity_name'] for n in nodes_after_gc]}"
+        )

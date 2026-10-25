@@ -22,7 +22,7 @@ def test_post_migrate_in_place_real_store(tmp_path, monkeypatch) -> None:
     (test_apply_in_place_updates_schema_version) which directly call
     apply_in_place_migrations with real LanceDB.
     """
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         # Register a collection.

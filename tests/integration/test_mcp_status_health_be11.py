@@ -5,7 +5,7 @@ Covers (completes S7):
   response has mcp.bindAddress non-null.
 - test_status_mcp_field_absent_when_disabled — make_real_app(mcp_enabled=False) →
   GET /status response mcp is null.
-- test_health_mcp_field — same for GET /health (both enabled and disabled).
+- test_health_is_liveness_only_whether_or_not_mcp_is_mounted — GET /health carries neither version nor MCP bind address.
 
 These are full-stack integration tests through the real create_app() lifespan:
 when mcp_enabled=True the lifespan actually mounts the MCP sub-app and sets
@@ -54,35 +54,17 @@ def test_status_mcp_field_absent_when_disabled(tmp_path, monkeypatch) -> None:
         assert body["mcp"] is None, "mcp field must be null when mcp.enabled=False"
 
 
-def test_health_mcp_field(tmp_path, monkeypatch) -> None:
-    """GET /health includes mcp.bindAddress when enabled, and mcp=null when disabled.
+def test_health_is_liveness_only_whether_or_not_mcp_is_mounted(tmp_path, monkeypatch) -> None:
+    """GET /health answers ``{"status": "running"}`` and nothing else, with MCP mounted or not.
 
-    /health is unauthenticated, so no Authorization header is sent.  The two
-    sub-cases use distinct data dirs (``tmp_path/enabled`` vs ``tmp_path/disabled``)
-    so the second ``make_real_app`` never reopens the first's LanceDB store.
+    /health is unauthenticated, so it must not disclose the MCP ``host:port/mcp`` bind address (that is in the
+    authenticated GET /status, tested above). The two sub-cases use distinct data dirs
+    (``tmp_path/enabled`` vs ``tmp_path/disabled``) so the second ``make_real_app`` never reopens the
+    first's LanceDB store.
     """
-    with make_real_app(tmp_path / "enabled", monkeypatch, mcp_enabled=True) as (
-        client,
-        cfg,
-        _api_key,
-    ):
-        resp = client.get("/health")
-        assert resp.status_code == 200, f"GET /health failed: {resp.status_code} {resp.text}"
-        body = resp.json()
-        assert "mcp" in body, "mcp key must be present in the /health response"
-        mcp = body["mcp"]
-        assert mcp is not None, "mcp field must be non-null when mcp.enabled=True"
-        assert mcp["bindAddress"] is not None, "MCP mount failed during lifespan"
-        assert mcp["enabled"] is True
-        assert mcp["bindAddress"] == f"{cfg.host}:{cfg.port}/mcp"
-
-    with make_real_app(tmp_path / "disabled", monkeypatch, mcp_enabled=False) as (
-        client,
-        _cfg,
-        _api_key,
-    ):
-        resp = client.get("/health")
-        assert resp.status_code == 200, f"GET /health failed: {resp.status_code} {resp.text}"
-        body = resp.json()
-        assert "mcp" in body, "mcp key must be present (and null) in the /health response"
-        assert body["mcp"] is None, "mcp field must be null when mcp.enabled=False"
+    for sub_dir, mcp_enabled in (("enabled", True), ("disabled", False)):
+        with make_real_app(tmp_path / sub_dir, monkeypatch, mcp_enabled=mcp_enabled) as (client, cfg, _api_key):
+            resp = client.get("/health")
+            assert resp.status_code == 200, f"GET /health failed: {resp.status_code} {resp.text}"
+            assert resp.json() == {"status": "running"}
+            assert f"{cfg.host}:{cfg.port}" not in resp.text

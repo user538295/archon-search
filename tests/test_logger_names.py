@@ -11,9 +11,20 @@ from pathlib import Path
 #          getLogger("archon_search_evil"), getLogger('archon'), etc.
 # The lookahead (?!archon_search[.'\"]) rejects strings that start with archon_search followed by
 # a dot (dotted child) or a quote (exact match) — those are the only two allowed forms.
+# The one third-party logger archon-search configures on purpose is "uvicorn.access" (logging_setup attaches
+# the query-credential redaction filter to it); no other uvicorn logger is allowed.
 _BAD_PATTERN = re.compile(
-    r"""getLogger\s*\(\s*['"](?!archon_search[.'"'])[^'"]+['"]\s*\)"""
+    r"""getLogger\s*\(\s*['"](?!archon_search[.'"']|uvicorn\.access['"])[^'"]+['"]\s*\)"""
 )
+
+
+def test_guard_allows_the_uvicorn_access_logger():
+    assert not _BAD_PATTERN.search('logging.getLogger("uvicorn.access")')
+
+
+def test_guard_detects_other_uvicorn_loggers():
+    assert _BAD_PATTERN.search('logging.getLogger("uvicorn.error")')
+    assert _BAD_PATTERN.search('logging.getLogger("uvicorn.access_evil")')
 
 
 def test_guard_detects_bad_name():

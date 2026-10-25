@@ -4,11 +4,11 @@ Integration tests using real pipeline + LanceDB store with stub embedder.
 """
 from __future__ import annotations
 
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers (same pattern as test_pipeline_acl.py)
@@ -17,7 +17,7 @@ import pytest
 
 def _make_pipeline(tmp_path: Path):
     """Return a SearchPipeline wired to a real LanceDB store with stub embedder/chunker/parser."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from archon_search._types import ChunkRecord
     from archon_search.pipeline import SearchPipeline
@@ -52,7 +52,7 @@ def _make_pipeline(tmp_path: Path):
             ingested_by: str = "cli",
             language: str = "",
         ) -> list[ChunkRecord]:
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             parts = [text[i : i + 200] for i in range(0, len(text), 200)] if text else []
             return [
                 ChunkRecord(

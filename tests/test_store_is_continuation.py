@@ -17,7 +17,7 @@ async def test_is_continuation_suppresses_doc_count_increment(tmp_path, monkeypa
     """Second ingest_chunks call with _is_continuation=True must not increment doc_count."""
     from tests.integration.conftest import make_real_pipeline
 
-    store, pipeline = await make_real_pipeline(tmp_path, monkeypatch)
+    store, _pipeline = await make_real_pipeline(tmp_path, monkeypatch)
 
     # Manually ingest two batches for the same doc_id, simulating batched ingest
     collection = "cont_test_col"

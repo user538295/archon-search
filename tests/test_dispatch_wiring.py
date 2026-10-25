@@ -170,7 +170,7 @@ def test_real_dispatch_invokes_export_task_for_export_job(tmp_path: Path) -> Non
                 portal.call(_run)
 
     assert "export" in captured, "real dispatch did not invoke _export_task"
-    job_arg, store_arg, search_store_arg, config_arg = captured["export"]
+    job_arg, store_arg, _search_store_arg, config_arg = captured["export"]
     assert job_arg is export_job
     assert store_arg is job_store
     assert config_arg is cfg
@@ -221,7 +221,7 @@ def test_real_dispatch_invokes_import_task_for_import_job(tmp_path: Path) -> Non
                 portal.call(_run)
 
     assert "import" in captured, "real dispatch did not invoke _import_task"
-    job_arg, store_arg, search_store_arg, pipeline_arg, embedder_cache_arg, config_arg = captured["import"]
+    job_arg, store_arg, _search_store_arg, pipeline_arg, embedder_cache_arg, config_arg = captured["import"]
     assert job_arg is import_job
     assert store_arg is job_store
     assert config_arg is cfg

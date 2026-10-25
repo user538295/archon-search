@@ -9,11 +9,18 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from archon_search.jobs.scheduler import DISPATCH_FAILED_DETAIL, JobScheduler, _SCHEDULER_TICK_SECONDS
+from archon_search.jobs.scheduler import (
+    _SCHEDULER_TICK_SECONDS,
+    DISPATCH_FAILED_DETAIL,
+    JobScheduler,
+)
 from archon_search.jobs.store import JobStore
 from archon_search.types import ExportJob, ImportJob, JobStatus
-from tests._job_store_faults import JOB_WRITE_FAILURES, failing_job_writes, persisted_statuses
-
+from tests._job_store_faults import (
+    JOB_WRITE_FAILURES,
+    failing_job_writes,
+    persisted_statuses,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers

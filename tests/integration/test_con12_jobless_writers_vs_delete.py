@@ -22,7 +22,10 @@ from archon_search.config import SearchConfig
 from archon_search.constants import INGEST_LOCK_TIMEOUT_S
 from archon_search.jobs.store import JobStore
 from archon_search.pipeline import SearchPipeline
-from archon_search.server._ingest_lock import COLLECTION_WRITER_IN_PROGRESS_DETAIL, STORE_BUSY_CODE
+from archon_search.server._ingest_lock import (
+    COLLECTION_WRITER_IN_PROGRESS_DETAIL,
+    STORE_BUSY_CODE,
+)
 from archon_search.server.app import create_app
 from archon_search.store import SearchStore
 from archon_search.sync import path_to_collection_name
@@ -165,7 +168,7 @@ async def test_a_watcher_sync_blocks_delete_while_it_runs_and_is_ignored_once_th
     world: _World,
 ) -> None:
     """The watcher keeps its startup snapshot after a DELETE: a change fired later must not re-create the collection."""
-    from archon_search.server.app import _sync_watched_collection  # noqa: PLC0415
+    from archon_search.server.app import _sync_watched_collection
 
     syncs: list[str] = []
 

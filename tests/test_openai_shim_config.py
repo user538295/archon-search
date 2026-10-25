@@ -11,7 +11,6 @@ import pytest
 
 from archon_search.config import OpenAIShimConfig, load_config
 
-
 # ---------------------------------------------------------------------------
 # OpenAIShimConfig dataclass defaults
 # ---------------------------------------------------------------------------

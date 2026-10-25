@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -19,11 +19,17 @@ import pytest
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
-from archon_search.types import ExportJob, ImportJob, JobStatus, MigrationJob, MigrationKind
+from archon_search.types import (
+    ExportJob,
+    ImportJob,
+    JobStatus,
+    MigrationJob,
+    MigrationKind,
+)
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 # ---------------------------------------------------------------------------

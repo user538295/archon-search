@@ -52,7 +52,7 @@ def _build_app_via_run_server(
 
     captured: dict[str, object] = {}
 
-    def _fake_uvicorn_run(app, **kwargs):  # noqa: ANN001, ANN003
+    def _fake_uvicorn_run(app, **kwargs):
         captured["app"] = app
 
     monkeypatch.setattr(app_module.uvicorn, "run", _fake_uvicorn_run)

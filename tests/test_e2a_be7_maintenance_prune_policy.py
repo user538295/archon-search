@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -30,12 +30,9 @@ from archon_search.config import MaintenanceConfig
 from archon_search.jobs.maintenance_loop import _EMPTY_HEALTH_ENTRY, MaintenanceLoop
 from archon_search.store_filters import _sql_quote_str
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
-
-UTC = timezone.utc
 
 
 def _make_collection_info(
@@ -574,8 +571,6 @@ async def test_maintenance_loop_prune_deletes_expired_and_updates_state(
     - State file gains last_expired_pruned_at (non-null) and
       collection_health[col].expired_chunks_removed_last_run >= 1
     """
-    from datetime import timezone as _tz
-
     from archon_search._types import normalize_iso_utc
     from archon_search.jobs.store import JobStore
     from archon_search.store import SearchStore
@@ -594,7 +589,7 @@ async def test_maintenance_loop_prune_deletes_expired_and_updates_state(
             await store.apply_in_place_migrations("col-prune", "default", pending)
 
         # Insert one expired chunk and one non-expired chunk.
-        now = datetime.now(_tz.utc)
+        now = datetime.now(UTC)
         past_iso = normalize_iso_utc(now - timedelta(seconds=60))
         future_iso = normalize_iso_utc(now + timedelta(hours=1))
 
@@ -702,8 +697,6 @@ async def test_ttl_expiry_maintenance_prune_removes_defref_graph_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """BE-12: maintenance TTL pruning removes def/ref rows for the expired doc."""
-    from datetime import timezone as _tz
-
     from archon_search._types import normalize_iso_utc
     from archon_search.graph_store import GraphStore
     from archon_search.graph_types import (
@@ -722,7 +715,7 @@ async def test_ttl_expiry_maintenance_prune_removes_defref_graph_rows(
     namespace = "default"
     expired_doc_id = "d" * 64
     alive_doc_id = "b" * 64
-    now = datetime.now(_tz.utc)
+    now = datetime.now(UTC)
     past_iso = normalize_iso_utc(now - timedelta(seconds=60))
     future_iso = normalize_iso_utc(now + timedelta(hours=1))
 
@@ -859,8 +852,6 @@ async def test_ttl_prune_keeps_defref_graph_when_doc_still_has_live_chunks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """BE-12: doc-scoped def/ref cleanup is skipped while any chunk for that doc remains."""
-    from datetime import timezone as _tz
-
     from archon_search._types import normalize_iso_utc
     from archon_search.graph_store import GraphStore
     from archon_search.graph_types import (
@@ -878,7 +869,7 @@ async def test_ttl_prune_keeps_defref_graph_when_doc_still_has_live_chunks(
     collection = "col-defref-mixed-prune"
     namespace = "default"
     doc_id = "c" * 64
-    now = datetime.now(_tz.utc)
+    now = datetime.now(UTC)
     past_iso = normalize_iso_utc(now - timedelta(seconds=60))
     future_iso = normalize_iso_utc(now + timedelta(hours=1))
 

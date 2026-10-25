@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -72,7 +72,7 @@ async def _write_communities_to_store(
             community_id=community_id,
             entity_ids=entity_ids or ["entity-t3-1"],
             representative_chunk_ids=chunk_ids,
-            built_at=built_at or datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+            built_at=built_at or datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC),
             summary_text=None,
         )
         await gs.write_communities(col, [community], ns="default")
@@ -187,7 +187,7 @@ def test_e2e_status_community_fields(
     install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t3-status-community-fields"
-    built_at = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    built_at = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
 
     doc = tmp_path / "doc.txt"
     doc.write_text(

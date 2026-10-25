@@ -60,7 +60,7 @@ def test_markdown_heading_flows_through_to_search_response(
         "A survey of related techniques and prior publications.\n" * 3
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "test-enrichment-heading"
         ingest_file_via_path(client, col, str(md_file), api_key=api_key)
 
@@ -115,7 +115,7 @@ def test_pdf_page_number_in_search_response(
     """
     pdf_fixture = three_page_pdf
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "test-enrichment-pdf"
         try:
             ingest_file_via_path(client, col, str(pdf_fixture), api_key=api_key, timeout_s=600.0)
@@ -190,7 +190,7 @@ def test_code_symbol_metadata_in_search_response(
         "        return all(isinstance(x, str) and x.strip() for x in data)\n"
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "test-enrichment-code"
         ingest_file_via_path(client, col, str(py_file), api_key=api_key)
 
@@ -266,7 +266,7 @@ def test_image_file_assigns_page_start_one(
     except ImportError:
         pytest.skip("Pillow not available — cannot create a text-bearing PNG for OCR test")
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "test-enrichment-image"
         try:
             ingest_file_via_path(client, col, str(png_path), api_key=api_key, timeout_s=600.0)

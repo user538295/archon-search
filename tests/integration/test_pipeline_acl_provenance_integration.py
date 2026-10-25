@@ -7,10 +7,10 @@ Covers:
 """
 from __future__ import annotations
 
+from datetime import UTC
 from pathlib import Path
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -19,12 +19,12 @@ import pytest
 
 def _make_store_and_pipeline(tmp_path: Path):
     """Return (store, pipeline) backed by real LanceDB in tmp_path with stub ML backends."""
+    from datetime import datetime
     from unittest.mock import MagicMock
-    from datetime import datetime, timezone
 
     from archon_search._types import ChunkRecord
-    from archon_search.store import SearchStore
     from archon_search.pipeline import SearchPipeline
+    from archon_search.store import SearchStore
 
     store = SearchStore(tmp_path / "db")
 
@@ -61,7 +61,7 @@ def _make_store_and_pipeline(tmp_path: Path):
             ingested_by: str = "cli",
             language: str = "",
         ) -> list[ChunkRecord]:
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             parts = [text[i : i + 200] for i in range(0, len(text), 200)] if text else []
             return [
                 ChunkRecord(
@@ -351,8 +351,30 @@ async def test_multi_collection_each_result_has_own_gate(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# BE-6 integration tests: fail-open warnings surfaced through full pipeline
+# BE-6 integration tests: fail-closed warnings surfaced through full pipeline
 # ---------------------------------------------------------------------------
+
+
+async def _assert_denied_with_provenance(store, pipeline, collection: str, expected_source: str) -> None:
+    """A declared-but-unusable ACL denies the document: search hides it, provenance stays on the rows."""
+    from archon_search.filters import SearchFilters
+
+    search_result = await pipeline.search(
+        "archon-search",
+        collection,
+        namespace="default",
+        embedder=pipeline._global_embedder,
+        filters=SearchFilters(),
+    )
+    assert search_result.results == [], "fail-closed ACL must hide the chunk from every namespace"
+    assert search_result.acl_filtered is True
+
+    rows = [row async for row in store.list_chunks_raw(collection, "default")]
+    assert rows, "the chunks are stored (denied, not dropped)"
+    for row in rows:
+        assert row["acl"] == []
+        assert row["acl_source"] == expected_source
+        assert any("chunk denied" in w for w in row["acl_warning"]), row["acl_warning"]
 
 
 @pytest.mark.asyncio
@@ -360,10 +382,8 @@ async def test_multi_collection_each_result_has_own_gate(tmp_path):
 async def test_search_acl_gate_warnings_surfaced_for_invalid_frontmatter(tmp_path):
     """S4e: ingest a doc with invalid-type _acl (bool), search with acl_context=true;
     acl_gate.warnings must be non-empty."""
-    from archon_search.filters import SearchFilters
-
     doc = tmp_path / "invalid_fm.md"
-    # bool value for _acl is an invalid type — triggers fail-open + warning
+    # bool value for _acl is an invalid type — triggers fail-closed + warning
     doc.write_text("---\n_acl: true\n---\n\nContent about archon-search.\n")
 
     store, pipeline = _make_store_and_pipeline(tmp_path)
@@ -379,25 +399,7 @@ async def test_search_acl_gate_warnings_surfaced_for_invalid_frontmatter(tmp_pat
         assert ingest_result.status == "ok"
         assert ingest_result.chunks_created > 0
 
-        search_result = await pipeline.search(
-            "archon-search",
-            collection,
-            namespace="default",
-            embedder=pipeline._global_embedder,
-            filters=SearchFilters(),
-        )
-        results = search_result.results
-        assert results, "Expected search results after ingest"
-
-        # Every result should carry non-empty warnings because _acl=True is invalid
-        for r in results:
-            assert r.acl_source == "frontmatter", (
-                f"Expected acl_source='frontmatter' for frontmatter _acl=True, got {r.acl_source!r}"
-            )
-            assert r.acl_warning, (
-                f"Expected non-empty acl_warning for invalid frontmatter _acl=True, "
-                f"got {r.acl_warning!r}"
-            )
+        await _assert_denied_with_provenance(store, pipeline, collection, "frontmatter")
     finally:
         await store.disconnect()
 
@@ -406,8 +408,6 @@ async def test_search_acl_gate_warnings_surfaced_for_invalid_frontmatter(tmp_pat
 @pytest.mark.integration
 async def test_search_acl_gate_warnings_surfaced_for_symlink_sidecar(tmp_path):
     """S4b: ingest a doc with a symlinked sidecar; acl_gate.warnings must be non-empty."""
-    from archon_search.filters import SearchFilters
-
     corpus = tmp_path / "corpus"
     corpus.mkdir()
 
@@ -433,23 +433,7 @@ async def test_search_acl_gate_warnings_surfaced_for_symlink_sidecar(tmp_path):
         assert ingest_result.status == "ok"
         assert ingest_result.chunks_created > 0
 
-        search_result = await pipeline.search(
-            "archon-search",
-            collection,
-            namespace="default",
-            embedder=pipeline._global_embedder,
-            filters=SearchFilters(),
-        )
-        results = search_result.results
-        assert results, "Expected search results after ingest"
-
-        for r in results:
-            assert r.acl_source == "sidecar", (
-                f"Expected acl_source='sidecar' for symlinked sidecar, got {r.acl_source!r}"
-            )
-            assert r.acl_warning, (
-                f"Expected non-empty acl_warning for symlinked sidecar, got {r.acl_warning!r}"
-            )
+        await _assert_denied_with_provenance(store, pipeline, collection, "sidecar")
     finally:
         await store.disconnect()
 
@@ -458,15 +442,13 @@ async def test_search_acl_gate_warnings_surfaced_for_symlink_sidecar(tmp_path):
 @pytest.mark.integration
 async def test_search_acl_gate_warnings_deny_all_mixed_invalid(tmp_path):
     """S4d: ingest a doc whose sidecar has deny-all mixed with invalid entries;
-    acl_gate.warnings must be non-empty (fail-open branch)."""
-    from archon_search.filters import SearchFilters
-
+    the document must be denied (fail-closed) with the warning stored."""
     doc = tmp_path / "deny_mixed.txt"
     doc.write_text("Content about archon-search and deny-all.\n")
 
     # Sidecar: invalid name first (not the deny-all sentinel position), then deny-all as a
     # non-sentinel entry → both are rejected by is_acl_namespace_valid, all entries invalid
-    # → fail-open (None) with warnings (S4d).
+    # → fail-closed ([]) with warnings (S4d).
     # Note: "deny-all" on the FIRST line would be treated as the deny-all sentinel (acl=[]),
     # so we place !!!bad!!! first so the sentinel check is bypassed and all lines go through
     # the is_acl_namespace_valid loop where deny-all is rejected like any invalid name.
@@ -486,23 +468,6 @@ async def test_search_acl_gate_warnings_deny_all_mixed_invalid(tmp_path):
         assert ingest_result.status == "ok"
         assert ingest_result.chunks_created > 0
 
-        search_result = await pipeline.search(
-            "archon-search",
-            collection,
-            namespace="default",
-            embedder=pipeline._global_embedder,
-            filters=SearchFilters(),
-        )
-        results = search_result.results
-        assert results, "Expected search results — deny+invalid is fail-open, so chunk is accessible"
-
-        for r in results:
-            assert r.acl_source == "sidecar", (
-                f"Expected acl_source='sidecar', got {r.acl_source!r}"
-            )
-            assert r.acl_warning, (
-                f"Expected non-empty acl_warning for deny-all mixed with invalid entries, "
-                f"got {r.acl_warning!r}"
-            )
+        await _assert_denied_with_provenance(store, pipeline, collection, "sidecar")
     finally:
         await store.disconnect()

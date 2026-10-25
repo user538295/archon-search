@@ -6,6 +6,7 @@ it, and released however it ends. A registration the lock refuses is the tools' 
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -57,8 +58,12 @@ class _Probe:
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> SearchStore:
-    return SearchStore(tmp_path / "db")
+async def store(tmp_path: Path) -> AsyncIterator[SearchStore]:
+    """A connected store: the tools check the caller's access to the collection before registering as its writer."""
+    connected = SearchStore(tmp_path / "db")
+    await connected.connect()
+    yield connected
+    await connected.disconnect()
 
 
 @_TOOLS

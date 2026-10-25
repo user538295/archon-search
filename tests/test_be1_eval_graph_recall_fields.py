@@ -7,7 +7,6 @@ Three tests:
 """
 from __future__ import annotations
 
-
 # ---------------------------------------------------------------------------
 # Test 1: EvalMetrics has four new graph recall fields, all defaulting to None
 # ---------------------------------------------------------------------------

@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import unittest.mock
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
-
-import unittest.mock
 
 import pytest
 
@@ -132,9 +131,11 @@ class TestPruneOnce:
         today = date(2025, 6, 15)
         _make_file(tmp_path, today - timedelta(days=60))
         pruner = Pruner(tmp_path, retention_days=30)
-        with unittest.mock.patch.object(Path, "unlink", side_effect=OSError("permission denied")):
-            with caplog.at_level(logging.WARNING, logger="archon.search"):
-                count = pruner.prune_once(now=today)
+        with (
+            unittest.mock.patch.object(Path, "unlink", side_effect=OSError("permission denied")),
+            caplog.at_level(logging.WARNING, logger="archon.search"),
+        ):
+            count = pruner.prune_once(now=today)
         assert count == 0
         assert any("pruner: failed to delete" in r.message for r in caplog.records if r.levelno == logging.WARNING)
 
@@ -222,13 +223,15 @@ class TestPrunerStart:
                 raise PermissionError("no access")
             return original_prune(**kwargs)  # type: ignore[arg-type]
 
-        with patch("archon_search.telemetry.pruner.asyncio.sleep", side_effect=fake_sleep):
-            with patch.object(pruner, "prune_once", side_effect=failing_then_ok):
-                task = await pruner.start()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        with (
+            patch("archon_search.telemetry.pruner.asyncio.sleep", side_effect=fake_sleep),
+            patch.object(pruner, "prune_once", side_effect=failing_then_ok),
+        ):
+            task = await pruner.start()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
         assert call_count == 2  # loop ran twice despite first failure
 

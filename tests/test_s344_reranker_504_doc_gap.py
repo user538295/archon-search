@@ -150,13 +150,13 @@ def test_no_shipped_doc_maps_explain_504_to_the_reranker() -> None:
         ("heading claim", "### POST /explain returns 504 when the reranker times out\n"),
         (
             "table row under a nested heading",
-            "### POST /explain\n#### Error responses\n\n"
-            "| Status | Meaning |\n|---|---|\n| 504 | The reranker cross-encoder timed out |\n",
+            ("### POST /explain\n#### Error responses\n\n"
+            "| Status | Meaning |\n|---|---|\n| 504 | The reranker cross-encoder timed out |\n"),
         ),
         (
             "module heading kept across a fenced block",
-            "### `routes_explain.py`\n\n```bash\n# curl the endpoint\n```\n\n"
-            "| 504 | The reranker timed out |\n",
+            ("### `routes_explain.py`\n\n```bash\n# curl the endpoint\n```\n\n"
+            "| 504 | The reranker timed out |\n"),
         ),
     ],
 )

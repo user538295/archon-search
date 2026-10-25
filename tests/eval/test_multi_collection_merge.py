@@ -19,7 +19,6 @@ import pytest
 
 from archon_search.eval.backends import EvalRerankerBackend
 
-
 # ---------------------------------------------------------------------------
 # Deterministic fixture builders (inline, corpus-free)
 # ---------------------------------------------------------------------------

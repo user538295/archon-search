@@ -16,7 +16,6 @@ import pytest
 from archon_search.config import GraphConfig
 from archon_search.graph_types import GraphExtractionResult
 
-
 # ---------------------------------------------------------------------------
 # Helper — build a minimal SearchPipeline with optional graph/defref components
 # ---------------------------------------------------------------------------
@@ -248,7 +247,14 @@ async def test_defref_writes_edges_when_extraction_succeeds(
     connected_store, col_name, sample_py_file
 ):
     """A clean extraction result is passed through to graph_store.write_graph."""
-    from archon_search.graph_types import EntityType, GraphNode, RelationshipType, GraphEdge, make_stable_entity_id, make_stable_edge_id
+    from archon_search.graph_types import (
+        EntityType,
+        GraphEdge,
+        GraphNode,
+        RelationshipType,
+        make_stable_edge_id,
+        make_stable_entity_id,
+    )
 
     node_a = GraphNode(
         id=make_stable_entity_id(EntityType.code_symbol.value, "caller::sample.py"),

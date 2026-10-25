@@ -19,7 +19,6 @@ from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -134,8 +133,9 @@ def test_status_openai_key_available_checks_openai_api_key(
     Tests HyDEGenerator directly (provider='openai' is not yet wired in
     create_app — that is BE-6).  OPENAI_API_KEY unset → False; set → True.
     """
-    from archon_search.hyde import HyDEGenerator
     from unittest.mock import MagicMock
+
+    from archon_search.hyde import HyDEGenerator
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -158,8 +158,9 @@ def test_rag_fusion_is_key_available_ollama_always_true(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """RAGFusionGenerator.is_key_available() returns True for ollama regardless of env keys (C1-I-21)."""
-    from archon_search.rag_fusion import RAGFusionGenerator
     from unittest.mock import MagicMock
+
+    from archon_search.rag_fusion import RAGFusionGenerator
 
     # Even with no API keys present, ollama must return True
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -180,8 +181,9 @@ def test_rag_fusion_is_key_available_openai_checks_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """RAGFusionGenerator.is_key_available() reads OPENAI_API_KEY for openai provider (C1-I-21)."""
-    from archon_search.rag_fusion import RAGFusionGenerator
     from unittest.mock import MagicMock
+
+    from archon_search.rag_fusion import RAGFusionGenerator
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 

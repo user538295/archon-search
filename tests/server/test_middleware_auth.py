@@ -1,8 +1,8 @@
 """Tests for APIKeyMiddleware and startup wire-up ."""
 from __future__ import annotations
 
+import hmac
 import logging
-import secrets
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -137,17 +137,22 @@ class TestAPIKeyMiddlewareAuth:
         resp = client.delete("/health")
         assert resp.status_code == 200
 
-    def test_docs_path_exempt_without_token(self, client: TestClient) -> None:
-        resp = client.get("/docs")
-        assert resp.status_code == 200
+    @pytest.mark.parametrize("path", ["/docs", "/openapi.json", "/redoc"])
+    def test_docs_paths_require_a_token_by_default(self, client: TestClient, path: str) -> None:
+        resp = client.get(path)
+        assert resp.status_code == 401
+        assert resp.headers.get("WWW-Authenticate") == "Bearer"
 
-    def test_openapi_json_exempt_without_token(self, client: TestClient) -> None:
-        resp = client.get("/openapi.json")
-        assert resp.status_code == 200
+    @pytest.mark.parametrize("path", ["/docs", "/openapi.json", "/redoc"])
+    def test_docs_paths_are_exempt_only_when_the_exempt_set_says_so(self, mini_app: FastAPI, path: str) -> None:
+        from archon_search.server.middleware_auth import _EXEMPT_PATHS, DOCS_PATHS
 
-    def test_redoc_exempt_without_token(self, client: TestClient) -> None:
-        resp = client.get("/redoc")
-        assert resp.status_code == 200
+        app = FastAPI()
+        app.add_middleware(APIKeyMiddleware, api_key=VALID_KEY, exempt_paths=_EXEMPT_PATHS | DOCS_PATHS)
+        for route in mini_app.routes:
+            app.router.routes.append(route)
+
+        assert TestClient(app).get(path).status_code == 200
 
     def test_search_still_requires_token(self, client: TestClient) -> None:
         resp = client.get("/search")
@@ -168,19 +173,20 @@ class TestAPIKeyMiddlewareAuth:
         assert resp.status_code == 401
 
     def test_compare_digest_used(self, mini_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify secrets.compare_digest is called (not ==)."""
-        calls: list[tuple[str, str]] = []
-        real_digest = secrets.compare_digest
+        """Verify hmac.compare_digest is called on bytes (not ==, and not str: str raises on non-ASCII)."""
+        calls: list[tuple[bytes, bytes]] = []
+        real_digest = hmac.compare_digest
 
-        def tracking_digest(a: str, b: str) -> bool:
+        def tracking_digest(a: bytes, b: bytes) -> bool:
             calls.append((a, b))
             return real_digest(a, b)
 
-        with patch("archon_search.server.middleware_auth.secrets.compare_digest", side_effect=tracking_digest):
+        with patch("archon_search.server.middleware_auth.hmac.compare_digest", side_effect=tracking_digest):
             test_client = TestClient(mini_app, raise_server_exceptions=False)
             test_client.get("/status", headers={"Authorization": f"Bearer {VALID_KEY}"})
 
-        assert len(calls) >= 1, "secrets.compare_digest was not called"
+        assert len(calls) >= 1, "hmac.compare_digest was not called"
+        assert all(isinstance(a, bytes) and isinstance(b, bytes) for a, b in calls)
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +249,7 @@ class TestStartupLog:
 
 class TestFullAppAuth:
     def test_protected_route_requires_auth(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        client, key = _make_full_client(tmp_path, monkeypatch)
+        client, _key = _make_full_client(tmp_path, monkeypatch)
         resp = client.get("/status")
         assert resp.status_code == 401
 
@@ -257,20 +263,18 @@ class TestFullAppAuth:
         resp = client.get("/health")
         assert resp.status_code == 200
 
-    def test_docs_exempt_in_full_app(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        client, _ = _make_full_client(tmp_path, monkeypatch)
-        resp = client.get("/docs")
-        assert resp.status_code == 200
+    @pytest.mark.parametrize("path", ["/docs", "/redoc"])
+    def test_interactive_docs_not_served_in_full_app_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        client, key = _make_full_client(tmp_path, monkeypatch)
+        assert client.get(path).status_code == 401
+        assert client.get(path, headers={"Authorization": f"Bearer {key}"}).status_code == 404
 
-    def test_openapi_json_exempt_in_full_app(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        client, _ = _make_full_client(tmp_path, monkeypatch)
-        resp = client.get("/openapi.json")
-        assert resp.status_code == 200
-
-    def test_redoc_exempt_in_full_app(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        client, _ = _make_full_client(tmp_path, monkeypatch)
-        resp = client.get("/redoc")
-        assert resp.status_code == 200
+    def test_openapi_json_requires_auth_in_full_app(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        client, key = _make_full_client(tmp_path, monkeypatch)
+        assert client.get("/openapi.json").status_code == 401
+        assert client.get("/openapi.json", headers={"Authorization": f"Bearer {key}"}).status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -341,9 +345,9 @@ class TestNamespaceResolution:
     def test_middleware_no_early_exit(self) -> None:
         """All namespace keys evaluated even after a match (no early exit)."""
         call_count = 0
-        real_compare = secrets.compare_digest
+        real_compare = hmac.compare_digest
 
-        def counting_compare(a: str, b: str) -> bool:
+        def counting_compare(a: bytes, b: bytes) -> bool:
             nonlocal call_count
             call_count += 1
             return real_compare(a, b)
@@ -351,7 +355,7 @@ class TestNamespaceResolution:
         namespaces = {KEY_A: "tenantA", KEY_B: "tenantB"}
         app = _make_ns_app(api_key=KEY_DEFAULT, namespaces=namespaces)
 
-        with patch("archon_search.server.middleware_auth.secrets.compare_digest", side_effect=counting_compare):
+        with patch("archon_search.server.middleware_auth.hmac.compare_digest", side_effect=counting_compare):
             client = TestClient(app, raise_server_exceptions=False)
             client.get("/me", headers={"Authorization": f"Bearer {KEY_A}"})
 

@@ -16,13 +16,13 @@ Communities are seeded directly into the GraphStore (no leidenalg required).
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -95,7 +95,7 @@ async def _seed_graph_and_community(
             community_id="test-comm-local-1",
             entity_ids=[node.id],
             representative_chunk_ids=[chunk_id],
-            built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            built_at=datetime(2024, 1, 1, tzinfo=UTC),
             summary_text=None,
         )
         await gs.write_communities(col, [community], ns="default")

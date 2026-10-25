@@ -18,9 +18,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search._types import SearchResult
 from archon_search.config import SearchConfig, TelemetryConfig
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.telemetry.entry import DOCUMENTED_SCHEMA_FIELDS, TelemetryEntry
@@ -192,7 +192,7 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
         assert resp.status_code == 400
 
         # route timeout → provides: error_kind via timeout path
-        timeout_router = _FakeColRouter(raise_on_get=asyncio.TimeoutError())
+        timeout_router = _FakeColRouter(raise_on_get=TimeoutError())
         with patch("archon_search.server.routes_route._build_router", return_value=timeout_router):
             resp = client.post("/route", json={"query": "q7"})
         assert resp.status_code == 504
@@ -460,7 +460,7 @@ def test_disabled_telemetry_writes_no_files(tmp_path: Path) -> None:
         assert resp.status_code == 400
 
         # Timeout
-        timeout_router = _FakeColRouter(raise_on_get=asyncio.TimeoutError())
+        timeout_router = _FakeColRouter(raise_on_get=TimeoutError())
         with patch(
             "archon_search.server.routes_route._build_router", return_value=timeout_router
         ):

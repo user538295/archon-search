@@ -42,7 +42,7 @@ def test_x_ingested_by_header_flows_through_to_lancedb_row(
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Watcher document\n\nContent ingested by watcher.\n" * 4)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "test-ingested-by-header"
         ingest_file_via_path(
             client,
@@ -78,7 +78,7 @@ def test_rest_search_response_carries_metadata_fields_from_real_ingest(
     md_file = tmp_path / "hello.md"
     md_file.write_text("# Hello\n\nA real document with real content to index.\n" * 4)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "test-metadata-fields"
 
         # Ingest via file path through HTTP — X-Ingested-By: cli sets ingested_by
@@ -122,7 +122,7 @@ def test_future_mtime_accepted_as_is(
     future_ts = time.time() + 3600.0
     os.utime(md_file, (future_ts, future_ts))
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "test-future-mtime"
         ingest_file_via_path(client, col, str(md_file), api_key=api_key)
 
@@ -134,7 +134,7 @@ def test_future_mtime_accepted_as_is(
             assert item["updated_at"], "updated_at must be non-empty"
             from datetime import datetime
             # Should parse without ValueError — verifies no clamping corrupted the value
-            dt = datetime.fromisoformat(item["updated_at"].replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(item["updated_at"])
             # The stored value should reflect the future mtime (year 2025 or later)
             assert dt.year >= 2025, f"updated_at year should be >= 2025, got: {dt.year}"
 
@@ -173,7 +173,7 @@ def test_reindex_metadata_cli_to_search_response_round_trip(
             },
         )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "test-reindex-metadata-e2e"
         store = client.app.state.search_store
 

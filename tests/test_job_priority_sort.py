@@ -6,7 +6,7 @@ User-sourced bulk jobs sort before backup-sourced bulk jobs. FIFO (by
 from __future__ import annotations
 
 import dataclasses
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -26,7 +26,7 @@ def _set_created_at(store: JobStore, job_id: str, ts: str) -> None:
 
 
 def _iso(seconds_ago: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
+    return (datetime.now(UTC) - timedelta(seconds=seconds_ago)).isoformat()
 
 
 # ---------------------------------------------------------------------------

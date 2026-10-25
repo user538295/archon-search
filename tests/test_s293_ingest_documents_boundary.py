@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
+from tests._collection_access_stub import allow_collection_access
 
 TEST_KEY = os.environ.get("ARCHON_SEARCH_API_KEY", "0" * 64)
 AUTH = {"Authorization": f"Bearer {TEST_KEY}"}
@@ -26,7 +27,7 @@ def _make_client(tmp_path: Path, max_file_mb: int = 0) -> TestClient:
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     config.ingest.max_file_mb = max_file_mb
-    app = create_app(config, JobStore(path=tmp_path / "jobs.json"))
+    app = allow_collection_access(create_app(config, JobStore(path=tmp_path / "jobs.json")))
     return TestClient(app, headers=AUTH)
 
 

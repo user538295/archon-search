@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-
 from archon_search.config import GraphConfig, SearchConfig
 from archon_search.graph_types import (
     EntityType,
@@ -23,7 +22,6 @@ from archon_search.graph_types import (
     RelationshipType,
     make_stable_entity_id,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

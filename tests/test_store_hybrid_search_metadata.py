@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -30,7 +30,7 @@ def _chunk(**overrides) -> ChunkRecord:
         text=overrides.pop("text", "searchable test content"),
         vector=overrides.pop("vector", [0.0] * _DIM),
         source_path=overrides.pop("source_path", "/tmp/x.py"),
-        indexed_at=overrides.pop("indexed_at", datetime.now(timezone.utc).isoformat()),
+        indexed_at=overrides.pop("indexed_at", datetime.now(UTC).isoformat()),
         **overrides,
     )
 

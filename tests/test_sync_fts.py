@@ -5,13 +5,13 @@ Integration tests are marked @pytest.mark.integration and require a real LanceDB
 """
 from __future__ import annotations
 
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from archon_search._types import CollectionInfo
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -241,8 +241,8 @@ class TestSyncFtsIntegration:
                 ingested_by: str,
                 language: str = "",
             ) -> list[ChunkRecord]:
-                from datetime import datetime, timezone
-                now = datetime.now(timezone.utc).isoformat()
+                from datetime import datetime
+                now = datetime.now(UTC).isoformat()
                 return [
                     ChunkRecord(
                         doc_id=doc_id,
@@ -331,8 +331,8 @@ class TestSyncFtsIntegration:
                 ingested_by: str,
                 language: str = "",
             ) -> list[ChunkRecord]:
-                from datetime import datetime, timezone
-                now = datetime.now(timezone.utc).isoformat()
+                from datetime import datetime
+                now = datetime.now(UTC).isoformat()
                 return [
                     ChunkRecord(
                         doc_id=doc_id,

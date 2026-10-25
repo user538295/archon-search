@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -25,8 +25,12 @@ from archon_search.types import (
     ReindexJob,
     SyncJob,
 )
-from tests._job_store_faults import SIMULATED_WRITE_FAILURE, failing_job_writes, persisted_statuses, recording_job_writes
-
+from tests._job_store_faults import (
+    SIMULATED_WRITE_FAILURE,
+    failing_job_writes,
+    persisted_statuses,
+    recording_job_writes,
+)
 
 UUID4_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -105,7 +109,7 @@ def test_corrupt_file_resets(tmp_path: Path) -> None:
 
 def test_eviction_removes_old_jobs(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
-    old_time = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    old_time = (datetime.now(UTC) - timedelta(days=8)).isoformat()
     old_id = str(uuid.uuid4())
     data = [
         {
@@ -125,7 +129,7 @@ def test_eviction_removes_old_jobs(tmp_path: Path) -> None:
 
 def test_eviction_keeps_recent_jobs(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
-    recent_time = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    recent_time = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     recent_id = str(uuid.uuid4())
     data = [
         {
@@ -213,7 +217,7 @@ def test_wrong_root_type_resets_store(tmp_path: Path) -> None:
 # RUNNING job that already has error="prior" → error becomes "process_restart"
 def test_crash_recovery_preserves_process_restart_over_prior_error(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     data = [
         {
             "job_id": str(uuid.uuid4()),
@@ -235,7 +239,7 @@ def test_crash_recovery_preserves_process_restart_over_prior_error(tmp_path: Pat
 # updated_at exactly 7 days + 1 second ago → evicted
 def test_eviction_boundary_one_second_over(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
-    old_time = (datetime.now(timezone.utc) - timedelta(days=7, seconds=1)).isoformat()
+    old_time = (datetime.now(UTC) - timedelta(days=7, seconds=1)).isoformat()
     old_id = str(uuid.uuid4())
     data = [
         {
@@ -260,7 +264,7 @@ def test_eviction_boundary_exactly_seven_days(tmp_path: Path) -> None:
     # We place the job 1 second inside the boundary to avoid a race with _evict_old()
     # recomputing "now" slightly later.  1s margin is far smaller than the 7-day window
     # yet large enough to survive any test execution latency.
-    boundary_time = (datetime.now(timezone.utc) - timedelta(days=7) + timedelta(seconds=1)).isoformat()
+    boundary_time = (datetime.now(UTC) - timedelta(days=7) + timedelta(seconds=1)).isoformat()
     recent_id = str(uuid.uuid4())
     data = [
         {
@@ -280,7 +284,7 @@ def test_eviction_boundary_exactly_seven_days(tmp_path: Path) -> None:
 # updated_at is not a valid ISO date → no crash, handled gracefully
 def test_invalid_date_no_crash(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     data = [
         {
             "job_id": str(uuid.uuid4()),
@@ -334,9 +338,11 @@ def test_write_atomic_failure_reraises(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
     s = JobStore(path=jobs_path)
 
-    with patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")):
-        with pytest.raises(OSError, match="simulated write failure"):
-            s.create()
+    with (
+        patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")),
+        pytest.raises(OSError, match="simulated write failure"),
+    ):
+        s.create()
 
 
 @pytest.mark.parametrize(
@@ -363,9 +369,11 @@ def test_create_write_failure_leaves_no_ghost_job(tmp_path: Path, create_call) -
     s = JobStore(path=tmp_path / "jobs.json")
     saved = s.create_export("c", "/out", "/tmp-out")  # QUEUED is kept on reload (a PENDING ingest/reindex is not)
 
-    with patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")):
-        with pytest.raises(OSError, match="simulated write failure"):
-            create_call(s)
+    with (
+        patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")),
+        pytest.raises(OSError, match="simulated write failure"),
+    ):
+        create_call(s)
 
     assert s.list() == [saved]
     assert JobStore(path=tmp_path / "jobs.json").list() == [saved]
@@ -392,9 +400,11 @@ def test_update_write_failure_keeps_update_and_next_write_persists_it(
     s = JobStore(path=tmp_path / "jobs.json")
     job = s.create_export("c", "/out", "/tmp-out")  # QUEUED is kept on reload (a PENDING ingest/reindex is not)
 
-    with patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")):
-        with pytest.raises(OSError, match="simulated write failure"):
-            mutate(s, job.job_id)
+    with (
+        patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")),
+        pytest.raises(OSError, match="simulated write failure"),
+    ):
+        mutate(s, job.job_id)
 
     in_memory = s.get(job.job_id)
     assert in_memory is not None
@@ -612,12 +622,12 @@ def test_job_store_persists_namespace(tmp_path: Path) -> None:
 
 def test_job_store_load_pre_5c_json(tmp_path: Path) -> None:
     """JSON entries lacking 'namespace' key should load with DEFAULT_NAMESPACE."""
+    from datetime import datetime
+
     from archon_search.constants import DEFAULT_NAMESPACE
 
-    from datetime import datetime, timezone
-
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     data = [
         {
             "job_id": "aaaa-bbbb",
@@ -687,7 +697,7 @@ def test_count_by_status_mixed(tmp_path: Path) -> None:
 def test_count_by_status_excludes_evicted_jobs(tmp_path: Path) -> None:
     """Evicted jobs (older than 7 days) must not appear in count_by_status."""
     jobs_path = tmp_path / "jobs.json"
-    old_ts = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    old_ts = (datetime.now(UTC) - timedelta(days=8)).isoformat()
     data = [
         {
             "job_id": str(uuid.uuid4()),
@@ -718,13 +728,13 @@ def test_crash_recovery_stamps_updated_at(tmp_path: Path, crash_status: str) -> 
     the very next load once that stale timestamp ages out.
     """
     jobs_path = tmp_path / "jobs.json"
-    created_at = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-    stale_updated_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    created_at = (datetime.now(UTC) - timedelta(days=3)).isoformat()
+    stale_updated_at = (datetime.now(UTC) - timedelta(days=2)).isoformat()
     job_id = _seed_job_file(
         jobs_path, status=crash_status, created_at=created_at, updated_at=stale_updated_at
     )
 
-    load_start_time = datetime.now(timezone.utc)
+    load_start_time = datetime.now(UTC)
     store = JobStore(path=jobs_path)
 
     job = store.get(job_id)
@@ -752,7 +762,7 @@ def test_crash_recovery_survives_eviction_cutoff(tmp_path: Path, crash_status: s
     on the very same load that recovered it.
     """
     jobs_path = tmp_path / "jobs.json"
-    ancient = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    ancient = (datetime.now(UTC) - timedelta(days=30)).isoformat()
     job_id = _seed_job_file(jobs_path, status=crash_status, created_at=ancient, updated_at=ancient)
 
     job = JobStore(path=jobs_path).get(job_id)
@@ -766,8 +776,8 @@ def test_crash_recovery_survives_eviction_cutoff(tmp_path: Path, crash_status: s
 def test_load_leaves_non_crash_jobs_untouched(tmp_path: Path, terminal_status: str) -> None:
     """Only crash statuses are rewritten — a terminal job keeps its status and timestamps."""
     jobs_path = tmp_path / "jobs.json"
-    created_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
-    updated_at = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    created_at = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    updated_at = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     job_id = _seed_job_file(
         jobs_path, status=terminal_status, created_at=created_at, updated_at=updated_at
     )
@@ -807,7 +817,7 @@ def test_create_persists_ingest_options_across_reload(tmp_path: Path) -> None:
 def test_load_tolerates_job_without_ingest_options(tmp_path: Path) -> None:
     """A row written before the options were stored loads with ``ingest_options`` None: its request is unknown."""
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     job_id = _seed_job_file(jobs_path, status="DONE", created_at=now, updated_at=now)
 
     job = JobStore(path=jobs_path).get(job_id)
@@ -839,10 +849,10 @@ def test_load_recovers_pending_job_as_failed_not_started(tmp_path: Path, job_typ
     from archon_search.jobs.store import NOT_STARTED_BEFORE_RESTART_DETAIL
 
     jobs_path = tmp_path / "jobs.json"
-    stale = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    stale = (datetime.now(UTC) - timedelta(days=2)).isoformat()
     job_id = _seed_job_file(jobs_path, status="PENDING", created_at=stale, updated_at=stale, job_type=job_type)
 
-    load_start_time = datetime.now(timezone.utc)
+    load_start_time = datetime.now(UTC)
     store = JobStore(path=jobs_path)
 
     job = store.get(job_id)
@@ -860,7 +870,7 @@ _NEVER_SCHEDULED_KINDS = [CommunityRebuildJob, MetadataReindexJob, SyncJob]
 def _legacy_queued_file(jobs_path: Path, job_cls: type[IngestJob], *, age: timedelta = timedelta()) -> str:
     """Write a jobs file holding one *job_cls* row left ``QUEUED`` *age* ago, as a pre-upgrade server did when it
     died between creating the job and claiming it RUNNING; return the job's id."""
-    stamp = (datetime.now(timezone.utc) - age).isoformat()
+    stamp = (datetime.now(UTC) - age).isoformat()
     job = job_cls(job_id=str(uuid.uuid4()), status=JobStatus.QUEUED, created_at=stamp, updated_at=stamp, collection="c")
     JobStore(path=jobs_path).create_job(job)
     return job.job_id
@@ -877,7 +887,7 @@ def test_load_fails_queued_job_of_a_kind_nothing_schedules(tmp_path: Path, job_c
     jobs_path = tmp_path / "jobs.json"
     job_id = _legacy_queued_file(jobs_path, job_cls, age=timedelta(days=2))
 
-    load_start_time = datetime.now(timezone.utc)
+    load_start_time = datetime.now(UTC)
     store = JobStore(path=jobs_path)
 
     job = store.get(job_id)
@@ -911,7 +921,7 @@ def test_load_keeps_pending_job_of_other_kinds(tmp_path: Path) -> None:
     PENDING status."""
     job_type = "delete"
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     jobs_path.write_text(json.dumps([{
         "job_id": "j1", "status": "PENDING", "created_at": now, "updated_at": now,
         "result": None, "error": None, "job_type": job_type,
@@ -947,7 +957,7 @@ def _job_on(
     namespace: str = "default",
     job_class: type[IngestJob] = IngestJob,
 ) -> IngestJob:
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     return job_class(
         job_id=job_id, status=status, created_at=now, updated_at=now, namespace=namespace, collection=collection
     )
@@ -1064,7 +1074,10 @@ _EXPECTED_BLOCKING_STATUSES: dict[type[IngestJob], frozenset[JobStatus]] = {
 def test_every_job_kind_is_classified_for_the_delete_guard() -> None:
     """Every job kind is listed either in COLLECTION_WRITING_JOB_STATUSES or in NEVER_BLOCKING_JOB_KINDS, never
     both: a new kind must be classified before DELETE /collections/{name} can tell whether it writes the collection."""
-    from archon_search.jobs.store import COLLECTION_WRITING_JOB_STATUSES, NEVER_BLOCKING_JOB_KINDS
+    from archon_search.jobs.store import (
+        COLLECTION_WRITING_JOB_STATUSES,
+        NEVER_BLOCKING_JOB_KINDS,
+    )
 
     kinds = _archon_job_kinds()
     assert {IngestJob, ReindexJob, ExportJob, SyncJob}.issubset(kinds), "precondition: kinds collected"
@@ -1156,8 +1169,8 @@ def test_may_write_collection_treats_an_unclassified_kind_as_writing_until_termi
         assert may_write_collection(job) is may_write
 
     errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
-    assert errors == (["JobStore: job unclassified has the unclassified kind _UnclassifiedJob; treating it as "
-                       "writing collection 'docs' until it is terminal"] if may_write else [])
+    assert errors == ([("JobStore: job unclassified has the unclassified kind _UnclassifiedJob; treating it as "
+                       "writing collection 'docs' until it is terminal")] if may_write else [])
 
 
 def test_find_active_collection_job_prefers_the_callers_namespace(tmp_path: Path) -> None:
@@ -1224,7 +1237,7 @@ def test_load_drops_one_rows_unusable_ingest_options_and_keeps_the_file(
     """An unusable ``ingest_options`` value costs only that row its options (``None``: never retried), logged at
     WARNING — never a reset of the whole jobs file."""
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     row = {"status": "FAILED", "created_at": now, "updated_at": now, "result": None, "error": None}
     jobs_path.write_text(json.dumps([
         {**row, "job_id": "bad", "ingest_options": bad_options},
@@ -1271,7 +1284,7 @@ def test_load_treats_a_non_bool_cancel_requested_as_unset(
     """A ``cancel_requested`` that is not a JSON boolean is no client's cancel: the row loads with it False (a truthy
     ``"false"`` would otherwise end a retry chain), logged at WARNING; the rest of the file loads unharmed."""
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     row = {"status": "FAILED", "created_at": now, "updated_at": now, "result": None, "error": None}
     jobs_path.write_text(json.dumps([
         {**row, "job_id": "bad", "cancel_requested": bad_marker},
@@ -1311,7 +1324,7 @@ def test_load_completes_a_cancel_requested_before_the_job_started(tmp_path: Path
     process — completes the cancel as that task would have (CANCELLED, no error) rather than reading it as a crash:
     it arms no crash-loop guard, as a job loaded still PENDING (never started) does not either."""
     jobs_path = tmp_path / "jobs.json"
-    stale = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    stale = (datetime.now(UTC) - timedelta(days=2)).isoformat()
     job_id = _seed_job_file(
         jobs_path,
         status="CANCELLING",
@@ -1322,7 +1335,7 @@ def test_load_completes_a_cancel_requested_before_the_job_started(tmp_path: Path
         cancelled_before_start=True,
     )
 
-    load_start_time = datetime.now(timezone.utc)
+    load_start_time = datetime.now(UTC)
     store = JobStore(path=jobs_path)
 
     job = store.get(job_id)
@@ -1339,7 +1352,7 @@ def test_load_still_reads_a_cancel_of_a_started_job_as_a_crash(tmp_path: Path, j
     CANCELLING at load was running when the process died: ``process_restart``, arming the crash-loop guard when it is
     an ingest (a reindex arms none)."""
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     job_id = _seed_job_file(
         jobs_path, status="CANCELLING", created_at=now, updated_at=now, job_type=job_type, cancel_requested=True
     )
@@ -1360,7 +1373,7 @@ def test_load_treats_a_non_bool_cancelled_before_start_as_unset(
     CANCELLING job it sits on is still read as a crash (a truthy ``"false"`` would otherwise disarm the crash-loop
     guard for a job that ran), logged at WARNING; the rest of the file loads unharmed."""
     jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     row = {"status": "CANCELLING", "created_at": now, "updated_at": now, "result": None, "error": None}
     jobs_path.write_text(json.dumps([
         {**row, "job_id": "bad", "cancel_requested": True, "cancelled_before_start": bad_marker},

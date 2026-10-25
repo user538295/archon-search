@@ -30,7 +30,7 @@ def connected_store(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ping_returns_true_when_connected(connected_store):
-    s, mock_db = connected_store
+    s, _mock_db = connected_store
     result = await s.ping()
     assert result is True
 
@@ -151,9 +151,8 @@ async def test_ping_cache_reset_on_connect(tmp_path):
 async def test_ping_cache_cleared_even_when_connect_fails(tmp_path):
     s = SearchStore(tmp_path / "db")
     s._ping_cache = (time.monotonic(), True)
-    with patch("lancedb.connect_async", side_effect=OSError("disk full")):
-        with pytest.raises(OSError):
-            await s.connect()
+    with patch("lancedb.connect_async", side_effect=OSError("disk full")), pytest.raises(OSError):
+        await s.connect()
     assert s._ping_cache is None
 
 

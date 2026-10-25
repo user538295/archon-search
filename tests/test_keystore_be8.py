@@ -32,7 +32,7 @@ def _make_app(
     namespaces: dict[str, str] | None = None,
 ):
     """Build a minimal FastAPI TestClient using the real create_app."""
-    from archon_search.config import SearchConfig, AuthConfig
+    from archon_search.config import AuthConfig, SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
@@ -226,7 +226,9 @@ def test_post_keys_rotate(tmp_path, monkeypatch):
     the mounted MCP auth middleware read.
     """
     from fastapi.testclient import TestClient
-    from archon_search.key_manager import get_key_file, ENV_VAR as _ENV_VAR
+
+    from archon_search.key_manager import ENV_VAR as _ENV_VAR
+    from archon_search.key_manager import get_key_file
 
     # Start without ARCHON_SEARCH_API_KEY so app auto-generates a key.
     # The app.state.api_key then holds the auto-generated token.
@@ -311,6 +313,7 @@ def test_post_keys_rotate_grace(tmp_path, monkeypatch):
     grace window logic on that managed key so the assertions always fire.
     """
     from fastapi.testclient import TestClient
+
     from archon_search.key_manager import ENV_VAR as _ENV_VAR
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
@@ -369,7 +372,7 @@ def test_post_keys_rotate_grace(tmp_path, monkeypatch):
 
         # old_key_expires_at should be within range [before+grace, after+grace]
         expires_str = body2["old_key_expires_at"]
-        expires_dt = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
+        expires_dt = datetime.fromisoformat(expires_str)
         assert before + timedelta(seconds=grace) <= expires_dt <= after + timedelta(seconds=grace)
 
         # managed_token still works during grace window (expires_at in the future)
@@ -389,12 +392,13 @@ def test_post_keys_rotate_body_grace_overrides_config(tmp_path, monkeypatch):
     over config=300, immediately revoking it.
     """
     from fastapi.testclient import TestClient
+
     from archon_search.key_manager import ENV_VAR as _ENV_VAR
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv(_ENV_VAR, raising=False)
 
-    from archon_search.config import SearchConfig, AuthConfig
+    from archon_search.config import AuthConfig, SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
@@ -557,10 +561,11 @@ def test_post_keys_rotate_config_grace_used_when_body_absent(tmp_path, monkeypat
     old key should be grace-expiring (still active), not immediately revoked.
     """
     from fastapi.testclient import TestClient
-    from archon_search.key_manager import ENV_VAR as _ENV_VAR
-    from archon_search.config import SearchConfig, AuthConfig
+
+    from archon_search.config import AuthConfig, SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
+    from archon_search.key_manager import ENV_VAR as _ENV_VAR
     from archon_search.server.app import create_app
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
@@ -623,10 +628,11 @@ def test_initial_key_rejected_after_rotation(tmp_path, monkeypatch):
     remain permanently valid after rotation.
     """
     from fastapi.testclient import TestClient
-    from archon_search.key_manager import ENV_VAR as _ENV_VAR
+
     from archon_search.config import SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
+    from archon_search.key_manager import ENV_VAR as _ENV_VAR
     from archon_search.server.app import create_app
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
@@ -697,10 +703,11 @@ def test_double_rotation_idempotency(tmp_path, monkeypatch):
     new_key_id values.
     """
     from fastapi.testclient import TestClient
-    from archon_search.key_manager import ENV_VAR as _ENV_VAR
+
     from archon_search.config import SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
+    from archon_search.key_manager import ENV_VAR as _ENV_VAR
     from archon_search.server.app import create_app
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
@@ -752,14 +759,16 @@ def test_grace_window_expiry_rejects_old_key(tmp_path, monkeypatch):
     Uses two rotations to get a managed key in keys.json with a short grace window,
     then patches datetime in key_manager so active_keys() sees the old key as expired.
     """
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
     from fastapi.testclient import TestClient
-    from archon_search.key_manager import ENV_VAR as _ENV_VAR
+
+    import archon_search.key_manager as km_mod
     from archon_search.config import SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
+    from archon_search.key_manager import ENV_VAR as _ENV_VAR
     from archon_search.server.app import create_app
-    import archon_search.key_manager as km_mod
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv(_ENV_VAR, raising=False)
@@ -848,13 +857,15 @@ def test_post_keys_rotate_search_env_write_fails_500(tmp_path, monkeypatch):
     keys.json is never touched.
     """
     from unittest.mock import patch
+
     from fastapi.testclient import TestClient
-    from archon_search.key_manager import ENV_VAR as _ENV_VAR
+
+    import archon_search.key_manager as km_mod
     from archon_search.config import SearchConfig
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
+    from archon_search.key_manager import ENV_VAR as _ENV_VAR
     from archon_search.server.app import create_app
-    import archon_search.key_manager as km_mod
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv(_ENV_VAR, raising=False)

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -35,7 +35,7 @@ def _auth(api_key: str) -> dict[str, str]:
 def test_pprMode_noEntityMatch_fallsBackToHybrid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S3: PPR with no entity match falls back to hybrid search, ppr_entities_matched=0."""
     install_graph_engine_stub(monkeypatch, empty=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         # Ingest a document so the collection exists
         doc = tmp_path / "doc.txt"
         doc.write_text("Hello world, this is a test document.")
@@ -54,7 +54,7 @@ def test_pprMode_noEntityMatch_fallsBackToHybrid(tmp_path: Path, monkeypatch: py
 def test_pprMode_graphDisabled_returns422(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S5: PPR with graph disabled → 422."""
     # No graph-engine stub needed — graph_enabled=False so _check_graph_deps is not called
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, _cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Hello world.")
         ingest_file_via_path(client, "col", str(doc), api_key=api_key)
@@ -70,7 +70,7 @@ def test_pprMode_graphDisabled_returns422(tmp_path: Path, monkeypatch: pytest.Mo
 def test_pprMode_scopeFilterConflict_returns422(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S6: scope_filter + graph_mode=ppr → 422."""
     install_graph_engine_stub(monkeypatch, empty=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Hello world.")
         ingest_file_via_path(client, "col", str(doc), api_key=api_key)
@@ -91,7 +91,7 @@ def test_pprMode_scopeFilterConflict_returns422(tmp_path: Path, monkeypatch: pyt
 def test_pprMode_searchPipelineResult_carriesPprCount(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """SearchPipelineResult.ppr_entities_matched=0 is propagated to SearchResponse."""
     install_graph_engine_stub(monkeypatch, empty=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Retrieval augmented generation pipeline test.")
         ingest_file_via_path(client, "col", str(doc), api_key=api_key)

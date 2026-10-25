@@ -2,23 +2,22 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import os
-
 import tomlkit
 from fastapi.testclient import TestClient
 
 from archon_search.collection_meta import CollectionMeta
-
 from archon_search.config import SearchConfig
 from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
+from tests._collection_access_stub import allow_collection_access
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -51,6 +50,7 @@ def _make_client(
     ]
 
     mock_store = MagicMock()
+    mock_store.assert_collection_access = AsyncMock()
     mock_store.get_all_collections_meta = AsyncMock(return_value=pinned_meta)
     # Stateful meta so a deleted collection stops resolving — mirrors the real
     # store, where delete_collection_meta removes the row and a subsequent
@@ -221,7 +221,7 @@ async def _wait_for_that_raises(coro: object, timeout: float) -> None:
     import inspect
     if inspect.iscoroutine(coro):
         coro.close()  # close without awaiting to suppress ResourceWarning
-    raise asyncio.TimeoutError
+    raise TimeoutError
 
 
 def test_E3_5b_timeout_returns_504(tmp_path: Path) -> None:
@@ -273,7 +273,7 @@ def test_H3_6b_all_collections_below_confidence_threshold(tmp_path: Path) -> Non
 def _make_ingest_client(
     tmp_path: Path,
     pipeline_fn=None,
-) -> tuple[TestClient, "FastAPI"]:
+) -> tuple[TestClient, FastAPI]:
     """Create a TestClient with optional injected pipeline function.
 
     Used as a context manager by the job-lifecycle tests below: without one,
@@ -286,7 +286,7 @@ def _make_ingest_client(
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     job_store = JobStore(path=tmp_path / "jobs.json")
-    app = create_app(config, job_store, config_path=tmp_path / "config.toml")
+    app = allow_collection_access(create_app(config, job_store, config_path=tmp_path / "config.toml"))
     if pipeline_fn is not None:
         app.state.ingest_pipeline = pipeline_fn
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -297,7 +297,7 @@ def _make_ingest_client(
 # ingest job transitions PENDING → DONE (real background task)
 # ---------------------------------------------------------------------------
 def test_H3_6_ingest_job_transitions_pending_to_done(tmp_path: Path) -> None:
-    client, app = _make_ingest_client(tmp_path)
+    client, _app = _make_ingest_client(tmp_path)
 
     # One portal for the whole test: the background task must outlive the POST.
     with client:
@@ -327,7 +327,7 @@ def test_H3_7_ingest_job_failure_sets_failed_status(tmp_path: Path) -> None:
     async def failing_pipeline(job_id: str, store: object, body: object, **kwargs: object) -> None:
         raise RuntimeError("pipeline exploded")
 
-    client, app = _make_ingest_client(tmp_path, pipeline_fn=failing_pipeline)
+    client, _app = _make_ingest_client(tmp_path, pipeline_fn=failing_pipeline)
 
     response = client.post("/ingest", json={"collection": "docs"})
     assert response.status_code == 202
@@ -373,25 +373,24 @@ async def test_H3_8_ingest_cancel_while_running_transitions_to_cancelling(
         transport=transport,
         base_url="http://test",
         headers={"Authorization": f"Bearer {key}"},
-    ) as client:
-        async with app.router.lifespan_context(app):
-            post_resp = await client.post(
-                "/ingest", json={"collection": "docs"}
-            )
-            assert post_resp.status_code == 202
-            job_id = post_resp.json()["job_id"]
+    ) as client, app.router.lifespan_context(app):
+        post_resp = await client.post(
+            "/ingest", json={"collection": "docs"}
+        )
+        assert post_resp.status_code == 202
+        job_id = post_resp.json()["job_id"]
 
-            # Wait until the pipeline signals it is running
-            await asyncio.wait_for(started.wait(), timeout=5.0)
+        # Wait until the pipeline signals it is running
+        await asyncio.wait_for(started.wait(), timeout=5.0)
 
-            del_resp = await client.delete(f"/jobs/{job_id}")
-            assert del_resp.status_code == 202
+        del_resp = await client.delete(f"/jobs/{job_id}")
+        assert del_resp.status_code == 202
 
-            get_resp = await client.get(f"/jobs/{job_id}")
-            assert get_resp.json()["status"] == JobStatus.CANCELLING.value
+        get_resp = await client.get(f"/jobs/{job_id}")
+        assert get_resp.json()["status"] == JobStatus.CANCELLING.value
 
-            # Unblock pipeline so background task can exit cleanly
-            blocked.set()
+        # Unblock pipeline so background task can exit cleanly
+        blocked.set()
 
 
 # ---------------------------------------------------------------------------
@@ -749,6 +748,7 @@ def _make_two_namespace_clients(
         return None
 
     mock_store = MagicMock()
+    mock_store.assert_collection_access = AsyncMock()
     mock_store.get_all_collections_meta = AsyncMock(return_value=all_meta)
     mock_store.get_collection_meta = AsyncMock(side_effect=_get_meta)
     mock_store.update_collection_meta = AsyncMock()

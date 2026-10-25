@@ -233,7 +233,7 @@ def test_backup_trigger_post_status_reflects_completion(
 
     with make_real_app(tmp_path, monkeypatch, backup_enabled=True) as (
         client,
-        cfg,
+        _cfg,
         api_key,
     ):
         job_store = client.app.state.job_store

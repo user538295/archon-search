@@ -21,7 +21,7 @@ import asyncio
 import hashlib
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -60,7 +60,7 @@ def _make_chunk(doc_id: str, idx: int, text: str, source_path: str, *, acl: list
         text=text,
         vector=[0.0] * _EMBEDDING_DIM,
         source_path=source_path,
-        indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+        indexed_at=normalize_iso_utc(datetime.now(UTC)),
         acl=acl,
     )
 

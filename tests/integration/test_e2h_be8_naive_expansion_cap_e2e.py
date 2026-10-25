@@ -7,10 +7,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests._graph_engine_stub import install_graph_engine_stub
-
 import pytest
 
+from tests._graph_engine_stub import install_graph_engine_stub
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration

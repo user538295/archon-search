@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +19,7 @@ from archon_search.progress import (
     from_dict,
     to_dict,
 )
+
 # compute_eta_seconds imported locally in TestComputeEtaSeconds to test it in isolation
 
 
@@ -653,14 +655,14 @@ class TestTriggerField:
 class TestComputeEtaSeconds:
     """Tests for compute_eta_seconds() pure function."""
 
-    def _make_cp(self, **kwargs) -> "CollectionProgress":
+    def _make_cp(self, **kwargs) -> CollectionProgress:
         from archon_search.progress import CollectionProgress, IndexingStatus
-        defaults = dict(
-            status=IndexingStatus.IN_PROGRESS,
-            total_files=100,
-            processed_files=50,
-            started_at=None,
-        )
+        defaults = {
+            "status": IndexingStatus.IN_PROGRESS,
+            "total_files": 100,
+            "processed_files": 50,
+            "started_at": None,
+        }
         defaults.update(kwargs)
         return CollectionProgress(**defaults)
 
@@ -668,9 +670,10 @@ class TestComputeEtaSeconds:
         "done", "pending", "failed",
     ])
     def test_compute_eta_returns_none_when_not_in_progress(self, status: str) -> None:
+        from datetime import datetime, timedelta
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone, timedelta
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         started = (now - timedelta(seconds=50)).isoformat()
         cp = self._make_cp(
             status=IndexingStatus(status),
@@ -680,9 +683,10 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_none_when_too_few_files(self) -> None:
+        from datetime import datetime, timedelta
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone, timedelta
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         started = (now - timedelta(seconds=50)).isoformat()
         cp = self._make_cp(
             status=IndexingStatus.IN_PROGRESS,
@@ -693,9 +697,10 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_none_when_started_at_missing(self) -> None:
+        from datetime import datetime
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         cp = self._make_cp(
             status=IndexingStatus.IN_PROGRESS,
             processed_files=50,
@@ -705,9 +710,10 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_none_when_elapsed_zero(self) -> None:
+        from datetime import datetime
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         cp = self._make_cp(
             status=IndexingStatus.IN_PROGRESS,
             processed_files=50,
@@ -717,9 +723,10 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_none_when_nothing_remaining(self) -> None:
+        from datetime import datetime, timedelta
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone, timedelta
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         started = (now - timedelta(seconds=50)).isoformat()
         cp = self._make_cp(
             status=IndexingStatus.IN_PROGRESS,
@@ -730,9 +737,10 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_basic_calculation(self) -> None:
+        from datetime import datetime, timedelta
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone, timedelta
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         started = (now - timedelta(seconds=50)).isoformat()
         cp = self._make_cp(
             status=IndexingStatus.IN_PROGRESS,
@@ -746,9 +754,10 @@ class TestComputeEtaSeconds:
         assert isinstance(result, int)  # must be int, not float
 
     def test_compute_eta_accepts_custom_now(self) -> None:
+        from datetime import datetime, timedelta
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone, timedelta
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         started = (now - timedelta(seconds=100)).isoformat()
         cp = self._make_cp(
             status=IndexingStatus.IN_PROGRESS,
@@ -760,9 +769,10 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) == 400
 
     def test_compute_eta_returns_none_for_invalid_started_at(self) -> None:
+        from datetime import datetime
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         cp = self._make_cp(
             status=IndexingStatus.IN_PROGRESS,
             processed_files=50,
@@ -772,9 +782,10 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_value_at_exact_threshold(self) -> None:
+        from datetime import datetime, timedelta
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone, timedelta
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         started = (now - timedelta(seconds=10)).isoformat()
         cp = self._make_cp(
             status=IndexingStatus.IN_PROGRESS,
@@ -786,9 +797,10 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) == 90
 
     def test_compute_eta_naive_started_at_treated_as_utc(self) -> None:
+        from datetime import datetime
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         # Naive ISO string — no timezone suffix
         started_naive = "2026-04-04T09:58:20"  # 100 seconds before now
         cp = self._make_cp(
@@ -801,9 +813,10 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) == 400
 
     def test_compute_eta_returns_none_when_elapsed_negative(self) -> None:
+        from datetime import datetime, timedelta
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone, timedelta
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         # now is 5 seconds BEFORE started_at (clock skew)
         started = (now + timedelta(seconds=5)).isoformat()
         cp = self._make_cp(
@@ -815,9 +828,10 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_none_when_total_files_zero(self) -> None:
+        from datetime import datetime, timedelta
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone, timedelta
-        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=UTC)
         started = (now - timedelta(seconds=50)).isoformat()
         cp = self._make_cp(
             status=IndexingStatus.IN_PROGRESS,
@@ -830,10 +844,11 @@ class TestComputeEtaSeconds:
 
     def test_compute_eta_naive_now_treated_as_utc(self) -> None:
         """Naive `now` kwarg should be treated as UTC (spec-mandated behavior)."""
+        from datetime import datetime
+
         from archon_search.progress import IndexingStatus, compute_eta_seconds
-        from datetime import datetime, timezone
         # started_at is UTC-aware
-        started_utc = datetime(2026, 4, 4, 9, 58, 20, tzinfo=timezone.utc)
+        started_utc = datetime(2026, 4, 4, 9, 58, 20, tzinfo=UTC)
         # now is naive (no tzinfo) — 100 seconds after started
         now_naive = datetime(2026, 4, 4, 10, 0, 0)  # no tzinfo
         cp = self._make_cp(
@@ -895,9 +910,8 @@ class TestIndexingStateStoreEdgeCases:
         import logging
         store = IndexingStateStore(tmp_path)
         # read() uses Path.read_text — patch it to raise PermissionError (subclass of OSError)
-        with patch.object(Path, "read_text", side_effect=PermissionError("denied")):
-            with caplog.at_level(logging.WARNING, logger="archon_search"):
-                result = store.read()
+        with patch.object(Path, "read_text", side_effect=PermissionError("denied")), caplog.at_level(logging.WARNING, logger="archon_search"):
+            result = store.read()
         assert result is None
         assert any(r.levelno == logging.WARNING and r.name == "archon_search.progress" for r in caplog.records)
 
@@ -913,9 +927,8 @@ class TestIndexingStateStoreEdgeCases:
     def test_write_helper_raises_propagates(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)
         state = IndexingState()
-        with patch("archon_search.progress.atomic_write_json", side_effect=OSError("disk full")):
-            with pytest.raises(OSError, match="disk full"):
-                store.write(state)
+        with patch("archon_search.progress.atomic_write_json", side_effect=OSError("disk full")), pytest.raises(OSError, match="disk full"):
+            store.write(state)
 
     # _safe_state_update (sync.py) must swallow a helper-raised OSError
     def test_safe_state_update_swallows_oserror_from_helper(self, tmp_path: Path) -> None:
@@ -957,9 +970,10 @@ class TestIndexingStateStoreEdgeCases:
 
     # processed_files > 0, elapsed=0 → returns None, no ZeroDivisionError
     def test_compute_eta_elapsed_zero_returns_none(self) -> None:
+        from datetime import datetime
+
         from archon_search.progress import compute_eta_seconds
-        from datetime import datetime, timezone
-        now = datetime(2026, 5, 7, 12, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 5, 7, 12, 0, 0, tzinfo=UTC)
         # started_at == now → elapsed == 0
         cp = CollectionProgress(
             status=IndexingStatus.IN_PROGRESS,
@@ -972,8 +986,9 @@ class TestIndexingStateStoreEdgeCases:
 
     # started_at with UTC+05:00 → ETA computed without crash
     def test_compute_eta_utc_plus_offset_no_crash(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
         from archon_search.progress import compute_eta_seconds
-        from datetime import datetime, timezone, timedelta
         tz_plus5 = timezone(timedelta(hours=5))
         now = datetime(2026, 5, 7, 17, 1, 40, tzinfo=tz_plus5)  # 12:01:40 UTC
         started = datetime(2026, 5, 7, 17, 0, 0, tzinfo=tz_plus5)  # 100s before now
@@ -1263,9 +1278,8 @@ class TestIndexingStateStoreThreadSafety(_ThreadSafetyHarness):
         def boom(_state: IndexingState) -> None:
             raise OSError("disk full")
 
-        with patch.object(store, "write", side_effect=boom):
-            with pytest.raises(OSError, match="disk full"):
-                store.update_collection("col", CollectionProgress(status=IndexingStatus.DONE))
+        with patch.object(store, "write", side_effect=boom), pytest.raises(OSError, match="disk full"):
+            store.update_collection("col", CollectionProgress(status=IndexingStatus.DONE))
 
         # Lock must have been released by the `with` context manager.
         done = threading.Event()

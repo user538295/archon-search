@@ -43,7 +43,7 @@ pytestmark = pytest.mark.xdist_group("install")
 
 class TestCheckProviderDepsAnthropic:
     def _config(self, **hyde_kwargs):
-        from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig  # noqa: PLC0415
+        from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig
 
         cfg = SearchConfig()
         cfg.hyde = HyDEConfig(**hyde_kwargs)
@@ -52,8 +52,8 @@ class TestCheckProviderDepsAnthropic:
 
     def test_hyde_enabled_anthropic_missing_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """hyde.enabled + provider=anthropic + package absent → ConfigError."""
-        from archon_search.config import ConfigError  # noqa: PLC0415
-        from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+        from archon_search.config import ConfigError
+        from archon_search.server.app import _check_provider_deps
 
         monkeypatch.setitem(sys.modules, "anthropic", None)
         cfg = self._config(enabled=True, provider="anthropic")
@@ -66,7 +66,7 @@ class TestCheckProviderDepsAnthropic:
         This is the optional-extras invariant: a default install must not require
         the anthropic package just because the default provider is anthropic.
         """
-        from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+        from archon_search.server.app import _check_provider_deps
 
         monkeypatch.setitem(sys.modules, "anthropic", None)
         cfg = self._config(enabled=False, provider="anthropic")
@@ -74,7 +74,7 @@ class TestCheckProviderDepsAnthropic:
 
     def test_hyde_enabled_anthropic_present_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """hyde.enabled + provider=anthropic + package present → NO error."""
-        from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+        from archon_search.server.app import _check_provider_deps
 
         monkeypatch.setitem(sys.modules, "anthropic", MagicMock())
         cfg = self._config(enabled=True, provider="anthropic")
@@ -82,8 +82,8 @@ class TestCheckProviderDepsAnthropic:
 
     def test_rag_fusion_enabled_anthropic_missing_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """rag_fusion.enabled + provider=anthropic + package absent → ConfigError names rag_fusion."""
-        from archon_search.config import ConfigError, RAGFusionConfig, SearchConfig  # noqa: PLC0415
-        from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+        from archon_search.config import ConfigError, RAGFusionConfig, SearchConfig
+        from archon_search.server.app import _check_provider_deps
 
         monkeypatch.setitem(sys.modules, "anthropic", None)
         cfg = SearchConfig()
@@ -93,7 +93,7 @@ class TestCheckProviderDepsAnthropic:
 
     def test_claude_cli_enabled_no_guard(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """provider=claude_cli must NOT be guarded — it degrades gracefully via shutil.which."""
-        from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+        from archon_search.server.app import _check_provider_deps
 
         # No `anthropic`/`claude` presence assumptions — claude_cli has no pip package.
         monkeypatch.setitem(sys.modules, "anthropic", None)
@@ -101,8 +101,13 @@ class TestCheckProviderDepsAnthropic:
         _check_provider_deps(cfg)  # must not raise
 
     def test_both_enabled_anthropic_missing_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from archon_search.config import ConfigError, HyDEConfig, RAGFusionConfig, SearchConfig  # noqa: PLC0415
-        from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+        from archon_search.config import (
+            ConfigError,
+            HyDEConfig,
+            RAGFusionConfig,
+            SearchConfig,
+        )
+        from archon_search.server.app import _check_provider_deps
         monkeypatch.setitem(sys.modules, "anthropic", None)
         cfg = SearchConfig()
         cfg.hyde = HyDEConfig(enabled=True, provider="anthropic")
@@ -111,8 +116,8 @@ class TestCheckProviderDepsAnthropic:
             _check_provider_deps(cfg)
 
     def test_rag_fusion_disabled_anthropic_missing_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from archon_search.config import RAGFusionConfig, SearchConfig  # noqa: PLC0415
-        from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+        from archon_search.config import RAGFusionConfig, SearchConfig
+        from archon_search.server.app import _check_provider_deps
         monkeypatch.setitem(sys.modules, "anthropic", None)
         cfg = SearchConfig()
         cfg.rag_fusion = RAGFusionConfig(enabled=False, provider="anthropic")
@@ -144,8 +149,8 @@ class TestCheckProviderDepsInstallHint:
         prefix_fixture: str,
         command: str,
     ) -> None:
-        from archon_search.config import ConfigError, HyDEConfig, SearchConfig  # noqa: PLC0415
-        from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+        from archon_search.config import ConfigError, HyDEConfig, SearchConfig
+        from archon_search.server.app import _check_provider_deps
 
         request.getfixturevalue(prefix_fixture)
         monkeypatch.setitem(sys.modules, provider, None)
@@ -411,7 +416,7 @@ class TestRevertGraphEnrichmentFlags:
 
 class TestAssertFeaturesPersisted:
     def _cfg(self, hyde_enabled: bool = False, rag_enabled: bool = False):
-        from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig  # noqa: PLC0415
+        from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig
 
         cfg = SearchConfig()
         cfg.hyde = HyDEConfig(enabled=hyde_enabled)

@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
 from archon_search.graph_types import (
     EntityType,
     GraphEdge,
@@ -19,8 +18,7 @@ from archon_search.graph_types import (
     make_stable_edge_id,
     make_stable_entity_id,
 )
-from archon_search.ppr_walker import PPRWalkResult, PPRWalker
-
+from archon_search.ppr_walker import PPRWalker, PPRWalkResult
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -53,11 +53,11 @@ def test_openapi_schema_is_cached(app) -> None:  # type: ignore[no-untyped-def]
     assert first is second, "openapi() should return the cached schema object"
 
 
-from starlette.testclient import TestClient  # noqa: E402
+from starlette.testclient import TestClient
 
 
-def test_cors_options_preflight_returns_headers(app) -> None:  # type: ignore[no-untyped-def]
-    """OPTIONS /search returns Access-Control-Allow-Origin: * without requiring auth."""
+def test_cors_options_preflight_sends_no_cors_headers_by_default(app) -> None:  # type: ignore[no-untyped-def]
+    """No ``[server].cors_origins`` configured: a preflight carries no Access-Control-Allow-Origin."""
     client = TestClient(app, raise_server_exceptions=False)
     response = client.options(
         "/search",
@@ -66,18 +66,18 @@ def test_cors_options_preflight_returns_headers(app) -> None:  # type: ignore[no
             "Access-Control-Request-Method": "POST",
         },
     )
-    assert response.headers.get("access-control-allow-origin") == "*"
+    assert "access-control-allow-origin" not in response.headers
 
 
-def test_cors_get_health_returns_headers(app) -> None:  # type: ignore[no-untyped-def]
-    """GET /health response includes Access-Control-Allow-Origin."""
+def test_cors_get_health_sends_no_cors_headers_by_default(app) -> None:  # type: ignore[no-untyped-def]
+    """GET /health carries no Access-Control-Allow-Origin unless the origin is configured."""
     client = TestClient(app, raise_server_exceptions=False)
     response = client.get("/health", headers={"Origin": "http://localhost:3000"})
-    assert response.headers.get("access-control-allow-origin") == "*"
+    assert "access-control-allow-origin" not in response.headers
 
 
-def test_cors_preflight_to_protected_endpoint_not_blocked(app) -> None:  # type: ignore[no-untyped-def]
-    """OPTIONS /search returns CORS headers and NOT 401 (preflight must bypass auth)."""
+def test_cors_preflight_to_protected_endpoint_still_refused_without_credentials(app) -> None:  # type: ignore[no-untyped-def]
+    """Without CORS config the preflight reaches the auth layer (no cross-origin grant, no CORS headers)."""
     client = TestClient(app, raise_server_exceptions=False)
     response = client.options(
         "/search",
@@ -86,12 +86,12 @@ def test_cors_preflight_to_protected_endpoint_not_blocked(app) -> None:  # type:
             "Access-Control-Request-Method": "POST",
         },
     )
-    assert response.status_code != 401
-    assert response.headers.get("access-control-allow-origin") == "*"
+    assert "access-control-allow-origin" not in response.headers
+    assert response.status_code != 200
 
 
 def test_health_response_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
-    """GET /health 200 response schema must have 'status' and 'version' string properties."""
+    """GET /health 200 response schema must have only a 'status' string property."""
     schema = app.openapi()
     get_op = schema["paths"]["/health"]["get"]
     resp_200 = get_op["responses"]["200"]
@@ -107,9 +107,8 @@ def test_health_response_schema_in_spec(app) -> None:  # type: ignore[no-untyped
         model_schema = json_schema
     props = model_schema.get("properties", {})
     assert "status" in props, "HealthResponse must have 'status' property"
-    assert "version" in props, "HealthResponse must have 'version' property"
+    assert "version" not in props, "HealthResponse must not disclose the version"
     assert props["status"].get("type") == "string"
-    assert props["version"].get("type") == "string"
 
 
 def test_status_response_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
@@ -134,15 +133,12 @@ def test_status_response_schema_in_spec(app) -> None:  # type: ignore[no-untyped
 
 
 def test_health_endpoint_returns_typed_response(app) -> None:  # type: ignore[no-untyped-def]
-    """GET /health returns JSON with 'status' and 'version' keys."""
+    """GET /health returns JSON with only a 'status' key (no version: the probe is unauthenticated)."""
     client = TestClient(app, raise_server_exceptions=False)
     response = client.get("/health")
     assert response.status_code == 200
     body = response.json()
-    assert "status" in body
-    assert "version" in body
-    assert isinstance(body["status"], str)
-    assert isinstance(body["version"], str)
+    assert body == {"status": "running"}
 
 
 def test_status_endpoint_returns_typed_response(
@@ -474,7 +470,7 @@ def test_error_schemas_documented(app) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_404_runtime_response_matches_error_detail(
-    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch"
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GET /collections/nonexistent returns HTTP 404 with body matching ErrorDetail shape."""
     from unittest.mock import AsyncMock, MagicMock
@@ -513,7 +509,7 @@ def test_404_runtime_response_matches_error_detail(
 
 
 def test_delete_active_job_returns_202(
-    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch"
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """DELETE /jobs/{job_id} for an in-progress job returns 202 with JobResponse body."""
     import asyncio as _asyncio
@@ -536,6 +532,7 @@ def test_delete_active_job_returns_202(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.assert_collection_access = AsyncMock()
     full_app.state.search_store = mock_store
 
     client = TestClient(full_app, raise_server_exceptions=False)

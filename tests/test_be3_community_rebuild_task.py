@@ -25,11 +25,18 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from archon_search.community_builder import COMMUNITY_DEPENDENCY_DETAIL, NoGraphNodesError, _run_leiden_partition_sync
+from archon_search.community_builder import (
+    COMMUNITY_DEPENDENCY_DETAIL,
+    NoGraphNodesError,
+    _run_leiden_partition_sync,
+)
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.types import JobStatus
-from tests._install_hint_leak import assert_install_hint_logged_not_sent, patch_install_hint
+from tests._install_hint_leak import (
+    assert_install_hint_logged_not_sent,
+    patch_install_hint,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -148,7 +155,10 @@ async def test_rebuild_task_missing_leidenalg_sets_failed_with_fixed_detail(
 
 async def test_rebuild_task_runtime_error_sets_failed(tmp_path: Path) -> None:
     """A RuntimeError from the builder (e.g. GraphStore I/O) -> FAILED with the sanitized text, never its message (C4)."""
-    from archon_search.server.routes_graph import COMMUNITY_REBUILD_FAILED_DETAIL, _community_rebuild_task
+    from archon_search.server.routes_graph import (
+        COMMUNITY_REBUILD_FAILED_DETAIL,
+        _community_rebuild_task,
+    )
 
     jobs_path = tmp_path / "jobs.json"
     job_store = JobStore(path=jobs_path)
@@ -181,9 +191,11 @@ async def test_rebuild_task_unexpected_error_sets_failed_with_sanitized_detail_a
     import logging
     from types import SimpleNamespace
 
+    from archon_search.server.routes_graph import (
+        COMMUNITY_REBUILD_FAILED_DETAIL,
+        _community_rebuild_task,
+    )
     from tests._job_store_faults import assert_error_logged_with_traceback
-
-    from archon_search.server.routes_graph import COMMUNITY_REBUILD_FAILED_DETAIL, _community_rebuild_task
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
@@ -263,7 +275,10 @@ async def test_rebuild_task_done_write_failure_does_not_escape(tmp_path: Path, c
     import logging
 
     from archon_search.server.routes_graph import _community_rebuild_task
-    from tests._job_store_faults import assert_error_logged_with_traceback, failing_job_writes
+    from tests._job_store_faults import (
+        assert_error_logged_with_traceback,
+        failing_job_writes,
+    )
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")

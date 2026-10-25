@@ -18,8 +18,8 @@ def _stub_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> None:
     provider guard (_check_provider_deps) now imports it when anthropic-backed
     HyDE/RAG Fusion is enabled, so provide a bare stub for these startup-path
     tests. No test in this file asserts anthropic-absence behavior."""
-    import sys  # noqa: PLC0415
-    import types  # noqa: PLC0415
+    import sys
+    import types
     stub = types.ModuleType("anthropic")
     # AnthropicQueryExpansionProvider.__init__ reads anthropic.APIError; give it
     # a real exception class so construction (and any except clause) is valid.
@@ -56,7 +56,7 @@ def wait_for_warmup(app: FastAPI, timeout: float = MODELS_CHECK_SETTLE_TIMEOUT_S
     task runs on the TestClient portal thread's loop, so it cannot be awaited from
     here — poll it instead.
     """
-    import time  # noqa: PLC0415
+    import time
 
     task = getattr(app.state, "_warmup_task", None)
     assert task is not None, (
@@ -83,9 +83,9 @@ def wait_for_models_check_to_settle(
 
     Raises ``AssertionError`` naming whichever of the two did not settle in time.
     """
-    import time  # noqa: PLC0415
+    import time
 
-    from archon_search.server.schemas import WarmupResult  # noqa: PLC0415
+    from archon_search.server.schemas import WarmupResult
 
     deadline = time.monotonic() + timeout
     while True:
@@ -266,8 +266,10 @@ def test_create_app_passes_namespaces_to_middleware(tmp_path: Path, job_store: J
 
 def test_create_app_empty_namespaces_no_error(tmp_path: Path, job_store: JobStore) -> None:
     """create_app() with config.namespaces == {} creates middleware without error; existing key still works."""
-    from starlette.testclient import TestClient
     from unittest.mock import AsyncMock, patch
+
+    from starlette.testclient import TestClient
+
     from archon_search.store import SearchStore
 
     cfg = SearchConfig()
@@ -282,7 +284,7 @@ def test_create_app_empty_namespaces_no_error(tmp_path: Path, job_store: JobStor
         app = create_app(cfg, job_store)
         # Retrieve the api_key that was generated so we can use it in the request
         from archon_search.key_manager import load_or_generate_key
-        api_key, _ = load_or_generate_key()
+        _api_key, _ = load_or_generate_key()
         with TestClient(app) as client:
             response = client.get("/health")
     # /health is public — must be 200 regardless of auth
@@ -291,8 +293,10 @@ def test_create_app_empty_namespaces_no_error(tmp_path: Path, job_store: JobStor
 
 def test_health_endpoint_unauthenticated_200(tmp_path: Path, job_store: JobStore) -> None:
     """GET /health with NO Authorization header returns 200 even when namespaces is non-empty."""
-    from starlette.testclient import TestClient
     from unittest.mock import AsyncMock, patch
+
+    from starlette.testclient import TestClient
+
     from archon_search.store import SearchStore
 
     cfg = SearchConfig()
@@ -317,12 +321,15 @@ def test_health_endpoint_unauthenticated_200(tmp_path: Path, job_store: JobStore
 # ---------------------------------------------------------------------------
 
 import re as _re
+
 _REQUEST_ID_RE = _re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 
 def _make_test_client(tmp_path: Path, job_store: JobStore):  # type: ignore[no-untyped-def]
     from unittest.mock import AsyncMock, patch
+
     from starlette.testclient import TestClient
+
     from archon_search.store import SearchStore
 
     cfg = SearchConfig()
@@ -338,7 +345,9 @@ def _make_test_client(tmp_path: Path, job_store: JobStore):  # type: ignore[no-u
 
 def test_health_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
     from unittest.mock import AsyncMock, patch
+
     from starlette.testclient import TestClient
+
     from archon_search.store import SearchStore
 
     cfg = SearchConfig()
@@ -356,7 +365,9 @@ def test_health_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
 
 def test_401_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
     from unittest.mock import AsyncMock, patch
+
     from starlette.testclient import TestClient
+
     from archon_search.store import SearchStore
 
     cfg = SearchConfig()
@@ -375,7 +386,9 @@ def test_401_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
 
 def test_options_preflight_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
     from unittest.mock import AsyncMock, patch
+
     from starlette.testclient import TestClient
+
     from archon_search.store import SearchStore
 
     cfg = SearchConfig()
@@ -422,7 +435,9 @@ def test_run_server_calls_configure_logging(monkeypatch):
 async def test_embedder_cache_in_app_state(config: SearchConfig, job_store: JobStore) -> None:
     """After lifespan startup, app.state.embedder_cache is an EmbedderCache instance."""
     from unittest.mock import AsyncMock, patch
+
     from starlette.testclient import TestClient
+
     from archon_search.embedder_cache import EmbedderCache
     from archon_search.store import SearchStore
 
@@ -450,7 +465,9 @@ async def test_eager_load_embedders_false_preloads_only_the_default_model(
     (``test_eager_load_embedders_true_preloads_collection_models``).
     """
     from unittest.mock import AsyncMock, MagicMock, patch
+
     from starlette.testclient import TestClient
+
     from archon_search.collection_meta import CollectionMeta
     from archon_search.store import SearchStore
 
@@ -481,11 +498,13 @@ async def test_eager_load_embedders_true_preloads_collection_models(tmp_path: Pa
     model-name set app.py hands it — the caching itself is EmbedderCache's contract
     and is covered by ``test_eager_load_embedders_preloads_default_model``.
     """
-    from unittest.mock import AsyncMock, patch, MagicMock
+    from unittest.mock import AsyncMock, MagicMock, patch
+
     from starlette.testclient import TestClient
-    from archon_search.store import SearchStore
-    from archon_search.embedder_cache import EmbedderCache
+
     from archon_search.collection_meta import CollectionMeta
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.store import SearchStore
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -528,9 +547,11 @@ async def test_eager_load_embedders_preloads_default_model(tmp_path: Path, job_s
     ``is_warm`` is True.
     """
     from unittest.mock import AsyncMock, patch
+
     from starlette.testclient import TestClient
-    from archon_search.store import SearchStore
+
     from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -561,27 +582,31 @@ async def test_eager_load_embedders_preloads_default_model(tmp_path: Path, job_s
 async def test_eager_load_warns_when_models_exceed_cache_size(
     tmp_path: Path, job_store: JobStore, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """S485: preloading more models than the cache holds evicts just-warmed models — warn."""
+    """S485: preloading more per-collection models than the cache holds evicts just-warmed models — warn."""
     import logging
-    from unittest.mock import AsyncMock, patch, MagicMock
+    from unittest.mock import AsyncMock, MagicMock, patch
+
     from starlette.testclient import TestClient
-    from archon_search.store import SearchStore
-    from archon_search.embedder_cache import EmbedderCache
+
     from archon_search.collection_meta import CollectionMeta
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.store import SearchStore
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
     cfg.eager_load_embedders = True
-    cfg.embedder_cache_size = 1  # default model + model-X > 1
+    cfg.embedder_cache_size = 1  # model-X + model-Y > 1; the pinned default model does not count
 
     fake_meta = MagicMock(spec=CollectionMeta)
     fake_meta.active_embedding_model = "model-X"
+    other_meta = MagicMock(spec=CollectionMeta)
+    other_meta.active_embedding_model = "model-Y"
 
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
-        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[fake_meta])),
+        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[fake_meta, other_meta])),
         patch.object(EmbedderCache, "preload", new=AsyncMock(return_value=[])),
         caplog.at_level(logging.WARNING, logger="archon_search.server.app"),
     ):
@@ -596,18 +621,20 @@ async def test_eager_load_warns_when_models_exceed_cache_size(
 async def test_eager_load_does_not_warn_when_models_exactly_fill_cache(
     tmp_path: Path, job_store: JobStore, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """S485 boundary: distinct models == embedder_cache_size fits — no eviction, no warning."""
+    """S485 boundary: per-collection models == embedder_cache_size fit — no eviction, no warning."""
     import logging
-    from unittest.mock import AsyncMock, patch, MagicMock
+    from unittest.mock import AsyncMock, MagicMock, patch
+
     from starlette.testclient import TestClient
-    from archon_search.store import SearchStore
-    from archon_search.embedder_cache import EmbedderCache
+
     from archon_search.collection_meta import CollectionMeta
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.store import SearchStore
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
     cfg.eager_load_embedders = True
-    cfg.embedder_cache_size = 2  # default model + model-X == 2
+    cfg.embedder_cache_size = 1  # model-X fits next to the pinned default model
 
     fake_meta = MagicMock(spec=CollectionMeta)
     fake_meta.active_embedding_model = "model-X"
@@ -720,13 +747,13 @@ def test_eager_warmup_failure_is_contained_and_logged(
     and silently lose the diagnostic. The ``except BaseException`` branch has to
     absorb it, and the server has to keep serving.
     """
-    import logging  # noqa: PLC0415
-    from unittest.mock import AsyncMock, patch  # noqa: PLC0415
+    import logging
+    from unittest.mock import AsyncMock, patch
 
-    from starlette.testclient import TestClient  # noqa: PLC0415
+    from starlette.testclient import TestClient
 
-    from archon_search.embedder_cache import EmbedderCache  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.store import SearchStore
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -764,13 +791,13 @@ async def test_eager_warmup_cancelled_on_shutdown_is_logged(
     task must re-raise ``CancelledError`` (so the gather sees a real cancellation)
     rather than swallowing it into the generic failure branch.
     """
-    import asyncio  # noqa: PLC0415
-    import logging  # noqa: PLC0415
-    from unittest.mock import AsyncMock, patch  # noqa: PLC0415
+    import asyncio
+    import logging
+    from unittest.mock import AsyncMock, patch
 
-    from archon_search.embedder_cache import EmbedderCache  # noqa: PLC0415
-    from archon_search.server.schemas import WarmupResult  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.server.schemas import WarmupResult
+    from archon_search.store import SearchStore
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -823,15 +850,24 @@ def test_warmup_task_attribute_exists_when_eager_load_disabled(
 
 
 def test_embedder_cache_receives_configured_device(tmp_path: Path, job_store: JobStore) -> None:
-    """[database].device must reach the cache — every search embeds through it, not app.state.embedder."""
-    from unittest.mock import AsyncMock, patch, MagicMock
+    """[database].device must reach the cache — every search embeds through it, not app.state.embedder.
+
+    The default model is seeded with the global embedder, so the cache builds only a collection's
+    own model.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
     from starlette.testclient import TestClient
+
+    from archon_search.collection_meta import CollectionMeta
     from archon_search.store import SearchStore
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
     cfg.device = "mps"
     cfg.eager_load_embedders = True
+    collection_model = "BAAI/bge-base-en-v1.5"
+    assert collection_model != cfg.embedding_model
 
     stub = MagicMock()
     stub.embed = AsyncMock(return_value=[[0.0]])
@@ -840,13 +876,18 @@ def test_embedder_cache_receives_configured_device(tmp_path: Path, job_store: Jo
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
-        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[])),
+        patch.object(
+            SearchStore,
+            "get_all_collections_meta",
+            new=AsyncMock(return_value=[CollectionMeta(name="c", active_embedding_model=collection_model)]),
+        ),
         patch("archon_search.embedder_cache.make_embedder", return_value=stub) as mock_make,
     ):
         app = create_app(cfg, job_store)
         with TestClient(app):
             wait_for_warmup(app)
 
+    assert mock_make.call_args.args == (collection_model,)
     assert mock_make.call_args.kwargs["device"] == "mps"
 
 
@@ -863,7 +904,9 @@ def test_collection_sync_receives_configured_device(tmp_path: Path, job_store: J
 
 def test_inbound_id_echoed(tmp_path: Path, job_store: JobStore) -> None:
     from unittest.mock import AsyncMock, patch
+
     from starlette.testclient import TestClient
+
     from archon_search.store import SearchStore
 
     cfg = SearchConfig()
@@ -1023,8 +1066,9 @@ def test_create_app_hyde_enabled_anthropic_missing_raises(
     tmp_path: Path, job_store: JobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """create_app must raise ConfigError when HyDE is enabled + anthropic absent (guard is wired in)."""
-    import sys  # noqa: PLC0415
-    from archon_search.config import ConfigError  # noqa: PLC0415
+    import sys
+
+    from archon_search.config import ConfigError
     monkeypatch.setitem(sys.modules, "anthropic", None)
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -1037,7 +1081,7 @@ def test_create_app_hyde_disabled_anthropic_missing_ok(
     tmp_path: Path, job_store: JobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Default install (HyDE disabled) must NOT require anthropic even though it is the default provider."""
-    import sys  # noqa: PLC0415
+    import sys
     monkeypatch.setitem(sys.modules, "anthropic", None)
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")

@@ -8,9 +8,6 @@ import pytest
 from archon_search.store import StoreBusyError
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
-
-
-
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------

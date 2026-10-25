@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -42,7 +42,7 @@ def test_e2h_t1_pprMode_returns200_pprEntitiesMatchedPresent(
 ) -> None:
     """PPR mode with graph enabled and no entity matches → 200, ppr_entities_matched=0."""
     install_graph_engine_stub(monkeypatch, empty=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Hello world, this is a test document.")
         ingest_file_via_path(client, "col", str(doc), api_key=api_key)
@@ -65,7 +65,7 @@ def test_e2h_t1_pprMode_graphDisabled_returns422(
 ) -> None:
     """PPR mode with graph disabled → 422, detail mentions 'graph'."""
     # No graph-engine stub needed — graph_enabled=False so _check_graph_deps is not called
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, _cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Hello world.")
         ingest_file_via_path(client, "col", str(doc), api_key=api_key)
@@ -88,7 +88,7 @@ def test_e2h_t1_pprMode_scopeFilter_returns422(
 ) -> None:
     """scope_filter + graph_mode=ppr → 422 (REST surface guard)."""
     install_graph_engine_stub(monkeypatch, empty=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Hello world.")
         ingest_file_via_path(client, "col", str(doc), api_key=api_key)

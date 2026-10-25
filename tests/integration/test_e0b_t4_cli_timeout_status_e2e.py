@@ -101,12 +101,11 @@ def test_e2e_status_cli_key_warning(
 
         # Step 2: Feed the real payload into the CLI renderer via patch.
         runner = CliRunner()
-        with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-            with patch(
-                "archon_search.cli.status._fetch_server_status",
-                return_value=body,
-            ):
-                result = runner.invoke(main, ["status"])
+        with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=body,
+        ):
+            result = runner.invoke(main, ["status"])
 
     assert result.exit_code == 0, (
         f"archon-search status exited {result.exit_code}:\n{result.output}"
@@ -247,7 +246,7 @@ def test_e2e_maintenance_wait_exits_2_on_failed_pass(
     the unit-level counterpart is test_maintenance_run_wait_exits_2_on_failed in
     tests/test_cli_maintenance.py.
     """
-    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (_client, _cfg, api_key):
         # Step 1: Build mock HTTP responses.
         # The CLI calls httpx.get twice: once for the baseline last_run_at (before
         # triggering) and once per poll iteration. We return None as the baseline

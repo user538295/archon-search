@@ -20,8 +20,8 @@ from typing import Any
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
+from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -133,7 +133,7 @@ async def test_mcp_search_real_pipeline_result_passes_pydantic_gate(
     doc = tmp_path / "doc.txt"
     doc.write_text("The quick brown fox jumps over the lazy dog. " * 6)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "mcp-schema-search"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
@@ -190,7 +190,7 @@ async def test_mcp_list_collections_real_pipeline_result_field_rename(
     doc = tmp_path / "col-list.txt"
     doc.write_text("Collection listing schema contract test document. " * 6)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "mcp-schema-collections"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
@@ -275,7 +275,7 @@ async def test_mcp_search_with_context_excludes_transient_chunk_fields(
     doc = tmp_path / "context-doc.txt"
     doc.write_text("\n\n".join([para_a, para_b, para_c, para_d] * 4))
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "mcp-schema-context"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 

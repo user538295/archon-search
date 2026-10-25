@@ -5,7 +5,7 @@ from pathlib import Path
 
 def test_package_importable() -> None:
     """import archon_search succeeds after uv sync."""
-    import archon_search  # noqa: F401
+    import archon_search
 
     assert archon_search is not None
 

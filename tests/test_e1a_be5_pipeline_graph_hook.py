@@ -9,7 +9,6 @@ import pytest
 from archon_search.config import GraphConfig
 from archon_search.graph_types import GraphExtractionResult
 
-
 # ---------------------------------------------------------------------------
 # Helper — build a minimal SearchPipeline with optional graph components
 # ---------------------------------------------------------------------------
@@ -201,8 +200,8 @@ async def test_ingest_threshold_warning_added_to_warnings(
 async def test_startup_config_error_when_extras_absent(tmp_path, monkeypatch):
     """ConfigError is raised at create_app() time when graph.enabled=True but gliner is absent."""
     import sys
-    from archon_search.config import SearchConfig, GraphConfig
-    from archon_search.config import ConfigError
+
+    from archon_search.config import ConfigError, GraphConfig, SearchConfig
     from archon_search.jobs.store import JobStore
 
     config = SearchConfig()

@@ -17,6 +17,7 @@ from archon_search._types import SearchResult
 from archon_search.pipeline import SearchPipelineResult
 from tests._fastmcp_stub import stubbed_fastmcp
 
+
 @pytest.mark.asyncio
 async def test_mcp_search_tool_includes_new_keys() -> None:
     sr = SearchResult(
@@ -46,7 +47,7 @@ async def test_mcp_search_tool_includes_new_keys() -> None:
         search_fn = app.tools["search"]
         payload = await search_fn(query="hello", collection=None, include_metadata=True)
 
-    assert "results" in payload and payload["results"]
+    assert payload.get("results")
     item = payload["results"][0]
     for key in ("file_type", "indexed_at", "updated_at", "ingested_by", "metadata", "acl"):
         assert key in item, f"missing key {key!r} in MCP search response"

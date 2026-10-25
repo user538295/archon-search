@@ -15,7 +15,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from archon_search.server import routes_sync
-from archon_search.server.routes_jobs import INTERNAL_ERROR_DETAIL, JOB_SUPERSEDED_DETAIL, _SYNC_JOB_NOT_CANCELLABLE_DETAIL
+from archon_search.server.routes_jobs import (
+    _SYNC_JOB_NOT_CANCELLABLE_DETAIL,
+    INTERNAL_ERROR_DETAIL,
+    JOB_SUPERSEDED_DETAIL,
+)
 from archon_search.server.routes_sync import _SYNC_FAILED_DETAIL
 from archon_search.types import JobStatus
 from tests._job_store_faults import (
@@ -46,7 +50,7 @@ def _clean_sync_stub() -> AsyncMock:
 def test_post_sync_returns_202_running(tmp_path, monkeypatch):
     """POST /sync returns 202 with JobResponse status=RUNNING, and the job's first persisted status is
     RUNNING: it is created in one write, never QUEUED (nothing schedules a SyncJob)."""
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         # Mock sync so it doesn't actually run filesystem operations
         client.app.state.collection_sync.sync = _clean_sync_stub()
 
@@ -64,7 +68,7 @@ def test_post_sync_returns_202_running(tmp_path, monkeypatch):
 
 def test_post_sync_409_on_concurrent_submit(tmp_path, monkeypatch):
     """POST /sync returns 409 when sync_lock is already held."""
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         # Acquire the lock externally (simulating a concurrent sync in progress)
         lock = client.app.state.sync_lock
 
@@ -83,7 +87,7 @@ def test_post_sync_409_on_concurrent_submit(tmp_path, monkeypatch):
 
 def test_post_sync_requires_bearer_auth(tmp_path, monkeypatch):
     """POST /sync returns 401 without a valid Bearer token."""
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, _api_key):
         resp = client.post("/sync")
         assert resp.status_code == 401
 
@@ -135,7 +139,7 @@ def test_post_sync_task_failed_releases_lock_and_second_submit_succeeds(tmp_path
 
     S23: a subsequent POST /sync must return 202, not 409.
     """
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         fail_mock = AsyncMock(side_effect=OSError("disk full"))
         client.app.state.collection_sync.sync = fail_mock
 
@@ -158,7 +162,7 @@ def test_post_sync_job_result_contains_all_sync_result_fields(tmp_path, monkeypa
 
     Uses a real sync over a tmp_path collection (empty — no configured collections).
     """
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         # Real sync — no collections configured, so it runs cleanly and DONE quickly
         resp = client.post("/sync", headers={"Authorization": f"Bearer {api_key}"})
         assert resp.status_code == 202

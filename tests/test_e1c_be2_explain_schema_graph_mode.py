@@ -31,7 +31,6 @@ from archon_search.server.routes_explain import (
     ExplainResult,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -296,7 +295,7 @@ def test_explain_schemas_extra_forbid_graph_mode() -> None:
 
 def test_explain_route_invalid_graph_mode_returns_422(tmp_path: Path) -> None:
     """POST /explain with graph_mode='NAIVE' (wrong case) → 422 (Pydantic validation error)."""
-    app, client = _make_app(tmp_path)
+    _app, client = _make_app(tmp_path)
     response = client.post(
         "/explain",
         json={

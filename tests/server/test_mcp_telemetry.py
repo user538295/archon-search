@@ -13,9 +13,6 @@ from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 from tests._fastmcp_stub import stubbed_fastmcp
 
-
-
-
 # ---------------------------------------------------------------------------
 # Helper: build a stub pipeline
 # ---------------------------------------------------------------------------
@@ -136,13 +133,12 @@ async def test_search_tool_query_text_never_in_factory_args() -> None:
         recorded_kwargs.update(kwargs)
         return TelemetryEntry.from_search_tool_result(**kwargs)
 
-    with stubbed_fastmcp():
-        with patch.object(TelemetryEntry, "from_search_tool_result", side_effect=recording_factory):
-            from archon_search.server import mcp as mcp_module
+    with stubbed_fastmcp(), patch.object(TelemetryEntry, "from_search_tool_result", side_effect=recording_factory):
+        from archon_search.server import mcp as mcp_module
 
-            app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
-            search_fn = app.tools["search"]  # type: ignore[attr-defined]
-            await search_fn(query=sentinel, collection=None)
+        app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
+        search_fn = app.tools["search"]  # type: ignore[attr-defined]
+        await search_fn(query=sentinel, collection=None)
 
     for value in recorded_kwargs.values():
         assert sentinel not in str(value), f"Sentinel found in factory kwarg value: {value!r}"
@@ -264,13 +260,12 @@ async def test_search_with_context_tool_query_text_never_in_factory_args() -> No
         recorded_kwargs.update(kwargs)
         return TelemetryEntry.from_search_tool_result(**kwargs)
 
-    with stubbed_fastmcp():
-        with patch.object(TelemetryEntry, "from_search_tool_result", side_effect=recording_factory):
-            from archon_search.server import mcp as mcp_module
+    with stubbed_fastmcp(), patch.object(TelemetryEntry, "from_search_tool_result", side_effect=recording_factory):
+        from archon_search.server import mcp as mcp_module
 
-            app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
-            swc_fn = app.tools["search_with_context"]  # type: ignore[attr-defined]
-            await swc_fn(query=sentinel, collection=None)
+        app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
+        swc_fn = app.tools["search_with_context"]  # type: ignore[attr-defined]
+        await swc_fn(query=sentinel, collection=None)
 
     for value in recorded_kwargs.values():
         assert sentinel not in str(value), f"Sentinel found in factory kwarg value: {value!r}"

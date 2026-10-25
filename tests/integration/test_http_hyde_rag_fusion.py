@@ -387,7 +387,7 @@ def test_rag_fusion_anthropic_behaviour_unchanged_after_refactor(
         "# RAG Fusion Test\n\nRAG Fusion decomposes queries into variants.\n" * 6
     )
 
-    with make_real_app(tmp_path, monkeypatch, rag_fusion_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, rag_fusion_enabled=True) as (client, _cfg, api_key):
         col = "rag-fusion-refactor"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 

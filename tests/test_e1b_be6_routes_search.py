@@ -12,7 +12,6 @@ from pydantic import ValidationError
 
 from archon_search.server.routes_search import SearchRequest
 
-
 # ---------------------------------------------------------------------------
 # test_search_request_graph_mode_validation
 # ---------------------------------------------------------------------------

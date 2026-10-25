@@ -18,13 +18,13 @@ import pytest
 
 from archon_search.graph_store import GraphStore
 from archon_search.graph_types import (
+    MAX_IMPACT_DEPTH,
+    MAX_IMPACT_GROUP_SIZE,
     EntityType,
     GraphEdge,
     GraphNode,
     ImpactDirection,
     ImpactGroup,
-    MAX_IMPACT_DEPTH,
-    MAX_IMPACT_GROUP_SIZE,
     RelationshipType,
     make_code_symbol_qualified_name,
     make_stable_edge_id,
@@ -1058,3 +1058,94 @@ def test_computeImpact_emptyStringFilePath_sameAsAbsent(tmp_path) -> None:
     # Both resolve by highest pagerank (run_b).
     assert [e.entity_name for e in by_empty.callers.direct] == ["caller_of_b"]
     assert [e.entity_name for e in by_none.callers.direct] == ["caller_of_b"]
+
+
+# ---------------------------------------------------------------------------
+# Chunk ACL: symbols / edges that came from a hidden document
+# ---------------------------------------------------------------------------
+
+_HIDDEN_DOC = "doc-hidden"
+
+
+def _in_doc(node_or_edge, doc_id: str):
+    """Return *node_or_edge* re-attributed to *doc_id* (the document that wrote it)."""
+    node_or_edge.source_doc_id = doc_id
+    return node_or_edge
+
+
+def _hiding():
+    from archon_search.acl import ChunkVisibility
+
+    return ChunkVisibility(hidden_doc_ids=frozenset({_HIDDEN_DOC}))
+
+
+def test_computeImpact_visibility_neverTraversesAnEdgeFromAHiddenDocument(tmp_path) -> None:
+    root, shown, secret, behind_secret = _symbol("root"), _symbol("shown"), _symbol("secret"), _symbol("behind_secret")
+    nodes = [root, shown, _in_doc(secret, _HIDDEN_DOC), _in_doc(behind_secret, _HIDDEN_DOC)]
+    edges = [
+        _edge(root, shown),
+        _in_doc(_edge(root, secret), _HIDDEN_DOC),
+        _in_doc(_edge(secret, behind_secret), _HIDDEN_DOC),
+    ]
+
+    async def _go():
+        store = await _seeded_store(tmp_path, "vis-edges", nodes, edges)
+        try:
+            args = {"depth": 3, "direction": ImpactDirection.callees, "extraction_method_filter": None, "file_path": None, "ns": NS}
+            return (
+                await store.compute_impact(COL, "root", **args),
+                await store.compute_impact(COL, "root", visibility=_hiding(), **args),
+            )
+        finally:
+            await store.disconnect()
+
+    unfiltered, filtered = _run(_go())
+
+    assert {e.entity_name for e in unfiltered.callees.direct} == {"shown", "secret"}
+    assert [e.entity_name for e in filtered.callees.direct] == ["shown"]
+    assert filtered.callees.indirect == [], "nothing reachable only through a hidden edge may appear"
+    assert filtered.depth_used == 1
+
+
+def test_computeImpact_visibility_hiddenRootIsIndistinguishableFromAMissingSymbol(tmp_path) -> None:
+    hidden_root, callee = _in_doc(_symbol("hidden_root"), _HIDDEN_DOC), _symbol("callee")
+
+    async def _go():
+        store = await _seeded_store(tmp_path, "vis-root", [hidden_root, callee], [_edge(hidden_root, callee)])
+        try:
+            args = {"depth": 2, "direction": ImpactDirection.both, "extraction_method_filter": None, "file_path": None, "ns": NS}
+            return (
+                await store.compute_impact(COL, "hidden_root", visibility=_hiding(), **args),
+                await store.compute_impact(COL, "no_such_symbol", visibility=_hiding(), **args),
+            )
+        finally:
+            await store.disconnect()
+
+    hidden, missing = _run(_go())
+
+    assert (hidden.callers, hidden.callees, hidden.depth_used) == (missing.callers, missing.callees, missing.depth_used)
+    assert hidden.depth_used == 0
+
+
+def test_computeImpact_visibility_ambiguousNameSkipsTheHiddenCandidate(tmp_path) -> None:
+    """Two code symbols named ``run``: the higher-PageRank one is hidden, so the visible one is the root."""
+    hidden_run = _in_doc(_symbol("run", "secret/run.py", pagerank_score=0.9), _HIDDEN_DOC)
+    visible_run = _symbol("run", "pub/run.py", pagerank_score=0.1)
+    hidden_caller, visible_caller = _symbol("secret_caller"), _symbol("pub_caller")
+    edges = [_edge(hidden_caller, hidden_run), _edge(visible_caller, visible_run)]
+
+    async def _go():
+        store = await _seeded_store(
+            tmp_path, "vis-ambiguous", [hidden_run, visible_run, hidden_caller, visible_caller], edges
+        )
+        try:
+            return await store.compute_impact(
+                COL, "run", depth=1, direction=ImpactDirection.callers,
+                extraction_method_filter=None, file_path=None, ns=NS, visibility=_hiding(),
+            )
+        finally:
+            await store.disconnect()
+
+    result = _run(_go())
+
+    assert [e.entity_name for e in result.callers.direct] == ["pub_caller"]

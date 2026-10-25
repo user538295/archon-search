@@ -18,11 +18,11 @@ from archon_search.graph_types import (
     GraphNode,
     make_stable_entity_id,
 )
+from tests._graph_engine_stub import install_graph_engine_stub
 from tests.integration.conftest import (
     ingest_file_via_path,
     make_real_app,
 )
-from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("ppr_explain")]
 
@@ -79,7 +79,7 @@ def test_explainEndpoint_pprMode_returnsGraphModeApplied(
 ) -> None:
     """POST /explain with graph_mode='ppr' returns graph_mode_applied='ppr' and ppr_entities_matched >= 0."""
     install_graph_engine_stub(monkeypatch, empty=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("kubernetes is a container orchestration system for deploying workloads.")
         ingest_file_via_path(client, "col", str(doc), api_key=api_key)
@@ -159,7 +159,7 @@ def test_explainEndpoint_pprMode_emptyGraph_fallsBackToHybrid(
 ) -> None:
     """PPR explain with empty graph: falls back to hybrid, ppr_entities_matched=0, results non-empty."""
     install_graph_engine_stub(monkeypatch, empty=True)
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("kubernetes is a container orchestration system.")
         ingest_file_via_path(client, "col", str(doc), api_key=api_key)

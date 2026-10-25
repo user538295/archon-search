@@ -45,8 +45,8 @@ _HAS_RUST = _has_module("tree_sitter_rust")
 _HAS_JAVA = _has_module("tree_sitter_java")
 _HAS_BASH = _has_module("tree_sitter_bash")
 
-from archon_search.defref_extractor import DefRefExtractor  # noqa: E402
-from archon_search.graph_types import (  # noqa: E402
+from archon_search.defref_extractor import DefRefExtractor
+from archon_search.graph_types import (
     EntityType,
     GraphNode,
     RelationshipType,

@@ -167,7 +167,7 @@ def test_scope_exact_match_e2e(
         encoding="utf-8",
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         _ingest_file(client, col, str(alice_file), api_key, chunk_scopes=["user:alice"])
         _ingest_file(client, col, str(thread_file), api_key, chunk_scopes=["user:alice:thread-1"])
         _ingest_file(client, col, str(bob_file), api_key, chunk_scopes=["user:bob"])
@@ -240,7 +240,7 @@ def test_scope_wildcard_match_e2e(
         "shared content alpha beta gamma delta " * 5, encoding="utf-8"
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         _ingest_file(client, col, str(alice_file), api_key, chunk_scopes=["user:alice"])
         _ingest_file(client, col, str(thread_file), api_key, chunk_scopes=["user:alice:thread-1"])
         _ingest_file(client, col, str(bob_file), api_key, chunk_scopes=["user:bob"])
@@ -290,7 +290,7 @@ def test_scope_noop_on_unscoped_collection_e2e(
         "some general content alpha beta gamma delta epsilon " * 5, encoding="utf-8"
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         # Ingest without any scopes (unscoped / shared / global)
         _ingest_file(client, col, str(doc_file), api_key, chunk_scopes=None)
 
@@ -326,7 +326,7 @@ def test_scope_filter_bare_wildcard_400_e2e(
     doc_file = col_path / "doc.txt"
     doc_file.write_text("some content for bare wildcard test", encoding="utf-8")
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         _ingest_file(client, col, str(doc_file), api_key)
 
         status, data = _post_search(
@@ -361,7 +361,7 @@ def test_scope_filter_leading_wildcard_400_e2e(
     doc_file = col_path / "doc.txt"
     doc_file.write_text("some content for leading wildcard test", encoding="utf-8")
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         _ingest_file(client, col, str(doc_file), api_key)
 
         # Leading wildcard: "user:*alice"
@@ -427,7 +427,7 @@ def test_scope_filter_on_explain_e2e(
         "shared explain content alpha beta gamma delta epsilon " * 5, encoding="utf-8"
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         _ingest_file(client, col, str(alice_file), api_key, chunk_scopes=["user:alice"])
         _ingest_file(client, col, str(bob_file), api_key, chunk_scopes=["user:bob"])
         _ingest_file(client, col, str(shared_file), api_key, chunk_scopes=None)
@@ -496,7 +496,7 @@ def test_get_documents_includes_scopes_e2e(
         encoding="utf-8",
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         _ingest_file(
             client, col, str(alice_file), api_key,
             chunk_scopes=["user:alice", "role:admin"],
@@ -712,7 +712,7 @@ def test_explain_scope_filter_multi_collection_e2e(
         "shared collection two content alpha beta gamma delta " * 5, encoding="utf-8"
     )
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         # Ingest into col1
         _ingest_file(client, col1, str(alice_c1), api_key, chunk_scopes=["user:alice"])
         _ingest_file(client, col1, str(bob_c1), api_key, chunk_scopes=["user:bob"])

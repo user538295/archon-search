@@ -1,13 +1,12 @@
 """Tests for MarkdownEnricher — heading scanner, page-break extraction, and chunk enrichment."""
+from archon_search._types import ChunkRecord
 from archon_search.enricher import (
+    PAGE_BREAK_MARKER,
+    PAGE_BREAK_MARKER_LEN,
     HeadingEntry,
     HeadingTable,
     MarkdownEnricher,
-    PAGE_BREAK_MARKER,
-    PAGE_BREAK_MARKER_LEN,
 )
-from archon_search._types import ChunkRecord
-
 
 # ===========================================================================
 # Task 1.1 — PAGE_BREAK_MARKER constant
@@ -386,7 +385,7 @@ class TestEnrichChunk:
 # Task 2.5 — enrich_chunk page-break branch
 # ===========================================================================
 
-import types  # noqa: E402  (inline import; only used in this section)
+import types
 
 
 class TestEnrichChunkPageBreak:
@@ -751,9 +750,10 @@ class TestPreprocess:
 # ===========================================================================
 
 import pytest
+
 from archon_search.enricher import (
-    source_subtype_for,
     is_docling_source,
+    source_subtype_for,
 )
 
 

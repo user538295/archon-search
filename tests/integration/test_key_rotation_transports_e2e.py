@@ -16,9 +16,19 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 from starlette.testclient import TestClient
 
-from archon_search.key_manager import ENV_VAR, ROTATE_WRITE_FAILED_DETAIL, KeyStore, get_key_file
+from archon_search.key_manager import (
+    ENV_VAR,
+    ROTATE_WRITE_FAILED_DETAIL,
+    KeyStore,
+    get_key_file,
+)
 from archon_search.paths import get_data_dir
-from tests.integration.conftest import make_real_app, mcp_headers, mcp_initialize, mcp_tool_call
+from tests.integration.conftest import (
+    make_real_app,
+    mcp_headers,
+    mcp_initialize,
+    mcp_tool_call,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -94,9 +104,11 @@ def test_the_mounted_mcp_app_shares_the_rest_key_store_and_key_state(tmp_path, m
 
     # String target: resolved from sys.modules when the patch starts, so it hits the module
     # the lifespan imports even after another test dropped archon_search.server.mcp.
-    with patch("archon_search.server.mcp.create_mcp_http_app", wraps=create_mcp_http_app) as factory:
-        with make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, _cfg, _key):
-            app_state = client.app.state
+    with (
+        patch("archon_search.server.mcp.create_mcp_http_app", wraps=create_mcp_http_app) as factory,
+        make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, _cfg, _key),
+    ):
+        app_state = client.app.state
 
     factory.assert_called_once()
     kwargs = factory.call_args.kwargs

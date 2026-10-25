@@ -29,7 +29,7 @@ def test_status_shows_real_path_and_doc_count(tmp_path: Path, monkeypatch) -> No
 
     toml_content = f'[collections]\ncollections = ["{docs_dir}"]\n'
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, config, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, _config, api_key):
         ingest_file_via_path(client, "mydocs", str(doc_file), api_key=api_key)
 
         resp = client.get("/status", headers={"Authorization": f"Bearer {api_key}"})
@@ -59,7 +59,7 @@ def test_status_two_collections_each_get_own_path_and_count(tmp_path: Path, monk
         f'[collections]\ncollections = ["{alpha_dir}", "{beta_dir}"]\n'
     )
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, config, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, _config, api_key):
         ingest_file_via_path(client, "alpha", str(alpha_file), api_key=api_key)
         ingest_file_via_path(client, "beta", str(beta_file), api_key=api_key)
 

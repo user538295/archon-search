@@ -12,7 +12,7 @@ Run with:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -33,7 +33,7 @@ def _community(idx: int, entity_ids: list[str], chunk_ids: list[str]) -> Communi
         community_id=f"comm-{idx}",
         entity_ids=entity_ids,
         representative_chunk_ids=chunk_ids,
-        built_at=datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        built_at=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
         summary_text=None,
     )
 
@@ -211,14 +211,14 @@ def test_write_communities_summary_text_roundtrip(tmp_path) -> None:
         community_id="comm-with",
         entity_ids=["entity-A"],
         representative_chunk_ids=["chunk-A"],
-        built_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        built_at=datetime(2026, 1, 1, tzinfo=UTC),
         summary_text="This is a summary.",
     )
     comm_without_summary = Community(
         community_id="comm-without",
         entity_ids=["entity-B"],
         representative_chunk_ids=["chunk-B"],
-        built_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        built_at=datetime(2026, 1, 1, tzinfo=UTC),
         summary_text=None,
     )
 
@@ -320,7 +320,7 @@ def test_write_communities_empty_list_clears_existing(tmp_path) -> None:
 def test_get_chunks_by_ids_returns_only_found(tmp_path) -> None:
     """SearchStore.get_chunks_by_ids returns only matching chunk IDs; missing IDs silently skipped."""
     import hashlib
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from archon_search._types import ChunkRecord, normalize_iso_utc
     from archon_search.store import SearchStore
@@ -344,7 +344,7 @@ def test_get_chunks_by_ids_returns_only_found(tmp_path) -> None:
                     text=f"chunk text {i}",
                     vector=[float(i)] * EMBEDDING_DIM,
                     source_path="/data/doc1.txt",
-                    indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+                    indexed_at=normalize_iso_utc(datetime.now(UTC)),
                     acl=None,
                 )
                 for i, cid in enumerate(chunk_ids)
@@ -372,7 +372,7 @@ def test_get_chunks_by_ids_returns_only_found(tmp_path) -> None:
 def test_get_chunks_for_doc_returns_all_for_doc(tmp_path) -> None:
     """SearchStore.get_chunks_for_doc returns all chunks for doc_id, excluding other docs."""
     import hashlib
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from archon_search._types import ChunkRecord, normalize_iso_utc
     from archon_search.store import SearchStore
@@ -396,7 +396,7 @@ def test_get_chunks_for_doc_returns_all_for_doc(tmp_path) -> None:
                     text=f"doc_a chunk {i}",
                     vector=[float(i)] * EMBEDDING_DIM,
                     source_path="/data/doc_a.txt",
-                    indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+                    indexed_at=normalize_iso_utc(datetime.now(UTC)),
                     acl=None,
                 )
                 for i in range(4)
@@ -408,7 +408,7 @@ def test_get_chunks_for_doc_returns_all_for_doc(tmp_path) -> None:
                     text=f"doc_b chunk {i}",
                     vector=[float(i)] * EMBEDDING_DIM,
                     source_path="/data/doc_b.txt",
-                    indexed_at=normalize_iso_utc(datetime.now(timezone.utc)),
+                    indexed_at=normalize_iso_utc(datetime.now(UTC)),
                     acl=None,
                 )
                 for i in range(2)

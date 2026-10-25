@@ -18,6 +18,7 @@ Tests:
 from __future__ import annotations
 
 import os
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,7 +29,6 @@ from archon_search.filters import SearchFilters
 from archon_search.pipeline import SearchPipelineResult
 from archon_search.server.routes_search import SearchRequest
 
-
 # ---------------------------------------------------------------------------
 # Helpers (mirror _make_app / _make_multi_pipeline_mock from test_routes_search)
 # ---------------------------------------------------------------------------
@@ -37,10 +37,11 @@ from archon_search.server.routes_search import SearchRequest
 def _make_app(tmp_path: Path) -> tuple:
     from unittest.mock import patch
 
+    from fastapi.testclient import TestClient
+
     from archon_search.config import SearchConfig
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
-    from fastapi.testclient import TestClient
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
@@ -268,9 +269,9 @@ def test_post_search_applied_filters_datetime_serialization(tmp_path: Path) -> N
     assert indexed_after_val is not None, "indexed_after must be present in applied_filters"
     # Must be a string (ISO datetime serialisation)
     assert isinstance(indexed_after_val, str), f"indexed_after must be a string, got: {type(indexed_after_val)}"
-    from datetime import datetime, timezone
-    parsed = datetime.fromisoformat(indexed_after_val.replace("Z", "+00:00"))
-    assert parsed == datetime(2024, 1, 15, 0, 0, 0, tzinfo=timezone.utc), (
+    from datetime import datetime
+    parsed = datetime.fromisoformat(indexed_after_val)
+    assert parsed == datetime(2024, 1, 15, 0, 0, 0, tzinfo=UTC), (
         f"indexed_after must serialise to midnight UTC, got: {indexed_after_val}"
     )
 

@@ -15,7 +15,6 @@ from archon_search.eval.fixtures import (
     load_eval_corpus,
 )
 
-
 # ---------------------------------------------------------------------------
 # RelevanceLabel
 # ---------------------------------------------------------------------------
@@ -453,6 +452,7 @@ def test_fixture_all_routing_collections_have_scorable_centroids() -> None:
     """
     import json
     import math
+
     from archon_search.eval.backends import EvalEmbedderBackend
 
     cols_file = _CORPUS_ROOT / "routing" / "collections.jsonl"
@@ -484,6 +484,7 @@ def test_fixture_faq_vocab_distinct_from_other_collections() -> None:
     """
     import json
     import math
+
     from archon_search.eval.backends import EvalEmbedderBackend
 
     embedder = EvalEmbedderBackend()

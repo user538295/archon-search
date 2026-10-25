@@ -27,9 +27,14 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from archon_search.constants import DEFAULT_NAMESPACE, IMPORTED_CHUNK_METADATA_KEY, IMPORTED_CHUNK_METADATA_VALUE
+from archon_search.constants import (
+    DEFAULT_NAMESPACE,
+    IMPORTED_CHUNK_METADATA_KEY,
+    IMPORTED_CHUNK_METADATA_VALUE,
+)
 from archon_search.store import SearchStore
 from tests.integration.conftest import (
+    REAL_APP_DATA_SUBDIR,
     ingest_file_via_path,
     make_real_app,
     trigger_maintenance_and_wait_for_orphans,
@@ -87,8 +92,8 @@ def _export_from_host_a(host_a_dir: Path, source_file: Path, monkeypatch: pytest
 
 
 def _copy_archive_to(host_dir: Path, archive: Path) -> Path:
-    exports = host_dir / "exports"
-    exports.mkdir()
+    exports = host_dir / REAL_APP_DATA_SUBDIR / "exports" / DEFAULT_NAMESPACE
+    exports.mkdir(parents=True)
     copied = exports / archive.name
     shutil.copy(archive, copied)
     return copied

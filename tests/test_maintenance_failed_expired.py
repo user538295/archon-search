@@ -11,7 +11,7 @@ Covers S11, S11b, S12, S12b:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -67,7 +67,7 @@ def _make_failed_ingest_job(
     retry_count: int = 0,
 ) -> IngestJob:
     """Create a FAILED IngestJob with the given age and retry_count — a maintenance retry when retry_count > 0."""
-    created_at = (datetime.now(timezone.utc) - timedelta(hours=age_hours)).isoformat()
+    created_at = (datetime.now(UTC) - timedelta(hours=age_hours)).isoformat()
     return IngestJob(
         job_id=f"job-{source_path[-8:]}",
         status=JobStatus.FAILED,
@@ -88,7 +88,7 @@ def _make_failed_expired_job(
     namespace: str = "default",
 ) -> IngestJob:
     """Create a FAILED_EXPIRED IngestJob."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     return IngestJob(
         job_id=f"job-fe-{source_path[-8:]}",
         status=JobStatus.FAILED_EXPIRED,
@@ -292,7 +292,7 @@ async def test_maintenance_loop_failed_expired_dedup_same_key(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_maintenance_loop_invalid_created_at_skips_with_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """Job with unparseable created_at is skipped; WARNING is logged."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     job = IngestJob(
         job_id="job-corrupt",
         status=JobStatus.FAILED,
@@ -332,7 +332,7 @@ async def test_maintenance_loop_failed_expired_via_real_job_store(
     job_store = JobStore(path=tmp_path / "jobs.json")
 
     # Seed: aged FAILED IngestJob with retry_count already at max
-    old_created = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat()
+    old_created = (datetime.now(UTC) - timedelta(hours=100)).isoformat()
     job = IngestJob(
         job_id="test-aged-job",
         status=JobStatus.FAILED,

@@ -20,7 +20,6 @@ from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from tests._maintenance_status_client import make_mock_search_store, make_status_client
 
-
 # ---------------------------------------------------------------------------
 # POST /maintenance/trigger — unit tests (Style A: pre-patch app.state)
 # ---------------------------------------------------------------------------

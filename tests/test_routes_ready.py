@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,8 +11,9 @@ from fastapi.testclient import TestClient
 
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
-from archon_search.model_validation import validate_models_async
+from archon_search.model_validation import ModelValidationResult, validate_models_async
 from archon_search.server.app import create_app
+from archon_search.server.schemas import WarmupResult
 
 
 @pytest.fixture()
@@ -95,9 +97,9 @@ def test_ready_503_body_is_readiness_response_not_error_detail(
     assert "detail" not in body
 
 
-def test_ready_appears_in_openapi_without_bearer_auth(client: TestClient) -> None:
+def test_ready_appears_in_openapi_without_bearer_auth(client: TestClient, auth_headers: dict[str, str]) -> None:
     """GET /ready must appear in OpenAPI without BearerAuth security annotation."""
-    openapi = client.get("/openapi.json").json()
+    openapi = client.get("/openapi.json", headers=auth_headers).json()
     paths = openapi.get("paths", {})
     assert "/ready" in paths, "/ready must appear in OpenAPI paths"
     ready_ops = paths["/ready"]
@@ -125,8 +127,9 @@ def test_watcher_manager_slot_is_none_by_default(tmp_path: Path) -> None:
 
 def test_ready_does_not_call_collect_readiness() -> None:
     """GET /ready must not import or use collect_readiness — it must stay minimal."""
-    import archon_search.server.routes_ready as mod
     from pathlib import Path as _Path
+
+    import archon_search.server.routes_ready as mod
 
     source = _Path(mod.__file__).read_text()
     assert "collect_readiness" not in source
@@ -134,8 +137,6 @@ def test_ready_does_not_call_collect_readiness() -> None:
 
 def _set_validation(client: TestClient, **kwargs: object) -> None:
     """Set ``app.state.model_validation`` to a ModelValidationResult on the client app."""
-    from archon_search.model_validation import ModelValidationResult
-
     client.app.state.model_validation = ModelValidationResult(**kwargs)
 
 
@@ -218,7 +219,13 @@ def test_ready_not_degraded_by_probe_fail(client_ping_true: TestClient) -> None:
     assert response.json()["checks"]["models"] == "ok"
 
 
-def test_ready_200_when_models_fail(client_ping_true: TestClient) -> None:
+def test_ready_200_when_only_the_validation_probe_fails(client_ping_true: TestClient) -> None:
+    """A failed probe alone is not proof the serving instances are broken.
+
+    Validation builds throwaway instances, and its timeout / crash path reports both flags
+    false on a merely slow host. Only a finished warm-up that left the serving instances cold
+    gates readiness (see the ``warm-up FAILED`` tests below).
+    """
     _set_validation(client_ping_true, embedder_ok=False, reranker_ok=False)
     response = client_ping_true.get("/ready")
     assert response.status_code == 200
@@ -252,3 +259,115 @@ def test_ready_returns_503_after_store_disconnect(tmp_path: Path) -> None:
     assert response.status_code == 503
     assert response.json()["checks"]["storage"] == "fail"
     assert response.json()["checks"]["models"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Which model states gate readiness: the default embedder and a configured reranker
+# ---------------------------------------------------------------------------
+
+
+def _set_models(
+    client: TestClient,
+    *,
+    warmup: WarmupResult | None,
+    embedder_warm: bool = True,
+    reranker_warm: bool = True,
+    reranker_model: str = "Xenova/ms-marco-MiniLM-L-6-v2",
+    validation: ModelValidationResult | None = None,
+) -> None:
+    """Pin the warm-up outcome and what the serving pipeline reports as warm."""
+    state = client.app.state
+    state.warmup_result = warmup
+    state.pipeline = SimpleNamespace(embedder_is_warm=embedder_warm, reranker_is_warm=reranker_warm)
+    state.config = SearchConfig(reranker_model=reranker_model)
+    state.model_validation = validation or ModelValidationResult(embedder_ok=True, reranker_ok=True)
+
+
+def test_ready_503_models_pending_while_warmup_runs(client_ping_true: TestClient) -> None:
+    _set_models(client_ping_true, warmup=WarmupResult.PENDING, embedder_warm=False, reranker_warm=False)
+    response = client_ping_true.get("/ready")
+    assert response.status_code == 503
+    assert response.json()["checks"]["models"] == "pending"
+
+
+def test_ready_200_models_ok_after_warmup_done(client_ping_true: TestClient) -> None:
+    _set_models(client_ping_true, warmup=WarmupResult.DONE)
+    response = client_ping_true.get("/ready")
+    assert response.status_code == 200
+    assert response.json()["checks"]["models"] == "ok"
+
+
+def test_ready_200_models_warn_after_warmup_done(client_ping_true: TestClient) -> None:
+    _set_models(
+        client_ping_true,
+        warmup=WarmupResult.DONE,
+        validation=ModelValidationResult(
+            embedder_ok=True, reranker_ok=True, provider_warnings=["device unavailable: mps; models loaded on cpu"]
+        ),
+    )
+    response = client_ping_true.get("/ready")
+    assert response.status_code == 200
+    assert response.json()["ready"] is True
+    assert response.json()["checks"]["models"] == "warn"
+
+
+def test_ready_503_when_default_embedder_failed_to_warm(client_ping_true: TestClient) -> None:
+    """The default embedder cannot load: every ingest fails and search is FTS-only — not ready."""
+    _set_models(
+        client_ping_true,
+        warmup=WarmupResult.FAILED,
+        embedder_warm=False,
+        validation=ModelValidationResult(embedder_ok=False, reranker_ok=True),
+    )
+    response = client_ping_true.get("/ready")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["ready"] is False
+    assert body["checks"]["models"] == "fail"
+    assert body["checks"]["storage"] == "ok"
+
+
+def test_ready_503_when_configured_reranker_failed_to_warm(client_ping_true: TestClient) -> None:
+    _set_models(
+        client_ping_true,
+        warmup=WarmupResult.FAILED,
+        reranker_warm=False,
+        validation=ModelValidationResult(embedder_ok=True, reranker_ok=False),
+    )
+    response = client_ping_true.get("/ready")
+    assert response.status_code == 503
+    assert response.json()["ready"] is False
+    assert response.json()["checks"]["models"] == "fail"
+
+
+def test_ready_200_when_no_reranker_is_configured(client_ping_true: TestClient) -> None:
+    """An intentionally absent reranker is never cold-and-failed: it must not wedge readiness."""
+    _set_models(
+        client_ping_true,
+        warmup=WarmupResult.FAILED,
+        reranker_warm=False,
+        reranker_model="",
+    )
+    response = client_ping_true.get("/ready")
+    assert response.status_code == 200
+    assert response.json()["ready"] is True
+    assert response.json()["checks"]["models"] == "fail"
+
+
+def test_ready_200_when_only_a_per_collection_preload_failed(client_ping_true: TestClient) -> None:
+    """Warm-up FAILED because a collection's own model did not load; the defaults are warm."""
+    _set_models(client_ping_true, warmup=WarmupResult.FAILED)
+    response = client_ping_true.get("/ready")
+    assert response.status_code == 200
+    assert response.json()["ready"] is True
+    assert response.json()["checks"]["models"] == "fail"
+
+
+def test_ready_recovers_when_a_cold_model_warms_after_failed_warmup(client_ping_true: TestClient) -> None:
+    """The gate reads live warm state, so a model built later (a slow load that finished) clears it."""
+    _set_models(client_ping_true, warmup=WarmupResult.FAILED, embedder_warm=False)
+    assert client_ping_true.get("/ready").status_code == 503
+
+    client_ping_true.app.state.pipeline.embedder_is_warm = True
+
+    assert client_ping_true.get("/ready").status_code == 200

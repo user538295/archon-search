@@ -17,7 +17,6 @@ from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -33,6 +32,7 @@ def _make_app_and_client(tmp_path: Path):  # type: ignore[no-untyped-def]
     app = create_app(config, jobs)
 
     mock_store = MagicMock()
+    mock_store.assert_collection_access = AsyncMock()
     mock_store.get_all_collections_meta = AsyncMock(return_value=[])
     mock_store.update_collection_meta = AsyncMock()
     mock_store.delete_collection_meta = AsyncMock()
@@ -64,14 +64,14 @@ def test_post_ingest_returns_503_when_lock_held(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """When the per-collection lock is held, POST /ingest returns 503 + Retry-After."""
-    app, client, mock_store, jobs = _make_app_and_client(tmp_path)
+    _app, client, _mock_store, _jobs = _make_app_and_client(tmp_path)
 
     # Force asyncio.wait_for to raise TimeoutError immediately, simulating a held lock.
     async def _raise_timeout(coro: object, timeout: object = None) -> None:
         import inspect
         if inspect.iscoroutine(coro):
             coro.close()  # prevent ResourceWarning
-        raise asyncio.TimeoutError
+        raise TimeoutError
 
     monkeypatch.setattr("archon_search.server._ingest_lock.asyncio.wait_for", _raise_timeout)
 
@@ -91,7 +91,7 @@ def test_lock_timeout_detail_names_no_reindex(tmp_path: Path, monkeypatch: pytes
         import inspect
         if inspect.iscoroutine(coro):
             coro.close()  # prevent ResourceWarning
-        raise asyncio.TimeoutError
+        raise TimeoutError
 
     monkeypatch.setattr("archon_search.server._ingest_lock.asyncio.wait_for", _raise_timeout)
 
@@ -102,7 +102,7 @@ def test_lock_timeout_detail_names_no_reindex(tmp_path: Path, monkeypatch: pytes
 
 def test_post_ingest_succeeds_when_lock_free(tmp_path: Path) -> None:
     """Happy path: POST /ingest returns 202 when the lock is free."""
-    app, client, mock_store, jobs = _make_app_and_client(tmp_path)
+    _app, client, _mock_store, _jobs = _make_app_and_client(tmp_path)
 
     response = client.post("/ingest", json={"collection": "free-col"})
     assert response.status_code == 202
@@ -112,7 +112,7 @@ def test_post_ingest_succeeds_when_lock_free(tmp_path: Path) -> None:
 
 def test_post_ingest_releases_lock_after_background_task(tmp_path: Path) -> None:
     """After the background task completes, the lock is free for a subsequent ingest."""
-    app, client, mock_store, jobs = _make_app_and_client(tmp_path)
+    _app, client, mock_store, _jobs = _make_app_and_client(tmp_path)
 
     # First ingest — lock acquired then released by wrapper.
     r1 = client.post("/ingest", json={"collection": "shared-col"})
@@ -135,7 +135,7 @@ def test_post_ingest_releases_lock_on_task_cancellation(tmp_path: Path) -> None:
     that loop (``asyncio.Runner.close``) cancels every task still pending on it — here the ingest task. The DELETE
     that follows only observes the already-terminal job.
     """
-    app, client, mock_store, jobs = _make_app_and_client(tmp_path)
+    app, client, mock_store, _jobs = _make_app_and_client(tmp_path)
 
     # Inject a pipeline function that blocks until cancelled so we can test cancellation.
     cancelled_event = asyncio.Event()
@@ -179,14 +179,14 @@ def test_post_collections_returns_503_when_lock_held(
     src = tmp_path / "docs"
     src.mkdir()
 
-    app, client, mock_store, jobs = _make_app_and_client(tmp_path)
+    _app, client, _mock_store, _jobs = _make_app_and_client(tmp_path)
 
     # Force asyncio.wait_for to raise TimeoutError immediately, simulating a held lock.
     async def _raise_timeout(coro: object, timeout: object = None) -> None:
         import inspect
         if inspect.iscoroutine(coro):
             coro.close()  # prevent ResourceWarning
-        raise asyncio.TimeoutError
+        raise TimeoutError
 
     monkeypatch.setattr("archon_search.server._ingest_lock.asyncio.wait_for", _raise_timeout)
 
@@ -216,7 +216,7 @@ def test_post_collections_503_leaves_no_orphaned_state(
         import inspect
         if inspect.iscoroutine(coro):
             coro.close()  # prevent ResourceWarning
-        raise asyncio.TimeoutError
+        raise TimeoutError
 
     monkeypatch.setattr("archon_search.server._ingest_lock.asyncio.wait_for", _raise_timeout)
 
@@ -248,14 +248,14 @@ def test_post_ingest_503_on_A_does_not_block_B(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A held lock on collection A must not prevent collection B from being ingested."""
-    app, client, mock_store, jobs = _make_app_and_client(tmp_path)
+    _app, client, mock_store, _jobs = _make_app_and_client(tmp_path)
 
     # Reduce the timeout so the contended case fails fast without a 30 s wait.
     monkeypatch.setattr("archon_search.constants.INGEST_LOCK_TIMEOUT_S", 0.05)
     # _ingest_lock.py reads _constants.INGEST_LOCK_TIMEOUT_S at call time via the
     # module alias; patch it there too so the running call sees the new value.
-    import archon_search.server._ingest_lock as _ingest_lock_mod
     import archon_search.constants as _constants_mod
+    import archon_search.server._ingest_lock as _ingest_lock_mod
     monkeypatch.setattr(_ingest_lock_mod, "_constants", _constants_mod)
 
     # Pre-acquire the lock for collection "A" so the request handler times out.

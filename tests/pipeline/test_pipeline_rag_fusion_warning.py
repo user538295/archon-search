@@ -9,7 +9,6 @@ success. Tests here verify propagation via monkeypatched generate_variants().
 """
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -17,7 +16,6 @@ import pytest
 from archon_search.pipeline import SearchPipelineResult
 
 from .conftest import make_pipeline
-
 
 # ---------------------------------------------------------------------------
 # Unit tests: SearchPipelineResult.rag_fusion_warning field existence
@@ -93,7 +91,7 @@ async def test_pipeline_result_rag_fusion_warning_set_on_timeout(
     await pipeline.ingest_file(doc, col_name, embedder=pipeline._global_embedder)
 
     mock_generator = MagicMock()
-    mock_generator.generate_variants = AsyncMock(side_effect=asyncio.TimeoutError())
+    mock_generator.generate_variants = AsyncMock(side_effect=TimeoutError())
     rag_fusion_config = RAGFusionConfig(enabled=True)
 
     result = await pipeline.search(
@@ -163,7 +161,7 @@ async def test_search_many_pipeline_result_expansion_warning_on_rag_fusion_failu
     await pipeline.ingest_file(doc, col_name, embedder=pipeline._global_embedder)
 
     mock_generator = MagicMock()
-    mock_generator.generate_variants = AsyncMock(side_effect=asyncio.TimeoutError())
+    mock_generator.generate_variants = AsyncMock(side_effect=TimeoutError())
     rag_fusion_config = RAGFusionConfig(enabled=True)
 
     result = await pipeline.search_many(

@@ -124,74 +124,73 @@ def test_pre_d3_startup_applies_in_place_migrations_e2e(
     # Step 2: boot the app — lifespan calls _run_startup_migrations() which
     # calls _migrate_schema_version() → add_columns({"schema_version": "cast(0 as bigint)"}).
     # This applies the default to ALL existing rows, including the seeded row.
-    with caplog.at_level(logging.WARNING, logger="archon_search"):
-        with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
-            headers = {"Authorization": f"Bearer {api_key}"}
+    with caplog.at_level(logging.WARNING, logger="archon_search"), make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        headers = {"Authorization": f"Bearer {api_key}"}
 
-            # Step 3: verify schema_version column is now present.
-            async def _read_meta_rows() -> tuple[list[str], list[dict]]:
-                db = await lancedb.connect_async(db_path)
-                tbl = await db.open_table("_archon_collection_meta")
-                schema = await tbl.schema()
-                rows = await tbl.query().to_list()
-                return schema.names, rows
+        # Step 3: verify schema_version column is now present.
+        async def _read_meta_rows() -> tuple[list[str], list[dict]]:
+            db = await lancedb.connect_async(db_path)
+            tbl = await db.open_table("_archon_collection_meta")
+            schema = await tbl.schema()
+            rows = await tbl.query().to_list()
+            return schema.names, rows
 
-            column_names, rows = asyncio.run(_read_meta_rows())
-            assert "schema_version" in column_names, (
-                f"schema_version column missing after startup migration; "
-                f"columns present: {column_names}"
-            )
+        column_names, rows = asyncio.run(_read_meta_rows())
+        assert "schema_version" in column_names, (
+            f"schema_version column missing after startup migration; "
+            f"columns present: {column_names}"
+        )
 
-            # Step 4: verify the pre-existing row got schema_version=0 from the
-            # add_columns migration (cast(0 as bigint)).  This is the core S3 assertion:
-            # a row that existed BEFORE the column was added receives the correct default.
-            seeded_row = next(
-                (r for r in rows if r.get("name") == col_name), None
-            )
-            assert seeded_row is not None, (
-                f"pre-seeded row for {col_name!r} not found after startup migration; "
-                f"rows present: {[r.get('name') for r in rows]}"
-            )
-            seeded_schema_version = seeded_row.get("schema_version")
-            assert seeded_schema_version == 0, (
-                f"pre-existing row must have schema_version=0 after add_columns migration; "
-                f"got schema_version={seeded_schema_version!r}"
-            )
+        # Step 4: verify the pre-existing row got schema_version=0 from the
+        # add_columns migration (cast(0 as bigint)).  This is the core S3 assertion:
+        # a row that existed BEFORE the column was added receives the correct default.
+        seeded_row = next(
+            (r for r in rows if r.get("name") == col_name), None
+        )
+        assert seeded_row is not None, (
+            f"pre-seeded row for {col_name!r} not found after startup migration; "
+            f"rows present: {[r.get('name') for r in rows]}"
+        )
+        seeded_schema_version = seeded_row.get("schema_version")
+        assert seeded_schema_version == 0, (
+            f"pre-existing row must have schema_version=0 after add_columns migration; "
+            f"got schema_version={seeded_schema_version!r}"
+        )
 
-            # Step 5: add the collection path to cfg.collections so GET /migrations/pending
-            # can pass the config-path gate (gate 1 of the two-gate 404 check) without
-            # going through POST /collections/ (which would 409 because the meta row
-            # already exists from the seed).
-            cfg.collections.append(str(col_path))
+        # Step 5: add the collection path to cfg.collections so GET /migrations/pending
+        # can pass the config-path gate (gate 1 of the two-gate 404 check) without
+        # going through POST /collections/ (which would 409 because the meta row
+        # already exists from the seed).
+        cfg.collections.append(str(col_path))
 
-            # Step 6: GET /collections/{name}/migrations/pending must return pending=[].
-            # All five pre-D3 migration specs have introduced_at=0; the pre-existing row
-            # now has schema_version=0 after startup migration.  0 > 0 is False → pending=[].
-            resp = client.get(
-                f"/collections/{col_name}/migrations/pending",
-                headers=headers,
-            )
-            assert resp.status_code == 200, (
-                f"GET /migrations/pending failed: {resp.status_code} {resp.text}"
-            )
+        # Step 6: GET /collections/{name}/migrations/pending must return pending=[].
+        # All five pre-D3 migration specs have introduced_at=0; the pre-existing row
+        # now has schema_version=0 after startup migration.  0 > 0 is False → pending=[].
+        resp = client.get(
+            f"/collections/{col_name}/migrations/pending",
+            headers=headers,
+        )
+        assert resp.status_code == 200, (
+            f"GET /migrations/pending failed: {resp.status_code} {resp.text}"
+        )
 
-            body = resp.json()
-            assert body["collection"] == col_name, (
-                f"expected collection={col_name!r}, got {body['collection']!r}"
-            )
-            # schema_version must be 0: startup migration adds the column with cast(0 as bigint).
-            # The two E2a migrations (introduced_at=1) are pending because 1 > 0.
-            # Operators must run POST /collections/{name}/migrate to apply them.
-            assert body["schema_version"] == 0, (
-                f"expected schema_version=0 for pre-D3 collection; got {body['schema_version']}"
-            )
-            pending_names = [s["name"] for s in body["pending"]]
-            assert "migrate_expires_at_and_scopes" in pending_names, (
-                f"expected E2a migration in pending; got: {pending_names}"
-            )
-            assert "migrate_default_ttl_seconds" in pending_names, (
-                f"expected E2a migration in pending; got: {pending_names}"
-            )
+        body = resp.json()
+        assert body["collection"] == col_name, (
+            f"expected collection={col_name!r}, got {body['collection']!r}"
+        )
+        # schema_version must be 0: startup migration adds the column with cast(0 as bigint).
+        # The two E2a migrations (introduced_at=1) are pending because 1 > 0.
+        # Operators must run POST /collections/{name}/migrate to apply them.
+        assert body["schema_version"] == 0, (
+            f"expected schema_version=0 for pre-D3 collection; got {body['schema_version']}"
+        )
+        pending_names = [s["name"] for s in body["pending"]]
+        assert "migrate_expires_at_and_scopes" in pending_names, (
+            f"expected E2a migration in pending; got: {pending_names}"
+        )
+        assert "migrate_default_ttl_seconds" in pending_names, (
+            f"expected E2a migration in pending; got: {pending_names}"
+        )
 
     # Step 7: assert no WARNING+ log messages from archon_search during the
     # full lifespan + migration path.  Per the test spec: "assert no error logged."

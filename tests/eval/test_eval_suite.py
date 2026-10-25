@@ -15,10 +15,14 @@ from pathlib import Path
 import pytest
 
 from archon_search.eval.fixtures import load_eval_corpus
-from archon_search.eval.runner import assert_thresholds, load_thresholds, render_report, run_eval_suite
+from archon_search.eval.runner import (
+    EvalQualityFloors,
+    assert_thresholds,
+    load_thresholds,
+    render_report,
+    run_eval_suite,
+)
 from archon_search.eval.types import EvalMetrics
-from archon_search.eval.runner import EvalQualityFloors
-
 
 CORPUS_ROOT = Path(__file__).resolve().parent
 RUNTIME_CONFIG_PATH = CORPUS_ROOT / "runtime.toml"
@@ -1152,15 +1156,15 @@ def test_bench_search_rag_fusion_enabled_latency(tmp_path_factory) -> None:  # t
 
     import numpy as np
 
+    from archon_search.chunker import DocumentChunker
     from archon_search.config import RAGFusionConfig
-    from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
     from archon_search.embedder import Embedder
+    from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
     from archon_search.rag_fusion import RAGFusionGenerator
     from archon_search.reranker import Reranker
     from archon_search.store import SearchStore
-    from archon_search.chunker import DocumentChunker
-    from archon_search.parser import DocumentParser
-    from archon_search.pipeline import SearchPipeline
 
     # Must match EvalEmbedderBackend's internal dimension (128).
     _DIM = 128

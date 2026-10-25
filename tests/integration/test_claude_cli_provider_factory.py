@@ -38,7 +38,9 @@ def test_factory_injects_claude_cli_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """provider='claude_cli' → generators use ClaudeCLIQueryExpansionProvider."""
-    from archon_search.providers.claude_cli_provider import ClaudeCLIQueryExpansionProvider
+    from archon_search.providers.claude_cli_provider import (
+        ClaudeCLIQueryExpansionProvider,
+    )
     from archon_search.query_expansion_protocol import QueryExpansionProvider
 
     toml = (
@@ -74,7 +76,9 @@ def test_claude_cli_rate_limit_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
     """claude_cli HyDE provider bypasses the token bucket (like Ollama)."""
     from archon_search.config import HyDEConfig
     from archon_search.hyde import HyDEGenerator
-    from archon_search.providers.claude_cli_provider import ClaudeCLIQueryExpansionProvider
+    from archon_search.providers.claude_cli_provider import (
+        ClaudeCLIQueryExpansionProvider,
+    )
 
     mock_embedder = MagicMock()
     mock_embedder.embed_one = AsyncMock(return_value=[0.1] * 384)
@@ -97,7 +101,9 @@ def test_claude_cli_rate_limit_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_claude_cli_rag_fusion_rate_limit_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
     """claude_cli RAG Fusion provider bypasses the token bucket."""
     from archon_search.config import RAGFusionConfig
-    from archon_search.providers.claude_cli_provider import ClaudeCLIQueryExpansionProvider
+    from archon_search.providers.claude_cli_provider import (
+        ClaudeCLIQueryExpansionProvider,
+    )
     from archon_search.rag_fusion import RAGFusionGenerator
 
     mock_provider = MagicMock(spec=ClaudeCLIQueryExpansionProvider)
@@ -166,7 +172,7 @@ def test_search_hyde_claude_cli_timeout_fallback(
 
     toml = "[hyde]\nenabled = true\nprovider = \"claude_cli\"\nmodel = \"haiku\"\n"
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
         provider = client.app.state.hyde_generator._provider
         monkeypatch.setattr(provider, "_claude_available", True)
         monkeypatch.setattr(provider, "_claude_path", "/usr/bin/claude")

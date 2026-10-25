@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "AclGateSchema": {
-        "description": "ACL provenance envelope attached to a result (g15 BE-5 / BE-7).\n\n``POST /search``: every result always serializes the ``acl_gate`` key \u2014 this\nobject when the request sets ``acl_context=true``, ``null`` otherwise.\n``POST /explain`` (and the MCP ``explain`` tool): every top-level result always\ncarries this object, no flag required; ``near_misses`` entries never carry it.\n``warnings`` is always a non-null list (C3). ``allowed_principals`` is null when\nno ACL applies to the chunk (open to all), including fail-open cases reported in\n``warnings``. ``source`` is null when no provenance is stored (pre-G15 chunks, or\na collection without the provenance columns) or the stored value is unrecognised;\ngraph-sourced candidates (communities, PPR) carry the same stored provenance as\nhybrid hits. ``sidecar_path`` is non-null only when ``source`` is ``\"sidecar\"``,\neven if that sidecar was ignored.",
+        "description": "ACL provenance envelope attached to a result (g15 BE-5 / BE-7).\n\n``POST /search``: every result always serializes the ``acl_gate`` key \u2014 this\nobject when the request sets ``acl_context=true``, ``null`` otherwise.\n``POST /explain`` (and the MCP ``explain`` tool): every top-level result always\ncarries this object, no flag required; ``near_misses`` entries never carry it.\n``warnings`` is always a non-null list (C3). ``allowed_principals`` is null when\nno ACL applies to the chunk (open to all); a declared-but-unusable ACL is deny-all\n(``[]``) and reported in ``warnings``. ``source`` is null when no provenance is stored (pre-G15 chunks, or\na collection without the provenance columns) or the stored value is unrecognised;\ngraph-sourced candidates (communities, PPR) carry the same stored provenance as\nhybrid hits. ``sidecar_path`` is non-null only when ``source`` is ``\"sidecar\"``,\neven if that sidecar was unusable (the document is then denied).",
         "properties": {
           "allowed_principals": {
             "anyOf": [
@@ -163,7 +163,7 @@
         "type": "object"
       },
       "CheckStatus": {
-        "description": "Check result for readiness probes.\n\n``PENDING`` and ``WARN`` (D6 C2) are additive values used by the model\nvalidation check: ``PENDING`` while background validation has not yet\ncompleted, ``WARN`` when both models loaded but validation reported warnings \u2014\ne.g. a configured ONNX provider the installed onnxruntime lacks, so the models\nloaded on the remaining providers or CPU (S635). See contract C2 in\n``Documentation/Completed/D6-provider-validation-team-plan.md``.",
+        "description": "Check result for readiness probes.\n\n``PENDING`` and ``WARN`` (D6 C2) are additive values used by the model\nvalidation check: ``PENDING`` while background validation has not yet\ncompleted, ``WARN`` when both models loaded but validation reported warnings \u2014\ne.g. a configured ``device`` the host lacks, so the models\nloaded on the CPU (S635). See contract C2 in\n``Documentation/Completed/D6-provider-validation-team-plan.md``.",
         "enum": [
           "ok",
           "fail",
@@ -1460,13 +1460,9 @@
         "type": "object"
       },
       "ExportRequest": {
-        "properties": {
-          "output_path": {
-            "default": "",
-            "title": "Output Path",
-            "type": "string"
-          }
-        },
+        "additionalProperties": false,
+        "description": "No fields: the archive's directory is fixed to the caller's namespace (``exports_dir``); a body that names an\n``output_path`` (or anything else) is refused with 422 rather than silently ignored.",
+        "properties": {},
         "title": "ExportRequest",
         "type": "object"
       },
@@ -1730,6 +1726,30 @@
         "title": "GraphStatusDetail",
         "type": "object"
       },
+      "GraphViewTokenResponse": {
+        "description": "Response body for POST /graph/{collection}/view-token: a short-lived token that opens the graph viewer.\n\n``view_url`` is the viewer page URL carrying the token; the token reads this collection's graph in\nthe minting namespace, only until ``expires_in`` seconds from now, and is accepted nowhere else.",
+        "properties": {
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "view_token": {
+            "title": "View Token",
+            "type": "string"
+          },
+          "view_url": {
+            "title": "View Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view_token",
+          "view_url",
+          "expires_in"
+        ],
+        "title": "GraphViewTokenResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1744,29 +1764,15 @@
         "type": "object"
       },
       "HealthResponse": {
+        "description": "Liveness probe body; it carries no version or bind address (``GET /status`` does, authenticated).",
         "properties": {
-          "mcp": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/McpStatusDetail"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "status": {
             "title": "Status",
-            "type": "string"
-          },
-          "version": {
-            "title": "Version",
             "type": "string"
           }
         },
         "required": [
-          "status",
-          "version"
+          "status"
         ],
         "title": "HealthResponse",
         "type": "object"
@@ -2291,6 +2297,11 @@
       "KeyCreateRequest": {
         "description": "Request body for POST /keys (D7 BE-4).",
         "properties": {
+          "admin": {
+            "default": false,
+            "title": "Admin",
+            "type": "boolean"
+          },
           "expires_at": {
             "anyOf": [
               {
@@ -2328,6 +2339,11 @@
       "KeyCreateResponse": {
         "description": "Response body for POST /keys (D7 BE-4).\n\nThe ``token`` field is present only in the create response \u2014 it is printed\nonce and never recoverable from the server thereafter.  ``status`` is always\n``'active'`` at creation time (for consistency with ``KeyResponse`` which\ncarries the live status value).\n\nSee contract C3 in ``Documentation/Backlog/D7-multi-key-auth-rotation-team-plan.md``.",
         "properties": {
+          "admin": {
+            "default": false,
+            "title": "Admin",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -2412,6 +2428,11 @@
       "KeyResponse": {
         "description": "A single key record in list/revoke responses \u2014 no token field (D7 BE-6).\n\n``id`` is ``str | None`` to accommodate TOML synthetic keys (which have\n``id=None`` since they are not managed entries).  TOML synthetic keys\ncannot be targeted by ``DELETE /keys/{id}``.",
         "properties": {
+          "admin": {
+            "default": false,
+            "title": "Admin",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -4206,6 +4227,16 @@
               }
             },
             "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "this operation requires an admin API key"
           }
         },
         "security": [
@@ -4254,7 +4285,7 @@
         "summary": "List Collections"
       },
       "post": {
-        "description": "Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob.",
+        "description": "Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob.\n\nAdmin key required: it appends the path to the shared ``archon-search.toml`` collection list, which the\nstartup sync and ``POST /sync`` process for every namespace.\n\nRefused ``503 ingest_busy`` while ``[ingest].max_concurrent_tasks`` ingest jobs are running, before any side effect.",
         "operationId": "add_collection_collections__post",
         "requestBody": {
           "content": {
@@ -4297,6 +4328,16 @@
             },
             "description": "Unauthorized"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "this operation requires an admin API key"
+          },
           "409": {
             "content": {
               "application/json": {
@@ -4335,7 +4376,7 @@
                 }
               }
             },
-            "description": "Store busy \u2014 another write holds the collection"
+            "description": "Store busy \u2014 another write holds the collection; or Ingest busy (code ingest_busy): [ingest].max_concurrent_tasks jobs are already running"
           }
         },
         "security": [
@@ -4796,7 +4837,7 @@
     },
     "/collections/{name}/export": {
       "post": {
-        "description": "Enqueue an export job for the named collection.\n\nReturns 202 with a JobResponse (status=QUEUED). The job is dispatched by\nthe scheduler when a slot is available.",
+        "description": "Enqueue an export job for the named collection.\n\nThe archive is written to ``<data_dir>/exports/<namespace>/``, the caller's own export directory: the caller\ncannot pick another directory, so an export never lands in (or creates directories under) a place the caller\nchose. Returns 202 with a JobResponse (status=QUEUED). The job is dispatched by the scheduler when a slot is\navailable.",
         "operationId": "export_collection_collections__name__export_post",
         "parameters": [
           {
@@ -4829,16 +4870,6 @@
               }
             },
             "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Path unsafe or invalid request"
           },
           "401": {
             "content": {
@@ -5729,7 +5760,7 @@
     },
     "/graph/{collection}/rebuild-communities": {
       "post": {
-        "description": "Enqueue an async Leiden community rebuild for a collection \u2014 BE-2.\n\nFollows the migrate route's pattern (``routes_collections.py``,\n``migrate_collection``): validate -> create the job RUNNING in one write\n-> spawn task -> return 202 with the full JobResponse body\n(``job_to_dict(running_job)``), so the response reports RUNNING, not\nPENDING (S1).\n\nAuth is handled solely by ``APIKeyMiddleware`` \u2014 this route does not\nimplement its own ``?token=`` fallback (unlike ``get_graph_view``, whose\nbranch exists only for HTML-iframe embedding). A token resolving to\n``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware\nreturns a bare 500 first (S14).\n\nThe optional ``?namespace=`` query param lets the CLI explicitly confirm\nwhich namespace it intends to target. If provided, it must match the\nnamespace resolved from the Bearer token; a mismatch returns 422 so the\ncaller knows to use the correct API key for the intended namespace.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in the caller's namespace (also when a DELETE dropped it meanwhile).\n- 409: A rebuild is already in progress for this collection (BE-5).\n- 422: graph.enabled=false, or ?namespace= does not match token namespace.\n- 500: The job could not be saved (sanitized ``{\"detail\": \"internal error\"}``).\n- 503: ``service not ready`` \u2014 no search store (checked after the 422 guards); or ``store_busy`` \u2014 the\n  collection lock was not acquired within ``INGEST_LOCK_TIMEOUT_S``.",
+        "description": "Enqueue an async Leiden community rebuild for a collection \u2014 BE-2.\n\nFollows the migrate route's pattern (``routes_collections.py``,\n``migrate_collection``): validate -> create the job RUNNING in one write\n-> spawn task -> return 202 with the full JobResponse body\n(``job_to_dict(running_job)``), so the response reports RUNNING, not\nPENDING (S1).\n\nAuth is handled solely by ``APIKeyMiddleware``. A token resolving to\n``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware\nreturns a bare 500 first (S14).\n\nThe optional ``?namespace=`` query param lets the CLI explicitly confirm\nwhich namespace it intends to target. If provided, it must match the\nnamespace resolved from the Bearer token; a mismatch returns 422 so the\ncaller knows to use the correct API key for the intended namespace.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in the caller's namespace (also when a DELETE dropped it meanwhile).\n- 409: A rebuild is already in progress for this collection (BE-5).\n- 422: graph.enabled=false, or ?namespace= does not match token namespace.\n- 500: The job could not be saved (sanitized ``{\"detail\": \"internal error\"}``).\n- 503: ``service not ready`` \u2014 no search store (checked after the 422 guards); or ``store_busy`` \u2014 the\n  collection lock was not acquired within ``INGEST_LOCK_TIMEOUT_S``.",
         "operationId": "rebuild_communities_graph__collection__rebuild_communities_post",
         "parameters": [
           {
@@ -5834,7 +5865,7 @@
     },
     "/graph/{collection}/view": {
       "get": {
-        "description": "Serve a self-contained graph viewer HTML page for a collection \u2014 E2j BE-2.\n\nQuery parameters:\n- ``token``: Optional Bearer token (used when no Authorization header is present).\n  The middleware exemption lets this request bypass the header-presence check.\n\nReturns:\n- 200: Self-contained HTML page with C4 placeholders substituted.\n- 401: Missing or invalid auth (WWW-Authenticate: Bearer header always present).\n- 404: Collection not found.\n- 422: graph.enabled=false.\n\nAuth resolution order (C3 precedence):\n1. Authorization header (middleware already validated; handler recovers token for embedding).\n2. ?token= query param (handler validates via validate_token_and_get_namespace).",
+        "description": "Serve a self-contained graph viewer HTML page for a collection \u2014 E2j BE-2.\n\nAuthentication (handled by ``APIKeyMiddleware``): an ``Authorization: Bearer`` header with any valid\nkey, or \u2014 for a browser navigation \u2014 the ``view_token`` query parameter minted by\n``POST /graph/{collection}/view-token``. The page never contains the caller's API key: it embeds a\nfreshly minted view token for its own data fetch, valid for ``GRAPH_VIEW_TOKEN_TTL_SECONDS`` and scoped\nto this collection's graph.\n\nReturns:\n- 200: Self-contained HTML page with C4 placeholders substituted.\n- 401: Missing or invalid auth (WWW-Authenticate: Bearer header always present).\n- 404: Collection not found.\n- 422: graph.enabled=false.",
         "operationId": "get_graph_view_graph__collection__view_get",
         "parameters": [
           {
@@ -5844,22 +5875,6 @@
             "schema": {
               "title": "Collection",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Token"
             }
           }
         ],
@@ -5893,8 +5908,74 @@
         "summary": "Get Graph View"
       }
     },
+    "/graph/{collection}/view-token": {
+      "post": {
+        "description": "Mint a short-lived token that opens the graph viewer for *collection* in a browser.\n\nOpen ``view_url`` in a browser: a page navigation cannot carry an ``Authorization`` header, and the real\nAPI key must never be put in a URL (access logs, history, proxies). The token is valid for\n``expires_in`` seconds, grants read access to this collection's graph in the caller's namespace and\nnothing else, and is accepted only by ``GET /graph/{collection}/view`` and ``GET /graph/{collection}``.\n\nReturns:\n- 200: the view token and the viewer URL that carries it.\n- 401: missing or invalid auth (a view token cannot mint another one).\n- 404: collection not found.\n- 422: graph.enabled=false.",
+        "operationId": "create_graph_view_token_graph__collection__view_token_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "title": "Collection",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphViewTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create Graph View Token"
+      }
+    },
     "/health": {
       "get": {
+        "description": "Unauthenticated liveness probe. It reveals nothing about the deployment: version and MCP bind address are in ``GET /status`` (authenticated).",
         "operationId": "health_health_get",
         "responses": {
           "200": {
@@ -6027,7 +6108,7 @@
                 }
               }
             },
-            "description": "Store busy (code store_busy): the collection lock was not acquired in time"
+            "description": "Store busy (code store_busy): the collection lock was not acquired in time; or Ingest busy (code ingest_busy): [ingest].max_concurrent_tasks jobs are already running"
           }
         },
         "security": [
@@ -6449,6 +6530,16 @@
             },
             "description": "Unauthorized"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "a non-admin API key can only manage keys in its own namespace"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -6504,6 +6595,16 @@
             },
             "description": "Unauthorized"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "a non-admin API key can only manage keys in its own namespace"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -6538,7 +6639,7 @@
     },
     "/keys/rotate": {
       "post": {
-        "description": "Rotate the default API key.\n\nGenerates a new managed API key, writes the new raw token to ``.search.env``,\nand revokes (or grace-expires) the old default key in ``keys.json``.\n\nReturns 409 when ``ARCHON_SEARCH_API_KEY`` env var is set \u2014 the env var\nalways overrides ``.search.env`` in the running process, so rotation would\nbe a silent no-op from the operator's perspective (S23).\n\nThe ``grace_seconds`` request body field overrides the TOML\n``[auth].rotate_grace_seconds`` config default.  When absent, the config\ndefault is used.  When both are 0, the old key is immediately revoked.",
+        "description": "Rotate the default API key (admin key required: it replaces the server-wide default key).\n\nGenerates a new managed API key, writes the new raw token to ``.search.env``,\nand revokes (or grace-expires) the old default key in ``keys.json``.\n\nReturns 409 when ``ARCHON_SEARCH_API_KEY`` env var is set \u2014 the env var\nalways overrides ``.search.env`` in the running process, so rotation would\nbe a silent no-op from the operator's perspective (S23).\n\nThe ``grace_seconds`` request body field overrides the TOML\n``[auth].rotate_grace_seconds`` config default.  When absent, the config\ndefault is used.  When both are 0, the old key is immediately revoked.",
         "operationId": "rotate_key_keys_rotate_post",
         "requestBody": {
           "content": {
@@ -6570,6 +6671,16 @@
               }
             },
             "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "this operation requires an admin API key"
           },
           "409": {
             "content": {
@@ -6715,6 +6826,16 @@
               }
             },
             "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "this operation requires an admin API key"
           }
         },
         "security": [
@@ -6730,7 +6851,7 @@
     },
     "/ready": {
       "get": {
-        "description": "Readiness probe: ``200`` once the storage ping succeeds and neither the models\ncheck nor the startup sync is ``pending``; ``503`` otherwise.\n\n``checks.models`` stays ``pending`` until model warm-up and the background model\nvalidation finish (a failed warm-up ends it as ``fail``). ``warn``/``fail`` model\nor sync results do not gate readiness \u2014 search still answers, degraded.",
+        "description": "Readiness probe: ``200`` once the storage ping succeeds, the models check is no\nlonger ``pending`` and the default models serve, and the startup sync is not\n``pending``; ``503`` otherwise.\n\n``checks.models`` stays ``pending`` until model warm-up and the background model\nvalidation finish (a failed warm-up ends it as ``fail``). A finished warm-up that left\nthe default embedder, or a configured reranker, unloaded also answers ``503``: that\nreplica cannot embed, so a load balancer must not route to it. Other ``warn``/``fail``\nmodel results and the sync ``fail``/``warn`` results do not gate readiness \u2014 search\nstill answers, degraded.",
         "operationId": "ready_ready_get",
         "responses": {
           "200": {
@@ -6964,6 +7085,16 @@
             },
             "description": "Unauthorized"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "this operation requires an admin API key"
+          },
           "409": {
             "content": {
               "application/json": {
@@ -7141,6 +7272,16 @@
             },
             "description": "Successful Response"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "this operation requires an admin API key"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -7217,6 +7358,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "this operation requires an admin API key"
           },
           "422": {
             "content": {

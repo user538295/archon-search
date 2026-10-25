@@ -1,6 +1,7 @@
 """Integration tests for POST /collections/{name}/export and import endpoints (Tasks 4.2, 5.2)."""
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import tarfile
@@ -14,17 +15,19 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.export_archive import (
+    ARCHIVE_NAMESPACE_MISMATCH_DETAIL,
     EXPORT_SCHEMA_VERSION,
     INVALID_ARCHIVE_DETAIL,
     INVALID_MANIFEST_DETAIL,
     ImportArchiveReader,
+    exports_dir,
     quote_archive_value,
 )
 from archon_search.jobs.store import JobStore
 from archon_search.paths import get_data_dir
+from archon_search.server import routes_export
 from archon_search.server.app import create_app
 from archon_search.types import JobStatus
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -97,21 +100,7 @@ def client_no_collection(
 
 @pytest.mark.integration
 def test_post_export_returns_202_and_job_id(client: TestClient) -> None:
-    """Valid collection with valid output_path returns 202 with a job_id."""
-    output_dir = str(get_data_dir() / "exports")
-    response = client.post(
-        "/collections/my-collection/export",
-        json={"output_path": output_dir},
-    )
-    assert response.status_code == 202
-    data = response.json()
-    assert "job_id" in data
-    assert data["status"] == JobStatus.QUEUED.value
-
-
-@pytest.mark.integration
-def test_post_export_default_output_path(client: TestClient) -> None:
-    """Empty output_path defaults to get_data_dir() / 'exports' and returns 202."""
+    """A valid collection returns 202 with a job_id; the archive is written in the caller's namespace directory."""
     response = client.post(
         "/collections/my-collection/export",
         json={},
@@ -120,15 +109,15 @@ def test_post_export_default_output_path(client: TestClient) -> None:
     data = response.json()
     assert "job_id" in data
     assert data["status"] == JobStatus.QUEUED.value
+    assert Path(data["output_path"]).parent == exports_dir(get_data_dir(), DEFAULT_NAMESPACE)
 
 
 @pytest.mark.integration
 def test_post_export_collection_not_found(client_no_collection: TestClient) -> None:
     """Unknown collection returns 404."""
-    output_dir = str(get_data_dir() / "exports")
     response = client_no_collection.post(
         "/collections/unknown-collection/export",
-        json={"output_path": output_dir},
+        json={},
     )
     assert response.status_code == 404
     data = response.json()
@@ -136,15 +125,18 @@ def test_post_export_collection_not_found(client_no_collection: TestClient) -> N
 
 
 @pytest.mark.integration
-def test_post_export_path_outside_allowed(client: TestClient) -> None:
-    """Path outside get_data_dir() returns 400 with error='path_unsafe'."""
-    response = client.post(
-        "/collections/my-collection/export",
-        json={"output_path": "/tmp/evil-export-dir"},
-    )
-    assert response.status_code == 400
-    data = response.json()
-    assert data["error"] == "path_unsafe"
+@pytest.mark.parametrize("chosen", ["/tmp/evil-export-dir", "inside-the-data-dir"])
+def test_post_export_refuses_a_caller_chosen_output_path(client: TestClient, chosen: str) -> None:
+    """SecReview #4: the export directory is pinned to the caller's namespace, not chosen by the caller.
+
+    An ``output_path`` — inside the data directory or not — is a 422, and no job is created.
+    """
+    target = str(get_data_dir() / chosen) if not chosen.startswith("/") else chosen
+    response = client.post("/collections/my-collection/export", json={"output_path": target})
+
+    assert response.status_code == 422
+    assert "output_path" in response.text
+    assert client.app.state.job_store.list() == []
 
 
 @pytest.mark.integration
@@ -156,10 +148,9 @@ def test_post_export_unauthenticated(tmp_path: Path, tmp_store: JobStore) -> Non
     app.state.search_store = _make_mock_search_store()
     # No auth headers
     no_auth_client = TestClient(app)
-    output_dir = str(get_data_dir() / "exports")
     response = no_auth_client.post(
         "/collections/my-collection/export",
-        json={"output_path": output_dir},
+        json={},
     )
     assert response.status_code == 401
 
@@ -171,6 +162,11 @@ def test_post_export_unauthenticated(tmp_path: Path, tmp_store: JobStore) -> Non
 _DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 
 
+def _own_exports(*parts: str) -> Path:
+    """A path below the default-namespace export directory, where the ``auth_headers`` key may import from."""
+    return exports_dir(get_data_dir(), DEFAULT_NAMESPACE).joinpath(*parts)
+
+
 def _make_valid_archive(
     dest_dir: Path,
     *,
@@ -178,15 +174,17 @@ def _make_valid_archive(
     embedding_model: str = _DEFAULT_EMBEDDING_MODEL,
     collection: str = "my-collection",
     doc_count: int = 0,
+    namespace: str = DEFAULT_NAMESPACE,
 ) -> Path:
     """Create a minimal valid .tar.gz export archive inside *dest_dir* and return its path.
 
-    *dest_dir* must be within ``get_data_dir()`` so that ``validate_export_path`` accepts
-    the resulting path.
+    *dest_dir* must be in the importing namespace's export directory (``_own_exports``) so that
+    ``validate_export_path`` accepts the resulting path.
     """
     manifest = {
         "schema_version": schema_version,
         "collection": collection,
+        "namespace": namespace,
         "exported_at": "2024-01-01T00:00:00+00:00",
         "doc_count": doc_count,
         "active_embedding_model": embedding_model,
@@ -234,8 +232,8 @@ def test_post_import_returns_202(
     tmp_path: Path,
 ) -> None:
     """Valid archive against a non-existent collection returns 202 with QUEUED job."""
-    # Archive must live inside get_data_dir() to pass validate_export_path
-    archive = _make_valid_archive(get_data_dir() / "exports" / "test_import_202")
+    # The archive must live in the caller's own namespace export directory to pass validate_export_path
+    archive = _make_valid_archive(_own_exports("test_import_202"))
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
@@ -315,7 +313,7 @@ def test_post_import_archive_not_found(
     app = create_app(config, tmp_store)
     app.state.search_store = _make_mock_search_store(collection_meta=None)
 
-    missing = get_data_dir() / "exports" / "does-not-exist.tar.gz"
+    missing = _own_exports("does-not-exist.tar.gz")
     c = TestClient(app, headers=auth_headers)
     response = c.post(
         "/collections/my-collection/import",
@@ -343,7 +341,7 @@ def test_post_import_corrupt_archive_sanitizes_wire_detail(
     app = create_app(config, tmp_store)
     app.state.search_store = _make_mock_search_store(collection_meta=None)
 
-    corrupt = get_data_dir() / "exports" / "corrupt.tar.gz"
+    corrupt = _own_exports("corrupt.tar.gz")
     corrupt.parent.mkdir(parents=True, exist_ok=True)
     corrupt.write_bytes(b"not a real gzip archive")
 
@@ -384,13 +382,13 @@ def test_post_import_uses_validated_resolved_path_not_raw_body_path(
     # the validated return value, the request would fail with 422 archive_not_found.
     nonexistent_raw_path = tmp_path / "does-not-exist-raw" / "phantom.tar.gz"
 
-    def _fake_validate_export_path(raw: str, allowed_base_dirs: list[Path]) -> Path:
+    def _fake_importable_archive_path(raw: str, data_dir: Path, backup_output_dir: str, namespace: str) -> Path:
         assert raw == str(nonexistent_raw_path)
         return real_archive
 
     monkeypatch.setattr(
-        "archon_search.server.routes_export.validate_export_path",
-        _fake_validate_export_path,
+        "archon_search.server.routes_export.importable_archive_path",
+        _fake_importable_archive_path,
     )
 
     config = SearchConfig()
@@ -415,7 +413,7 @@ def test_post_import_collection_exists_no_force(
     meta: CollectionMeta,
 ) -> None:
     """Importing into an existing collection without force_overwrite returns 409."""
-    archive = _make_valid_archive(get_data_dir() / "exports" / "test_import_exists_no_force")
+    archive = _make_valid_archive(_own_exports("test_import_exists_no_force"))
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
@@ -441,7 +439,7 @@ def test_post_import_schema_version_mismatch_no_flag(
 ) -> None:
     """Archive with wrong schema_version returns 422 without ignore_schema_version flag."""
     archive = _make_valid_archive(
-        get_data_dir() / "exports" / "test_import_schema_mismatch",
+        _own_exports("test_import_schema_mismatch"),
         schema_version=99,
     )
 
@@ -469,7 +467,7 @@ def test_post_import_schema_version_mismatch_truncates_archive_supplied_value(
     """A crafted non-int schema_version is quoted truncated, so it cannot inflate the detail."""
     crafted_schema = ["v"] * 1_000
     archive = _make_valid_archive(
-        get_data_dir() / "exports" / "test_import_long_schema", schema_version=crafted_schema
+        _own_exports("test_import_long_schema"), schema_version=crafted_schema
     )
 
     response = _import_client(tmp_path, tmp_store, auth_headers).post(
@@ -503,7 +501,7 @@ def test_post_import_invalid_on_error(
     c = TestClient(app, headers=auth_headers)
     response = c.post(
         "/collections/my-collection/import",
-        json={"path": str(get_data_dir() / "exports" / "any.tar.gz"), "on_error": "invalid"},
+        json={"path": str(_own_exports("any.tar.gz")), "on_error": "invalid"},
     )
     assert response.status_code == 422
 
@@ -546,7 +544,7 @@ def test_post_import_undecodable_manifest_sends_fixed_text_not_parser_error(
 ) -> None:
     """A manifest.json the JSON parser cannot read (bad syntax, or nesting deep enough to raise
     RecursionError) is a 422 with archon-search's own wording, never the parser's or a 500."""
-    archive = _make_raw_archive(get_data_dir() / "exports" / "test_import_bad_manifest", manifest_bytes)
+    archive = _make_raw_archive(_own_exports("test_import_bad_manifest"), manifest_bytes)
 
     response = _import_client(tmp_path, tmp_store, auth_headers).post(
         "/collections/my-collection/import", json={"path": str(archive)}
@@ -567,7 +565,7 @@ def test_post_import_unexpected_manifest_error_sends_sanitized_detail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A ValueError that is not an ArchiveRejectedError never reaches the wire as text."""
-    archive = _make_valid_archive(get_data_dir() / "exports" / "test_import_manifest_internal")
+    archive = _make_valid_archive(_own_exports("test_import_manifest_internal"))
 
     def _internal_failure(_self: ImportArchiveReader) -> dict:
         raise ValueError("internal: /var/lib/secret/state.db is locked")
@@ -590,7 +588,7 @@ def test_post_import_model_mismatch_truncates_archive_supplied_model(
 ) -> None:
     crafted_model = "m" * 10_000
     archive = _make_valid_archive(
-        get_data_dir() / "exports" / "test_import_long_model", embedding_model=crafted_model
+        _own_exports("test_import_long_model"), embedding_model=crafted_model
     )
 
     response = _import_client(tmp_path, tmp_store, auth_headers).post(
@@ -602,3 +600,176 @@ def test_post_import_model_mismatch_truncates_archive_supplied_model(
         f"archive uses model {quote_archive_value(crafted_model)}; "
         f"server is configured with {_DEFAULT_EMBEDDING_MODEL!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# SecReview #4 — archives are bound to the namespace that exported them
+# ---------------------------------------------------------------------------
+
+_OTHER_NAMESPACE = "team-b"
+
+
+@pytest.mark.integration
+def test_post_import_refuses_an_archive_in_another_namespaces_export_directory(
+    tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]
+) -> None:
+    """Another namespace's export directory is outside the caller's allow-list: 400, and the archive is untouched."""
+    foreign = _make_valid_archive(
+        exports_dir(get_data_dir(), _OTHER_NAMESPACE) / "x", namespace=_OTHER_NAMESPACE
+    )
+
+    response = _import_client(tmp_path, tmp_store, auth_headers).post(
+        "/collections/my-collection/import", json={"path": str(foreign)}
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "path_unsafe", "reason": "outside_allowed_dirs"}
+    assert tmp_store.list() == []
+
+
+@pytest.mark.integration
+def test_post_import_answers_the_same_whether_or_not_a_foreign_archive_exists(
+    tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]
+) -> None:
+    """``archive_not_found`` is no existence oracle for another namespace's files (SecReview #4)."""
+    present = _make_valid_archive(exports_dir(get_data_dir(), _OTHER_NAMESPACE) / "x", namespace=_OTHER_NAMESPACE)
+    absent = exports_dir(get_data_dir(), _OTHER_NAMESPACE) / "x" / "never-written.tar.gz"
+    client = _import_client(tmp_path, tmp_store, auth_headers)
+
+    responses = [
+        client.post("/collections/my-collection/import", json={"path": str(path)}) for path in (present, absent)
+    ]
+
+    assert [r.status_code for r in responses] == [400, 400]
+    assert responses[0].json() == responses[1].json()
+
+
+@pytest.mark.integration
+def test_post_import_refuses_an_archive_the_manifest_binds_to_another_namespace(
+    tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]
+) -> None:
+    """A file copied into the caller's directory is still refused: its manifest names its exporter."""
+    copied = _make_valid_archive(_own_exports("copied"), namespace=_OTHER_NAMESPACE)
+
+    response = _import_client(tmp_path, tmp_store, auth_headers).post(
+        "/collections/my-collection/import", json={"path": str(copied)}
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json() == {"error": "archive_namespace_mismatch", "detail": ARCHIVE_NAMESPACE_MISMATCH_DETAIL}
+    assert _OTHER_NAMESPACE not in response.text
+    assert tmp_store.list() == []
+
+
+@pytest.mark.integration
+def test_post_import_accepts_a_pre_upgrade_manifest_that_records_no_namespace_from_the_callers_directory(
+    tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]
+) -> None:
+    """Ownership of a namespace-less archive comes from the directory it sits in (the full matrix: see
+    ``tests/test_import_pre_upgrade_archives.py``)."""
+    manifest = {
+        "schema_version": EXPORT_SCHEMA_VERSION,
+        "collection": "my-collection",
+        "exported_at": "2024-01-01T00:00:00+00:00",
+        "doc_count": 0,
+        "active_embedding_model": _DEFAULT_EMBEDDING_MODEL,
+    }
+    archive = _make_raw_archive(_own_exports("legacy"), json.dumps(manifest).encode())
+
+    response = _import_client(tmp_path, tmp_store, auth_headers).post(
+        "/collections/my-collection/import", json={"path": str(archive)}
+    )
+
+    assert response.status_code == 202, response.text
+
+
+@pytest.mark.integration
+def test_post_import_still_requires_the_other_manifest_keys(
+    tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]
+) -> None:
+    archive = _make_raw_archive(_own_exports("no-doc-count"), json.dumps({"collection": "my-collection"}).encode())
+
+    response = _import_client(tmp_path, tmp_store, auth_headers).post(
+        "/collections/my-collection/import", json={"path": str(archive)}
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == "invalid_manifest"
+    assert "namespace" not in response.json()["detail"]
+
+
+@pytest.mark.integration
+def test_post_import_accepts_the_callers_own_backup_directory(
+    tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]
+) -> None:
+    """An off-tree ``[backup].output_dir/<namespace>`` stays restorable by its own namespace (S291)."""
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = _DEFAULT_EMBEDDING_MODEL
+    config.backup.output_dir = str(tmp_path / "offsite" / "backups")
+    app = create_app(config, tmp_store)
+    app.state.search_store = _make_mock_search_store(collection_meta=None)
+    archive = _make_valid_archive(tmp_path / "offsite" / "backups" / DEFAULT_NAMESPACE)
+
+    response = TestClient(app, headers=auth_headers).post(
+        "/collections/my-collection/import", json={"path": str(archive)}
+    )
+
+    assert response.status_code == 202, response.text
+
+
+@pytest.mark.integration
+def test_post_import_refuses_another_namespaces_backup_directory(
+    tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]
+) -> None:
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = _DEFAULT_EMBEDDING_MODEL
+    config.backup.output_dir = str(tmp_path / "offsite" / "backups")
+    app = create_app(config, tmp_store)
+    app.state.search_store = _make_mock_search_store(collection_meta=None)
+    foreign = _make_valid_archive(tmp_path / "offsite" / "backups" / _OTHER_NAMESPACE, namespace=_OTHER_NAMESPACE)
+
+    response = TestClient(app, headers=auth_headers).post(
+        "/collections/my-collection/import", json={"path": str(foreign)}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["reason"] == "outside_allowed_dirs"
+
+
+def _running_on_the_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+@pytest.mark.integration
+def test_post_import_runs_the_blocking_archive_inspection_off_the_event_loop(
+    tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``tarfile.open`` / ``getmembers()`` of the member check and the manifest read must not run on the loop."""
+    archive = _make_valid_archive(_own_exports("off_loop"))
+    ran_on_loop: dict[str, bool] = {}
+    real_validate = routes_export.validate_archive_file
+    real_read_manifest = ImportArchiveReader.read_manifest
+
+    def _validate(path: Path) -> None:
+        ran_on_loop["validate_archive_file"] = _running_on_the_event_loop()
+        real_validate(path)
+
+    def _read_manifest(self: ImportArchiveReader) -> dict:
+        ran_on_loop["read_manifest"] = _running_on_the_event_loop()
+        return real_read_manifest(self)
+
+    monkeypatch.setattr(routes_export, "validate_archive_file", _validate)
+    monkeypatch.setattr(ImportArchiveReader, "read_manifest", _read_manifest)
+
+    response = _import_client(tmp_path, tmp_store, auth_headers).post(
+        "/collections/my-collection/import", json={"path": str(archive)}
+    )
+
+    assert response.status_code == 202, response.text
+    assert ran_on_loop == {"validate_archive_file": False, "read_manifest": False}

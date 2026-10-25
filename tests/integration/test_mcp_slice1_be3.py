@@ -135,22 +135,24 @@ def test_mcp_tool_list_returns_15_tools_without_key_store(tmp_path, monkeypatch)
         kwargs["key_store"] = None
         return _real_factory(**kwargs)
 
-    with patch("archon_search.server.mcp.create_mcp_http_app", side_effect=_factory_no_key_store):
-        with make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (
+    with (
+        patch("archon_search.server.mcp.create_mcp_http_app", side_effect=_factory_no_key_store),
+        make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (
             client,
             _cfg,
             api_key,
-        ):
-            tools = _mcp_tools_list(client, api_key)
-            tool_names = [t["name"] for t in tools]
-            assert len(tools) == 16, (
-                f"Expected 16 base tools (no key_store), got {len(tools)}: {tool_names}"
+        ),
+    ):
+        tools = _mcp_tools_list(client, api_key)
+        tool_names = [t["name"] for t in tools]
+        assert len(tools) == 16, (
+            f"Expected 16 base tools (no key_store), got {len(tools)}: {tool_names}"
+        )
+        # Key-management tools must be absent
+        for key_tool in ("create_key", "list_keys", "revoke_key", "rotate_key"):
+            assert key_tool not in tool_names, (
+                f"Key-management tool {key_tool!r} present without key_store"
             )
-            # Key-management tools must be absent
-            for key_tool in ("create_key", "list_keys", "revoke_key", "rotate_key"):
-                assert key_tool not in tool_names, (
-                    f"Key-management tool {key_tool!r} present without key_store"
-                )
 
 
 def test_lifecycle_shutdown(tmp_path, monkeypatch, caplog) -> None:
@@ -164,31 +166,30 @@ def test_lifecycle_shutdown(tmp_path, monkeypatch, caplog) -> None:
     """
     # The TestClient context manager raises on any lifespan error.
     # If shutdown is unclean, it would propagate here.
-    with caplog.at_level(logging.WARNING, logger="archon_search"):
-        with make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, _cfg, api_key):
-            # Confirm the app is live inside the context
-            assert client.get("/health").status_code == 200
-            # Also confirm MCP is reachable before context exit (proves session manager active)
-            resp = client.post(
-                "/mcp",
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "clientInfo": {"name": "shutdown-test", "version": "1.0"},
-                    },
+    with caplog.at_level(logging.WARNING, logger="archon_search"), make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, _cfg, api_key):
+        # Confirm the app is live inside the context
+        assert client.get("/health").status_code == 200
+        # Also confirm MCP is reachable before context exit (proves session manager active)
+        resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "shutdown-test", "version": "1.0"},
                 },
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                },
-            )
-            assert resp.status_code == 200
-            assert resp.headers.get("mcp-session-id"), "MCP session manager was not active"
+            },
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("mcp-session-id"), "MCP session manager was not active"
     # No exception reaching here means clean shutdown.  S6 proven.
     # No WARNING/ERROR related to MCP during startup or shutdown confirms clean lifecycle.
     # Catches loggers whose name contains "mcp" (e.g. archon_search.server.mcp, mcp.*)

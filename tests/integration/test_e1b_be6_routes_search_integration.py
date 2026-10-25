@@ -13,13 +13,13 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -62,7 +62,7 @@ async def _write_communities_to_store(
             community_id=community_id,
             entity_ids=entity_ids or ["entity-1"],
             representative_chunk_ids=chunk_ids,
-            built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            built_at=datetime(2024, 1, 1, tzinfo=UTC),
             summary_text=None,
         )
         await gs.write_communities(col, [community], ns="default")
@@ -162,7 +162,7 @@ def test_post_search_global_no_communities_422(
     doc = tmp_path / "test_doc.txt"
     doc.write_text("Some content for testing.\n" * 5, encoding="utf-8")
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
         # Do NOT build communities.
@@ -215,7 +215,7 @@ def test_post_search_local_no_communities_422(
     doc = tmp_path / "test_doc.txt"
     doc.write_text("Some content for testing.\n" * 5, encoding="utf-8")
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
         # Entity matching succeeds, but communities were never built.
@@ -420,7 +420,7 @@ def test_post_search_fanout_global_no_communities_422(
     doc = tmp_path / "test_doc.txt"
     doc.write_text("Some content for fanout testing.\n" * 5, encoding="utf-8")
 
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, api_key):
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
         # Do NOT build communities; use collections (plural) to trigger search_many().

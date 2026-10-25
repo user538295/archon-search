@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 
 from archon_search.key_manager import KeyStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -57,7 +56,7 @@ def _make_minimal_app(tmp_path, monkeypatch, *, namespaces: dict[str, str] | Non
 
 def test_create_app_exposes_key_store(tmp_path, monkeypatch):
     """app.state.key_store is a KeyStore instance after create_app()."""
-    app, api_key = _make_minimal_app(tmp_path, monkeypatch)
+    app, _api_key = _make_minimal_app(tmp_path, monkeypatch)
     with TestClient(app):
         assert hasattr(app.state, "key_store"), "app.state.key_store not set by create_app()"
         assert isinstance(app.state.key_store, KeyStore), (
@@ -70,7 +69,7 @@ def test_toml_synthetic_key_records_loaded_at_startup(tmp_path, monkeypatch):
     toml_token = secrets.token_hex(32)
     namespaces = {toml_token: "toml-ns"}
 
-    app, api_key = _make_minimal_app(tmp_path, monkeypatch, namespaces=namespaces)
+    app, _api_key = _make_minimal_app(tmp_path, monkeypatch, namespaces=namespaces)
     with TestClient(app):
         key_store = app.state.key_store
         import asyncio
@@ -107,7 +106,7 @@ def test_toml_namespaces_still_work(tmp_path, monkeypatch):
     toml_token = secrets.token_hex(32)
     namespaces = {toml_token: "toml-ns"}
 
-    app, api_key = _make_minimal_app(tmp_path, monkeypatch, namespaces=namespaces)
+    app, _api_key = _make_minimal_app(tmp_path, monkeypatch, namespaces=namespaces)
     with TestClient(app) as client:
         resp = client.get(
             "/collections",
@@ -127,7 +126,7 @@ def test_toml_and_managed_key_coexist(tmp_path, monkeypatch):
     toml_token = secrets.token_hex(32)
     namespaces = {toml_token: "toml-ns"}
 
-    app, api_key = _make_minimal_app(tmp_path, monkeypatch, namespaces=namespaces)
+    app, _api_key = _make_minimal_app(tmp_path, monkeypatch, namespaces=namespaces)
     with TestClient(app) as client:
         # First: TOML token works
         resp_toml = client.get(
@@ -144,7 +143,7 @@ def test_toml_and_managed_key_coexist(tmp_path, monkeypatch):
 
         key_store = app.state.key_store
         result = asyncio.run(key_store.create(ns="managed-ns", label=None, expires_at=None))
-        managed_token = result["token"]
+        managed_token = result.token
 
         # Managed key must also be accepted
         resp_managed = client.get(
@@ -186,11 +185,11 @@ def test_create_mcp_http_app_accepts_managed_key(tmp_path, monkeypatch):
     # Create a KeyStore and populate it with a managed key
     key_store = KeyStore(get_data_dir() / "keys.json")
     result = asyncio.run(key_store.create(ns="managed-ns", label=None, expires_at=None))
-    managed_token = result["token"]
+    managed_token = result.token
 
     # Build a minimal pipeline mock
-    from archon_search.pipeline import SearchPipelineResult
     from archon_search.embedder_cache import EmbedderCache
+    from archon_search.pipeline import SearchPipelineResult
 
     pipeline = MagicMock()
     pipeline.warmup_models = AsyncMock(return_value=True)

@@ -38,12 +38,18 @@ from __future__ import annotations
 
 import sys
 import types
-import warnings
 from collections.abc import Callable
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
+from archon_search.paths import (
+    GRAPH_NER_MODEL_FILES,
+    GRAPH_NER_MODEL_NAME,
+    GRAPH_NER_MODEL_REVISION,
+    get_graph_models_dir,
+)
 from archon_search.prose_extraction_backend import (
     BatchExtraction,
     ChunkExtraction,
@@ -278,6 +284,25 @@ class RecordingGlinerModel:
         return entities, rels
 
 
+def seed_graph_model_snapshot() -> Path:
+    """Create the pinned GLiNER snapshot (empty files) under the current data dir and return it.
+
+    ``load_gliner_model`` downloads the checkpoint itself (``model_store.ensure_pinned_snapshot``) before it
+    hands gliner a local directory; a seeded snapshot is a cache hit, so tests that fake ``gliner`` never reach
+    the network.
+    """
+    snapshot = (
+        get_graph_models_dir()
+        / f"models--{GRAPH_NER_MODEL_NAME.replace('/', '--')}"
+        / "snapshots"
+        / GRAPH_NER_MODEL_REVISION
+    )
+    snapshot.mkdir(parents=True, exist_ok=True)
+    for name in GRAPH_NER_MODEL_FILES:
+        (snapshot / name).touch()
+    return snapshot
+
+
 def install_deep_gliner_stub(monkeypatch: pytest.MonkeyPatch, model: object) -> None:
     """Inject a fake ``gliner`` module whose ``GLiNER.from_pretrained`` returns
     ``model``, so ``ProseExtractionBackend.load()`` runs its real logic against
@@ -285,9 +310,10 @@ def install_deep_gliner_stub(monkeypatch: pytest.MonkeyPatch, model: object) -> 
     and threshold decision is the backend's own. torch stays real (it is a dev
     dependency and the load only pins its thread counts).
     """
+    seed_graph_model_snapshot()
     gliner_mod = types.ModuleType("gliner")
     gliner_cls = types.SimpleNamespace(from_pretrained=lambda *a, **k: model)
-    setattr(gliner_mod, "GLiNER", gliner_cls)
+    gliner_mod.GLiNER = gliner_cls
     monkeypatch.setitem(sys.modules, "gliner", gliner_mod)
 
 
@@ -298,32 +324,10 @@ def fake_torch_and_gliner(from_pretrained: MagicMock) -> tuple[types.ModuleType,
     path runs unmodified. ``torch`` exposes only the thread-pinning setters the
     load calls, as ``MagicMock``s callers may configure or assert on.
     """
+    seed_graph_model_snapshot()
     torch_mod = types.ModuleType("torch")
-    setattr(torch_mod, "set_num_threads", MagicMock())
-    setattr(torch_mod, "set_num_interop_threads", MagicMock())
+    torch_mod.set_num_threads = MagicMock()
+    torch_mod.set_num_interop_threads = MagicMock()
     gliner_mod = types.ModuleType("gliner")
-    setattr(gliner_mod, "GLiNER", types.SimpleNamespace(from_pretrained=from_pretrained))
+    gliner_mod.GLiNER = types.SimpleNamespace(from_pretrained=from_pretrained)
     return torch_mod, gliner_mod
-
-
-def gliner_from_pretrained_emulating_hub(model: object) -> Callable[..., object]:
-    """A ``GLiNER.from_pretrained`` stand-in that keeps the one real contract the
-    ``resume_download`` fix depends on: gliner (0.2.28, 0.2.29 and ``main``) defaults
-    ``resume_download=False`` and forwards it to ``huggingface_hub.snapshot_download``,
-    whose ``smoothly_deprecate_legacy_arguments`` warns on any value but ``None``
-    (``huggingface_hub/utils/_validators.py``, hub 1.33). Returns ``model`` otherwise.
-    """
-
-    def from_pretrained(
-        model_id: str, *, resume_download: bool | None = False, **_kwargs: object
-    ) -> object:
-        if resume_download is not None:
-            warnings.warn(
-                "The `resume_download` argument is deprecated and ignored in "
-                "`snapshot_download`. Downloads always resume whenever possible.",
-                UserWarning,
-                stacklevel=2,
-            )
-        return model
-
-    return from_pretrained

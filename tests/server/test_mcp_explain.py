@@ -17,12 +17,14 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder
 from archon_search.jobs.store import JobStore
-from archon_search.pipeline import METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL, SearchPipeline
+from archon_search.pipeline import (
+    METADATA_STORE_UNAVAILABLE_CODE,
+    METADATA_STORE_UNAVAILABLE_DETAIL,
+    SearchPipeline,
+)
 from archon_search.reranker import Reranker
 from archon_search.server.app import create_app as create_rest_app
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
-
-
 
 
 def _make_mcp_app(pipeline: Any, *, config: SearchConfig | None = None, writer: Any = None) -> StubFastMCP:
@@ -300,7 +302,7 @@ async def test_mcp_explain_telemetry_no_query(tmp_path: Path) -> None:
 
     reader = TelemetryReader(logs_dir, retention_days=30)
     today = datetime.now(UTC).date()
-    entries, skipped = reader.read_entries(today, today)
+    entries, _skipped = reader.read_entries(today, today)
     explain_entries = [e for e in entries if e.endpoint == "explain"]
     assert len(explain_entries) >= 1
     assert explain_entries[0].collection == "docs"

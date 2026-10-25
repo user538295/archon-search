@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _make_client(rpm: int = 60, extra_rpm: int | None = None) -> "AnthropicEnrichmentClient":
+def _make_client(rpm: int = 60, extra_rpm: int | None = None) -> AnthropicEnrichmentClient:
     from archon_search.enrichment.anthropic import AnthropicEnrichmentClient
 
     config = MagicMock()
@@ -33,7 +33,7 @@ def _make_client(rpm: int = 60, extra_rpm: int | None = None) -> "AnthropicEnric
 
 def _make_ready_client(
     mock_response_text: str = "summary",
-) -> tuple["AnthropicEnrichmentClient", "MagicMock"]:
+) -> tuple[AnthropicEnrichmentClient, MagicMock]:
     """Return a client with _anthropic_available=True and a wired mock Anthropic client."""
     client = _make_client()
     mock_content = MagicMock()

@@ -33,10 +33,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from archon_search.graph_extractor import (
-    BACKEND_UNAVAILABLE_DETAIL,
     _LATCHED_LOAD_FAILURE_LOG_MESSAGE,
     _LOAD_FAILURE_LOG_MESSAGE,
     _LOAD_WAIT_TIMEOUT_DETAIL,
+    BACKEND_UNAVAILABLE_DETAIL,
 )
 from archon_search.graph_types import (
     ChunkInput,
@@ -57,7 +57,6 @@ from tests._load_single_flight_probe import (
     LoadSingleFlightProbe,
     gated_failing_from_pretrained,
 )
-
 
 # ---------------------------------------------------------------------------
 # Prose extraction backend stub helper
@@ -780,9 +779,8 @@ def test_backend_load_failure_warning_is_logged_once_per_process(caplog) -> None
         side_effect=NotADirectoryError("models/graph is a file, not a directory")
     )
     torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
-    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
-        with caplog.at_level(logging.DEBUG, logger=_EXTRACTOR_LOGGER):
-            job_1_results, job_2_results, job_3_results = asyncio.run(_run())
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}), caplog.at_level(logging.DEBUG, logger=_EXTRACTOR_LOGGER):
+        job_1_results, job_2_results, job_3_results = asyncio.run(_run())
 
     # The real backend latched: the checkpoint load was attempted exactly once.
     assert from_pretrained.call_count == 1
@@ -855,9 +853,8 @@ def test_concurrent_first_failing_load_warns_once(caplog) -> None:
             return await asyncio.gather(*extractions)
 
     torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
-    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
-        with caplog.at_level(logging.DEBUG, logger=_EXTRACTOR_LOGGER):
-            results = asyncio.run(_run())
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}), caplog.at_level(logging.DEBUG, logger=_EXTRACTOR_LOGGER):
+        results = asyncio.run(_run())
 
     assert from_pretrained.call_count == 1
     assert probe.loader_dispatches == 1
@@ -889,9 +886,8 @@ def test_real_backend_non_latched_load_failure_is_retried_and_warns_per_document
 
     from_pretrained = MagicMock(side_effect=_fresh_system_exit)
     torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
-    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
-        with caplog.at_level(logging.DEBUG, logger=_EXTRACTOR_LOGGER):
-            results = asyncio.run(_run())
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}), caplog.at_level(logging.DEBUG, logger=_EXTRACTOR_LOGGER):
+        results = asyncio.run(_run())
 
     assert from_pretrained.call_count == len(docs), "a non-latched failure must be re-attempted"
     _assert_degraded_with_unavailable_warning(docs, results)

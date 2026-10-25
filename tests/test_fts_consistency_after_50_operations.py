@@ -25,14 +25,13 @@ import asyncio
 import hashlib
 import random
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 from archon_search._types import ChunkRecord
 from archon_search.store import SearchStore
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -76,7 +75,7 @@ def _chunk(doc_id: str, idx: int, text: str) -> ChunkRecord:
         text=text,
         vector=vector,
         source_path=f"/corpus/{doc_id[:8]}.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -157,7 +156,7 @@ def test_fts_consistency_after_50_operations(tmp_path: Any) -> None:
 
                 else:  # reingest
                     pick = rng.choice(live_indices)
-                    doc_id, old_token, _ = base_docs[pick]
+                    doc_id, _old_token, _ = base_docs[pick]
                     ver = op_version.get(pick, 0) + 1
                     op_version[pick] = ver
                     # Track old token as a "deleted token" for phantom-hit checks.

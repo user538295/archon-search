@@ -59,7 +59,7 @@ def test_reindex_metadata_job_result_contains_all_fields(tmp_path: Path, monkeyp
 
     toml_content = f"[collections]\ncollections=[{str(collection_dir)!r}]\n"
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, cfg, api_key):
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, _cfg, api_key):
         from archon_search.sync import path_to_collection_name
 
         headers = {"Authorization": f"Bearer {api_key}"}

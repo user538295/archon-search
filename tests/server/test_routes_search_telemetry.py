@@ -14,7 +14,6 @@ from archon_search.pipeline import SearchPipelineResult
 from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
-
 # ---------------------------------------------------------------------------
 # Minimal test app helper
 # ---------------------------------------------------------------------------
@@ -25,9 +24,8 @@ def _make_test_app(
     pipeline_mock: MagicMock | None = None,
 ) -> FastAPI:
     """Create a minimal FastAPI app with only the search router and mocked state."""
-    from archon_search.server import routes_search
-
     from archon_search.config import SearchConfig
+    from archon_search.server import routes_search
 
     app = FastAPI()
     app.state.telemetry_writer = writer
@@ -160,12 +158,11 @@ def test_pipeline_failure_logs_structured_event_type(caplog: pytest.LogCaptureFi
 
     app = _make_test_app(writer=writer_mock, pipeline_mock=pipeline_mock)
 
-    with caplog.at_level(logging.ERROR, logger="archon_search"):
-        with TestClient(app, raise_server_exceptions=False) as client:
-            response = client.post(
-                "/search",
-                json={"collection": "col", "query": "SENTINEL_QUERY_PRIVACY_CHECK_XYZ"},
-            )
+    with caplog.at_level(logging.ERROR, logger="archon_search"), TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/search",
+            json={"collection": "col", "query": "SENTINEL_QUERY_PRIVACY_CHECK_XYZ"},
+        )
 
     assert response.status_code == 500
 
@@ -208,9 +205,8 @@ def test_telemetry_enqueue_failure_does_not_break_route(
 
     app = _make_test_app(writer=writer_mock, pipeline_mock=pipeline_mock)
 
-    with caplog.at_level(logging.WARNING, logger="archon_search"):
-        with TestClient(app, raise_server_exceptions=False) as client:
-            response = client.post("/search", json={"collection": "col", "query": "test"})
+    with caplog.at_level(logging.WARNING, logger="archon_search"), TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 500
     assert any(
@@ -385,6 +381,7 @@ def test_search_pipeline_timeout_returns_504_and_enqueues_telemetry(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     import asyncio
+
     import archon_search.server.routes_search as routes_search_module
 
     monkeypatch.setattr(routes_search_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
@@ -403,9 +400,8 @@ def test_search_pipeline_timeout_returns_504_and_enqueues_telemetry(
 
     app = _make_test_app(writer=writer_mock, pipeline_mock=pipeline_mock)
 
-    with caplog.at_level(logging.ERROR, logger="archon_search"):
-        with TestClient(app, raise_server_exceptions=False) as client:
-            response = client.post("/search", json={"collection": "col", "query": "test"})
+    with caplog.at_level(logging.ERROR, logger="archon_search"), TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 504
     assert writer_mock.enqueue.call_count == 1

@@ -5,9 +5,9 @@ from typing import Final, get_type_hints
 import pytest
 
 from archon_search.constants import (
+    _INGEST_CHUNK_BATCH_SIZE,
     PING_TIMEOUT_SECONDS,
     PING_TTL_SECONDS,
-    _INGEST_CHUNK_BATCH_SIZE,
     _validate_namespace,
 )
 

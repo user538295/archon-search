@@ -6,7 +6,7 @@ import dataclasses
 import hashlib
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -43,7 +43,7 @@ def _chunk(doc_id: str, idx: int, text: str = "hello", dim: int = _DIM) -> Chunk
         text=text,
         vector=[float(idx)] * dim,
         source_path=f"/tmp/{doc_id[:8]}.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -554,7 +554,7 @@ async def test_store_list_documents_limit_capped_at_1000(
     """list_documents caps limit at 1000 — requesting more does not OOM."""
     await connected_store.ensure_collection(col_name, _DIM)
     # Should not raise even with unreasonable limit
-    items, _next_cursor, total = await connected_store.list_documents(col_name, limit=100_000)
+    items, _next_cursor, _total = await connected_store.list_documents(col_name, limit=100_000)
     assert isinstance(items, list)
 
 
@@ -568,7 +568,7 @@ def test_drop_collection_raises_before_connect(tmp_path: Path) -> None:
     import asyncio
     store = SearchStore(tmp_path / "db")
     with pytest.raises(RuntimeError, match="not connected"):
-        asyncio.run(store.drop_collection("col"))
+        asyncio.run(store.drop_collection("col", namespace="default"))
 
 
 def test_drop_collection_removes_table(tmp_path: Path) -> None:
@@ -584,7 +584,7 @@ def test_drop_collection_removes_table(tmp_path: Path) -> None:
     mock_db.drop_table = AsyncMock()
     store._db = mock_db
 
-    asyncio.run(store.drop_collection("my-col"))
+    asyncio.run(store.drop_collection("my-col", namespace="default"))
 
     mock_db.drop_table.assert_awaited_once_with("my-col")
 
@@ -602,7 +602,7 @@ def test_drop_collection_raises_keyerror_on_missing(tmp_path: Path) -> None:
     store._db = mock_db
 
     with pytest.raises(KeyError):
-        asyncio.run(store.drop_collection("nonexistent"))
+        asyncio.run(store.drop_collection("nonexistent", namespace="default"))
 
 
 @pytest.mark.asyncio
@@ -612,7 +612,7 @@ async def test_drop_collection_integration(connected_store: SearchStore, col_nam
     names_before = [c.name for c in await connected_store.list_collections()]
     assert col_name in names_before
 
-    await connected_store.drop_collection(col_name)
+    await connected_store.drop_collection(col_name, namespace="default")
 
     names_after = [c.name for c in await connected_store.list_collections()]
     assert col_name not in names_after
@@ -1122,6 +1122,7 @@ async def test_migrate_namespace_already_migrated(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_migrate_namespace_rows_backfilled(tmp_path: Path) -> None:
     import pyarrow as pa
+
     from archon_search.constants import DEFAULT_NAMESPACE
 
     store = SearchStore(tmp_path / "db")
@@ -1185,8 +1186,9 @@ async def test_migrate_namespace_add_columns_duplicate_error_matches_handler(tmp
 
 @pytest.mark.asyncio
 async def test_migrate_namespace_concurrent_race(tmp_path: Path) -> None:
-    import lancedb.table
     from unittest.mock import AsyncMock, patch
+
+    import lancedb.table
 
     store = SearchStore(tmp_path / "db")
     await store.connect()
@@ -1745,8 +1747,8 @@ async def test_collection_meta_upsert(connected_store: SearchStore) -> None:
         doc_count=5,
         chunk_count=10,
         active_embedding_model="BAAI/bge-small-en-v1.5",
-        last_indexed=datetime(2026, 3, 1, tzinfo=timezone.utc),
-        last_described=datetime(2026, 3, 2, tzinfo=timezone.utc),
+        last_indexed=datetime(2026, 3, 1, tzinfo=UTC),
+        last_described=datetime(2026, 3, 2, tzinfo=UTC),
     )
     await connected_store.update_collection_meta(meta)
     retrieved = await connected_store.get_collection_meta("test-meta-col")
@@ -1759,7 +1761,7 @@ async def test_collection_meta_upsert(connected_store: SearchStore) -> None:
     assert retrieved.doc_count == 5
     assert retrieved.chunk_count == 10
     assert retrieved.active_embedding_model == "BAAI/bge-small-en-v1.5"
-    assert retrieved.last_indexed == datetime(2026, 3, 1, tzinfo=timezone.utc)
+    assert retrieved.last_indexed == datetime(2026, 3, 1, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
@@ -2014,7 +2016,7 @@ async def test_get_all_collections_meta_returns_all_rows(tmp_path: Path) -> None
             doc_count=2,
             chunk_count=10,
             centroid=[0.1, 0.2],
-            last_indexed=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            last_indexed=datetime(2026, 1, 1, tzinfo=UTC),
         )
         meta2 = CollectionMeta(
             name="col-b",
@@ -2267,7 +2269,7 @@ async def test_P14_11_store_rebuild_fts_on_empty_collection_does_not_raise(
     # Should not raise (may be a no-op or succeed silently)
     try:
         await connected_store.rebuild_fts_index(col_name)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — test converts any error from rebuild_fts_index into an explicit failure message
         pytest.fail(f"rebuild_fts_index on empty collection raised: {exc}")
 
 
@@ -2281,7 +2283,7 @@ async def test_P14_13_store_list_documents_limit_zero_returns_empty(
     await connected_store.ensure_collection(col_name, _DIM)
     await connected_store.ingest_chunks(col_name, chunks)
 
-    items, next_cursor, total = await connected_store.list_documents(col_name, limit=0)
+    items, next_cursor, _total = await connected_store.list_documents(col_name, limit=0)
     # limit=0 → min(0, 1000) = 0 → limit * 50 = 0 rows fetched → []
     assert items == []
     assert next_cursor is None
@@ -2722,6 +2724,7 @@ def test_hybrid_search_trace_sort_is_deterministic_on_score_ties(tmp_path: Path)
 def test_mcp_search_response_schema_matches_public_contract_without_eval_provenance() -> None:
     """Serialized public SearchResult payloads match the public contract and exclude eval-only provenance."""
     from dataclasses import asdict
+
     from archon_search._types import SearchResult
 
     result = SearchResult(
@@ -2750,6 +2753,7 @@ def test_mcp_search_response_schema_matches_public_contract_without_eval_provena
 def test_mcp_search_with_context_response_schema_matches_public_contract_without_eval_provenance() -> None:
     """Context (multi-result) payloads match the public Search contract and exclude eval provenance."""
     from dataclasses import asdict
+
     from archon_search._types import SearchResult
 
     results = [
@@ -2837,6 +2841,7 @@ async def test_get_collection_meta_default_namespace(connected_store: SearchStor
 async def test_get_collection_meta_missing_namespace_field_fallback(tmp_path: Path) -> None:
     """Legacy rows without namespace column are matched when querying DEFAULT_NAMESPACE."""
     import pyarrow as pa
+
     from archon_search.constants import DEFAULT_NAMESPACE
 
     store = SearchStore(tmp_path / "db_legacy_ns")
@@ -3283,7 +3288,7 @@ async def test_hybrid_search_trace_returns_language_field(
         text="language field test",
         vector=[1.0] * _DIM,
         source_path="/tmp/lang.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
         language="en",
     )
     await connected_store.ensure_collection(col_name, _DIM)
@@ -3353,10 +3358,10 @@ def test_hybrid_search_trace_score_kind_values_match_backend_polarity(tmp_path: 
 
 
 def _make_mock_store_for_filter_tests(
-    tmp_path: "Path",
+    tmp_path: Path,
     vec_rows: list[dict],
     fts_rows: list[dict],
-) -> "tuple[SearchStore, MagicMock, MagicMock]":
+) -> tuple[SearchStore, MagicMock, MagicMock]:
     """Return (store, mock_db, mock_table) pre-wired for filter tests."""
     from unittest.mock import AsyncMock, MagicMock
 
@@ -3467,7 +3472,7 @@ def test_hybrid_search_with_trace_empty_filters_no_where_called(tmp_path: Path) 
 def test_hybrid_search_with_trace_combined_filters_predicate(tmp_path: Path) -> None:
     """Combined filters produce a predicate with all three clauses joined by ' AND '."""
     import asyncio
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from archon_search.filters import SearchFilters
 
@@ -3478,7 +3483,7 @@ def test_hybrid_search_with_trace_combined_filters_predicate(tmp_path: Path) -> 
     filters = SearchFilters(
         file_type="md",
         source_path_prefix="/docs/",
-        indexed_after=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        indexed_after=datetime(2026, 1, 1, tzinfo=UTC),
     )
     asyncio.run(store.hybrid_search_with_trace("my-col", [0.0] * _DIM, "q", 5, filters=filters))
 
@@ -3583,7 +3588,7 @@ async def test_hybrid_search_file_type_filter(
             text=f"markdown content {i}",
             vector=[float(i)] * _DIM,
             source_path=f"/docs/readme_{i}.md",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
+            indexed_at=datetime.now(UTC).isoformat(),
             file_type="md",
         )
         for i in range(3)
@@ -3595,7 +3600,7 @@ async def test_hybrid_search_file_type_filter(
             text=f"python code {i}",
             vector=[float(i + 10)] * _DIM,
             source_path=f"/src/module_{i}.py",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
+            indexed_at=datetime.now(UTC).isoformat(),
             file_type="py",
         )
         for i in range(3)
@@ -3635,7 +3640,7 @@ async def test_hybrid_search_source_path_prefix_filter(
             text=f"doc a chunk {i}",
             vector=[float(i)] * _DIM,
             source_path=f"/project/100%/a_{i}.md",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
+            indexed_at=datetime.now(UTC).isoformat(),
         )
         for i in range(2)
     ]
@@ -3646,7 +3651,7 @@ async def test_hybrid_search_source_path_prefix_filter(
             text=f"doc b chunk {i}",
             vector=[float(i + 5)] * _DIM,
             source_path=f"/other/b_{i}.md",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
+            indexed_at=datetime.now(UTC).isoformat(),
         )
         for i in range(2)
     ]
@@ -3734,7 +3739,7 @@ async def test_hybrid_search_prefilter_returns_full_top_k_from_matching_subset(
             text=f"matching document {i}",
             vector=[float(i)] * _DIM,
             source_path=f"/docs/file_{i}.md",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
+            indexed_at=datetime.now(UTC).isoformat(),
             file_type="md",
         )
         for i in range(10)
@@ -3771,7 +3776,7 @@ async def test_hybrid_search_filter_applies_to_fts_branch_via_where(
             text=f"{unique_word} markdown {i}",
             vector=[float(i)] * _DIM,
             source_path=f"/docs/guide_{i}.md",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
+            indexed_at=datetime.now(UTC).isoformat(),
             file_type="md",
         )
         for i in range(3)
@@ -3783,7 +3788,7 @@ async def test_hybrid_search_filter_applies_to_fts_branch_via_where(
             text=f"{unique_word} python {i}",
             vector=[float(i + 20)] * _DIM,
             source_path=f"/src/code_{i}.py",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
+            indexed_at=datetime.now(UTC).isoformat(),
             file_type="py",
         )
         for i in range(3)
@@ -3854,39 +3859,39 @@ def test_double_star_equivalent_to_single_star(tmp_path: Path) -> None:
 
 
 def test_where_eq_basic() -> None:
-    from archon_search.store import _where_eq  # noqa: PLC0415
+    from archon_search.store import _where_eq
 
     assert _where_eq("name", "foo") == "name = 'foo'"
 
 
 def test_where_eq_adversarial() -> None:
     """Belt-and-braces: call directly, bypassing upstream regex gate."""
-    from archon_search.store import _where_eq  # noqa: PLC0415
+    from archon_search.store import _where_eq
 
     assert _where_eq("name", "O'Brien") == "name = 'O''Brien'"
 
 
 def test_where_in_basic() -> None:
-    from archon_search.store import _where_in  # noqa: PLC0415
+    from archon_search.store import _where_in
 
     assert _where_in("chunk_id", ["a", "b"]) == "chunk_id IN ('a', 'b')"
 
 
 def test_where_in_empty_returns_always_false() -> None:
-    from archon_search.store import _where_in  # noqa: PLC0415
+    from archon_search.store import _where_in
 
     assert _where_in("chunk_id", []) == "1=0"
 
 
 def test_where_in_single() -> None:
-    from archon_search.store import _where_in  # noqa: PLC0415
+    from archon_search.store import _where_in
 
     assert _where_in("chunk_id", ["a"]) == "chunk_id IN ('a')"
 
 
 def test_where_in_adversarial() -> None:
     """Values containing single-quotes are doubled."""
-    from archon_search.store import _where_in  # noqa: PLC0415
+    from archon_search.store import _where_in
 
     assert _where_in("c", ["a'b"]) == "c IN ('a''b')"
 
@@ -4033,7 +4038,7 @@ async def test_delete_document_removes_all_chunks(connected_store: SearchStore, 
 
     Exercises both count_rows and delete sites (lines ~725 and ~728).
     """
-    doc_id, chunks = await _ingest_doc(connected_store, col_name, n_chunks=3)
+    doc_id, _chunks = await _ingest_doc(connected_store, col_name, n_chunks=3)
 
     deleted = await connected_store.delete_document(col_name, doc_id)
     assert deleted == 3, f"Expected 3 chunks deleted, got {deleted}"
@@ -4180,9 +4185,9 @@ async def test_migrate_description_embedding_concurrent_calls(tmp_path: Path) ->
     its concurrency test uses patch to simulate an already-exists error. We follow the same
     mock-based approach here for consistency.
     """
-    import lancedb.table
     from unittest.mock import AsyncMock, patch
 
+    import lancedb.table
     import pyarrow as pa
 
     store = SearchStore(tmp_path / "db_emb_concurrent")
@@ -4265,6 +4270,7 @@ async def test_description_embedding_round_trips(tmp_path: Path) -> None:
 async def test_old_table_without_column_reads_none(tmp_path: Path) -> None:
     """Meta table without description_embedding_json column → description_embedding is None."""
     import pyarrow as pa
+
     from archon_search.constants import DEFAULT_NAMESPACE
 
     store = SearchStore(tmp_path / "db_emb_old")
@@ -4537,7 +4543,7 @@ async def test_do_fetch_doc_vectors_unlocked_returns_correct_vectors(
             text="a chunk 0",
             vector=vec_a0,
             source_path=f"/tmp/{doc_a[:8]}.md",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
+            indexed_at=datetime.now(UTC).isoformat(),
         ),
         ChunkRecord(
             doc_id=doc_a,
@@ -4545,7 +4551,7 @@ async def test_do_fetch_doc_vectors_unlocked_returns_correct_vectors(
             text="a chunk 1",
             vector=vec_a1,
             source_path=f"/tmp/{doc_a[:8]}.md",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
+            indexed_at=datetime.now(UTC).isoformat(),
         ),
         ChunkRecord(
             doc_id=doc_b,
@@ -4553,7 +4559,7 @@ async def test_do_fetch_doc_vectors_unlocked_returns_correct_vectors(
             text="b chunk 0",
             vector=vec_b0,
             source_path=f"/tmp/{doc_b[:8]}.md",
-            indexed_at=datetime.now(timezone.utc).isoformat(),
+            indexed_at=datetime.now(UTC).isoformat(),
         ),
     ]
     await connected_store.ensure_collection(col_name, _DIM)
@@ -4737,6 +4743,7 @@ def test_elementwise_sum_raises_on_mixed_dimensions() -> None:
 def _make_store_with_config(tmp_path, **config_overrides):
     """Create a connected SearchStore with a custom SearchConfig."""
     import asyncio
+
     from archon_search.config import SearchConfig
     cfg = SearchConfig(**config_overrides)
     store = SearchStore(tmp_path / "db", config=cfg)
@@ -4987,6 +4994,7 @@ async def test_do_update_meta_on_add_new_collection_no_recompute_at_threshold(tm
 def _make_incremental_store(tmp_path, threshold: int = 10_000):
     """Return a connected SearchStore with incremental centroid enabled."""
     import asyncio
+
     from archon_search.config import SearchConfig
     cfg = SearchConfig(centroid_recompute_threshold=threshold)
     store = SearchStore(tmp_path / "db", config=cfg)
@@ -5008,11 +5016,11 @@ async def test_ingest_chunks_accumulates_centroid_sum_on_second_batch(tmp_path) 
         await store.ensure_collection(col, 2)
         # Batch 1: [[1.0, 2.0]]
         c1 = _chunk(doc1, 0)
-        import dataclasses; c1 = dataclasses.replace(c1, vector=[1.0, 2.0])
+        c1 = dataclasses.replace(c1, vector=[1.0, 2.0])
         await store.ingest_chunks(col, [c1], embedding_model="m")
         # Batch 2: [[3.0, 4.0]]
         c2 = _chunk(doc2, 0)
-        import dataclasses; c2 = dataclasses.replace(c2, vector=[3.0, 4.0])
+        c2 = dataclasses.replace(c2, vector=[3.0, 4.0])
         await store.ingest_chunks(col, [c2], embedding_model="m")
         meta = await store.get_collection_meta(col)
         assert meta is not None
@@ -5071,6 +5079,7 @@ async def test_ingest_chunks_doc_count_multi_doc_batch(tmp_path) -> None:
 async def test_ingest_chunks_no_full_scan_spy(tmp_path) -> None:
     """get_all_vectors and count_documents are never called during ingest_chunks."""
     from unittest.mock import AsyncMock, patch
+
     from archon_search.config import SearchConfig
     cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
@@ -5095,6 +5104,7 @@ async def test_ingest_chunks_no_full_scan_spy(tmp_path) -> None:
 async def test_ingest_chunks_lock_serializes_concurrent_adds(tmp_path) -> None:
     """Two concurrent ingest_chunks for the same collection serialize correctly."""
     import asyncio
+
     from archon_search.config import SearchConfig
     cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
@@ -5197,8 +5207,8 @@ async def test_ingest_chunks_chunks_ingested_correct(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_ingest_chunks_needs_recompute_false_below_threshold(tmp_path) -> None:
     """Fresh collection, 3 chunks, default threshold 10 000 → needs_recompute == False."""
-    from archon_search.store import ChunkIngestResult
     from archon_search.config import SearchConfig
+    from archon_search.store import ChunkIngestResult
     cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
@@ -5222,6 +5232,7 @@ async def test_ingest_chunks_needs_recompute_false_below_threshold(tmp_path) -> 
 def _meta_with(tmp_path, **kwargs):
     """Sync helper: create a store, write a CollectionMeta row, return (store, db, col)."""
     import asyncio
+
     from archon_search.config import SearchConfig
     cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
@@ -5301,14 +5312,15 @@ async def test_do_subtract_meta_noop_on_empty_vectors(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_do_subtract_meta_bumps_last_indexed(tmp_path) -> None:
     """last_indexed is updated to a recent datetime after subtraction."""
+    from datetime import datetime
+
     from archon_search.collection_meta import CollectionMeta
-    from datetime import datetime, timezone
     store = SearchStore(tmp_path / "db")
     await store.connect()
     try:
         db = store._require_connected()
         col = "sub_ts"
-        old_ts = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        old_ts = datetime(2020, 1, 1, tzinfo=UTC)
         seed = CollectionMeta(
             name=col, centroid_sum=[6.0], centroid=[6.0],
             chunk_count=2, doc_count=1, active_embedding_model="m",
@@ -5590,6 +5602,7 @@ async def test_delete_document_lock_timeout_raises_store_busy_error(tmp_path, mo
 async def test_delete_document_no_full_scan_spy(tmp_path) -> None:
     """delete_document does not call get_all_vectors or count_documents (no full scan)."""
     from unittest.mock import patch
+
     from archon_search.config import SearchConfig
     cfg = SearchConfig()
     store = SearchStore(tmp_path / "db_del_spy", config=cfg)
@@ -5705,8 +5718,9 @@ async def test_update_description_noop_when_no_meta_row(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_update_description_timeout_skips_write(tmp_path, caplog, monkeypatch) -> None:
     """Lock held externally → update_description returns silently (no StoreBusyError) and logs warning."""
-    import archon_search.store as store_mod
     import logging
+
+    import archon_search.store as store_mod
 
     monkeypatch.setattr(store_mod, "INGEST_LOCK_TIMEOUT_S", 0.1)
     store = SearchStore(tmp_path / "db")
@@ -5737,6 +5751,7 @@ async def test_update_description_timeout_skips_write(tmp_path, caplog, monkeypa
 async def test_update_description_concurrent_with_ingest(tmp_path) -> None:
     """Concurrent ingest_chunks and update_description — centroid_sum correct, description set."""
     import asyncio
+
     from archon_search.config import SearchConfig
     cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
@@ -5771,7 +5786,7 @@ async def test_store_ingest_chunks_always_calls_incremental_update(tmp_path) -> 
 
     update_calls: list = []
 
-    async def fake_update(db, collection, batch_vectors, distinct_doc_count, *, embedding_model, embedding_dim, namespace):
+    async def fake_update(db, collection, batch_vectors, distinct_doc_count, *, embedding_model, embedding_dim, namespace, claimed):
         update_calls.append((batch_vectors, distinct_doc_count))
         return False
 
@@ -5951,7 +5966,7 @@ async def test_get_stored_vector_dimension_returns_correct_dim(
         text="hello",
         vector=[0.1] * dim,
         source_path=f"/tmp/{doc_id[:8]}.md",
-        indexed_at=datetime.now(timezone.utc).isoformat(),
+        indexed_at=datetime.now(UTC).isoformat(),
     )
     await connected_store.ensure_collection(col_name, dim)
     await connected_store.ingest_chunks(col_name, [chunk])
@@ -6159,10 +6174,10 @@ async def test_rebuild_fts_index_with_language(tmp_path: Path) -> None:
     db = store._require_connected()  # type: ignore[attr-defined]
     table = await db.open_table(col)
 
-    async def fake_create_index(col_arg: str, config: FTS, replace: bool = False) -> None:  # noqa: ARG001
+    async def fake_create_index(col_arg: str, config: FTS, replace: bool = False) -> None:
         captured_fts.append(config)
 
-    async def fake_open_table(name: str):  # noqa: ANN202
+    async def fake_open_table(name: str):
         return table
 
     table.create_index = fake_create_index  # type: ignore[method-assign]
@@ -6192,10 +6207,10 @@ async def test_rebuild_fts_index_unknown_language_uses_default(tmp_path: Path) -
     db = store._require_connected()  # type: ignore[attr-defined]
     table = await db.open_table(col)
 
-    async def fake_create_index(col_arg: str, config: FTS, replace: bool = False) -> None:  # noqa: ARG001
+    async def fake_create_index(col_arg: str, config: FTS, replace: bool = False) -> None:
         captured_fts.append(config)
 
-    async def fake_open_table(name: str):  # noqa: ANN202
+    async def fake_open_table(name: str):
         return table
 
     table.create_index = fake_create_index  # type: ignore[method-assign]
@@ -6226,10 +6241,10 @@ async def test_rebuild_fts_index_empty_language_uses_default(tmp_path: Path) -> 
     db = store._require_connected()  # type: ignore[attr-defined]
     table = await db.open_table(col)
 
-    async def fake_create_index(col_arg: str, config: FTS, replace: bool = False) -> None:  # noqa: ARG001
+    async def fake_create_index(col_arg: str, config: FTS, replace: bool = False) -> None:
         captured_fts.append(config)
 
-    async def fake_open_table(name: str):  # noqa: ANN202
+    async def fake_open_table(name: str):
         return table
 
     table.create_index = fake_create_index  # type: ignore[method-assign]
@@ -6945,7 +6960,7 @@ async def test_run_startup_migrations_applies_in_place_on_startup(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
-    """_run_startup_migrations() calls all 9 methods in the correct order."""
+    """_run_startup_migrations() calls all 9 migrations in the correct order, then reports tables without a meta row."""
     from archon_search.store import SearchStore
 
     call_order: list[str] = []
@@ -6965,6 +6980,7 @@ async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
     store._migrate_community_rebuild_job_id = make_recorder("_migrate_community_rebuild_job_id")
     store._migrate_metadata_reindex_job_id = make_recorder("_migrate_metadata_reindex_job_id")
     store.migrate_acl_provenance = make_recorder("migrate_acl_provenance")
+    store._log_tables_without_meta = make_recorder("_log_tables_without_meta")
 
     await store._run_startup_migrations()
 
@@ -6978,6 +6994,7 @@ async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
         "_migrate_community_rebuild_job_id",
         "_migrate_metadata_reindex_job_id",
         "migrate_acl_provenance",
+        "_log_tables_without_meta",
     ], f"Unexpected call order: {call_order}"
 
 
@@ -7011,7 +7028,7 @@ async def test_apply_rewrite_calls_progress_cb_every_100_chunks() -> None:
     """progress_cb is called at processed=100, 200, and 250 for a 250-chunk collection."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from archon_search.store import SearchStore, _MIGRATION_PROGRESS_INTERVAL
+    from archon_search.store import _MIGRATION_PROGRESS_INTERVAL, SearchStore
     from archon_search.types import MigrationKind, MigrationSpec
 
     assert _MIGRATION_PROGRESS_INTERVAL == 100
@@ -7188,10 +7205,10 @@ async def test_apply_rewrite_empty_collection_completes_immediately() -> None:
 async def test_apply_rewrite_acquires_collection_lock() -> None:
     """Concurrent ingest attempt times out with StoreBusyError while rewrite holds lock."""
     import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from archon_search.store import SearchStore, StoreBusyError
     from archon_search.types import MigrationKind, MigrationSpec
-    from unittest.mock import AsyncMock, MagicMock, patch
 
     store = SearchStore.__new__(SearchStore)
     store._collection_locks = {}
@@ -7245,10 +7262,9 @@ async def test_apply_rewrite_acquires_collection_lock() -> None:
 
     # Verify that ingest_chunks raises StoreBusyError when lock is held.
     # Use patch to set a short timeout so the test doesn't hang.
-    with patch("archon_search.store.INGEST_LOCK_TIMEOUT_S", 0.05):
-        with pytest.raises(StoreBusyError):
-            valid_chunk = _chunk(_doc_id(), 0)
-            await store.ingest_chunks("col1", [valid_chunk])
+    with patch("archon_search.store.INGEST_LOCK_TIMEOUT_S", 0.05), pytest.raises(StoreBusyError):
+        valid_chunk = _chunk(_doc_id(), 0)
+        await store.ingest_chunks("col1", [valid_chunk])
 
     # Let the rewrite finish.
     release_transform.set()
@@ -7588,11 +7604,11 @@ async def test_list_documents_deleted_cursor_resumes_from_sort_position(
     """Cursor doc_id not in aggregated result → resumes from first doc_id > cursor; no error."""
     await _ingest_n_docs(connected_store, col_name, 10)
     # Get first page to obtain a real cursor
-    items_p1, cursor, _ = await connected_store.list_documents(col_name, limit=5)
+    _items_p1, cursor, _ = await connected_store.list_documents(col_name, limit=5)
     assert cursor is not None
     # cursor is the 5th doc_id; now use a synthetic cursor that sorts between page1 and page2
     # Use the real cursor but imagine it was "deleted" — behavior should be same as normal cursor
-    items_after, next_cursor, total = await connected_store.list_documents(col_name, limit=5, cursor=cursor)
+    items_after, _next_cursor, _total = await connected_store.list_documents(col_name, limit=5, cursor=cursor)
     assert len(items_after) == 5
     assert all(d.doc_id > cursor for d in items_after)
 
@@ -7706,42 +7722,26 @@ async def test_ingest_chunks_uses_caller_namespace_for_collection_meta(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_ingest_chunks_cross_namespace_update_uses_owner_meta(tmp_path: Path) -> None:
-    """Cross-namespace ingest into an existing collection must not create a second meta row.
+async def test_ingest_chunks_into_another_namespaces_collection_is_refused(tmp_path: Path) -> None:
+    """Namespace B may not ingest into a collection namespace A owns, and A's meta row is untouched (SecReview #2).
 
-    If namespace A owns collection 'foo', namespace B ingesting into 'foo' must:
-    - Succeed (the collection accepts documents from multiple namespaces; ACL controls read).
-    - NOT create a second meta row — the single meta row stays under namespace A.
-    - Update the owner's (namespace A's) meta row with the new chunk counts.
-
-    This preserves the multi-namespace ACL model: a shared physical collection can hold
-    documents from different namespaces, with per-document ACL sidecars controlling access.
+    This used to succeed and update the owner's centroid and counts; the full matrix lives in
+    tests/test_store_collection_ownership.py.
     """
+    from archon_search.store import CollectionOwnershipError
+
     col = "conflict_col"
     store = SearchStore(tmp_path / "db")
     await store.connect()
     try:
         await store.ensure_collection(col, _DIM)
-        # First ingest: default namespace owns the collection.
         await store.ingest_chunks(col, [_chunk(_doc_id(), 0)], embedding_model="m", namespace="default")
-        assert await store.get_collection_meta(col, namespace="default") is not None
 
-        # Second ingest: a different namespace adds documents to the same collection.
-        # Must succeed and must NOT create a second meta row.
-        await store.ingest_chunks(col, [_chunk(_doc_id(), 0)], embedding_model="m", namespace="ns-b")
+        with pytest.raises(CollectionOwnershipError):
+            await store.ingest_chunks(col, [_chunk(_doc_id(), 0)], embedding_model="m", namespace="ns-b")
 
-        # Only one meta row must exist — the original owner's.
-        all_meta = await store.get_all_collections_meta()
-        foo_rows = [m for m in all_meta if m.name == col]
-        assert len(foo_rows) == 1, f"expected 1 meta row for {col!r}, got {len(foo_rows)}: {foo_rows}"
-        assert foo_rows[0].namespace == "default", (
-            f"meta row must stay under the original owner's namespace; got {foo_rows[0].namespace!r}"
-        )
-
-        # Owner's chunk_count reflects the physical table (includes namespace B's chunk).
-        assert foo_rows[0].chunk_count == 2, (
-            f"owner's meta should reflect total chunk count; got {foo_rows[0].chunk_count}"
-        )
+        foo_rows = [m for m in await store.get_all_collections_meta() if m.name == col]
+        assert [(m.namespace, m.chunk_count) for m in foo_rows] == [("default", 1)]
     finally:
         await store.disconnect()
 
@@ -7868,7 +7868,7 @@ def test_validate_chunk_record_rejects_value_ingest_chunks_cannot_store(
         pytest.param({"custom_score": "1.5"}, id="custom_score-numeric-str"),
         pytest.param({"custom_score": True}, id="custom_score-bool"),
         pytest.param({"expires_at": "2030-01-02T03:04:05Z"}, id="expires_at-iso"),
-        pytest.param({"expires_at": datetime(2030, 1, 2, tzinfo=timezone.utc)}, id="expires_at-datetime"),
+        pytest.param({"expires_at": datetime(2030, 1, 2, tzinfo=UTC)}, id="expires_at-datetime"),
         pytest.param({"acl": ["default"]}, id="acl-list"),
         pytest.param({"metadata": {"k": "v"}}, id="metadata-dict"),
     ],
