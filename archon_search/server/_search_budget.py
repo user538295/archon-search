@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 SEARCH_TIMEOUT_SECONDS = 30.0
 
 # Upper bound on how long one search request waits for the cross-encoder to finish
-# its cold ONNX build before answering without reranking (S286/S288).  Deliberately
+# its cold model build before answering without reranking (S286/S288).  Deliberately
 # short, not a client-read-timeout budget: a request already this deep into a cold
 # path means an ingest or import job upstream (bounded by
 # _job_warmup.JOB_WARMUP_WAIT_SECONDS) or the lifespan warm-up already spent up to
@@ -32,7 +32,7 @@ SEARCH_TIMEOUT_SECONDS = 30.0
 RERANKER_WARMUP_WAIT_SECONDS = 0.5
 
 # Upper bound on how long one search request waits for the query embedder to finish
-# its cold ONNX build before answering FTS-only (S290).  Same reasoning as the
+# its cold model build before answering FTS-only (S290).  Same reasoning as the
 # reranker bound above — a request this deep into a cold path is waiting behind a
 # lifespan, ingest or import warm-up that has already spent its own ceiling on this
 # build — and the same outcome: the build keeps running in its worker thread, this
@@ -62,9 +62,9 @@ class SearchBudgetExceeded(Exception):
 
 
 async def warmup_for_search(
-    pipeline: "SearchPipeline", embedder: "Embedder | None" = None
+    pipeline: SearchPipeline, embedder: Embedder | None = None
 ) -> SearchWarmup:
-    """Warm the lazy ONNX models before entering the search budget.
+    """Warm the lazy PyTorch models before entering the search budget.
 
     Both ML backends load their weights on first use, so warming them here keeps a
     cold build off the request's timeout budget (S184).  *Both* legs are bounded,
@@ -95,7 +95,7 @@ async def warmup_for_search(
     return SearchWarmup(rerank=rerank, fts_only=not warm)
 
 
-async def run_within_budget(
+async def run_within_budget[T](
     coro: Coroutine[Any, Any, _T], *, timeout: float = SEARCH_TIMEOUT_SECONDS
 ) -> _T:
     """Await *coro* under the overall search budget.
@@ -111,7 +111,7 @@ async def run_within_budget(
     task = asyncio.ensure_future(coro)
     try:
         return await asyncio.wait_for(task, timeout=timeout)
-    except (asyncio.TimeoutError, TimeoutError):
+    except TimeoutError:
         # wait_for cancels the task on expiry; a TimeoutError raised *by the task*
         # leaves it finished-with-exception instead.
         if task.cancelled():

@@ -9,6 +9,7 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import _tiny_encoder as tiny_encoder
 import pytest
@@ -196,7 +197,7 @@ def test_every_source_key_is_consumed_exactly_once(fused_checkpoint: Path, fused
 
 def test_output_dtype_is_float32_although_the_checkpoint_is_bf16(fused_checkpoint: Path) -> None:
     with safe_open(str(fused_checkpoint / "model.safetensors"), "pt") as stored:
-        assert {stored.get_tensor(key).dtype for key in stored.keys()} == {torch.bfloat16}
+        assert {stored.get_tensor(key).dtype for key in list(stored.keys())} == {torch.bfloat16}
 
     model = load_jina_reranker(fused_checkpoint)
 
@@ -349,3 +350,36 @@ def test_importing_the_loading_module_does_not_import_torch() -> None:
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
 
     assert result.returncode == 0, result.stderr
+
+
+_MODELS_BUILT_AT_ONCE = 4
+
+
+def test_concurrent_cross_encoder_loads_build_one_model_at_a_time(bert_snapshot: Path) -> None:
+    """``from_pretrained`` swaps torch globals while it builds a model (``transformers`` 4.x), so two
+    threads building at once leave meta tensors behind ('Cannot copy out of meta tensor'). Every
+    device serializes the build; ``accelerator_lock`` alone does that for ``mps`` only."""
+    from transformers import AutoModelForSequenceClassification
+
+    meter = tiny_encoder.OverlapMeter()
+    with patch.object(AutoModelForSequenceClassification, "from_pretrained", new=meter):
+        tiny_encoder.run_concurrently(
+            lambda: load_cross_encoder(tiny_encoder.tiny_reranker_spec("bert"), bert_snapshot, "cpu"),
+            _MODELS_BUILT_AT_ONCE,
+        )
+
+    assert meter.calls == _MODELS_BUILT_AT_ONCE
+    assert meter.peak == 1
+
+
+def test_concurrent_jina_conversions_build_one_model_at_a_time(fused_checkpoint: Path) -> None:
+    """The Jina route builds its model by hand, not through ``from_pretrained``; that build must not
+    overlap another thread's ``from_pretrained`` either, so it takes the same lock."""
+    import transformers
+
+    meter = tiny_encoder.OverlapMeter(build=transformers.XLMRobertaForSequenceClassification)
+    with patch.object(transformers, "XLMRobertaForSequenceClassification", new=meter):
+        tiny_encoder.run_concurrently(lambda: load_jina_reranker(fused_checkpoint), _MODELS_BUILT_AT_ONCE)
+
+    assert meter.calls == _MODELS_BUILT_AT_ONCE
+    assert meter.peak == 1

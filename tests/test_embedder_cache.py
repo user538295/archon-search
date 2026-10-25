@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.model_specs import UnsupportedModelError
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -193,9 +193,11 @@ async def test_preload_warmup_failure_evicts_and_does_not_abort_other_models(
     cold.embed = AsyncMock(side_effect=RuntimeError("warm-up failed"))
     embedders = {"good-model": good, "cold-model": cold}
 
-    with caplog.at_level(logging.WARNING, logger="archon_search.embedder_cache"):
-        with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": embedders[n]):
-            await cache.preload(["good-model", "cold-model"])  # must not raise
+    with (
+        caplog.at_level(logging.WARNING, logger="archon_search.embedder_cache"),
+        patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": embedders[n]),
+    ):
+        await cache.preload(["good-model", "cold-model"])  # must not raise
 
     assert "good-model" in cache.cached_models()
     good.embed.assert_awaited_once()
@@ -220,9 +222,11 @@ async def test_preload_warmup_failure_keeps_an_already_warm_embedder(
     warm = _mock_embedder("warm-model", is_warm=True)
     warm.embed = AsyncMock(side_effect=RuntimeError("inference blew up after load"))
 
-    with caplog.at_level(logging.WARNING, logger="archon_search.embedder_cache"):
-        with patch("archon_search.embedder_cache.make_embedder", return_value=warm):
-            await cache.preload(["warm-model"])  # must not raise
+    with (
+        caplog.at_level(logging.WARNING, logger="archon_search.embedder_cache"),
+        patch("archon_search.embedder_cache.make_embedder", return_value=warm),
+    ):
+        await cache.preload(["warm-model"])  # must not raise
 
     assert "warm-model" in cache.cached_models()
     assert "failed to warm up 'warm-model'" in caplog.text
@@ -239,9 +243,11 @@ async def test_preload_load_failure_logs_load_message(caplog: pytest.LogCaptureF
             raise ValueError("unknown model")
         return _mock_embedder(name)
 
-    with caplog.at_level(logging.WARNING, logger="archon_search.embedder_cache"):
-        with patch("archon_search.embedder_cache.make_embedder", side_effect=_selective_make):
-            await cache.preload(["bad-model"])
+    with (
+        caplog.at_level(logging.WARNING, logger="archon_search.embedder_cache"),
+        patch("archon_search.embedder_cache.make_embedder", side_effect=_selective_make),
+    ):
+        await cache.preload(["bad-model"])
 
     assert "failed to load 'bad-model'" in caplog.text
     assert "warm up" not in caplog.text
@@ -445,9 +451,11 @@ async def test_preload_uses_asyncio_to_thread():
         to_thread_calls.append(args[0] if args else "?")
         return await original_to_thread(func, *args, **kwargs)
 
-    with patch("asyncio.to_thread", side_effect=tracking_to_thread):
-        with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)):
-            await cache.preload(["model-A", "model-B"])
+    with (
+        patch("asyncio.to_thread", side_effect=tracking_to_thread),
+        patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)),
+    ):
+        await cache.preload(["model-A", "model-B"])
 
     assert len(to_thread_calls) == 2
 
@@ -533,3 +541,160 @@ async def test_preload_failure_does_not_leave_dangling_loading_event():
         result = await asyncio.wait_for(cache.get_or_load("model-A"), timeout=2.0)
 
     assert result.model_name == "model-A"
+
+
+# ---------------------------------------------------------------------------
+# Eviction returns the evicted model's memory
+# ---------------------------------------------------------------------------
+
+_EVICTION_DEVICE = "mps"
+
+
+@pytest.mark.asyncio
+async def test_eviction_releases_the_memory_of_the_evicted_model():
+    """Dropping the reference frees nothing by itself (a model lives in reference cycles, and the
+    accelerator keeps freed blocks cached): the cache must collect and release on eviction."""
+    cache = EmbedderCache(max_size=1, device=_EVICTION_DEVICE)
+    with (
+        patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)),
+        patch("archon_search.embedder_cache.release_model_memory") as release,
+    ):
+        await cache.get_or_load("model-A")
+        release.assert_not_called()
+        await cache.get_or_load("model-B")  # evicts A
+
+    release.assert_called_once_with(_EVICTION_DEVICE)
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_and_load_without_eviction_release_nothing():
+    cache = EmbedderCache(max_size=2, device=_EVICTION_DEVICE)
+    with (
+        patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)),
+        patch("archon_search.embedder_cache.release_model_memory") as release,
+    ):
+        await cache.get_or_load("model-A")
+        await cache.get_or_load("model-B")
+        await cache.get_or_load("model-A")
+
+    release.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_eviction_release_runs_off_the_event_loop():
+    """The collection walks every live object: it must not stall the loop that serves requests."""
+    loop_thread = threading.get_ident()
+    release_threads: list[int] = []
+    cache = EmbedderCache(max_size=1)
+    with (
+        patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)),
+        patch(
+            "archon_search.embedder_cache.release_model_memory",
+            side_effect=lambda device: release_threads.append(threading.get_ident()),
+        ),
+    ):
+        await cache.get_or_load("model-A")
+        await cache.get_or_load("model-B")
+
+    assert release_threads
+    assert loop_thread not in release_threads
+
+
+@pytest.mark.asyncio
+async def test_failed_release_does_not_fail_the_load_that_evicted(caplog: pytest.LogCaptureFixture):
+    cache = EmbedderCache(max_size=1)
+    with (
+        patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)),
+        patch("archon_search.embedder_cache.release_model_memory", side_effect=RuntimeError("driver gone")),
+        caplog.at_level(logging.WARNING, logger="archon_search.embedder_cache"),
+    ):
+        await cache.get_or_load("model-A")
+        result = await cache.get_or_load("model-B")
+
+    assert result.model_name == "model-B"
+    assert cache.cached_models() == ["model-B"]
+    assert any("model-A" in r.getMessage() and "driver gone" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_evicting_only_cold_embedders_releases_nothing():
+    """A cold embedder holds no weights, so a collection of the cache is not worth a full collection."""
+    cache = EmbedderCache(max_size=1)
+    with (
+        patch(
+            "archon_search.embedder_cache.make_embedder",
+            side_effect=lambda n, device="auto": _mock_embedder(n, is_warm=False),
+        ),
+        patch("archon_search.embedder_cache.release_model_memory") as release,
+    ):
+        await cache.get_or_load("model-A")
+        await cache.get_or_load("model-B")  # evicts the cold A
+
+    release.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Seeding with an existing embedder
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_preloaded_embedder_is_served_without_building_another():
+    seeded = _mock_embedder("model-A")
+    cache = EmbedderCache(max_size=2, preloaded={"model-A": seeded})
+    with patch("archon_search.embedder_cache.make_embedder") as make:
+        served = await cache.get_or_load("model-A")
+
+    assert served is seeded
+    make.assert_not_called()
+    assert cache.cached_models() == ["model-A"]
+
+
+@pytest.mark.asyncio
+async def test_preloaded_embedder_is_pinned_and_not_counted_against_the_size_limit():
+    seeded = _mock_embedder("model-A")
+    cache = EmbedderCache(max_size=1, preloaded={"model-A": seeded})
+    with (
+        patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)),
+        patch("archon_search.embedder_cache.release_model_memory"),
+    ):
+        await cache.get_or_load("model-B")
+        await cache.get_or_load("model-C")  # evicts B, never the seeded A
+
+    assert cache.cached_models() == ["model-A", "model-C"]
+
+
+@pytest.mark.asyncio
+async def test_preload_warmup_failure_keeps_a_pinned_cold_embedder_and_never_rebuilds_it() -> None:
+    """A seeded (pinned) cold embedder whose warm-up embed() fails stays cached: pinned means never evicted."""
+    seeded = _mock_embedder("model-A", is_warm=False)
+    seeded.embed = AsyncMock(side_effect=RuntimeError("warm-up failed"))
+    cache = EmbedderCache(max_size=1, preloaded={"model-A": seeded})
+
+    with patch("archon_search.embedder_cache.make_embedder") as make:
+        failed = await cache.preload(["model-A"])
+        served = await cache.get_or_load("model-A")
+
+    assert failed == ["model-A"]
+    assert served is seeded
+    make.assert_not_called()
+    assert cache.cached_models() == ["model-A"]
+
+
+@pytest.mark.asyncio
+async def test_release_failure_of_an_evicted_embedder_is_logged_with_its_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed memory release never fails the load that evicted, and leaves a traceback in the log."""
+    cache = EmbedderCache(max_size=1)
+    with (
+        caplog.at_level(logging.WARNING, logger="archon_search.embedder_cache"),
+        patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)),
+        patch("archon_search.embedder_cache.release_model_memory", side_effect=RuntimeError("gc blew up")),
+    ):
+        await cache.get_or_load("model-A")
+        loaded = await cache.get_or_load("model-B")  # evicts the warm A, whose release fails
+
+    assert loaded.model_name == "model-B"
+    record = next(r for r in caplog.records if "releasing the memory" in r.getMessage())
+    assert record.levelno == logging.WARNING
+    assert record.exc_info is not None

@@ -9,7 +9,12 @@ from unittest.mock import patch
 import pytest
 
 from archon_search.model_specs import EMBEDDER_SPECS, EmbedderSpec
-from archon_search.model_store import ModelDownloadError, ensure_model, model_path
+from archon_search.model_store import (
+    ModelDownloadError,
+    ensure_model,
+    ensure_pinned_snapshot,
+    model_path,
+)
 
 _SPEC = EMBEDDER_SPECS["BAAI/bge-small-en-v1.5"]
 _FILES = ("model.safetensors", "config.json", "tokenizer.json")
@@ -86,9 +91,8 @@ def test_download_requests_only_the_three_files_at_the_pinned_revision(models_ro
 def test_offline_miss_raises_download_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
 
-    with patch(_SNAPSHOT_DOWNLOAD) as download:
-        with pytest.raises(ModelDownloadError) as excinfo:
-            ensure_model(_SPEC)
+    with patch(_SNAPSHOT_DOWNLOAD) as download, pytest.raises(ModelDownloadError) as excinfo:
+        ensure_model(_SPEC)
 
     download.assert_not_called()
     assert _SPEC.repo in str(excinfo.value)
@@ -103,10 +107,12 @@ def test_offline_hit_works(models_root: Path, monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_error_text_names_repo_not_exception_text(caplog: pytest.LogCaptureFixture) -> None:
-    with patch(_SNAPSHOT_DOWNLOAD, side_effect=OSError(_SECRET)):
-        with caplog.at_level(logging.DEBUG, logger="archon_search.model_store"):
-            with pytest.raises(ModelDownloadError) as excinfo:
-                ensure_model(_SPEC)
+    with (
+        patch(_SNAPSHOT_DOWNLOAD, side_effect=OSError(_SECRET)),
+        caplog.at_level(logging.DEBUG, logger="archon_search.model_store"),
+        pytest.raises(ModelDownloadError) as excinfo,
+    ):
+        ensure_model(_SPEC)
 
     assert _SPEC.repo in str(excinfo.value)
     assert _SECRET not in str(excinfo.value)
@@ -115,12 +121,47 @@ def test_error_text_names_repo_not_exception_text(caplog: pytest.LogCaptureFixtu
     assert all(r.levelno == logging.DEBUG for r in logged)
 
 
+_CREDENTIALED_FAILURE = (
+    "401 Client Error for url: https://user:hunter2@huggingface.co/BAAI/m/resolve/abc/model.safetensors"
+    "?token=hf_SECRET123&X-Amz-Signature=sigvalue Authorization: Bearer hf_BEARER456 api_key=plainkey"
+)
+_LEAKED = ("hunter2", "hf_SECRET123", "sigvalue", "hf_BEARER456", "plainkey")
+
+
+@pytest.mark.parametrize("fetch", [ensure_model, None], ids=["ensure_model", "ensure_pinned_snapshot"])
+def test_download_failure_is_logged_at_warning_with_class_and_scrubbed_message(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, fetch: object
+) -> None:
+    caplog.set_level(logging.WARNING, logger="archon_search.model_store")
+    with patch(_SNAPSHOT_DOWNLOAD, side_effect=OSError(_CREDENTIALED_FAILURE)), pytest.raises(ModelDownloadError):
+        if fetch is None:
+            ensure_pinned_snapshot("BAAI/m", "a" * 40, _FILES, tmp_path)
+        else:
+            ensure_model(_SPEC)
+
+    [record] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    message = record.getMessage()
+    assert "OSError" in message
+    assert "401 Client Error" in message
+    assert "huggingface.co" in message
+    assert not any(secret in message for secret in _LEAKED)
+    assert record.exc_info is None  # the traceback carries the raw text; it stays at DEBUG
+
+
+def test_a_very_long_failure_message_is_truncated_in_the_warning(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="archon_search.model_store")
+    with patch(_SNAPSHOT_DOWNLOAD, side_effect=OSError("x" * 10_000)), pytest.raises(ModelDownloadError):
+        ensure_model(_SPEC)
+
+    [record] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(record.getMessage()) < 1_000
+
+
 def test_incomplete_download_raises_download_error(tmp_path: Path) -> None:
     incomplete = _populate(tmp_path / "snap", files=("config.json",))
 
-    with patch(_SNAPSHOT_DOWNLOAD, return_value=str(incomplete)):
-        with pytest.raises(ModelDownloadError) as excinfo:
-            ensure_model(_SPEC)
+    with patch(_SNAPSHOT_DOWNLOAD, return_value=str(incomplete)), pytest.raises(ModelDownloadError) as excinfo:
+        ensure_model(_SPEC)
 
     assert _SPEC.repo in str(excinfo.value)
 

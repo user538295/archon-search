@@ -26,6 +26,11 @@ from typing import Literal
 Pooling = Literal["cls", "mean", "last_token"]
 Architecture = Literal["bert", "xlm_roberta", "jina_xlm_roberta"]
 
+#: Files of a model snapshot the runtime reads.
+WEIGHTS_FILE = "model.safetensors"
+CONFIG_FILE = "config.json"
+TOKENIZER_FILE = "tokenizer.json"
+
 
 @dataclass(frozen=True)
 class EmbedderSpec:

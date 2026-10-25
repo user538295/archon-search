@@ -9,26 +9,49 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
-from archon_search.model_specs import EmbedderSpec, RerankerSpec
+from archon_search.model_specs import (
+    CONFIG_FILE,
+    TOKENIZER_FILE,
+    WEIGHTS_FILE,
+    EmbedderSpec,
+    RerankerSpec,
+)
 from archon_search.paths import get_models_dir
 
 logger = logging.getLogger(__name__)
 
 #: Files the runtime needs; also the download allow-list.
-MODEL_FILES: tuple[str, ...] = ("model.safetensors", "config.json", "tokenizer.json")
+MODEL_FILES: tuple[str, ...] = (WEIGHTS_FILE, CONFIG_FILE, TOKENIZER_FILE)
 _OFFLINE_ENV_VAR = "HF_HUB_OFFLINE"
 #: Values huggingface_hub treats as "enabled" for its boolean env vars (case-insensitive).
 _ENV_TRUE_VALUES = frozenset({"1", "ON", "YES", "TRUE"})
+#: ``huggingface_hub`` cache layout: ``<cache>/models--<org>--<name>/snapshots/<revision>``.
+_HUB_REPO_DIR_PREFIX = "models--"
+_HUB_REPO_SEPARATOR = "--"
+_HUB_SNAPSHOTS_DIR = "snapshots"
 
 # Fixed, wire-safe phase texts. Never interpolate a caught exception into them:
 # hub errors can embed cache paths, URLs and tokens.
 _OFFLINE_MISS_DETAIL = "offline mode is on and the model is not in the local cache"
 _DOWNLOAD_FAILED_DETAIL = "download failed; check the network connection and free disk space"
 _INCOMPLETE_DETAIL = "the downloaded snapshot is missing required files"
+#: Longest exception text a download-failure log line carries.
+_LOG_MESSAGE_MAX_CHARS = 500
+_REDACTED = "<redacted>"
+#: What must never be logged from a hub error: URL credentials and query strings (signed URLs),
+#: Hugging Face tokens, bearer tokens and ``key=value`` secrets.
+_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?<=//)[^/\s@]+@"), ""),
+    (re.compile(r"\?[^\s'\"]*"), f"?{_REDACTED}"),
+    (re.compile(r"\bhf_[A-Za-z0-9]+"), f"hf_{_REDACTED}"),
+    (re.compile(r"\bBearer\s+\S+", re.IGNORECASE), f"Bearer {_REDACTED}"),
+    (re.compile(r"\b(token|api[_-]?key|password|secret|authorization)\s*[=:]\s*\S+", re.IGNORECASE), rf"\1={_REDACTED}"),
+)
 
 
 class ModelDownloadError(RuntimeError):
@@ -43,12 +66,64 @@ class ModelDownloadError(RuntimeError):
         self.repo = repo
 
 
+def _has_files(snapshot: Path, files: tuple[str, ...]) -> bool:
+    return all((snapshot / name).is_file() for name in files)
+
+
 def _is_complete(snapshot: Path) -> bool:
-    return all((snapshot / name).is_file() for name in MODEL_FILES)
+    return _has_files(snapshot, MODEL_FILES)
 
 
-def _offline() -> bool:
+def _is_offline() -> bool:
     return os.environ.get(_OFFLINE_ENV_VAR, "").upper() in _ENV_TRUE_VALUES
+
+
+def _scrub(text: str) -> str:
+    """Drop credentials from a hub exception message before it reaches a log line."""
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text if len(text) <= _LOG_MESSAGE_MAX_CHARS else text[:_LOG_MESSAGE_MAX_CHARS] + "..."
+
+
+def _log_download_failure(repo: str, exc: Exception) -> None:
+    """Log why a download failed: WARNING with the exception class and a scrubbed message.
+
+    The wire text (:class:`ModelDownloadError`) stays fixed. The raw cause and traceback remain
+    at DEBUG only: hub errors can embed tokens, signed URLs and cache paths.
+    """
+    logger.warning("model download failed for %r: %s: %s", repo, type(exc).__name__, _scrub(str(exc)))
+    logger.debug("model download failed for %r: %s", repo, exc, exc_info=exc)
+
+
+def _snapshot_dir(cache_dir: Path, repo: str, revision: str) -> Path:
+    """Where the hub cache layout puts *repo* at *revision* under *cache_dir*."""
+    repo_dir = f"{_HUB_REPO_DIR_PREFIX}{repo.replace('/', _HUB_REPO_SEPARATOR)}"
+    return cache_dir / repo_dir / _HUB_SNAPSHOTS_DIR / revision
+
+
+def _ensure_snapshot(repo: str, revision: str, files: tuple[str, ...], cache_dir: Path) -> Path:
+    """Return the snapshot of *repo* at *revision* holding every one of *files*, downloading just those when absent.
+
+    A cache hit never touches the network; ``HF_HUB_OFFLINE=1`` turns a miss into an error.
+
+    Raises:
+        ModelDownloadError: on offline miss, download failure or an incomplete snapshot.
+    """
+    snapshot = _snapshot_dir(cache_dir, repo, revision)
+    if _has_files(snapshot, files):
+        return snapshot
+    if _is_offline():
+        raise ModelDownloadError(repo, _OFFLINE_MISS_DETAIL)
+    try:
+        snapshot = Path(
+            snapshot_download(repo_id=repo, revision=revision, allow_patterns=list(files), cache_dir=cache_dir)
+        )
+    except Exception as exc:  # hub raises many unrelated types; all map to one error
+        _log_download_failure(repo, exc)
+        raise ModelDownloadError(repo, _DOWNLOAD_FAILED_DETAIL) from exc
+    if not _has_files(snapshot, files):
+        raise ModelDownloadError(repo, _INCOMPLETE_DETAIL)
+    return snapshot
 
 
 def model_path(spec: EmbedderSpec | RerankerSpec) -> Path | None:
@@ -57,8 +132,7 @@ def model_path(spec: EmbedderSpec | RerankerSpec) -> Path | None:
     Never touches the network. A snapshot counts only when every file in
     ``MODEL_FILES`` exists, so a partial download is a miss.
     """
-    repo_dir = f"models--{spec.repo.replace('/', '--')}"
-    snapshot = get_models_dir() / repo_dir / "snapshots" / spec.revision
+    snapshot = _snapshot_dir(get_models_dir(), spec.repo, spec.revision)
     return snapshot if _is_complete(snapshot) else None
 
 
@@ -71,23 +145,17 @@ def ensure_model(spec: EmbedderSpec | RerankerSpec) -> Path:
     Raises:
         ModelDownloadError: on offline miss, download failure or an incomplete snapshot.
     """
-    cached = model_path(spec)
-    if cached is not None:
-        return cached
-    if _offline():
-        raise ModelDownloadError(spec.repo, _OFFLINE_MISS_DETAIL)
-    try:
-        snapshot = Path(
-            snapshot_download(
-                repo_id=spec.repo,
-                revision=spec.revision,
-                allow_patterns=list(MODEL_FILES),
-                cache_dir=get_models_dir(),
-            )
-        )
-    except Exception as exc:  # noqa: BLE001 — hub raises many unrelated types; all map to one error
-        logger.debug("model download failed for %r: %s", spec.repo, exc, exc_info=True)
-        raise ModelDownloadError(spec.repo, _DOWNLOAD_FAILED_DETAIL) from exc
-    if not _is_complete(snapshot):
-        raise ModelDownloadError(spec.repo, _INCOMPLETE_DETAIL)
-    return snapshot
+    return _ensure_snapshot(spec.repo, spec.revision, MODEL_FILES, get_models_dir())
+
+
+def ensure_pinned_snapshot(repo: str, revision: str, files: tuple[str, ...], cache_dir: Path) -> Path:
+    """Return the snapshot directory of *repo* at the pinned *revision*, downloading just *files* when absent.
+
+    For a model whose own library would otherwise fetch the whole repo (and anything else it chooses): the caller
+    loads from the returned local directory only. A cache hit — every file of *files* present under
+    ``cache_dir`` — never touches the network; ``HF_HUB_OFFLINE=1`` turns a miss into an error.
+
+    Raises:
+        ModelDownloadError: on offline miss, download failure or an incomplete snapshot.
+    """
+    return _ensure_snapshot(repo, revision, files, cache_dir)

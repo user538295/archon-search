@@ -7,36 +7,43 @@ import threading
 from typing import TYPE_CHECKING, NamedTuple, Protocol, runtime_checkable
 
 from archon_search._diagnostics import ScoredSearchCandidate
-from archon_search._types import SearchResult
 from archon_search.model_specs import get_reranker_spec
 from archon_search.model_store import ensure_model
 from archon_search.observability import record_stage
 from archon_search.reranker_loading import load_cross_encoder
-from archon_search.text_batching import DEFAULT_TOKEN_BUDGET, plan_batches
+from archon_search.text_batching import map_in_token_batches
 from archon_search.torch_runtime import (
     AUTO_DEVICE,
+    DEFAULT_PAD_TOKEN_ID,
     accelerator_lock,
     pad_encodings,
     release_accelerator_cache,
     resolve_device,
 )
+from archon_search.warmup_coordinator import WarmupCoordinator, WarmupTimeout
 
 if TYPE_CHECKING:
     import torch
     from tokenizers import Encoding, Tokenizer
 
-_DEFAULT_PAD_TOKEN_ID = 0
+_RERANK_STAGE = "rerank"
 # Trivial (query, document) pair used only to force a cold backend to load.
 _WARMUP_PAIR = ("warmup", "warmup")
-_WARMUP_TIMEOUT_SECONDS = 300.0
 
 
-class RerankerWarmupTimeout(Exception):
-    """The warm-up build outran ``_WARMUP_TIMEOUT_SECONDS`` (the wait stopped, not the build)."""
+class RerankerWarmupTimeout(WarmupTimeout):
+    """The reranker warm-up build outran ``WARMUP_TIMEOUT_SECONDS`` (the wait stopped, not the build)."""
 
 
 @runtime_checkable
 class RerankerBackend(Protocol):
+    """Scores (query, document) pairs; may load its weights lazily.
+
+    ``predict`` returns one raw logit per pair, in input order (higher means more relevant). It is
+    called from worker threads, possibly several at once, so an implementation must be thread-safe.
+    ``is_warm`` is ``True`` once the weights are loaded, so ``predict`` no longer pays the load.
+    """
+
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]: ...
 
     @property
@@ -84,7 +91,7 @@ class ModelReranker:
                     path = ensure_model(self._spec)
                     device = resolve_device(self._device_setting)
                     tokenizer, model = load_cross_encoder(self._spec, path, device)
-                    pad_token_id = getattr(model.config, "pad_token_id", None) or _DEFAULT_PAD_TOKEN_ID
+                    pad_token_id = getattr(model.config, "pad_token_id", None) or DEFAULT_PAD_TOKEN_ID
                     self._cross_encoder = _CrossEncoder(tokenizer, model, device, pad_token_id)
         return self._cross_encoder
 
@@ -98,17 +105,14 @@ class ModelReranker:
             return []
         cross_encoder = self._load()
         encodings = [cross_encoder.tokenizer.encode(query, document) for query, document in pairs]
-        scores = [0.0] * len(pairs)
-        for batch in plan_batches([len(e.ids) for e in encodings], token_budget=DEFAULT_TOKEN_BUDGET):
-            batch_encodings = [encodings[i] for i in batch]
-            for index, score in zip(batch, self._score_batch(cross_encoder, batch_encodings), strict=True):
-                scores[index] = score
-            if len(batch) * max(len(e.ids) for e in batch_encodings) > DEFAULT_TOKEN_BUDGET:
-                release_accelerator_cache(cross_encoder.device)
-        return scores
+        return map_in_token_batches(
+            [len(encoding.ids) for encoding in encodings],
+            lambda batch: self._score_batch(cross_encoder, [encodings[index] for index in batch]),
+            release_memory=lambda: release_accelerator_cache(cross_encoder.device),
+        )
 
     def _score_batch(self, cross_encoder: _CrossEncoder, encodings: list[Encoding]) -> list[float]:
-        import torch  # noqa: PLC0415 — lazy: keeps ``import archon_search.reranker`` free of PyTorch
+        import torch  # lazy: keeps ``import archon_search.reranker`` free of PyTorch
 
         with accelerator_lock(cross_encoder.device):
             inputs = pad_encodings(
@@ -120,7 +124,8 @@ class ModelReranker:
             )
             with torch.inference_mode():
                 logits = cross_encoder.model(**inputs).logits
-            return logits[:, 0].float().cpu().tolist()  # type: ignore[no-any-return]
+            scores: list[float] = logits[:, 0].float().cpu().tolist()
+            return scores
 
 
 class Reranker:
@@ -128,117 +133,36 @@ class Reranker:
 
     def __init__(self, backend: RerankerBackend) -> None:
         self._backend = backend
-        self._warmup_failed = False
-        # In-flight build, shared by every concurrent caller (see warmup()), plus
-        # the lock guarding it and the loop both belong to. All three are bound
-        # to one event loop and recreated together when the loop changes: an
-        # asyncio.Lock left held by a task in a since-closed loop would deadlock
-        # every later warmup().
-        self._warmup_loop: asyncio.AbstractEventLoop | None = None
-        self._warmup_lock: asyncio.Lock | None = None
-        self._warmup_task: asyncio.Task[None] | None = None
+        self._warmup_coordinator = WarmupCoordinator(
+            subject="reranker",
+            is_warm=lambda: self.is_warm,
+            build=lambda: asyncio.to_thread(self._backend.predict, [_WARMUP_PAIR]),
+            timeout_error=RerankerWarmupTimeout,
+        )
+
+    @property
+    def backend(self) -> RerankerBackend:
+        """The wrapped backend — what a startup probe runs so it shares this instance's weights."""
+        return self._backend
 
     @property
     def is_warm(self) -> bool:
         return self._backend.is_warm
 
-    def _acquire_warmup_lock(self) -> asyncio.Lock:
-        """Return the lock for the running loop, rebinding warm-up state if it changed."""
-        loop = asyncio.get_running_loop()
-        if self._warmup_lock is None or self._warmup_loop is not loop:
-            stale = self._warmup_task
-            if stale is not None and not stale.done():
-                stale.cancel()
-            self._warmup_task = None
-            self._warmup_lock = asyncio.Lock()
-            self._warmup_loop = loop
-        return self._warmup_lock
-
-    async def _run_warmup(self) -> None:
-        """Force the backend to build its model. Never cancelled by a caller."""
-        try:
-            await asyncio.wait_for(
-                asyncio.to_thread(self._backend.predict, [_WARMUP_PAIR]),
-                timeout=_WARMUP_TIMEOUT_SECONDS,
-            )
-            self._warmup_failed = False
-        except asyncio.TimeoutError as exc:
-            self._warmup_failed = True
-            raise RerankerWarmupTimeout(
-                f"reranker warm-up exceeded {_WARMUP_TIMEOUT_SECONDS}s"
-            ) from exc
-        except Exception:
-            self._warmup_failed = True
-            raise
-
     async def warmup(self) -> None:
-        """Build the backend's model now, off the request path.
+        """Build the backend's model now, off the request path (see ``WarmupCoordinator.warmup``).
 
-        ``ModelReranker`` constructs its cross-encoder on the *first*
-        ``predict`` call, so callers must run this outside any request timeout
-        budget (S184). Contract:
+        ``ModelReranker`` constructs its cross-encoder on the *first* ``predict`` call, so a
+        request that triggers it spends its whole timeout budget on the load and fails with 504.
+        Concurrent cold requests join one build instead of each starting another.
 
-        - Idempotent, and a no-op once warm.
-        - Single-flight: one shared task does the build; callers only
-          ``await asyncio.shield`` it, so a caller that bounds its own wait and
-          gives up cancels nothing but that wait. The build keeps running, warms
-          the backend for later requests, and later callers join it instead of
-          starting a second model build (S288 fan-out thundering herd).
-        - Not latched on failure (S283): ``_warmup_failed`` records only the most
-          recent attempt and is diagnostic; the next caller retries with a fresh
-          task, since a settled task is never re-awaited.
-        - Raises ``RerankerWarmupTimeout`` if the build outruns
-          ``_WARMUP_TIMEOUT_SECONDS``. That stops the *waiting*, not the build:
-          ``asyncio.to_thread`` workers are not cancellable, so the thread runs
-          to completion (and, being non-daemon, delays executor shutdown).
+        See ``Documentation/Architecture/140_error_handling_strategy.md`` for how the caller
+        degrades when this returns cold.
 
-        See ``Documentation/Architecture/140_error_handling_strategy.md`` for how
-        the caller degrades when this returns cold.
+        Raises:
+            RerankerWarmupTimeout: if the build outruns ``WARMUP_TIMEOUT_SECONDS``.
         """
-        if self._backend.is_warm:
-            return
-        async with self._acquire_warmup_lock():
-            if self._backend.is_warm:
-                return
-            task = self._warmup_task
-            if task is None or task.done():
-                task = asyncio.ensure_future(self._run_warmup())
-                task.add_done_callback(self._on_warmup_done)
-                self._warmup_task = task
-        await asyncio.shield(task)
-
-    def _on_warmup_done(self, task: asyncio.Task[None]) -> None:
-        """Drop the settled task and swallow its result so asyncio stays quiet.
-
-        A build whose every waiter was cancelled has no one left to retrieve its
-        exception; retrieving it here avoids a spurious "Task exception was
-        never retrieved" warning.
-        """
-        if self._warmup_task is task:
-            self._warmup_task = None
-        if not task.cancelled():
-            task.exception()
-
-    async def rerank(
-        self, query: str, candidates: list[SearchResult], top_k: int
-    ) -> list[SearchResult]:
-        with record_stage("rerank"):
-            if not candidates:
-                return []
-
-            pairs = [(query, c.text) for c in candidates]
-            scores: list[float] = await asyncio.to_thread(self._backend.predict, pairs)
-
-        if len(scores) != len(candidates):
-            raise ValueError(
-                f"Backend returned {len(scores)} scores for {len(candidates)} candidates"
-            )
-
-        for candidate, score in zip(candidates, scores):
-            candidate.score = score
-            candidate.reranker_score = score
-
-        return sorted(candidates, key=lambda c: c.score, reverse=True)[:top_k]
+        await self._warmup_coordinator.warmup()
 
     async def rerank_candidates(
         self,
@@ -252,11 +176,11 @@ class Reranker:
         and explain paths). Returns new ScoredSearchCandidate objects with
         reranker_score populated. Input candidates are NOT mutated.
         """
-        with record_stage("rerank"):
+        with record_stage(_RERANK_STAGE):
             if not candidates:
                 return []
 
-            pairs = [(query, c.text) for c in candidates]
+            pairs = [(query, candidate.text) for candidate in candidates]
             scores: list[float] = await asyncio.to_thread(self._backend.predict, pairs)
 
         if len(scores) != len(candidates):
@@ -277,21 +201,12 @@ class Reranker:
         # block away from the retrieval order the fusion stage produced, which
         # measurably regresses the eval gate (tests/eval/test_eval_baseline_unchanged.py).
         traced.sort(
-            key=lambda c: c.score_breakdown.reranker_score
-            if c.score_breakdown.reranker_score is not None
+            key=lambda candidate: candidate.score_breakdown.reranker_score
+            if candidate.score_breakdown.reranker_score is not None
             else 0.0,
             reverse=True,
         )
         return traced[:top_k]
-
-    async def _rerank_with_trace(
-        self,
-        query: str,
-        candidates: list[ScoredSearchCandidate],
-        top_k: int,
-    ) -> list[ScoredSearchCandidate]:
-        """Backward-compat alias for :meth:`rerank_candidates`."""
-        return await self.rerank_candidates(query, candidates, top_k)
 
 
 def make_reranker(model_name: str, device: str = AUTO_DEVICE) -> Reranker:

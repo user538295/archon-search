@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import subprocess
 import sys
 import threading
@@ -16,6 +17,7 @@ import numpy as np
 import pytest
 
 import archon_search.embedder as embedder_module
+from archon_search import text_batching, warmup_coordinator
 from archon_search.embedder import (
     Embedder,
     EmbedderBackend,
@@ -329,7 +331,6 @@ async def test_abandoned_embedder_waiter_does_not_cancel_the_shared_build() -> N
         await asyncio.wait_for(embedder.warmup(), timeout=0.01)
     await asyncio.to_thread(backend.started.wait, 5.0)
     assert backend.build_count == 1
-    assert embedder._warmup_task is not None, "the abandoned wait cancelled the build"
 
     joiner = asyncio.create_task(embedder.warmup())
     await asyncio.sleep(0)
@@ -376,11 +377,9 @@ async def test_embedder_warmup_is_a_noop_once_warm() -> None:
 
 @pytest.mark.asyncio
 async def test_failed_embedder_warmup_is_retried_by_the_next_caller() -> None:
-    """S283 semantics: ``_warmup_failed`` records the last attempt, it does not latch.
+    """A transient failure (HF 429, network blip, unwritable cache) must not disarm warm-up.
 
-    It previously gated ``warmup()`` itself, so one transient failure (HF 429,
-    network blip, unwritable cache) disarmed every later warm-up for the life of
-    the process — and, since S290, pinned every later search to its FTS leg.
+    A latched failure would pin every later search to its FTS leg for the life of the process.
     """
 
     class _FailOnceBackend:
@@ -402,14 +401,12 @@ async def test_failed_embedder_warmup_is_retried_by_the_next_caller() -> None:
 
     with pytest.raises(RuntimeError, match="transient failure"):
         await embedder.warmup()
-    assert embedder._warmup_failed is True
     assert embedder.is_warm is False
 
     await embedder.warmup()
 
     assert backend.build_count == 2, "the failed warm-up was not retried"
     assert embedder.is_warm is True
-    assert embedder._warmup_failed is False
 
 
 @pytest.mark.asyncio
@@ -421,23 +418,39 @@ async def test_embedder_warmup_raises_embedderwarmuptimeout_not_asyncio_timeoute
     It must NOT be an ``asyncio.TimeoutError``: since 3.11 that is the builtin
     ``TimeoutError`` (an ``OSError``), which callers use to mean "I gave up
     waiting" — a different condition from "the build blew its own ceiling", and
-    one ``warmup_models`` must report differently (C1-I-2).
+    one ``warmup_models`` must report differently.
     """
-    import archon_search.embedder as embedder_module
-
-    monkeypatch.setattr(embedder_module, "_WARMUP_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(warmup_coordinator, "WARMUP_TIMEOUT_SECONDS", 0.01)
     backend = _BlockingEmbedderBackend(hang=True)
     embedder = Embedder(backend)  # type: ignore[arg-type]
 
     try:
-        with pytest.raises(EmbedderWarmupTimeout):
+        with pytest.raises(EmbedderWarmupTimeout, match="embedder warm-up exceeded"):
             await embedder.warmup()
     finally:
         backend.release.set()
 
     assert not issubclass(EmbedderWarmupTimeout, asyncio.TimeoutError)
     assert not issubclass(EmbedderWarmupTimeout, OSError)
-    assert embedder._warmup_failed is True
+
+
+@pytest.mark.asyncio
+async def test_embedder_warmup_reports_a_socket_etimedout_as_the_build_failing_not_as_the_ceiling() -> None:
+    """A download's ``ETIMEDOUT`` is a ``TimeoutError`` too; it must not become ``EmbedderWarmupTimeout``."""
+
+    class _EtimedoutBackend:
+        model_name: str = "etimedout-embedder"
+        is_warm: bool = False
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            raise TimeoutError(errno.ETIMEDOUT, "Connection timed out")
+
+    embedder = Embedder(_EtimedoutBackend())  # type: ignore[arg-type]
+
+    with pytest.raises(TimeoutError) as caught:
+        await embedder.warmup()
+
+    assert not isinstance(caught.value, EmbedderWarmupTimeout)
 
 
 # ---------------------------------------------------------------------------
@@ -672,21 +685,19 @@ def test_output_order_matches_input_order_across_batches(
 ) -> None:
     use_tiny_model()
     budget = 8
-    monkeypatch.setattr(embedder_module, "DEFAULT_TOKEN_BUDGET", budget)
+    monkeypatch.setattr(text_batching, "DEFAULT_TOKEN_BUDGET", budget)
     # Word counts 1..7 -> 3..9 tokens, scrambled: the sorted-by-length plan cannot be the identity.
     word_counts = [5, 1, 7, 3, 6, 2, 4]
     texts = [" ".join(f"w{i}" for i in range(1, count + 1)) for count in word_counts]
     plans: list[list[list[int]]] = []
-    real_plan = embedder_module.plan_batches
-    monkeypatch.setattr(
-        embedder_module, "plan_batches", lambda *a, **k: plans.append(real_plan(*a, **k)) or plans[-1]
-    )
+    real_plan = text_batching.plan_batches
+    monkeypatch.setattr(text_batching, "plan_batches", lambda *a, **k: plans.append(real_plan(*a, **k)) or plans[-1])
 
     batched = _embed(texts)
 
     assert len(plans[0]) > 1
     assert [i for batch in plans[0] for i in batch] != list(range(len(texts)))
-    monkeypatch.setattr(embedder_module, "DEFAULT_TOKEN_BUDGET", 4096)
+    monkeypatch.setattr(text_batching, "DEFAULT_TOKEN_BUDGET", 4096)
     for text, vector in zip(texts, batched, strict=True):
         np.testing.assert_allclose(vector, _embed([text])[0], atol=_TOLERANCE)
 
@@ -695,7 +706,7 @@ def test_accelerator_cache_is_released_only_after_an_oversize_batch(
     use_tiny_model: Callable[..., MagicMock], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     use_tiny_model()
-    monkeypatch.setattr(embedder_module, "DEFAULT_TOKEN_BUDGET", 8)
+    monkeypatch.setattr(text_batching, "DEFAULT_TOKEN_BUDGET", 8)
     release = MagicMock()
     monkeypatch.setattr(embedder_module, "release_accelerator_cache", release)
     embedder = ModelEmbedder("tiny/bert", device="cpu")

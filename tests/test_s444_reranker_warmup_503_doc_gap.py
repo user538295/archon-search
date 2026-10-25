@@ -171,13 +171,13 @@ def test_no_shipped_doc_maps_a_reranker_warmup_to_503() -> None:
         ("context from an enclosing heading only", "## /search\n\n503 while the reranker warms up.\n"),
         (
             "table row under a nested heading",
-            "### POST /search\n#### Error responses\n\n"
-            "| Status | Meaning |\n|---|---|\n| 503 | The reranker cross-encoder is still warming up |\n",
+            ("### POST /search\n#### Error responses\n\n"
+            "| Status | Meaning |\n|---|---|\n| 503 | The reranker cross-encoder is still warming up |\n"),
         ),
         (
             "module heading kept across a fenced block",
-            "### `routes_search.py`\n\n```bash\n# curl the endpoint\n```\n\n"
-            "| 503 | The reranker is still warming up |\n",
+            ("### `routes_search.py`\n\n```bash\n# curl the endpoint\n```\n\n"
+            "| 503 | The reranker is still warming up |\n"),
         ),
     ],
 )
@@ -196,8 +196,8 @@ def test_detector_flags_a_documented_reranker_warmup_503_mapping(
     [
         (
             "503 belongs to a different subject",
-            "/search 503 means the metadata store could not be reached. The reranker warm-up only "
-            "degrades to rerank=False.\n",
+            ("/search 503 means the metadata store could not be reached. The reranker warm-up only "
+            "degrades to rerank=False.\n"),
         ),
         ("no /search context", "`GET /ready` returns 503 while the reranker warm-up runs.\n"),
         ("no reranker", "/search returns 503 when the collection meta lookup fails.\n"),

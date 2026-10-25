@@ -16,6 +16,7 @@ corresponding gap is closed.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -46,12 +47,12 @@ async def test_sync_blocks_lifespan_startup(tmp_path: Path, job_store: JobStore)
     the sync has to be handed to ``asyncio.create_task``. The second assertion
     keeps the test honest: deleting the sync outright must not make it pass.
     """
-    import asyncio  # noqa: PLC0415
-    from unittest.mock import AsyncMock, patch  # noqa: PLC0415
+    import asyncio
+    from unittest.mock import AsyncMock, patch
 
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+    from archon_search.server.app import create_app
+    from archon_search.store import SearchStore
+    from archon_search.sync import SearchCollectionSync
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -63,7 +64,6 @@ async def test_sync_blocks_lifespan_startup(tmp_path: Path, job_store: JobStore)
     async def parked_sync(self: SearchCollectionSync, collections: list[str], progress_cb=None):
         sync_started.set()
         await release.wait()
-        return None
 
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
@@ -127,7 +127,7 @@ def test_warmup_result_attribute_missing(tmp_path: Path, job_store: JobStore) ->
     ``if config.eager_load_embedders:`` lifespan branch AttributeErrors for every
     reader when the flag is off.
     """
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.server.app import create_app
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -157,17 +157,17 @@ async def test_ready_returns_503_while_warmup_pending() -> None:
     blocks on ONNX construction — an orchestrator would route traffic to a server
     that cannot serve it.
     """
-    import json  # noqa: PLC0415
-    from datetime import UTC, datetime  # noqa: PLC0415
-    from unittest.mock import AsyncMock  # noqa: PLC0415
+    import json
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock
 
-    from archon_search.model_validation import ModelValidationResult  # noqa: PLC0415
-    from archon_search.server.routes_ready import (  # noqa: PLC0415
+    from archon_search.model_validation import ModelValidationResult
+    from archon_search.server.routes_ready import (
         _model_check_status,
         _warmup_pending,
         ready,
     )
-    from archon_search.server.schemas import CheckStatus  # noqa: PLC0415
+    from archon_search.server.schemas import CheckStatus
 
     cfg = SearchConfig()
     cfg.eager_load_embedders = True
@@ -230,13 +230,13 @@ async def test_ready_returns_503_while_warmup_pending() -> None:
 )
 async def test_ready_reports_fail_after_failed_warmup(warmup_result_value: str | None) -> None:
     """A failed eager warm-up must surface as checks.models="fail", ready stays true."""
-    import json  # noqa: PLC0415
-    from datetime import UTC, datetime  # noqa: PLC0415
-    from unittest.mock import AsyncMock  # noqa: PLC0415
+    import json
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock
 
-    from archon_search.model_validation import ModelValidationResult  # noqa: PLC0415
-    from archon_search.server.routes_ready import ready  # noqa: PLC0415
-    from archon_search.server.schemas import WarmupResult  # noqa: PLC0415
+    from archon_search.model_validation import ModelValidationResult
+    from archon_search.server.routes_ready import ready
+    from archon_search.server.schemas import WarmupResult
 
     if warmup_result_value is None:
         warmup_result_value = WarmupResult.FAILED
@@ -258,6 +258,9 @@ async def test_ready_reports_fail_after_failed_warmup(warmup_result_value: str |
         )
         warmup_result = warmup_result_value
         config = cfg
+        # Failed warm-up with both default models still warm: the replica can serve, so
+        # /ready keeps answering 200 (the not-warm => 503 rule is pinned in test_routes_ready.py).
+        pipeline = SimpleNamespace(embedder_is_warm=True, reranker_is_warm=True)
         search_store = FakeStore()
 
     class FakeApp:
@@ -295,10 +298,10 @@ def test_server_connect_fail_msg_probes_ready_endpoint() -> None:
     ``/ready`` probe answering 503 with ``checks.models == "pending"`` is the
     authoritative "still starting up" signal and works for every launch mode.
     """
-    import inspect  # noqa: PLC0415
-    from unittest.mock import MagicMock, patch  # noqa: PLC0415
+    import inspect
+    from unittest.mock import MagicMock, patch
 
-    from archon_search.cli import _helpers  # noqa: PLC0415
+    from archon_search.cli import _helpers
 
     params = inspect.signature(_helpers._server_connect_fail_msg).parameters
     assert "base_url" in params, (
@@ -360,11 +363,11 @@ async def test_get_or_load_concurrent_waiter_hangs_without_timeout(
     A hardcoded inline timeout is not acceptable — it makes the behavior untestable
     and unconfigurable.
     """
-    import asyncio  # noqa: PLC0415
-    import threading  # noqa: PLC0415
-    from unittest.mock import MagicMock, patch  # noqa: PLC0415
+    import asyncio
+    import threading
+    from unittest.mock import MagicMock, patch
 
-    from archon_search import embedder_cache as ec  # noqa: PLC0415
+    from archon_search import embedder_cache as ec
 
     # Dial any module-level timeout constant down so a realistic production value
     # (tens of seconds) does not make this test slow.

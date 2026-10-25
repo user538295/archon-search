@@ -4,15 +4,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import OrderedDict
+from collections.abc import Mapping
 
-from archon_search.embedder import Embedder, make_embedder
-from archon_search.torch_runtime import AUTO_DEVICE
+from archon_search.embedder import WARMUP_TEXT, Embedder, make_embedder
+from archon_search.torch_runtime import AUTO_DEVICE, release_model_memory
 
 logger = logging.getLogger(__name__)
 
-# Unknown model validation: make_embedder() resolves the model spec eagerly, so it
-# raises UnsupportedModelError for a name outside the registry — before any weights
-# are touched. validate_embedding_model() is the up-front check at PATCH time.
+# make_embedder() resolves the model spec eagerly, so it raises UnsupportedModelError for a
+# name outside the registry before any weights are touched. model_validation.validate_embedding_model()
+# is the cheap up-front check for callers that must reject an unknown name before using the cache.
 
 # Upper bound on how long a deduplicated waiter blocks on the active loader. A
 # stalled loader (slow disk, wedged weight load) must not hang every concurrent
@@ -50,6 +51,12 @@ class EmbedderCache:
     ``make_embedder`` call, so cached embedders — which serve every search — run on
     the same device as the global one.
 
+    ``preloaded`` seeds the cache with embedders that already exist (name → embedder): the
+    server seeds the default model with the pipeline's global embedder so both resolve to one
+    copy of its weights. A seeded entry is pinned: never evicted and not counted against
+    ``max_size`` (its owner keeps it alive anyway, so evicting it would only make the next
+    ``get_or_load`` of the default model build a second copy of its weights).
+
     A model name outside the registry fails fast: ``make_embedder`` raises
     ``UnsupportedModelError`` in the loader thread, ``get_or_load`` propagates it, and
     nothing is cached — the registration is cleared like for any failed load, so a
@@ -57,10 +64,13 @@ class EmbedderCache:
     reading a poisoned entry. ``preload`` logs and skips such a model.
     """
 
-    def __init__(self, max_size: int, device: str = AUTO_DEVICE) -> None:
+    def __init__(
+        self, max_size: int, device: str = AUTO_DEVICE, *, preloaded: Mapping[str, Embedder] | None = None
+    ) -> None:
         self._max_size = max_size
         self._device = device
-        self._cache: OrderedDict[str, Embedder] = OrderedDict()
+        self._pinned: frozenset[str] = frozenset(preloaded or ())
+        self._cache: OrderedDict[str, Embedder] = OrderedDict(preloaded or {})
         self._lock = asyncio.Lock()
         self._loading: dict[str, asyncio.Event] = {}
 
@@ -96,7 +106,7 @@ class EmbedderCache:
             # Await the in-progress load OUTSIDE the lock to avoid deadlock
             try:
                 await asyncio.wait_for(event.wait(), timeout=_LOAD_WAIT_TIMEOUT_SECONDS)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Do NOT touch self._loading here. A waiter has no authority over
                 # the loader's lifecycle: the loader clears its own registration
                 # on every exit path — success, any exception, or cancellation
@@ -128,6 +138,7 @@ class EmbedderCache:
         # waiter can ever clean it up (the waiter's timeout handler above
         # deliberately never touches _loading) — permanently poisoning the
         # model for the process lifetime.
+        evicted: list[Embedder] = []
         try:
             embedder = await asyncio.to_thread(make_embedder, model_name, device=self._device)
             # Load succeeded — store in cache under lock. Only the cache
@@ -136,8 +147,9 @@ class EmbedderCache:
             async with self._lock:
                 self._cache[model_name] = embedder
                 self._cache.move_to_end(model_name)
-                while len(self._cache) > self._max_size:
-                    self._cache.popitem(last=False)  # evict LRU
+                unpinned = [name for name in self._cache if name not in self._pinned]  # LRU first
+                for victim in unpinned[: max(0, len(unpinned) - self._max_size)]:
+                    evicted.append(self._cache.pop(victim))
         finally:
             # No lock here: dict.pop + Event.set are already atomic under
             # single-threaded asyncio (there is no await point between them),
@@ -153,7 +165,32 @@ class EmbedderCache:
             ev = self._loading.pop(model_name, None)
             if ev:
                 ev.set()  # wake waiters so they retry rather than deadlock
+        await self._release_evicted(evicted)
         return embedder
+
+    async def _release_evicted(self, evicted: list[Embedder]) -> None:
+        """Return the memory of the warm embedders in *evicted* (see ``release_model_memory``).
+
+        Empties *evicted* first: the collection can only reclaim a model nothing references, and this
+        list (the caller's own local too) would keep every evicted embedder alive through it. Runs after
+        the registration is cleared, so waiters are not held up by the collection, and in a worker
+        thread: it walks every live object. An evicted embedder a request still holds keeps its weights
+        until that request is done; a cold one holds none. A failure costs only the early release, never
+        the load that evicted.
+        """
+        any_warm = any(embedder.is_warm for embedder in evicted)
+        names = ", ".join(repr(embedder.model_name) for embedder in evicted)
+        evicted.clear()
+        if not any_warm:
+            return
+        # The release is a best-effort side effect of the eviction: a failure is logged with its
+        # traceback and never raised, so it can neither fail the load that evicted nor mask its result.
+        try:
+            await asyncio.to_thread(release_model_memory, self._device)
+        except Exception as exc:  # memory release is best-effort; any failure is logged, never raised
+            logger.warning(
+                "EmbedderCache: releasing the memory of evicted %s failed — %s", names, exc, exc_info=True
+            )
 
     async def preload(self, model_names: list[str]) -> list[str]:
         """Load and warm up models concurrently; log and skip any that fail.
@@ -180,17 +217,18 @@ class EmbedderCache:
         async def _load_and_warm(model: str) -> bool:
             try:
                 embedder = await self.get_or_load(model)
-            except Exception as exc:  # noqa: BLE001 — one bad model must not abort the rest
+            except Exception as exc:  # noqa: BLE001 — preload contract: a failing model is logged and skipped, never raised
                 logger.warning("EmbedderCache.preload: failed to load %r — %s", model, exc)
                 return False
             try:
-                await embedder.embed(["warmup"])
-            except Exception as exc:  # noqa: BLE001 — same: never fail startup
+                await embedder.embed([WARMUP_TEXT])
+            except Exception as exc:  # noqa: BLE001 — preload contract: a failing warm-up is logged and skipped, never raised
                 # encode() assigns the backend model BEFORE running inference, so a
-                # failure here does not prove the model failed to load.
+                # failure here does not prove the model failed to load. A pinned (seeded)
+                # embedder is never evicted, even cold: the lifespan owns that object.
                 async with self._lock:
                     cached = self._cache.get(model)
-                    evicted = cached is not None and not cached.is_warm
+                    evicted = cached is not None and not cached.is_warm and model not in self._pinned
                     if evicted:
                         del self._cache[model]
                 logger.warning(

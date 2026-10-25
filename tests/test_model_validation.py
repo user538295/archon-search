@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import os
+import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -244,6 +247,57 @@ def test_unsupported_model_name_fails_the_probe_without_raising() -> None:
     assert result == (False, True, [EMBEDDER_PROBE_FAILED_WARNING])
 
 
+class _SharedBackends:
+    """Serving backends handed to the probe: they record calls instead of loading weights."""
+
+    def __init__(self) -> None:
+        self.encoded: list[list[str]] = []
+        self.scored: list[list[tuple[str, str]]] = []
+        self.embed_error: Exception | None = None
+
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        self.encoded.append(texts)
+        if self.embed_error is not None:
+            raise self.embed_error
+        return [[0.0] for _ in texts]
+
+    def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+        self.scored.append(pairs)
+        return [0.5 for _ in pairs]
+
+
+def test_supplied_backends_are_probed_and_no_second_copy_is_built(probes: _Probes) -> None:
+    """The probe runs the serving instances: a throwaway copy doubles the weights in memory at startup."""
+    shared = _SharedBackends()
+
+    result = validate_device("cpu", _EMBEDDER, _RERANKER, embedder=shared, reranker=shared)
+
+    assert result == (True, True, [])
+    assert shared.encoded == [[_PROBE_TEXT]]
+    assert shared.scored == [[_PROBE_PAIR]]
+    assert probes.embedders == []
+    assert probes.rerankers == []
+
+
+def test_a_failing_supplied_backend_reports_the_fixed_warning(probes: _Probes) -> None:
+    shared = _SharedBackends()
+    shared.embed_error = RuntimeError(ONNX_MSG)
+
+    result = validate_device("cpu", _EMBEDDER, _RERANKER, embedder=shared, reranker=shared)
+
+    assert result == (False, True, [EMBEDDER_PROBE_FAILED_WARNING])
+    assert probes.embedders == []
+
+
+def test_a_disabled_reranker_is_not_probed_even_when_a_backend_is_supplied(probes: _Probes) -> None:
+    shared = _SharedBackends()
+
+    result = validate_device("cpu", _EMBEDDER, "", embedder=shared, reranker=shared)
+
+    assert result == (True, True, [])
+    assert shared.scored == []
+
+
 _PROBE_FAILURES = [
     pytest.param(
         "embed_error",
@@ -307,7 +361,7 @@ async def test_validate_models_async_both_ok():
 async def test_validate_models_async_probes_the_configured_device_and_models():
     with patch(_VALIDATE_DEVICE, return_value=(True, True, [])) as probe:
         await validate_models_async(_cfg(device="mps"), timeout_seconds=5)
-    probe.assert_called_once_with("mps", _EMBEDDER, _RERANKER)
+    probe.assert_called_once_with("mps", _EMBEDDER, _RERANKER, embedder=None, reranker=None)
 
 
 @pytest.mark.asyncio
@@ -391,12 +445,13 @@ async def test_validate_models_async_reranker_disabled():
 
 
 @pytest.mark.asyncio
-async def test_validate_models_async_embedder_warm_skip():
-    """embedder_is_warm=True → the caller passes embedding_model="" → probe skipped → ok=True."""
+async def test_validate_models_async_probes_the_supplied_serving_backends():
+    """The caller's warm instances are what get probed — the embedder is no longer skipped when warm."""
+    embedder, reranker = _SharedBackends(), _SharedBackends()
     with patch(_VALIDATE_DEVICE, return_value=(True, True, [])) as probe:
-        result = await validate_models_async(_cfg(), timeout_seconds=5, embedder_is_warm=True)
+        result = await validate_models_async(_cfg(), timeout_seconds=5, embedder=embedder, reranker=reranker)
     assert result.embedder_ok is True
-    assert probe.call_args.args[1] == ""
+    probe.assert_called_once_with("cpu", _EMBEDDER, _RERANKER, embedder=embedder, reranker=reranker)
 
 
 @pytest.mark.asyncio
@@ -419,6 +474,31 @@ async def test_validate_models_async_cancelled_returns_result():
     assert result.embedder_ok is False
     assert result.reranker_ok is False
     assert result.provider_warnings == [VALIDATION_FAILED_WARNING]
+
+
+@pytest.mark.asyncio
+async def test_validate_models_async_propagates_task_cancellation(caplog: pytest.LogCaptureFixture):
+    """A cancelled validation task (server shutdown mid-probe) ends cancelled, silently — no WARNING, no fake result."""
+    probe_started = threading.Event()
+    release_probe = threading.Event()
+
+    def blocking_probe(*_args: object, **_kwargs: object) -> tuple[bool, bool, list[str]]:
+        probe_started.set()
+        release_probe.wait(timeout=10)
+        return True, True, []
+
+    with patch(_VALIDATE_DEVICE, side_effect=blocking_probe), caplog.at_level(logging.WARNING):
+        task = asyncio.create_task(validate_models_async(_cfg(), timeout_seconds=30))
+        try:
+            await asyncio.to_thread(probe_started.wait, 10)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            release_probe.set()
+
+    assert task.cancelled()
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 # ---------------------------------------------------------------------------
@@ -550,3 +630,33 @@ async def test_extraction_probe_client_build_failure_is_logged_with_traceback(
     build.assert_called_once()
     assert warnings == [EXTRACTION_MODEL_PROBE_ERROR_WARNING]
     assert_logged_with_traceback(caplog, ONNX_MSG)
+
+
+# ---------------------------------------------------------------------------
+# ModelValidationResult is an immutable value with a coherent timestamp
+# ---------------------------------------------------------------------------
+
+
+def test_model_validation_result_is_immutable() -> None:
+    result = ModelValidationResult(embedder_ok=True, reranker_ok=True)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.embedder_ok = False  # type: ignore[misc]
+
+
+def test_pending_model_validation_result_is_valid() -> None:
+    result = ModelValidationResult()
+    assert (result.embedder_ok, result.reranker_ok, result.validated_at) == (None, None, None)
+
+
+@pytest.mark.parametrize(("embedder_ok", "reranker_ok"), [(None, None), (True, None), (None, False)])
+def test_a_finished_validation_must_have_resolved_both_probes(
+    embedder_ok: bool | None, reranker_ok: bool | None
+) -> None:
+    with pytest.raises(ValueError, match="validated_at"):
+        ModelValidationResult(embedder_ok=embedder_ok, reranker_ok=reranker_ok, validated_at=datetime.now(UTC))
+
+
+def test_a_finished_validation_with_both_probes_resolved_is_valid() -> None:
+    stamp = datetime.now(UTC)
+    result = ModelValidationResult(embedder_ok=False, reranker_ok=True, validated_at=stamp)
+    assert result.validated_at == stamp

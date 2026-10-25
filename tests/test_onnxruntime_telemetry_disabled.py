@@ -34,6 +34,7 @@ def _value_after_import(env: dict[str, str]) -> str:
         capture_output=True,
         text=True,
         env=env,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()

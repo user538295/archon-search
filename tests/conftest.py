@@ -7,12 +7,14 @@ HuggingFace-tokenizers Rust-library process explosion.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.metadata
 import os
 import sys
 import uuid
+from collections.abc import Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Generator
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 if TYPE_CHECKING:
@@ -40,7 +42,7 @@ _tests_dir = os.path.dirname(os.path.abspath(__file__))
 if _tests_dir not in sys.path:
     sys.path.insert(0, _tests_dir)
 
-from _search_stubs import install_stubs  # noqa: E402
+from _search_stubs import install_stubs
 
 install_stubs()
 
@@ -130,7 +132,7 @@ def _block_anthropic_client() -> Generator[None, None, None]:
     `import anthropic` inside generators gets the mock, not the real module.
     """
     try:
-        import anthropic as _anthropic_mod  # noqa: PLC0415
+        import anthropic as _anthropic_mod
     except ImportError:
         yield  # anthropic extra not installed — nothing to block
         return
@@ -281,13 +283,44 @@ def _isolate_archon_logging() -> Generator[None, None, None]:
         for handler in logger.handlers[:]:
             if handler not in saved_handlers:
                 logger.removeHandler(handler)
-                try:
+                with contextlib.suppress(Exception):
                     handler.close()
-                except Exception:
-                    pass
         logger.handlers[:] = saved_handlers
         logger.propagate = saved_propagate
         logger.setLevel(saved_level)
+
+
+@pytest.fixture
+def real_mcp_auth_context() -> None:
+    """Opt a test out of ``_mcp_default_request_context``: its tool calls see the real request context."""
+
+
+@pytest.fixture(autouse=True)
+def _mcp_default_request_context(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give MCP tool functions called directly (no HTTP request) an authenticated default-namespace admin caller.
+
+    ``archon_search.server.mcp._get_request_identity`` fails closed: outside an authenticated HTTP request it
+    refuses the call. Tests that invoke the tool functions directly (``StubFastMCP``) have no request, so
+    ``get_http_request`` falls back to a fake request that ``APIKeyMiddleware`` would have stamped for the
+    default key. A real request (``TestClient`` against the mounted ``/mcp`` app) is untouched: the real
+    ``get_http_request`` answers first. Request the ``real_mcp_auth_context`` fixture to opt out.
+    """
+    if "real_mcp_auth_context" in request.fixturenames:
+        return
+    import importlib
+    from types import SimpleNamespace
+
+    mcp_module = importlib.import_module("archon_search.server.mcp")
+    real_get_http_request = mcp_module.get_http_request
+    default_request = SimpleNamespace(state=SimpleNamespace(namespace="default", admin=True))
+
+    def _request_or_default_caller() -> object:
+        try:
+            return real_get_http_request()
+        except RuntimeError:
+            return default_request
+
+    monkeypatch.setattr(mcp_module, "get_http_request", _request_or_default_caller)
 
 
 @pytest.fixture
@@ -357,7 +390,7 @@ def three_page_pdf(tmp_path_factory: pytest.TempPathFactory) -> Path:
     The PDF is byte-deterministic (invariant=True suppresses reportlab timestamps).
     Uses tmp_path_factory so each xdist worker gets its own isolated copy.
     """
-    from _pdf_fixture import generate_three_page_pdf  # noqa: PLC0415
+    from _pdf_fixture import generate_three_page_pdf
 
     pdf_path = tmp_path_factory.mktemp("pdfs") / "three_page.pdf"
     generate_three_page_pdf(pdf_path)
@@ -375,7 +408,7 @@ def substantial_three_page_pdf(tmp_path_factory: pytest.TempPathFactory) -> Path
     emission.
     """
     pytest.importorskip("reportlab")
-    from reportlab.pdfgen.canvas import Canvas  # noqa: PLC0415
+    from reportlab.pdfgen.canvas import Canvas
 
     _PARA = (
         "This is a paragraph of text that provides enough content for the PDF parser "
@@ -408,7 +441,7 @@ def scanned_pdf(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """
     pytest.importorskip("reportlab")
     pytest.importorskip("PIL")
-    from _pdf_fixture import generate_scanned_pdf  # noqa: PLC0415
+    from _pdf_fixture import generate_scanned_pdf
 
     pdf_path = tmp_path_factory.mktemp("pdfs") / "scanned.pdf"
     generate_scanned_pdf(pdf_path)
@@ -458,7 +491,7 @@ def mock_graph_store() -> MockGraphStore:
 @pytest.fixture(scope="session")
 def entrypoint_wheelhouse(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """The offline wheelhouse every entrypoint :class:`Container` resolves from; read-only once built."""
-    from tests._entrypoint_harness import build_wheelhouse  # noqa: PLC0415
+    from tests._entrypoint_harness import build_wheelhouse
 
     directory = tmp_path_factory.mktemp("entrypoint-wheelhouse")
     build_wheelhouse(directory)
@@ -468,6 +501,6 @@ def entrypoint_wheelhouse(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture
 def entrypoint_container(tmp_path: Path, entrypoint_wheelhouse: Path) -> Container:
     """A fresh image plus an empty ``/pip-packages`` volume that runs the real entrypoint."""
-    from tests import _entrypoint_harness  # noqa: PLC0415
+    from tests import _entrypoint_harness
 
     return _entrypoint_harness.Container(tmp_path, entrypoint_wheelhouse)

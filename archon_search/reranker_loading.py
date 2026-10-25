@@ -11,9 +11,15 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from archon_search.torch_runtime import accelerator_lock, disable_weight_progress_bar, load_tokenizer
+from archon_search.model_specs import CONFIG_FILE, WEIGHTS_FILE
+from archon_search.torch_runtime import (
+    TRANSFORMERS_LOCK,
+    accelerator_lock,
+    disable_weight_progress_bar,
+    load_tokenizer,
+)
 
 if TYPE_CHECKING:
     import torch
@@ -22,12 +28,11 @@ if TYPE_CHECKING:
 
     from archon_search.model_specs import RerankerSpec
 
-CONFIG_FILE = "config.json"
-WEIGHTS_FILE = "model.safetensors"
 JINA_ARCHITECTURE = "jina_xlm_roberta"
 _XLM_ROBERTA_PAD_TOKEN_ID = 1
 _XLM_ROBERTA_BOS_TOKEN_ID = 0
 _XLM_ROBERTA_EOS_TOKEN_ID = 2
+_SINGLE_LABEL = 1
 _FUSED_PROJECTIONS = ("query", "key", "value")
 
 _FUSED_QKV = re.compile(r"^(roberta\.encoder\.)layers(\.\d+\.)mixer\.Wqkv\.(weight|bias)$")
@@ -53,8 +58,11 @@ def load_cross_encoder(spec: RerankerSpec, path: Path, device: str) -> tuple[Tok
     already-resolved torch device; the model is returned in eval mode on it and maps a
     token batch to one raw logit per row (``logits[:, 0]``).
     """
-    import torch  # noqa: PLC0415 — lazy: keeps module import free of PyTorch
-    from transformers import AutoModelForSequenceClassification  # noqa: PLC0415
+    import torch  # lazy: keeps module import free of PyTorch
+
+    with TRANSFORMERS_LOCK:
+        # Lazy: keeps module import free of transformers.
+        from transformers import AutoModelForSequenceClassification
 
     disable_weight_progress_bar()
     tokenizer = load_tokenizer(path, spec.max_length)
@@ -62,7 +70,11 @@ def load_cross_encoder(spec: RerankerSpec, path: Path, device: str) -> tuple[Tok
         if spec.architecture == JINA_ARCHITECTURE:
             model = load_jina_reranker(path)
         else:
-            model = AutoModelForSequenceClassification.from_pretrained(path, dtype=torch.float32)
+            with TRANSFORMERS_LOCK:
+                # safetensors only: a pickle checkpoint (``pytorch_model.bin``) would execute code on load.
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    path, dtype=torch.float32, use_safetensors=True
+                )
         model = model.to(device).eval()
     return tokenizer, model
 
@@ -80,7 +92,7 @@ def load_jina_reranker(path: Path) -> torch.nn.Module:
         ValueError: if a checkpoint tensor has no place in the model, or a model tensor
             has no source in the checkpoint; the message names the offending keys.
     """
-    from safetensors import safe_open  # noqa: PLC0415 — lazy: keeps module import free of PyTorch
+    from safetensors import safe_open  # lazy: keeps module import free of safetensors
 
     config = json.loads((path / CONFIG_FILE).read_text())
     model = _stock_model(config)
@@ -95,12 +107,13 @@ def load_jina_reranker(path: Path) -> torch.nn.Module:
     return model
 
 
-def _stock_model(config: dict[str, object]) -> torch.nn.Module:
+def _stock_model(config: dict[str, Any]) -> torch.nn.Module:
     """An untrained single-label stock XLM-R classifier shaped by the Jina *config*."""
-    from transformers import XLMRobertaConfig, XLMRobertaForSequenceClassification  # noqa: PLC0415
+    with TRANSFORMERS_LOCK:
+        # Lazy: keeps module import free of transformers.
+        from transformers import XLMRobertaConfig, XLMRobertaForSequenceClassification
 
-    return XLMRobertaForSequenceClassification(
-        XLMRobertaConfig(
+        xlm_config = XLMRobertaConfig(
             vocab_size=config["vocab_size"],
             hidden_size=config["hidden_size"],
             num_hidden_layers=config["num_hidden_layers"],
@@ -112,9 +125,11 @@ def _stock_model(config: dict[str, object]) -> torch.nn.Module:
             pad_token_id=_XLM_ROBERTA_PAD_TOKEN_ID,
             bos_token_id=_XLM_ROBERTA_BOS_TOKEN_ID,
             eos_token_id=_XLM_ROBERTA_EOS_TOKEN_ID,
-            num_labels=1,
         )
-    ).float()
+        # Assigned after construction: PretrainedConfig.num_labels is a typed property, whereas the
+        # XLMRobertaConfig signature does not declare it as a keyword.
+        xlm_config.num_labels = _SINGLE_LABEL
+        return XLMRobertaForSequenceClassification(xlm_config).float()
 
 
 def _convert(checkpoint: safe_open) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
@@ -124,7 +139,8 @@ def _convert(checkpoint: safe_open) -> tuple[dict[str, torch.Tensor], dict[str, 
     """
     converted: dict[str, torch.Tensor] = {}
     sources: dict[str, str] = {}
-    for key in checkpoint.keys():
+    # ``safe_open`` is not iterable: its tensor names come from ``keys()``.
+    for key in list(checkpoint.keys()):
         tensor = checkpoint.get_tensor(key).float()
         for name, value in _stock_entries(key, tensor):
             if name in sources:

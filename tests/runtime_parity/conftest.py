@@ -18,9 +18,8 @@ import numpy as np
 import pytest
 from tokenizers import Tokenizer
 
-from archon_search.model_specs import EmbedderSpec, RerankerSpec
+from archon_search.model_specs import TOKENIZER_FILE, EmbedderSpec, RerankerSpec
 from archon_search.model_store import model_path
-from archon_search.torch_runtime import TOKENIZER_FILE
 
 PARITY_DATA_DIR_ENV = "ARCHON_RUNTIME_PARITY_DATA_DIR"
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "runtime_parity"

@@ -13,6 +13,7 @@ up as a wire-level symptom several layers away from its cause.
 """
 from __future__ import annotations
 
+import logging
 import time
 
 import pytest
@@ -138,6 +139,32 @@ async def test_warmup_models_swallows_reranker_warmup_timeout(connected_store, m
     pipeline._reranker = reranker
 
     assert await pipeline.warmup_models(reranker_timeout=5.0) is False
+
+
+@pytest.mark.asyncio
+async def test_warmup_models_never_reports_waiting_none_seconds_for_the_reranker(
+    connected_store, caplog
+) -> None:
+    """An unbounded reranker wait cannot time out, so a socket ETIMEDOUT is a failed build.
+
+    Since 3.11 ``asyncio.TimeoutError`` **is** the builtin ``TimeoutError``, so an ``ETIMEDOUT``
+    from a model download must not be reported as the caller having waited ``None`` seconds.
+    """
+
+    class _EtimedoutBackend:
+        is_warm: bool = False
+
+        def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+            raise TimeoutError("ETIMEDOUT fetching model weights")
+
+    pipeline = make_pipeline(connected_store)
+    pipeline._reranker = Reranker(_EtimedoutBackend())  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.pipeline"):
+        assert await pipeline.warmup_models() is False
+
+    assert "Nones" not in caplog.text
+    assert "reranker failed" in caplog.text
 
 
 @pytest.mark.asyncio

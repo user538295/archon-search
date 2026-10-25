@@ -32,6 +32,7 @@ def test_importing_archon_search_disables_torch_dynamo_on_macos() -> None:
         capture_output=True,
         text=True,
         env=env,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "1", (
@@ -51,6 +52,7 @@ def test_operator_override_of_torchdynamo_disable_is_preserved() -> None:
         capture_output=True,
         text=True,
         env=env,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "0", (

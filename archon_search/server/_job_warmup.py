@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 #: Ceiling on the pre-DONE model warm-up wait in an ingest (S281) or import (S288)
-#: task. Generous enough for a cold cross-encoder ONNX build (the "max" profile
+#: task. Generous enough for a cold cross-encoder model build (the "max" profile
 #: measured 91 s), bounded so a wedged model download cannot pin a job forever.
 JOB_WARMUP_WAIT_SECONDS = 180.0
 
@@ -25,7 +25,7 @@ JOB_WARMUP_WAIT_SECONDS = 180.0
 async def await_models_warm(
     pipeline: SearchPipeline | None, job_id: str, embedder: Embedder | None = None
 ) -> None:
-    """Block until the lazy ONNX models are built, before an ingest or import reports DONE.
+    """Block until the lazy PyTorch models are built, before an ingest or import reports DONE.
 
     A job's terminal ``DONE`` is the completion signal clients act on —
     ``archon-search collection add --wait`` polls exactly this, then searches.
@@ -58,7 +58,7 @@ async def await_models_warm(
             job_id,
             JOB_WARMUP_WAIT_SECONDS,
         )
-    except Exception:  # noqa: BLE001 — CancelledError is a BaseException and still propagates
+    except Exception:
         logger.warning(
             "job %s: model warm-up failed; searches on this collection run degraded "
             "(FTS-only or unreranked) while the model stays unbuilt",

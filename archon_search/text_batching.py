@@ -5,7 +5,7 @@ Pure Python: no ``torch`` import, so the planner is testable without weights.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 #: Padded tokens per forward pass. Measured on multilingual-e5-large (Apple GPU):
 #: 4096 gave the best throughput at 3.2 GB of accelerator memory; 65536 was 32%
@@ -49,3 +49,24 @@ def plan_batches(
     if current:
         batches.append(current)
     return batches
+
+
+def map_in_token_batches[T](
+    lengths: Sequence[int],
+    run_batch: Callable[[list[int]], list[T]],
+    *,
+    release_memory: Callable[[], None],
+) -> list[T]:
+    """Run *run_batch* over ``plan_batches(lengths)`` and return one result per item, in input order.
+
+    *run_batch* gets a batch of item indices and returns one result per index, in batch order.
+    *release_memory* is called right after a batch whose padded size (``len(batch) * longest``)
+    exceeded ``DEFAULT_TOKEN_BUDGET``: only a lone item longer than the budget can do that, and it
+    leaves the accelerator holding memory sized for that outlier.
+    """
+    results: dict[int, T] = {}
+    for batch in plan_batches(lengths, token_budget=DEFAULT_TOKEN_BUDGET):
+        results.update(zip(batch, run_batch(batch), strict=True))
+        if len(batch) * max(lengths[index] for index in batch) > DEFAULT_TOKEN_BUDGET:
+            release_memory()
+    return [results[index] for index in range(len(lengths))]

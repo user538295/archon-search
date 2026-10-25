@@ -80,7 +80,7 @@ def test_lifespan_runs_initial_prune_before_writer_starts(tmp_path: Path) -> Non
 
     # Create a file that is 31 days old (> retention_days=30).
     # Use UTC to match Pruner.prune_once() which also uses datetime.now(UTC).date().
-    old_date = datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=31)
+    old_date = datetime.datetime.now(datetime.UTC).date() - datetime.timedelta(days=31)
     old_file = log_dir / f"{old_date.isoformat()}.jsonl"
     old_file.write_text('{"query_id":"old"}\n', encoding="utf-8")
 
@@ -116,9 +116,8 @@ def test_lifespan_prune_runs_in_thread_not_event_loop(tmp_path: Path) -> None:
         to_thread_calls.append(func)
         return await original_to_thread(func, *args, **kwargs)  # type: ignore[arg-type]
 
-    with patch("archon_search.server.app.asyncio.to_thread", side_effect=capturing_to_thread):
-        with TestClient(app):
-            pass
+    with patch("archon_search.server.app.asyncio.to_thread", side_effect=capturing_to_thread), TestClient(app):
+        pass
 
     # prune_once must be dispatched to a thread (the background model-validation
     # task also uses asyncio.to_thread, so prune_once is one of the calls, not

@@ -2,21 +2,33 @@
 
 from __future__ import annotations
 
+import gc
 import logging
+import os
 import subprocess
 import sys
 import threading
 import time
+import weakref
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+import _tiny_encoder as tiny_encoder
 import pytest
 
-import _tiny_encoder as tiny_encoder
 from archon_search import torch_runtime
-from archon_search.torch_runtime import load_encoder, release_accelerator_cache, resolve_device
+from archon_search.torch_runtime import (
+    accelerator_lock,
+    load_encoder,
+    release_accelerator_cache,
+    release_model_memory,
+    resolve_device,
+)
+
+_LOCK_WAIT_SECONDS = 0.2
+_JOIN_SECONDS = 5.0
 
 if TYPE_CHECKING:
     from tokenizers import Encoding
@@ -45,9 +57,12 @@ def test_auto_prefers_cuda_then_mps_then_cpu() -> None:
 
 
 def test_auto_never_warns(caplog: pytest.LogCaptureFixture) -> None:
-    with patch(_CUDA, return_value=False), patch(_MPS, return_value=False):
-        with caplog.at_level(logging.WARNING):
-            resolve_device("auto")
+    with (
+        patch(_CUDA, return_value=False),
+        patch(_MPS, return_value=False),
+        caplog.at_level(logging.WARNING),
+    ):
+        resolve_device("auto")
     assert caplog.records == []
 
 
@@ -97,9 +112,8 @@ def test_accelerator_lock_leaves_other_devices_concurrent(device: str) -> None:
 
 def test_accelerator_lock_can_be_re_entered_by_the_holder() -> None:
     """A load that runs a probe inference inside the lock must not deadlock on itself."""
-    with torch_runtime.accelerator_lock("mps"):
-        with torch_runtime.accelerator_lock("mps"):
-            pass
+    with torch_runtime.accelerator_lock("mps"), torch_runtime.accelerator_lock("mps"):
+        pass
 
 
 def test_available_accelerator_is_used() -> None:
@@ -121,11 +135,14 @@ def test_unavailable_accelerator_steps_down_once(caplog: pytest.LogCaptureFixtur
 
 
 def test_each_unavailable_setting_warns_once(caplog: pytest.LogCaptureFixture) -> None:
-    with patch(_MPS, return_value=False), patch(_CUDA, return_value=False):
-        with caplog.at_level(logging.WARNING):
-            resolve_device("mps")
-            resolve_device("cuda")
-            resolve_device("cuda")
+    with (
+        patch(_MPS, return_value=False),
+        patch(_CUDA, return_value=False),
+        caplog.at_level(logging.WARNING),
+    ):
+        resolve_device("mps")
+        resolve_device("cuda")
+        resolve_device("cuda")
 
     assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 2
 
@@ -210,6 +227,73 @@ def test_release_empties_the_cuda_cache() -> None:
     mps.assert_not_called()
 
 
+class _SelfReferencing:
+    """Garbage that only the cyclic collector can free, as a ``transformers`` model is."""
+
+    def __init__(self) -> None:
+        self.itself = self
+
+
+def test_release_model_memory_collects_cycles_before_returning_the_accelerator_cache() -> None:
+    """A dropped model survives in its reference cycles until the cyclic collector runs, and
+    the accelerator cache only returns blocks that are already free: collect first."""
+    seen: list[tuple[str, bool]] = []
+    garbage = weakref.ref(_SelfReferencing())
+    gc.disable()
+    try:
+        assert garbage() is not None  # what an evicted embedder looks like: dropped, not freed
+        with patch.object(
+            torch_runtime, "release_accelerator_cache", lambda device: seen.append((device, garbage() is None))
+        ):
+            release_model_memory("cpu")
+    finally:
+        gc.enable()
+
+    assert seen == [("cpu", True)]
+
+
+def test_release_model_memory_resolves_the_device_setting() -> None:
+    seen: list[str] = []
+    with (
+        patch.object(torch_runtime, "resolve_device", return_value="mps") as resolve,
+        patch.object(torch_runtime, "release_accelerator_cache", seen.append),
+    ):
+        release_model_memory("auto")
+
+    resolve.assert_called_once_with("auto")
+    assert seen == ["mps"]
+
+
+def test_release_model_memory_waits_for_the_running_accelerator_work() -> None:
+    released = threading.Event()
+    with (
+        patch.object(torch_runtime, "resolve_device", return_value="mps"),
+        patch("torch.mps.empty_cache", side_effect=released.set),
+    ):
+        with accelerator_lock("mps"):
+            releaser = threading.Thread(target=release_model_memory, args=("mps",))
+            releaser.start()
+            assert not released.wait(timeout=_LOCK_WAIT_SECONDS)
+        releaser.join(timeout=_JOIN_SECONDS)
+
+    assert released.is_set()
+
+
+def test_release_accelerator_cache_waits_for_the_running_accelerator_work() -> None:
+    """The embedder and reranker free their cache between oversize batches straight through this function:
+    it must not interleave with another thread's ``mps`` forward pass."""
+    released = threading.Event()
+    with patch("torch.mps.empty_cache", side_effect=released.set):
+        with accelerator_lock("mps"):
+            releaser = threading.Thread(target=release_accelerator_cache, args=("mps",))
+            releaser.start()
+            assert not released.wait(timeout=_LOCK_WAIT_SECONDS)
+        releaser.join(timeout=_JOIN_SECONDS)
+
+    assert released.is_set()
+
+
+
 def test_torch_is_imported_lazily() -> None:
     code = (
         "import sys; import archon_search.torch_runtime as r; "
@@ -265,3 +349,101 @@ def test_loading_weights_prints_no_progress_bar(
     load_encoder(tiny_encoder.tiny_spec(), tiny_snapshot, "cpu")
 
     assert "Loading weights" not in capfd.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# concurrent first load
+# ---------------------------------------------------------------------------
+
+_LOADER_THREADS_PER_KIND = 3
+_CONCURRENT_FIRST_LOAD_SCRIPT = """
+import sys
+import threading
+from pathlib import Path
+
+import torch  # imported up front so the threads below race on transformers alone
+
+import _tiny_encoder as tiny_encoder
+from archon_search.reranker_loading import load_cross_encoder
+from archon_search.torch_runtime import disable_weight_progress_bar, load_encoder
+
+encoder_snapshot, reranker_snapshot, threads_per_kind = sys.argv[1], sys.argv[2], int(sys.argv[3])
+assert "transformers" not in sys.modules, "the import must happen inside the racing threads"
+barrier = threading.Barrier(3 * threads_per_kind)
+failures = []
+
+
+def load_embedder():
+    barrier.wait()
+    try:
+        load_encoder(tiny_encoder.tiny_spec(), Path(encoder_snapshot), "cpu")
+    except BaseException as exc:
+        failures.append(repr(exc))
+
+
+def silence_progress_bar():
+    barrier.wait()
+    try:
+        disable_weight_progress_bar()
+    except BaseException as exc:
+        failures.append(repr(exc))
+
+
+def load_reranker():
+    barrier.wait()
+    try:
+        load_cross_encoder(tiny_encoder.tiny_reranker_spec("bert"), Path(reranker_snapshot), "cpu")
+    except BaseException as exc:
+        failures.append(repr(exc))
+
+
+threads = [
+    threading.Thread(target=target)
+    for _ in range(threads_per_kind)
+    for target in (silence_progress_bar, load_embedder, load_reranker)
+]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join()
+print("ok" if not failures else "\\n".join(failures))
+"""
+
+
+def test_concurrent_first_loads_do_not_race_the_transformers_import(
+    tiny_snapshot: Path, tmp_path: Path
+) -> None:
+    """``transformers`` is not safe to import first from several threads at once (circular-import
+    ``ImportError``). A server start does exactly that: the embedder probe and the warm-up threads
+    all load a model before anything has imported it."""
+    reranker_snapshot = tiny_encoder.build_cross_encoder_snapshot(tmp_path / "tiny-reranker", "bert")
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).parent)}
+
+    result = subprocess.run(
+        [sys.executable, "-c", _CONCURRENT_FIRST_LOAD_SCRIPT, str(tiny_snapshot), str(reranker_snapshot), str(_LOADER_THREADS_PER_KIND)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+    assert result.stdout.strip() == "ok", result.stdout + result.stderr
+
+
+_MODELS_BUILT_AT_ONCE = 4
+
+
+def test_concurrent_encoder_loads_build_one_model_at_a_time(tiny_snapshot: Path) -> None:
+    """``from_pretrained`` swaps torch globals while it builds a model (``transformers`` 4.x), so two
+    threads building at once leave meta tensors behind ('Cannot copy out of meta tensor'). Every
+    device serializes the build; ``accelerator_lock`` alone does that for ``mps`` only."""
+    from transformers import AutoModel
+
+    meter = tiny_encoder.OverlapMeter()
+    with patch.object(AutoModel, "from_pretrained", new=meter):
+        tiny_encoder.run_concurrently(
+            lambda: load_encoder(tiny_encoder.tiny_spec(), tiny_snapshot, "cpu"), _MODELS_BUILT_AT_ONCE
+        )
+
+    assert meter.calls == _MODELS_BUILT_AT_ONCE
+    assert meter.peak == 1

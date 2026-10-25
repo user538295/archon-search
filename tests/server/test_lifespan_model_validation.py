@@ -49,10 +49,9 @@ def test_model_validation_state_none_before_task(tmp_path: Path) -> None:
     with patch(
         "archon_search.server.app.validate_models_async",
         side_effect=_blocking_validate,
-    ):
-        with TestClient(app):
-            assert app.state.model_validation is None
-            release.set()
+    ), TestClient(app):
+        assert app.state.model_validation is None
+        release.set()
 
 
 def test_background_task_exception_sets_failure_result(tmp_path: Path) -> None:
@@ -68,17 +67,16 @@ def test_background_task_exception_sets_failure_result(tmp_path: Path) -> None:
     with patch(
         "archon_search.server.app.validate_models_async",
         side_effect=_boom,
-    ):
-        with TestClient(app):
-            wait_for_models_check_to_settle(app)
-            assert app.state.model_validation is not None
-            assert app.state.model_validation.embedder_ok is False
-            assert app.state.model_validation.reranker_ok is False
-            assert app.state.model_validation.validated_at is not None
-            assert any(
-                "failed unexpectedly" in w
-                for w in app.state.model_validation.provider_warnings
-            )
+    ), TestClient(app):
+        wait_for_models_check_to_settle(app)
+        assert app.state.model_validation is not None
+        assert app.state.model_validation.embedder_ok is False
+        assert app.state.model_validation.reranker_ok is False
+        assert app.state.model_validation.validated_at is not None
+        assert any(
+            "failed unexpectedly" in w
+            for w in app.state.model_validation.provider_warnings
+        )
 
 
 @pytest.mark.integration
@@ -106,15 +104,14 @@ def test_startup_warning_logged_llama_cpp_unreachable(
     mock_cls = MagicMock(return_value=mock_client)
 
     with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
-         caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
-        with TestClient(app) as client:
-            # /ready gates on a pending checks.models, which lasts until both the
-            # background warm-up and the background validation finish (S631); the
-            # lifespan awaits neither — wait both out, or this asserts on a race
-            # rather than on the probe failure.
-            wait_for_models_check_to_settle(app)
-            # Boot completed normally — /ready is reachable despite the probe failure.
-            assert client.get("/ready").status_code == 200
+         caplog.at_level(logging.WARNING, logger="archon_search.model_validation"), TestClient(app) as client:
+        # /ready gates on a pending checks.models, which lasts until both the
+        # background warm-up and the background validation finish (S631); the
+        # lifespan awaits neither — wait both out, or this asserts on a race
+        # rather than on the probe failure.
+        wait_for_models_check_to_settle(app)
+        # Boot completed normally — /ready is reachable despite the probe failure.
+        assert client.get("/ready").status_code == 200
 
     assert app.state.model_validation is not None
     assert app.state.model_validation.llama_cpp_ok is False

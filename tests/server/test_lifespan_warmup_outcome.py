@@ -248,8 +248,9 @@ def test_warmup_with_an_unloadable_model_reports_failed_naming_it_once(
     assert _warmup_failures(caplog) == [f"{_FAILED_PREFIX}{unloadable_model}"]
     assert not any(message.startswith("model warm-up complete") for message in _warmup_infos(caplog))
     assert run.app.state.warmup_result == WarmupResult.FAILED
-    assert run.ready_status == 200
-    assert run.ready["ready"] is True
+    # The default embedder / configured reranker is the one that did not load: not servable.
+    assert run.ready_status == 503
+    assert run.ready["ready"] is False
     assert run.ready["checks"]["models"] == "fail"
 
 
@@ -316,7 +317,7 @@ def test_warmup_with_several_failed_models_names_each_once_in_a_fixed_order(
         collections=[_collection("b", _COLLECTION_MODEL_B), _collection("a", _COLLECTION_MODEL_A)],
     )
 
-    expected = ", ".join([_UNLOADABLE_EMBEDDER, _COLLECTION_MODEL_A, _COLLECTION_MODEL_B, _UNLOADABLE_RERANKER])
+    expected = f"{_UNLOADABLE_EMBEDDER}, {_COLLECTION_MODEL_A}, {_COLLECTION_MODEL_B}, {_UNLOADABLE_RERANKER}"
     assert _warmup_failures(caplog) == [f"{_FAILED_PREFIX}{expected}"]
     assert run.app.state.warmup_result == WarmupResult.FAILED
 
@@ -351,15 +352,19 @@ def test_warmup_timeout_names_the_models_still_cold(
 
     ``asyncio.timeout`` raises a bare ``TimeoutError`` whose ``str()`` is empty, so the
     old generic handler logged ``model warm-up failed: `` with nothing after it. The
-    pipeline warm-up finishes first, so only the embedder preload never warmed.
+    pipeline warm-up finishes first (and warms the default model the cache is seeded
+    with), so only the collection model the preload never reached is still cold.
     """
+    config.eager_load_embedders = True
     _install_preload_that_runs_out_of_budget(monkeypatch, load_first=False)
 
-    run = run_warmup(config)
+    run = run_warmup(config, collections=[_collection("a", _COLLECTION_MODEL_A)])
 
     assert _warmup_failures(caplog) == [
-        f"{_FAILED_PREFIX}timed out after {warmup_module._WARMUP_TASK_TIMEOUT_SECONDS}s; "
-        f"still cold: {config.embedding_model}"
+        (
+            f"{_FAILED_PREFIX}timed out after {warmup_module._WARMUP_TASK_TIMEOUT_SECONDS}s; "
+            f"still cold: {_COLLECTION_MODEL_A}"
+        )
     ]
     assert run.app.state.warmup_result == WarmupResult.FAILED
     assert run.ready["checks"]["models"] == "fail"
@@ -392,18 +397,20 @@ def test_warmup_timeout_names_a_model_the_lru_evicted_after_it_warmed(
     """The timeout's cold probe reads the cache, so a model that warmed and was then
     LRU-evicted is reported as still cold — the first search pays its build again.
 
-    ``preload`` warms both models concurrently into a one-slot cache, so which one is
-    evicted is a race; exactly one of them must be named.
+    ``preload`` warms the two per-collection models concurrently into a one-slot cache (the default model is pinned
+    and does not compete), so which one is evicted is a race; exactly one of them must be named.
     """
     config.eager_load_embedders = True
     config.embedder_cache_size = 1
     _install_preload_that_runs_out_of_budget(monkeypatch, load_first=True)
 
-    run = run_warmup(config, collections=[_collection("a", _COLLECTION_MODEL_A)])
+    run = run_warmup(
+        config, collections=[_collection("a", _COLLECTION_MODEL_A), _collection("b", _COLLECTION_MODEL_B)]
+    )
 
     [failure] = _warmup_failures(caplog)
     assert failure.startswith(f"{_FAILED_PREFIX}timed out after {warmup_module._WARMUP_TASK_TIMEOUT_SECONDS}s; ")
     still_cold = failure.split("; still cold: ", 1)[1].split(", ")
     assert len(still_cold) == 1
-    assert still_cold[0] in {config.embedding_model, _COLLECTION_MODEL_A}
+    assert still_cold[0] in {_COLLECTION_MODEL_A, _COLLECTION_MODEL_B}
     assert run.app.state.warmup_result == WarmupResult.FAILED
