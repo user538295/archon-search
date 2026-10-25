@@ -34,7 +34,11 @@ from archon_search.install.extras import (
     _cuda_visible_in_subprocess,
     _torch_cuda_available,
 )
-from archon_search.install.installer import _CUDA_GUIDE_DOC, _CUDA_GUIDE_HEADING, _CUDA_GUIDE_URL
+from archon_search.install.installer import (
+    _CUDA_GUIDE_DOC,
+    _CUDA_GUIDE_HEADING,
+    _CUDA_GUIDE_URL,
+)
 from archon_search.platform.types import GpuType
 
 pytestmark = pytest.mark.xdist_group("install")
@@ -95,9 +99,8 @@ class TestInstallCudaTorch:
         build, so pip/uv would skip the reinstall and the swap would be a silent
         no-op. The command must carry the local tag, whatever build is installed.
         """
-        with patch(_VERSION, side_effect=_versions(installed)):
-            with patch(_RUN, return_value=MagicMock(returncode=0)) as mock_run:
-                _install_cuda_torch()
+        with patch(_VERSION, side_effect=_versions(installed)), patch(_RUN, return_value=MagicMock(returncode=0)) as mock_run:
+            _install_cuda_torch()
         assert mock_run.call_count == 1
         cmd = mock_run.call_args_list[0][0][0]
         assert expected_torch in cmd
@@ -112,9 +115,11 @@ class TestInstallCudaTorch:
 
     def test_uv_absent_falls_back_to_pip_with_local_pin(self):
         """FileNotFoundError from uv triggers a pip fallback keeping the local pin."""
-        with patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})):
-            with patch(_RUN, side_effect=[FileNotFoundError("uv not found"), MagicMock(returncode=0)]) as mock_run:
-                _install_cuda_torch()
+        with (
+            patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})),
+            patch(_RUN, side_effect=[FileNotFoundError("uv not found"), MagicMock(returncode=0)]) as mock_run,
+        ):
+            _install_cuda_torch()
         assert mock_run.call_count == 2
         pip_cmd = mock_run.call_args_list[1][0][0]
         assert pip_cmd[1:4] == ["-m", "pip", "install"]
@@ -125,18 +130,22 @@ class TestInstallCudaTorch:
     def test_uv_permission_error_falls_back_to_pip(self):
         """A non-CalledProcessError OSError from uv (e.g. uv not executable /
         wrong-arch) must still fall back to pip, not escape the best-effort guard."""
-        with patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})):
-            with patch(_RUN, side_effect=[PermissionError("uv not executable"), MagicMock(returncode=0)]) as mock_run:
-                _install_cuda_torch()  # must NOT raise
+        with (
+            patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})),
+            patch(_RUN, side_effect=[PermissionError("uv not executable"), MagicMock(returncode=0)]) as mock_run,
+        ):
+            _install_cuda_torch()  # must NOT raise
         assert mock_run.call_count == 2
         assert mock_run.call_args_list[1][0][0][1:4] == ["-m", "pip", "install"]
 
     def test_uv_permission_error_then_pip_fails_keeps_installed_build(self, capsys):
         """uv OSError + pip failure is still best-effort: warn, do NOT raise."""
         pip_err = subprocess.CalledProcessError(1, "pip", stderr=b"no wheel")
-        with patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})):
-            with patch(_RUN, side_effect=[PermissionError("uv not executable"), pip_err]):
-                _install_cuda_torch()  # must NOT raise
+        with (
+            patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})),
+            patch(_RUN, side_effect=[PermissionError("uv not executable"), pip_err]),
+        ):
+            _install_cuda_torch()  # must NOT raise
         assert "keeping the installed build" in capsys.readouterr().err
 
     def test_missing_torch_metadata_warns_and_skips(self, capsys):
@@ -151,9 +160,8 @@ class TestInstallCudaTorch:
         """Both uv and pip failing is best-effort: warn to stderr, do NOT raise."""
         uv_err = subprocess.CalledProcessError(1, "uv", stderr=b"uv error")
         pip_err = subprocess.CalledProcessError(1, "pip", stderr=b"cuda wheel not found")
-        with patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})):
-            with patch(_RUN, side_effect=[uv_err, pip_err]):
-                _install_cuda_torch()  # must NOT raise
+        with patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})), patch(_RUN, side_effect=[uv_err, pip_err]):
+            _install_cuda_torch()  # must NOT raise
         err = capsys.readouterr().err
         assert "CUDA torch install failed; keeping the installed build" in err
         assert "cuda wheel not found" in err  # the cause is surfaced

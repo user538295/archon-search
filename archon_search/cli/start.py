@@ -6,7 +6,11 @@ from pathlib import Path
 
 import click
 
-from archon_search.cli._helpers import _CONTAINER_MSG, _exit_on_config_error, _get_service
+from archon_search.cli._helpers import (
+    _CONTAINER_MSG,
+    _exit_on_config_error,
+    _get_service,
+)
 from archon_search.config import load_config
 
 
@@ -32,6 +36,6 @@ def start(config_path: Path | None) -> None:
         else:
             click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — CLI boundary: any service failure is reported as one line, exit 1
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)

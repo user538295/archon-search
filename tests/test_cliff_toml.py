@@ -95,6 +95,7 @@ def _cliff_output(tmpdir: Path) -> str:
     result = subprocess.run(
         ["git-cliff", "--config", str(CLIFF_TOML), "--unreleased", "--tag", "26.5.1"],
         cwd=tmpdir, capture_output=True, text=True,
+        check=False,
     )
     return result.stdout
 

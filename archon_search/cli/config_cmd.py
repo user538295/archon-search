@@ -6,8 +6,16 @@ from pathlib import Path
 import click
 import tomlkit
 
+from archon_search._durable_io import atomic_write_bytes
 from archon_search.cli._helpers import _exit_on_config_error
-from archon_search.config import SearchConfig, get_default_config_path, warn_if_legacy_config_ignored
+from archon_search.config import (
+    ConfigError,
+    SearchConfig,
+    get_default_config_path,
+    removed_keys_in,
+    validate_document,
+    warn_if_legacy_config_ignored,
+)
 
 
 def _default_toml() -> str:
@@ -24,6 +32,7 @@ def _default_toml() -> str:
     database.add("db_path", cfg.db_path)
     database.add("embedding_model", cfg.embedding_model)
     database.add("reranker_model", cfg.reranker_model)
+    database.add("device", cfg.device)
     database.add("chunk_size", cfg.chunk_size)
     database.add("auto_reindex_on_chunk_size_change", cfg.auto_reindex_on_chunk_size_change)
     database.add("eager_load_embedders", cfg.eager_load_embedders)
@@ -74,7 +83,7 @@ def _effective_toml(path: Path) -> str:
     The wizard deliberately omits unanswered keys from the written file, so a
     raw echo would show an incomplete config.
     """
-    doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.exists() else tomlkit.document()
+    doc = _load_doc(path)
     defaults = tomlkit.parse(_default_toml())
 
     for section, table in defaults.items():
@@ -88,6 +97,29 @@ def _effective_toml(path: Path) -> str:
     return tomlkit.dumps(doc)
 
 
+def _load_doc(path: Path) -> tomlkit.TOMLDocument:
+    """Return the parsed file, or an empty document when it does not exist.
+
+    Raises:
+        ConfigError: ``Failed to parse <path>: <error with line and column>`` (the loader's own text).
+    """
+    if not path.exists():
+        return tomlkit.document()
+    try:
+        return tomlkit.parse(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ConfigError(f"Failed to parse {path}: {exc}") from exc
+
+
+def _removed_keys_warning(removed: list[str]) -> str:
+    """Return the one-line stderr warning naming the removed keys a file still holds and their replacement."""
+    return (
+        f"Warning: removed keys {', '.join(removed)} are still in the file; they were replaced by "
+        "[database].device / [graph].device (auto|cpu|mps|cuda) and stop serve/start from loading it; "
+        "delete them, see BREAKING.md"
+    )
+
+
 @click.group()
 def config() -> None:
     """Show or edit configuration."""
@@ -98,7 +130,12 @@ def config() -> None:
 def show(config_path: Path | None) -> None:
     """Show current configuration."""
     path = _resolve_config_path(config_path)
-    click.echo(_effective_toml(path))
+    with _exit_on_config_error():
+        text = _effective_toml(path)
+    click.echo(text)
+    removed = removed_keys_in(tomlkit.parse(text))
+    if removed:
+        click.echo(_removed_keys_warning(removed), err=True)
 
 
 @config.command("get")
@@ -107,7 +144,8 @@ def show(config_path: Path | None) -> None:
 def get(key: str, config_path: Path | None) -> None:
     """Get a configuration value by dotted key (e.g. server.port)."""
     path = _resolve_config_path(config_path)
-    doc = tomlkit.parse(_effective_toml(path))
+    with _exit_on_config_error():
+        doc = tomlkit.parse(_effective_toml(path))
 
     parts = key.split(".")
     if len(parts) != 2:
@@ -130,11 +168,8 @@ def get(key: str, config_path: Path | None) -> None:
 def set_cmd(key: str, value: str, config_path: Path | None) -> None:
     """Set a configuration value by dotted key (e.g. server.port 9000)."""
     path = _resolve_config_path(config_path)
-
-    if path.exists():
-        doc = tomlkit.parse(path.read_text(encoding="utf-8"))
-    else:
-        doc = tomlkit.document()
+    with _exit_on_config_error():
+        doc = _load_doc(path)
 
     parts = key.split(".")
     if len(parts) != 2:
@@ -163,6 +198,9 @@ def set_cmd(key: str, value: str, config_path: Path | None) -> None:
 
     doc[section][field] = coerced  # type: ignore[index]
 
+    with _exit_on_config_error():
+        validate_document(doc, setting=(section, field))
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")  # noqa: durable-write
+    atomic_write_bytes(path, tomlkit.dumps(doc).encode("utf-8"))
     click.echo(f"Set {key} = {coerced}")

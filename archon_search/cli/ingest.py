@@ -6,7 +6,12 @@ from pathlib import Path
 import click
 import httpx
 
-from archon_search.cli._helpers import _CONNECT_FAIL, _LOCK_WAITING_REQUEST_TIMEOUT_S, _poll_job, _server_connect_fail_msg
+from archon_search.cli._helpers import (
+    _CONNECT_FAIL,
+    _LOCK_WAITING_REQUEST_TIMEOUT_S,
+    _poll_job,
+    _server_connect_fail_msg,
+)
 from archon_search.cli.collection import _DEFAULT_API_URL, _resolve_api_key
 from archon_search.sync import path_to_collection_name
 

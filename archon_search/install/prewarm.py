@@ -33,8 +33,12 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Disk space guard (Task C0-2.2)
+# Disk space guard
 # ---------------------------------------------------------------------------
+
+# The disk guard requires this multiple of the planned download to be free.
+_DISK_HEADROOM_FACTOR = 2
+
 
 def _planned_total_bytes(profile: InstallProfile, features: WizardFeatures | None = None) -> int:
     """Return the planned-download byte total for *profile* plus every selected extra.
@@ -70,7 +74,7 @@ def _check_disk_space(
 
     usage = shutil.disk_usage(check_path)
     # No ceil(): the summed byte total is already an integer.
-    required_free_bytes = _planned_total_bytes(profile, features) * 2
+    required_free_bytes = _planned_total_bytes(profile, features) * _DISK_HEADROOM_FACTOR
     if usage.free < required_free_bytes:
         raise InstallError(
             f"Insufficient disk space. This install requires"
@@ -80,16 +84,24 @@ def _check_disk_space(
 
 
 # ---------------------------------------------------------------------------
-# Model pre-warm: download, then load (Task C0-2.3, S671)
+# Model pre-warm: download, then load
 # ---------------------------------------------------------------------------
+
+# Pre-warm deadline: the download size at an assumed throughput, clamped to this range.
+_PREWARM_TIMEOUT_MAX_SECONDS = 1800
+_PREWARM_TIMEOUT_MIN_SECONDS = 300
+_PREWARM_ASSUMED_BYTES_PER_SECOND = 100_000
 
 # Fixed, trivial probe input: one inference proves the model runs, not just loads.
 _PROBE_TEXT = "archon search pre-warm probe"
 
 
 def _prewarm_timeout(profile: InstallProfile) -> int:
-    estimated_bytes = profile.download_mb * 1_000_000
-    return min(1800, max(300, estimated_bytes // 100_000))
+    estimated_bytes = profile.download_mb * BYTES_PER_MB
+    return min(
+        _PREWARM_TIMEOUT_MAX_SECONDS,
+        max(_PREWARM_TIMEOUT_MIN_SECONDS, estimated_bytes // _PREWARM_ASSUMED_BYTES_PER_SECOND),
+    )
 
 
 class _PrewarmFailure(Exception):
@@ -138,18 +150,18 @@ def _prewarm_models(
     memory is one model.
 
     Failure policy: an embedder failure raises InstallError (the service cannot embed
-    without it). A reranker failure only warns (S202). The graph NER model is
+    without it). A reranker failure only warns. The graph NER model is
     non-fatal too (``_prewarm_graph_model``).
 
     *timeout* (seconds; the caller passes ``_prewarm_timeout(profile)``) sets a
     deadline that is checked between models: it cannot interrupt a running download
     or load, but once it has passed, the models not yet started are skipped.
     Hub download progress is printed to stderr — not suppressed. When
-    ``install_graph_extra`` is set, the graph NER model (Task BE-8) is pre-warmed
+    ``install_graph_extra`` is set, the graph NER model is pre-warmed
     inside the same deadline as the embedder/reranker, placed on the device
-    ``graph_device`` resolves to (Task FE-5).
+    ``graph_device`` resolves to.
 
-    Returns the graph NER pre-warm's resolved torch device (Task BE-14's stage-2
+    Returns the graph NER pre-warm's resolved torch device (the install's stage-2
     device probe rides this), or ``None`` if the graph pre-warm did not run (not
     requested, or skipped after the deadline) or ran and failed.
     """
@@ -177,7 +189,7 @@ def _prewarm_models(
                 ),
             )
         except _PrewarmFailure as exc:
-            # Non-fatal (S202): a model load error or transient download hiccup
+            # Non-fatal: a model load error or transient download hiccup
             # must not abort the wizard; the service still searches. str(exc), not
             # exc: a LogRecord holding the exception would keep the failed model's
             # frames — and the model — alive.
@@ -215,7 +227,7 @@ def _prewarm_models(
 
 
 # ---------------------------------------------------------------------------
-# Graph NER model pre-warm (Task BE-8 — optional, non-fatal)
+# Graph NER model pre-warm (optional, non-fatal)
 # ---------------------------------------------------------------------------
 
 def _prewarm_graph_model(device: str = CPU_DEVICE) -> str | None:
@@ -228,7 +240,7 @@ def _prewarm_graph_model(device: str = CPU_DEVICE) -> str | None:
     use share one on-disk cache (get_graph_models_dir()) rather than two.
 
     Returns the resolved torch device string ("cpu"/"cuda"/"mps") read off the
-    loaded model on success (Task BE-14's stage-2 device probe rides this
+    loaded model on success (the stage-2 device probe rides this
     pre-warm), or ``None`` on any failure.
     """
     try:
@@ -238,7 +250,7 @@ def _prewarm_graph_model(device: str = CPU_DEVICE) -> str | None:
         # placement, so the device stage 2 probes is the device ingest gets.
         model = model.to(resolve_device(device))
         return model.device.type
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — gliner/huggingface may fail in arbitrary ways; pre-warm is non-fatal
         # Non-fatal: the [graph] extra may not be installed, or this may be a
         # transient download hiccup — either must not abort the wizard.
         logger.warning(
@@ -250,7 +262,7 @@ def _prewarm_graph_model(device: str = CPU_DEVICE) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Reinstall guard (Task C0-2.4)
+# Reinstall guard
 # ---------------------------------------------------------------------------
 
 def _check_reinstall_guard(
@@ -277,6 +289,98 @@ def _check_reinstall_guard(
     )
 
 
+def _back_up_config(config_path: Path, bak_path: Path, dry_run: bool) -> bool:
+    """Copy *config_path* to *bak_path*; return whether a backup now exists to restore from."""
+    if dry_run:
+        if config_path.exists():
+            print(f"[dry-run] Would create backup at {bak_path}.")
+        return False
+    try:
+        shutil.copy2(config_path, bak_path)
+    except FileNotFoundError:
+        return False  # no config to preserve (a fresh install, or removed since the caller looked)
+    return True
+
+
+def _restore_config(config_path: Path, bak_path: Path, has_backup: bool) -> None:
+    if has_backup:
+        shutil.copy2(bak_path, config_path)
+
+
+def _confirm_deletion(config_path: Path, bak_path: Path, has_backup: bool) -> None:
+    """Ask the operator to type ``yes``; otherwise restore the config and exit with status 1."""
+    try:
+        response = input("WARNING: This will permanently delete all indexed data. Type 'yes' to confirm: ")
+    except EOFError:
+        response = ""
+    if response != "yes":
+        _restore_config(config_path, bak_path, has_backup)
+        print("Aborted.")
+        raise SystemExit(1)
+
+
+def _stop_service(config_path: Path, bak_path: Path, has_backup: bool, dry_run: bool) -> None:
+    """Stop the running service so it releases the database; restore the config if that fails.
+
+    A service that is not running needs no stop. A running one that cannot be stopped aborts
+    the reinstall before anything is deleted.
+    """
+    if dry_run:
+        print("[dry-run] Would stop service.")
+        return
+    try:
+        service = get_search_service()
+        if service.status().running:
+            service.stop()
+    except Exception:
+        _restore_config(config_path, bak_path, has_backup)
+        raise
+
+
+def _report_preserved_config(phase: str, bak_path: Path, cause: Exception) -> None:
+    print(
+        f"Install failed {phase}. Your previous config has been preserved at "
+        f"{bak_path} for reference. "
+        "Run archon-search install to create a fresh install from scratch. "
+        f"Cause: {cause}",
+        file=sys.stderr,
+    )
+
+
+def _delete_database(db_path: Path, bak_path: Path, dry_run: bool) -> None:
+    if dry_run:
+        print(f"[dry-run] Would delete database at {db_path}.")
+        return
+    try:
+        shutil.rmtree(db_path)
+    except FileNotFoundError:
+        pass  # nothing to delete: no index yet, or removed since the caller looked
+    except OSError as exc:
+        _report_preserved_config("during database deletion", bak_path, exc)
+        raise SystemExit(1) from exc
+
+
+def _write_new_profile_config(
+    config_path: Path,
+    bak_path: Path,
+    profile: InstallProfile,
+    profile_name: str,
+    multilingual: bool,
+    features: WizardFeatures | None,
+    dry_run: bool,
+) -> None:
+    if dry_run:
+        print(f"[dry-run] Would write profile config for {profile_name}.")
+        return
+    stale_tmp_path = config_path.with_suffix(".toml.tmp")
+    stale_tmp_path.unlink(missing_ok=True)
+    try:
+        _write_profile_config(config_path, profile, profile_name, multilingual, features=features, clear_collections=True)
+    except Exception as exc:  # any config-write failure is reported and mapped to SystemExit(1)
+        _report_preserved_config("after database deletion", bak_path, exc)
+        raise SystemExit(1) from exc
+
+
 def _execute_force_reinstall(
     config_path: Path,
     db_path: Path,
@@ -287,71 +391,12 @@ def _execute_force_reinstall(
     dry_run: bool = False,
     features: WizardFeatures | None = None,
 ) -> None:
-    """Execute the force-delete-db rollback sequence."""
-    # Step 1: Backup config
+    """Execute the force-delete-db rollback sequence: back up the config, confirm, stop the
+    service, delete the database, write the new profile config."""
     bak_path = config_path.with_suffix(".toml.bak")
-    has_backup = False
-    if config_path.exists():
-        if dry_run:
-            print(f"[dry-run] Would create backup at {bak_path}.")
-        else:
-            shutil.copy2(config_path, bak_path)
-            has_backup = True
-
-    # Step 2: Confirmation gate
+    has_backup = _back_up_config(config_path, bak_path, dry_run)
     if not non_interactive:
-        try:
-            response = input("WARNING: This will permanently delete all indexed data. Type 'yes' to confirm: ")
-        except EOFError:
-            response = ""
-        if response != "yes":
-            if has_backup:
-                shutil.copy2(bak_path, config_path)
-            print("Aborted.")
-            raise SystemExit(1)
-
-    # Step 3: Stop service
-    if dry_run:
-        print("[dry-run] Would stop service.")
-    else:
-        try:
-            get_search_service().stop()
-        except RuntimeError:
-            pass  # treat service-not-running as no-op
-        except Exception:
-            if has_backup:
-                shutil.copy2(bak_path, config_path)
-            raise
-
-    # Step 4: Delete DB directory
-    if dry_run:
-        print(f"[dry-run] Would delete database at {db_path}.")
-    else:
-        if db_path.exists():
-            try:
-                shutil.rmtree(db_path)
-            except Exception:
-                print(
-                    f"Install failed during database deletion. Your previous config has been preserved at "
-                    f"{bak_path} for reference. "
-                    "Run archon-search install to create a fresh install from scratch.",
-                    file=sys.stderr,
-                )
-                raise SystemExit(1)
-
-    # Step 5: Write new profile config
-    if dry_run:
-        print(f"[dry-run] Would write profile config for {profile_name}.")
-    else:
-        tmp = config_path.with_suffix(".toml.tmp")
-        tmp.unlink(missing_ok=True)
-        try:
-            _write_profile_config(config_path, profile, profile_name, multilingual, features=features, clear_collections=True)
-        except Exception:
-            print(
-                f"Install failed after database deletion. Your previous config has been preserved at "
-                f"{bak_path} for reference. "
-                "Run archon-search install to create a fresh install from scratch.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
+        _confirm_deletion(config_path, bak_path, has_backup)
+    _stop_service(config_path, bak_path, has_backup, dry_run)
+    _delete_database(db_path, bak_path, dry_run)
+    _write_new_profile_config(config_path, bak_path, profile, profile_name, multilingual, features, dry_run)

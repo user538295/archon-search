@@ -522,9 +522,10 @@ def test_c11_22_routing_confidence_threshold_above_one_raises(tmp_path: Path) ->
 def test_config_namespaces_populated(tmp_path: Path) -> None:
     """TOML with [namespaces] section → config.namespaces populated."""
     toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text('[namespaces]\nkeyA = "tenantA"\n', encoding="utf-8")
+    token = "A" * 40
+    toml_file.write_text(f'[namespaces]\n{token} = "tenantA"\n', encoding="utf-8")
     config = load_config(path=toml_file)
-    assert config.namespaces == {"keyA": "tenantA"}
+    assert config.namespaces == {token: "tenantA"}
 
 
 def test_config_namespaces_absent(tmp_path: Path) -> None:
@@ -546,8 +547,9 @@ def test_config_namespaces_empty_section(tmp_path: Path) -> None:
 def test_save_config_does_not_destroy_existing_namespaces(tmp_path: Path) -> None:
     """save_config() round-trip preserves [namespaces] entries unchanged."""
     toml_file = tmp_path / "archon-search.toml"
+    token_a, token_b = "A" * 40, "B" * 40
     toml_file.write_text(
-        '[namespaces]\nkeyA = "tenantA"\nkeyB = "tenantB"\n\n[collections]\ncollections = []\npinned_collections = []\n',
+        f'[namespaces]\n{token_a} = "tenantA"\n{token_b} = "tenantB"\n\n[collections]\ncollections = []\npinned_collections = []\n',
         encoding="utf-8",
     )
     config = load_config(path=toml_file)
@@ -555,7 +557,7 @@ def test_save_config_does_not_destroy_existing_namespaces(tmp_path: Path) -> Non
     save_config(config, toml_file)
 
     reloaded = load_config(path=toml_file)
-    assert reloaded.namespaces == {"keyA": "tenantA", "keyB": "tenantB"}
+    assert reloaded.namespaces == {token_a: "tenantA", token_b: "tenantB"}
 
 
 def test_config_namespaces_non_string_value_raises(tmp_path: Path) -> None:
@@ -1122,6 +1124,7 @@ def test_logging_log_file_empty_string_warning_reaches_stderr(tmp_path: Path) ->
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert "log_file" in result.stderr and "file logging is disabled" in result.stderr, (
@@ -1138,9 +1141,9 @@ def test_logging_toml_key_format_maps_to_log_format_field(tmp_path: Path) -> Non
 
 
 def test_default_toml_logging_section_includes_all_keys() -> None:
-    from archon_search.cli.config_cmd import _default_toml
-
     import tomlkit as _tomlkit
+
+    from archon_search.cli.config_cmd import _default_toml
 
     doc = _tomlkit.parse(_default_toml())
     log_section = doc.get("logging", {})
@@ -1583,6 +1586,8 @@ _FLOAT_KEYS = [
     ("routing", "routing_description_weight", "routing_description_weight"),
     ("hyde", "timeout_seconds", "[hyde].timeout_seconds"),
     ("rag_fusion", "timeout_seconds", "[rag_fusion].timeout_seconds"),
+    ("ingest", "parse_timeout_seconds", "[ingest].parse_timeout_seconds"),
+    ("ingest", "parse_timeout_seconds_per_mb", "[ingest].parse_timeout_seconds_per_mb"),
     ("graph", "extraction_timeout_seconds", "[graph].extraction_timeout_seconds"),
     ("graph", "leiden_resolution", "[graph].leiden_resolution"),
     ("graph", "ppr_damping", "[graph].ppr_damping"),
@@ -1829,10 +1834,13 @@ def test_warn_gc_cpu_priority_wired_in_app_lifespan() -> None:
     # Assert import of warn_gc_cpu_priority
     imported = False
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "archon_search.config":
-            if any(alias.name == "warn_gc_cpu_priority" for alias in node.names):
-                imported = True
-                break
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module == "archon_search.config"
+            and any(alias.name == "warn_gc_cpu_priority" for alias in node.names)
+        ):
+            imported = True
+            break
     assert imported, "app.py must import warn_gc_cpu_priority from archon_search.config"
 
     # Assert call to warn_gc_cpu_priority
@@ -1913,7 +1921,12 @@ def test_startup_warns_suppressed_when_feature_inactive(
     import logging
     import sys
 
-    from archon_search.config import GraphConfig, MaintenanceConfig, SearchConfig, warn_gc_cpu_priority
+    from archon_search.config import (
+        GraphConfig,
+        MaintenanceConfig,
+        SearchConfig,
+        warn_gc_cpu_priority,
+    )
 
     monkeypatch.setattr(sys, "platform", "darwin")
 

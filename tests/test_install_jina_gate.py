@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+from archon_search.install import _prompt_jina_license, _requires_jina_license
 from archon_search.profiles import JINA_RERANKER_MODEL, get_profile
-from archon_search.install import _requires_jina_license, _prompt_jina_license
-
 
 # ---------------------------------------------------------------------------
 # _requires_jina_license

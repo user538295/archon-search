@@ -3,17 +3,17 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from _cli_server_stub import server_reported_stopped
 from click.testing import CliRunner
 
-from _cli_server_stub import server_reported_stopped
 from archon_search.cli.collection import collection
 from archon_search.store import _FIXED_WIDTH_TS_RE
-
 
 # ---------------------------------------------------------------------------
 # 1. Pure regex contract tests (no I/O)
@@ -22,7 +22,8 @@ from archon_search.store import _FIXED_WIDTH_TS_RE
 
 def test_legacy_format_regex_rejects_known_legacy_shapes() -> None:
     """The strict fixed-width regex must reject non-canonical forms."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from archon_search._types import normalize_iso_utc
 
     rejects = [
@@ -40,7 +41,7 @@ def test_legacy_format_regex_rejects_known_legacy_shapes() -> None:
         assert _FIXED_WIDTH_TS_RE.match(s), f"Expected regex to accept: {s!r}"
 
     # normalize_iso_utc always produces output accepted by the regex
-    normalized = normalize_iso_utc(datetime.now(timezone.utc))
+    normalized = normalize_iso_utc(datetime.now(UTC))
     assert _FIXED_WIDTH_TS_RE.match(normalized), (
         f"normalize_iso_utc output {normalized!r} not accepted by _FIXED_WIDTH_TS_RE"
     )
@@ -111,7 +112,7 @@ def _doc_id() -> str:
 
 
 def _chunk_record(source_path: str, **overrides):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from archon_search._types import ChunkRecord
 
@@ -122,7 +123,7 @@ def _chunk_record(source_path: str, **overrides):
         text=overrides.pop("text", "timestamp normalization test"),
         vector=overrides.pop("vector", [0.0] * _DIM),
         source_path=source_path,
-        indexed_at=overrides.pop("indexed_at", datetime.now(timezone.utc).isoformat()),
+        indexed_at=overrides.pop("indexed_at", datetime.now(UTC).isoformat()),
         ingested_by=overrides.pop("ingested_by", "cli"),
         **overrides,
     )
@@ -278,9 +279,8 @@ def test_migrate_cli_no_flags_defaults_to_dry_run() -> None:
     ]
     get_resp = _mock_http_response(200, _pending_response("mycol", specs))
 
-    with patch("archon_search.cli.collection.httpx.get", return_value=get_resp) as mock_get:
-        with patch("archon_search.cli.collection.httpx.post") as mock_post:
-            result = runner.invoke(collection, ["migrate", "mycol", "--api-key", "test-key"])
+    with patch("archon_search.cli.collection.httpx.get", return_value=get_resp) as mock_get, patch("archon_search.cli.collection.httpx.post") as mock_post:
+        result = runner.invoke(collection, ["migrate", "mycol", "--api-key", "test-key"])
 
     assert result.exit_code == 0, result.output
     assert "migrate_acl" in result.output
@@ -789,9 +789,8 @@ def test_resolve_api_key_arg_priority() -> None:
     """Explicit --api-key arg wins even when ARCHON_SEARCH_API_KEY env var is set."""
     from archon_search.cli.collection import _resolve_api_key
 
-    with patch.dict("os.environ", {"ARCHON_SEARCH_API_KEY": "env-key"}):
-        with patch("archon_search.cli.collection.load_key") as mock_load:
-            result = _resolve_api_key("explicit-key")
+    with patch.dict("os.environ", {"ARCHON_SEARCH_API_KEY": "env-key"}), patch("archon_search.cli.collection.load_key") as mock_load:
+        result = _resolve_api_key("explicit-key")
 
     assert result == "explicit-key"
     mock_load.assert_not_called()

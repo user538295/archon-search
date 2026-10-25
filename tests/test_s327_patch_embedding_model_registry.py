@@ -26,7 +26,6 @@ from archon_search.jobs.store import JobStore
 from archon_search.model_validation import validate_embedding_model
 from archon_search.server.app import create_app
 from archon_search.sync import path_to_collection_name
-
 from tests._collection_lock_stub import with_locked_collection_meta
 
 ACTIVE_MODEL = "BAAI/bge-small-en-v1.5"

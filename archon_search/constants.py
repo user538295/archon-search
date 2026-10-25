@@ -20,6 +20,12 @@ INGESTED_BY_VALUES: Final[tuple[str, ...]] = ("cli", "http", "watcher", "reindex
 # from this value (rounded up to integer seconds per RFC 7231).
 INGEST_LOCK_TIMEOUT_S: Final[float] = 30.0
 
+# ``[maintenance].version_retention_hours`` default: LanceDB keeps each superseded table version
+# (manifest, transaction and data files) until it is older than this. Long enough that a reader
+# still on an old version, or an operator rolling a table back, is never cut off; short enough that
+# an ingest-heavy server's disk use stays bounded. LanceDB's own default is 7 days.
+DEFAULT_VERSION_RETENTION_HOURS: Final[int] = 24
+
 # asyncio.wait_for timeout used by SearchStore.ping() (B2 Task 1.1).
 PING_TIMEOUT_SECONDS: Final[float] = 1.0
 
@@ -40,6 +46,83 @@ DEFAULT_NAMESPACE: str = "default"
 # ``now + timedelta(seconds=grace)`` cannot overflow ``datetime`` (year 9999, reached at
 # ~2.5e11 s from now); 100 years (365-day years) restricts no realistic grace window.
 MAX_ROTATE_GRACE_SECONDS: Final[int] = 100 * 365 * 24 * 60 * 60
+
+# Minimum length (characters) of any bearer token the server accepts from configuration: the default
+# key (``ARCHON_SEARCH_API_KEY`` / ``.search.env``) and every TOML ``[namespaces]`` token. Keys the server
+# generates are 64 hex characters (``secrets.token_hex(32)``); 32 hex characters is 128 bits of entropy.
+MIN_API_KEY_LENGTH: Final[int] = 32
+
+# Lifetime of a graph-viewer view token (``POST /graph/{collection}/view-token``). The viewer page loads
+# the token from its URL and fetches the graph with it immediately, so a minute is ample; the token is
+# scoped to one namespace and one collection and grants read access to that collection's graph only.
+GRAPH_VIEW_TOKEN_TTL_SECONDS: Final[int] = 60
+
+# Query parameter carrying a graph-viewer view token; the access log redacts its value.
+VIEW_TOKEN_QUERY_PARAM: Final[str] = "view_token"
+
+# ``[server].docs_enabled`` default: the interactive ``/docs`` and ``/redoc`` pages (Swagger UI loads its
+# JavaScript from a CDN) are not served unless the operator opts in.
+DEFAULT_DOCS_ENABLED: Final[bool] = False
+
+# Bytes in one MiB: the unit of every ``*_mb`` size limit in the configuration.
+BYTES_PER_MIB: Final[int] = 1024 * 1024
+
+# The environment variable ``archon-search`` reads as "I run inside a container". The Dockerfile sets it to ``1``;
+# it selects the container-only defaults (the bind address below, stderr logging).
+CONTAINER_ENV_VAR: Final[str] = "ARCHON_SEARCH_CONTAINER"
+
+# Bind address ``archon-search serve`` defaults to inside a container, where the published port is only reachable
+# through a non-loopback interface. Natively the default stays ``SearchConfig.host`` (loopback); the operator's
+# ``[server].host`` / ``ARCHON_SEARCH_HOST`` win in both.
+CONTAINER_BIND_HOST: Final[str] = "0.0.0.0"
+
+# ``[server].max_request_body_mb`` default: the largest request body the server buffers (inline ``documents``
+# ingest, a bulk collection payload). 32 MiB fits a batch of inline documents several times over at the default
+# per-document ``[ingest].max_file_mb`` of one file; a larger body is refused with 413 before it is read.
+DEFAULT_MAX_REQUEST_BODY_MB: Final[int] = 32
+
+# ``[server].graceful_shutdown_seconds`` default: how long uvicorn lets open requests (an in-flight ingest) finish
+# after SIGTERM before it cancels them. Shorter than the 30 s ``docker stop`` waits before SIGKILL, so the server
+# always gets to finish its own shutdown (flushing state, releasing the data directory) before the kill arrives.
+DEFAULT_GRACEFUL_SHUTDOWN_SECONDS: Final[int] = 25
+
+# ``[ingest].max_file_mb`` default. A chosen cap, not a measured limit: it bounds the memory one parse (a plain-text
+# read, a docling or markitdown conversion) can pin, so a single hostile or runaway file cannot exhaust the host.
+# 0 disables the cap, at the operator's risk.
+DEFAULT_MAX_FILE_MB: Final[int] = 100
+
+# ``[ingest].parse_timeout_seconds`` default: wall-clock bound on one docling (PDF / image) conversion. A large
+# scanned PDF with OCR takes minutes; ten times that is a wedged parse worker, which is then replaced.
+DEFAULT_PARSE_TIMEOUT_SECONDS: Final[float] = 300.0
+
+# ``[ingest].parse_timeout_seconds_per_mb`` default: seconds added to the parse bound per MiB of the file, so a big
+# scanned PDF is judged by its size and not by the flat bound a one-page file needs. Measured on an Apple-silicon
+# Mac (docling on CPU, which ``parser._pin_docling_off_mps`` forces there): 3.8 s per MiB of a 150-dpi scanned PDF
+# (2.1 s per page, 0.55 MiB per page). The default is 2.5 times that, for slower hosts and container CPUs.
+# 0 turns the scaling off: the bound is then ``parse_timeout_seconds`` alone.
+DEFAULT_PARSE_TIMEOUT_SECONDS_PER_MB: Final[float] = 10.0
+
+# ``[ingest].max_zip_entries`` / ``max_zip_uncompressed_mb`` defaults: bounds checked on the central directory of a
+# zip-based Office file (.docx, .pptx, .xlsx, .epub) before markitdown opens it, so a zip bomb is refused rather
+# than inflated. A real document has tens to low thousands of entries; 512 MiB uncompressed is above any real
+# document and still a quarter of a typical container memory limit.
+DEFAULT_MAX_ZIP_ENTRIES: Final[int] = 10_000
+DEFAULT_MAX_ZIP_UNCOMPRESSED_MB: Final[int] = 512
+
+# ``[ingest].max_discovered_files`` default: the most files one directory ingest enumerates. The walk is bounded so a
+# request for ``/`` (or a glob that matches a whole disk) cannot build an unbounded list in memory; a directory with
+# more files is refused with an explanation instead of being silently truncated.
+DEFAULT_MAX_DISCOVERED_FILES: Final[int] = 100_000
+
+# ``[ingest].max_concurrent_tasks`` default: ingest jobs (``POST /ingest``, ``POST /collections/``) running at once
+# across all collections. Each one parses, embeds and writes; more than a few at once only contend for the CPU and
+# the embedder. A further request is refused with 503 ``ingest_busy`` and a ``Retry-After``.
+DEFAULT_MAX_CONCURRENT_INGEST_TASKS: Final[int] = 4
+
+# ``[graph].max_cross_collection_collections`` default: the collection names one ``GET /graph/cross-collection``
+# (or MCP ``get_graph_cross_collection``) call may name. Equal to the default multi-collection search fan-out
+# (``max_fanout``), so graph reads are bounded like searches are.
+DEFAULT_MAX_CROSS_COLLECTION_COLLECTIONS: Final[int] = 8
 
 # Default blend weight for description-embedding cosine in hybrid routing.
 # Shared by router.py, config.py, and eval/runner.py to avoid hardcoding 0.3.

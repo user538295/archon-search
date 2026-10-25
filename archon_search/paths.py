@@ -38,13 +38,26 @@ _ENV_VAR: str = "ARCHON_SEARCH_DATA_DIR"
 #: Name of the default data directory under HOME (``~/.archon-search``) when ``_ENV_VAR`` is unset.
 DEFAULT_DATA_DIR_NAME: str = ".archon-search"
 
-#: Pinned GLiNER checkpoint (BE-8's ``ProseExtractionBackend`` loads this via
-#: ``GLiNER.from_pretrained(GRAPH_NER_MODEL_NAME, revision=GRAPH_NER_MODEL_REVISION,
-#: cache_dir=get_graph_models_dir())``) — see
+#: Pinned GLiNER checkpoint. BE-8's ``ProseExtractionBackend`` first fetches exactly ``GRAPH_NER_MODEL_FILES`` of this
+#: revision into ``get_graph_models_dir()`` (``model_store.ensure_pinned_snapshot``), then loads that local directory
+#: with ``GLiNER.from_pretrained(..., local_files_only=True)`` — see
 #: ``Documentation/Backlog/2026-08-19-035-multilingual-graph-ner-team-plan.md``
 #: (Q1/K2) for why this is the one checkpoint the plan settled on.
 GRAPH_NER_MODEL_NAME: str = "knowledgator/gliner-relex-multi-v1.0"
 GRAPH_NER_MODEL_REVISION: str = "e990d9ba6f471b846f7d78bf7e4b4dab11761ada"
+#: The files of that revision the loader needs, and the download allow-list: the safetensors weights (no pickle),
+#: the gliner config (it embeds the backbone's encoder config, so no second repo is consulted for it) and the
+#: tokenizer assets (the repo ships its own, so the backbone's tokenizer is never fetched either). The README,
+#: ``trainer_state.json`` and any file a later push to the repo adds are never downloaded.
+GRAPH_NER_MODEL_FILES: tuple[str, ...] = (
+    "gliner_config.json",
+    "model.safetensors",
+    "tokenizer_config.json",
+    "tokenizer.json",
+    "spm.model",
+    "added_tokens.json",
+    "special_tokens_map.json",
+)
 
 
 def get_data_dir() -> Path:

@@ -13,12 +13,10 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from _cli_server_stub import server_reported_stopped
 from click.testing import CliRunner
 
 from archon_search.cli.maintenance_cmd import maintenance_cmd
-
-from _cli_server_stub import server_reported_stopped
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -967,9 +965,8 @@ def test_get_maintenance_state_propagates_connect_error(tmp_path: Path) -> None:
     with patch(
         "archon_search.cli.maintenance_cmd.httpx.get",
         side_effect=httpx.ConnectError("nope"),
-    ):
-        with pytest.raises(httpx.ConnectError):
-            _get_maintenance_state("http://localhost:9999/status", {"Authorization": "Bearer x"})
+    ), pytest.raises(httpx.ConnectError):
+        _get_maintenance_state("http://localhost:9999/status", {"Authorization": "Bearer x"})
 
 
 # ---------------------------------------------------------------------------

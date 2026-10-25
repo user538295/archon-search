@@ -6,7 +6,7 @@ import sys
 import types
 import weakref
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Self
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -21,7 +21,7 @@ from archon_search.install import (
 from archon_search.model_specs import get_embedder_spec, get_reranker_spec
 from archon_search.model_store import ModelDownloadError
 from archon_search.profiles import ENGLISH_PROFILES, InstallProfile
-from tests._graph_engine_stub import gliner_from_pretrained_emulating_hub
+from tests._graph_engine_stub import seed_graph_model_snapshot
 
 _TIMEOUT_S = 300.0
 # The load error S671 hit: the files downloaded, but no session could be built.
@@ -117,7 +117,7 @@ class _Rig:
     def _embedder_names() -> set[str]:
         return {p.embedder for p in ENGLISH_PROFILES.values()}
 
-    def __enter__(self) -> _Rig:
+    def __enter__(self) -> Self:
         self._patches = [
             patch(f"{_PREWARM}.ensure_model", self._ensure),
             patch(f"{_PREWARM}.ModelEmbedder", self._embedder_cls),
@@ -250,9 +250,8 @@ def test_prewarm_releases_each_model_before_the_next_one_loads():
 def test_prewarm_embedder_download_failure_raises_naming_model_and_cause():
     """A failed resolve/download is fatal, says which phase failed, and stops before
     the reranker is touched."""
-    with _Rig(embedder_download_error=RuntimeError("network error")) as rig:
-        with pytest.raises(InstallError) as exc_info:
-            _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
+    with _Rig(embedder_download_error=RuntimeError("network error")) as rig, pytest.raises(InstallError) as exc_info:
+        _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
     message = str(exc_info.value)
     assert f"Could not resolve or download the embedder model {_EMBEDDER!r}" in message
     assert "network error" in message
@@ -265,9 +264,8 @@ def test_download_failure_names_phase_and_repo():
     error = ModelDownloadError(
         "BAAI/bge-small-en-v1.5", "download failed; check the network connection and free disk space"
     )
-    with _Rig(embedder_download_error=error):
-        with pytest.raises(InstallError) as exc_info:
-            _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
+    with _Rig(embedder_download_error=error), pytest.raises(InstallError) as exc_info:
+        _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
     assert str(exc_info.value) == (
         "Could not resolve or download the embedder model 'BAAI/bge-small-en-v1.5': "
         "could not fetch model 'BAAI/bge-small-en-v1.5': "
@@ -279,9 +277,8 @@ def test_prewarm_embedder_load_failure_raises_naming_model_and_cause():
     """S671: the files download but the model cannot be built or run. That must fail the
     install with the model and the cause, not surface at the first ingest — and the
     reranker is never touched."""
-    with _Rig(embedder_load_error=RuntimeError(_LOAD_ERROR)) as rig:
-        with pytest.raises(InstallError) as exc_info:
-            _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
+    with _Rig(embedder_load_error=RuntimeError(_LOAD_ERROR)) as rig, pytest.raises(InstallError) as exc_info:
+        _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
     message = str(exc_info.value)
     assert f"The embedder model {_EMBEDDER!r} was downloaded but cannot be loaded" in message
     assert _LOAD_ERROR in message
@@ -296,18 +293,16 @@ def test_prewarm_embedder_load_failure_raises_naming_model_and_cause():
 def test_prewarm_failure_with_empty_exception_text_names_the_exception_type(failure):
     """An exception without a message (MemoryError()) still leaves a cause in the
     message: its type name, not an empty string after the colon."""
-    with _Rig(**failure):
-        with pytest.raises(InstallError) as exc_info:
-            _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
+    with _Rig(**failure), pytest.raises(InstallError) as exc_info:
+        _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
     message = str(exc_info.value)
     assert _EMBEDDER in message
     assert message.endswith(": MemoryError"), message
 
 
 def _reranker_warnings(caplog: pytest.LogCaptureFixture, rig: _Rig) -> list[str]:
-    with caplog.at_level(logging.WARNING, logger="archon_search.install"):
-        with rig:
-            _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)  # must NOT raise
+    with caplog.at_level(logging.WARNING, logger="archon_search.install"), rig:
+        _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)  # must NOT raise
     return [r.getMessage() for r in caplog.records]
 
 
@@ -463,14 +458,11 @@ def test_prewarm_deadline_never_passed_runs_every_model(caplog):
 # _prewarm_graph_model — non-fatal, mirrors the reranker branch (Task BE-8)
 # ---------------------------------------------------------------------------
 
-def test_prewarm_graph_model_calls_from_pretrained_with_cache_dir():
-    """GLiNER.from_pretrained is called with the same cache_dir as the runtime lazy-load."""
-    from archon_search.paths import (
-        GRAPH_NER_MODEL_NAME,
-        GRAPH_NER_MODEL_REVISION,
-        get_graph_models_dir,
-    )
+def test_prewarm_graph_model_loads_the_pinned_snapshot_from_the_runtime_cache_dir():
+    """GLiNER.from_pretrained gets the local pinned snapshot and the runtime lazy-load's cache_dir, offline-only."""
+    from archon_search.paths import get_graph_models_dir
 
+    snapshot = seed_graph_model_snapshot()
     mock_gliner_cls = MagicMock()
     gliner_mod = types.ModuleType("gliner")
     gliner_mod.GLiNER = mock_gliner_cls  # type: ignore[attr-defined]
@@ -479,39 +471,23 @@ def test_prewarm_graph_model_calls_from_pretrained_with_cache_dir():
         _prewarm_graph_model()
 
     mock_gliner_cls.from_pretrained.assert_called_once_with(
-        GRAPH_NER_MODEL_NAME,
-        revision=GRAPH_NER_MODEL_REVISION,
+        str(snapshot),
         cache_dir=str(get_graph_models_dir()),
-        resume_download=None,
+        local_files_only=True,
     )
 
-
-@pytest.mark.filterwarnings("error")
-def test_prewarm_graph_model_does_not_hand_the_hub_a_deprecated_resume_download():
-    """gliner defaults `resume_download=False` and forwards it to huggingface_hub, which
-    warns on any non-None value; the pre-warm must load without that warning."""
-    model = MagicMock()
-    model.to.return_value = model
-    model.device.type = "cpu"
-    gliner_mod = types.ModuleType("gliner")
-    gliner_mod.GLiNER = types.SimpleNamespace(  # type: ignore[attr-defined]
-        from_pretrained=gliner_from_pretrained_emulating_hub(model)
-    )
-
-    with patch.dict(sys.modules, {"gliner": gliner_mod}):
-        assert _prewarm_graph_model() == "cpu"
 
 
 def test_prewarm_entry_is_non_fatal_and_logs_first_use_will_download(caplog):
     """A failed graph model pre-warm must not raise — it logs and lets first use download it."""
+    seed_graph_model_snapshot()
     mock_gliner_cls = MagicMock()
     mock_gliner_cls.from_pretrained.side_effect = RuntimeError("network hiccup")
     gliner_mod = types.ModuleType("gliner")
     gliner_mod.GLiNER = mock_gliner_cls  # type: ignore[attr-defined]
 
-    with patch.dict(sys.modules, {"gliner": gliner_mod}):
-        with caplog.at_level("WARNING"):
-            device = _prewarm_graph_model()  # must not raise
+    with patch.dict(sys.modules, {"gliner": gliner_mod}), caplog.at_level("WARNING"):
+        device = _prewarm_graph_model()  # must not raise
 
     # Stage 2 rides this return: a failed load must yield None, not a device.
     assert device is None

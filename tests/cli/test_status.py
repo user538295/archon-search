@@ -19,9 +19,8 @@ def runner() -> CliRunner:
 def test_status_running_output(runner: CliRunner) -> None:
     svc = MagicMock()
     svc.status.return_value = ServiceStatus(running=True, pid=123, uptime_seconds=42.0)
-    with patch("archon_search.cli.status._get_service", return_value=svc):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=None):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=svc), patch("archon_search.cli.status._fetch_server_status", return_value=None):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "running" in result.output
 
@@ -29,9 +28,8 @@ def test_status_running_output(runner: CliRunner) -> None:
 def test_status_stopped_output(runner: CliRunner) -> None:
     svc = MagicMock()
     svc.status.return_value = ServiceStatus(running=False, pid=None, uptime_seconds=None)
-    with patch("archon_search.cli.status._get_service", return_value=svc):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=None):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=svc), patch("archon_search.cli.status._fetch_server_status", return_value=None):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "stopped" in result.output
 
@@ -39,9 +37,8 @@ def test_status_stopped_output(runner: CliRunner) -> None:
 def test_status_running_includes_pid_and_uptime(runner: CliRunner) -> None:
     svc = MagicMock()
     svc.status.return_value = ServiceStatus(running=True, pid=456, uptime_seconds=99.0)
-    with patch("archon_search.cli.status._get_service", return_value=svc):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=None):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=svc), patch("archon_search.cli.status._fetch_server_status", return_value=None):
+        result = runner.invoke(main, ["status"])
     assert "456" in result.output
     assert "99" in result.output
 
@@ -49,9 +46,8 @@ def test_status_running_includes_pid_and_uptime(runner: CliRunner) -> None:
 def test_status_running_no_pid_no_uptime(runner: CliRunner) -> None:
     svc = MagicMock()
     svc.status.return_value = ServiceStatus(running=True, pid=None, uptime_seconds=None)
-    with patch("archon_search.cli.status._get_service", return_value=svc):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=None):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=svc), patch("archon_search.cli.status._fetch_server_status", return_value=None):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "running" in result.output
 
@@ -81,12 +77,11 @@ def test_status_cli_shows_hash_doc_ids_enabled_true(runner: CliRunner) -> None:
     server_payload = {
         "telemetry": {"enabled": True, "hash_doc_ids_enabled": True},
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "hash_doc_ids_enabled" in result.output
     assert "True" in result.output or "true" in result.output
@@ -97,12 +92,11 @@ def test_status_cli_shows_hash_doc_ids_enabled_false(runner: CliRunner) -> None:
     server_payload = {
         "telemetry": {"enabled": True, "hash_doc_ids_enabled": False},
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "hash_doc_ids_enabled" in result.output
     assert "False" in result.output or "false" in result.output
@@ -119,12 +113,11 @@ def test_status_cli_sends_bearer_token(runner: CliRunner) -> None:
         mock_resp.status_code = 503
         return mock_resp
 
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status.httpx.get", side_effect=fake_httpx_get):
-            result = runner.invoke(
-                main,
-                ["status", "--api-key", "test-token-abc", "--api-url", "http://localhost:9999"],
-            )
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch("archon_search.cli.status.httpx.get", side_effect=fake_httpx_get):
+        result = runner.invoke(
+            main,
+            ["status", "--api-key", "test-token-abc", "--api-url", "http://localhost:9999"],
+        )
     assert result.exit_code == 0, result.output
     assert captured_headers, "Expected httpx.get to be called"
     assert captured_headers[0].get("Authorization") == "Bearer test-token-abc"
@@ -132,12 +125,11 @@ def test_status_cli_sends_bearer_token(runner: CliRunner) -> None:
 
 def test_status_cli_handles_401_unauthorized(runner: CliRunner) -> None:
     """Server returns 401 → clear auth-failure message, no crash (distinct from unreachable)."""
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value={"_auth_failed": True},
-        ):
-            result = runner.invoke(main, ["status", "--api-key", "bad-key"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value={"_auth_failed": True},
+    ):
+        result = runner.invoke(main, ["status", "--api-key", "bad-key"])
     assert result.exit_code == 0, result.output
     assert "401" in result.output
     assert "Unauthorized" in result.output
@@ -145,12 +137,11 @@ def test_status_cli_handles_401_unauthorized(runner: CliRunner) -> None:
 
 def test_status_cli_graceful_when_server_unreachable(runner: CliRunner) -> None:
     """Connection error → service state shown, no crash, telemetry section omitted (S12b)."""
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc(running=True)):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=None,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc(running=True)), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=None,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "running" in result.output
     # Telemetry section should be omitted when server is unreachable
@@ -160,12 +151,11 @@ def test_status_cli_graceful_when_server_unreachable(runner: CliRunner) -> None:
 def test_status_cli_omits_telemetry_when_disabled_on_server(runner: CliRunner) -> None:
     """When server returns telemetry: null, no telemetry section is shown."""
     server_payload = {"telemetry": None}
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "hash_doc_ids_enabled" not in result.output
 
@@ -194,12 +184,11 @@ def test_fetch_server_status_returns_none_on_http_error() -> None:
     """httpx.HTTPError → returns None (server unreachable)."""
     import archon_search.cli.status as status_mod
 
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch(
-            "archon_search.cli.status.httpx.get",
-            side_effect=httpx.ConnectError("connection refused"),
-        ):
-            result = status_mod._fetch_server_status("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch(
+        "archon_search.cli.status.httpx.get",
+        side_effect=httpx.ConnectError("connection refused"),
+    ):
+        result = status_mod._fetch_server_status("http://localhost:8765", None)
     assert result is None
 
 
@@ -209,9 +198,8 @@ def test_fetch_server_status_returns_auth_failed_on_401() -> None:
 
     mock_resp = MagicMock()
     mock_resp.status_code = 401
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
-            result = status_mod._fetch_server_status("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
+        result = status_mod._fetch_server_status("http://localhost:8765", None)
     assert result == {"_auth_failed": True}
 
 
@@ -221,9 +209,8 @@ def test_fetch_server_status_returns_none_on_non_200_non_401() -> None:
 
     mock_resp = MagicMock()
     mock_resp.status_code = 500
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
-            result = status_mod._fetch_server_status("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
+        result = status_mod._fetch_server_status("http://localhost:8765", None)
     assert result is None
 
 
@@ -234,9 +221,8 @@ def test_fetch_server_status_returns_none_on_invalid_json() -> None:
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.side_effect = ValueError("not JSON")
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
-            result = status_mod._fetch_server_status("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
+        result = status_mod._fetch_server_status("http://localhost:8765", None)
     assert result is None
 
 
@@ -248,9 +234,8 @@ def test_fetch_server_status_returns_payload_on_200() -> None:
     mock_resp.status_code = 200
     expected = {"telemetry": {"enabled": True, "hash_doc_ids_enabled": True}}
     mock_resp.json.return_value = expected
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
-            result = status_mod._fetch_server_status("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
+        result = status_mod._fetch_server_status("http://localhost:8765", None)
     assert result == expected
 
 
@@ -266,9 +251,8 @@ def test_fetch_server_status_constructs_url_correctly() -> None:
         mock_resp.status_code = 503
         return mock_resp
 
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=fake_get):
-            status_mod._fetch_server_status("http://localhost:9999/", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", side_effect=fake_get):
+        status_mod._fetch_server_status("http://localhost:9999/", None)
     assert captured_urls == ["http://localhost:9999/status"]
 
 
@@ -313,12 +297,11 @@ def test_status_cli_warns_when_hyde_key_unavailable(runner: CliRunner) -> None:
         "failed_expired_ingest_count": 0,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "ANTHROPIC_API_KEY" in result.stderr, (
         f"Expected 'ANTHROPIC_API_KEY' in stderr; got: {result.stderr!r}"
@@ -336,12 +319,11 @@ def test_status_cli_warns_when_rag_fusion_key_unavailable(runner: CliRunner) -> 
         "failed_expired_ingest_count": 0,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "ANTHROPIC_API_KEY" in result.stderr, (
         f"Expected 'ANTHROPIC_API_KEY' in stderr; got: {result.stderr!r}"
@@ -359,12 +341,11 @@ def test_status_cli_no_warning_when_hyde_key_available(runner: CliRunner) -> Non
         "failed_expired_ingest_count": 0,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "ANTHROPIC_API_KEY" not in result.stderr, (
         f"Unexpected 'ANTHROPIC_API_KEY' in stderr; got: {result.stderr!r}"
@@ -379,12 +360,11 @@ def test_status_cli_no_warning_when_hyde_null(runner: CliRunner) -> None:
         "failed_expired_ingest_count": 0,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "ANTHROPIC_API_KEY" not in result.stderr
 
@@ -397,12 +377,11 @@ def test_status_cli_no_warning_when_rag_fusion_key_available(runner: CliRunner) 
         "failed_expired_ingest_count": 0,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "ANTHROPIC_API_KEY" not in result.stderr, (
         f"Unexpected 'ANTHROPIC_API_KEY' in stderr; got: {result.stderr!r}"
@@ -417,12 +396,11 @@ def test_status_cli_warns_for_both_hyde_and_rag_fusion_key_unavailable(runner: C
         "failed_expired_ingest_count": 0,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "HyDE" in result.stderr, (
         f"Expected 'HyDE' warning in stderr; got: {result.stderr!r}"
@@ -443,12 +421,11 @@ def test_status_cli_shows_failed_expired_count(runner: CliRunner) -> None:
         "failed_expired_ingest_count": 3,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "3 ingest job(s) expired" in result.stdout, (
         f"Expected '3 ingest job(s) expired' in stdout; got: {result.stdout!r}"
@@ -466,12 +443,11 @@ def test_status_cli_no_failed_expired_output_when_zero(runner: CliRunner) -> Non
         "failed_expired_ingest_count": 0,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "re-ingest" not in result.stdout.lower()
 
@@ -484,12 +460,11 @@ def test_status_cli_no_failed_expired_output_when_key_absent(runner: CliRunner) 
         # failed_expired_ingest_count intentionally absent (pre-E0b server)
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "re-ingest" not in result.stdout.lower()
 
@@ -506,12 +481,11 @@ def test_status_cli_no_failed_expired_output_when_count_is_null(runner: CliRunne
         "failed_expired_ingest_count": None,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "re-ingest" not in result.stdout.lower()
 
@@ -524,12 +498,11 @@ def test_status_cli_shows_failed_expired_count_singular(runner: CliRunner) -> No
         "failed_expired_ingest_count": 1,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "1 ingest job(s) expired" in result.stdout, (
         f"Expected '1 ingest job(s) expired' in stdout; got: {result.stdout!r}"
@@ -562,12 +535,11 @@ def test_status_cli_displays_stale_mention_count(runner: CliRunner) -> None:
         },
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "5" in result.output
     assert "stale" in result.output.lower() or "mention" in result.output.lower()
@@ -594,12 +566,11 @@ def test_status_cli_displays_last_graph_gc_at(runner: CliRunner) -> None:
         },
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "2026-07-05T12:00:00Z" in result.output
 
@@ -620,12 +591,11 @@ def test_status_cli_graph_fields_absent_when_graph_disabled(runner: CliRunner) -
         },
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     # Should not crash even with null graph
 
@@ -643,11 +613,10 @@ def test_status_cli_prints_collections(runner: CliRunner) -> None:
         ],
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status", return_value=server_payload
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status", return_value=server_payload
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "mydocs" in result.output
     assert "42" in result.output
@@ -663,11 +632,10 @@ def test_status_cli_prints_collections_when_telemetry_disabled(runner: CliRunner
         ],
         "telemetry": None,  # disabled → early-return follows the collections block
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status", return_value=server_payload
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status", return_value=server_payload
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "mydocs" in result.output
     assert "3" in result.output
@@ -685,9 +653,11 @@ def test_expansion_warning_openai_hyde_shows_openai_key(runner: CliRunner) -> No
         "rag_fusion": None,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "OPENAI_API_KEY" in result.stderr
     assert "ANTHROPIC_API_KEY" not in result.stderr
@@ -700,9 +670,11 @@ def test_expansion_warning_openai_rag_fusion_shows_openai_key(runner: CliRunner)
         "rag_fusion": {"key_available": False, "provider": "openai"},
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "OPENAI_API_KEY" in result.stderr
     assert "ANTHROPIC_API_KEY" not in result.stderr
@@ -715,9 +687,11 @@ def test_expansion_warning_explicit_anthropic_provider(runner: CliRunner) -> Non
         "rag_fusion": None,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "ANTHROPIC_API_KEY" in result.stderr
 
@@ -729,9 +703,11 @@ def test_expansion_warning_unknown_provider_no_crash(runner: CliRunner) -> None:
         "rag_fusion": None,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "HyDE enabled but the 'myservice' API key is not set" in result.stderr
 
@@ -743,9 +719,11 @@ def test_expansion_warning_both_openai_shows_two_openai_keys(runner: CliRunner) 
         "rag_fusion": {"key_available": False, "provider": "openai"},
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert result.stderr.count("OPENAI_API_KEY") == 2
     assert "ANTHROPIC_API_KEY" not in result.stderr
@@ -758,9 +736,11 @@ def test_expansion_warning_missing_provider_field_defaults_to_anthropic(runner: 
         "rag_fusion": None,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "ANTHROPIC_API_KEY" in result.stderr
 
@@ -772,9 +752,11 @@ def test_expansion_warning_null_provider_defaults_to_anthropic(runner: CliRunner
         "rag_fusion": None,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "ANTHROPIC_API_KEY" in result.stderr
 
@@ -786,9 +768,11 @@ def test_expansion_warning_key_available_absent_no_warning(runner: CliRunner) ->
         "rag_fusion": None,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert result.stderr == ""
 
@@ -800,9 +784,11 @@ def test_expansion_warning_non_dict_hyde_no_crash(runner: CliRunner) -> None:
         "rag_fusion": None,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert result.stderr == ""
 
@@ -814,9 +800,11 @@ def test_expansion_warning_ollama_no_warning(runner: CliRunner) -> None:
         "rag_fusion": None,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert result.stderr == ""
 
@@ -828,9 +816,11 @@ def test_expansion_warning_claude_cli_generic_message(runner: CliRunner) -> None
         "rag_fusion": None,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert result.stderr == ""
 
@@ -842,9 +832,11 @@ def test_expansion_warning_mixed_providers(runner: CliRunner) -> None:
         "rag_fusion": {"key_available": False, "provider": "anthropic"},
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "OPENAI_API_KEY" in result.stderr
     assert "ANTHROPIC_API_KEY" in result.stderr
@@ -861,9 +853,11 @@ def test_expansion_warning_openai_key_available_no_warning(runner: CliRunner) ->
         "rag_fusion": None,
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert result.stderr == ""
 
@@ -876,11 +870,10 @@ def test_status_cli_renders_empty_path_without_error(runner: CliRunner) -> None:
         ],
         "telemetry": None,
     }
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status", return_value=server_payload
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status", return_value=server_payload
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "adhoc" in result.output
     assert "7" in result.output
@@ -901,12 +894,11 @@ def test_status_container_mode_suppresses_stopped_when_reachable(runner: CliRunn
         "telemetry": {"enabled": True, "hash_doc_ids_enabled": False},
         "collections": [{"name": "docs", "path": "/data/docs", "doc_count": 5}],
     }
-    with patch("archon_search.cli.status._get_service", return_value=svc):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=server_payload,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=svc), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=server_payload,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "stopped" not in result.output, (
         f"'stopped' should be suppressed in container mode; got:\n{result.output}"
@@ -921,12 +913,11 @@ def test_status_container_mode_no_traceback_when_unreachable(runner: CliRunner, 
     monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
     svc = MagicMock()
     svc.status.return_value = ServiceStatus(running=False, pid=None, uptime_seconds=None)
-    with patch("archon_search.cli.status._get_service", return_value=svc):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=None,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=svc), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=None,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "Traceback" not in (result.output + (result.stderr or "")), (
         f"No traceback expected in container mode; got:\n{result.output}\n{result.stderr}"
@@ -941,12 +932,11 @@ def test_status_native_path_unchanged(runner: CliRunner, monkeypatch) -> None:
     monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
     svc = MagicMock()
     svc.status.return_value = ServiceStatus(running=False, pid=None, uptime_seconds=None)
-    with patch("archon_search.cli.status._get_service", return_value=svc):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=None,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=svc), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=None,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "stopped" in result.output, (
         f"Native path must still print 'stopped'; got:\n{result.output}"
@@ -958,12 +948,11 @@ def test_status_container_mode_running_service_shows_running(runner: CliRunner, 
     monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
     svc = MagicMock()
     svc.status.return_value = ServiceStatus(running=True, pid=42, uptime_seconds=None)
-    with patch("archon_search.cli.status._get_service", return_value=svc):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value=None,
-        ):
-            result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=svc), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value=None,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "running" in result.output, (
         f"Container mode must not suppress 'running'; got:\n{result.output}"
@@ -988,9 +977,8 @@ def test_status_json_flag_outputs_valid_json_with_running_state(runner: CliRunne
 
     svc = MagicMock()
     svc.status.return_value = ServiceStatus(running=True, pid=123, uptime_seconds=42.0)
-    with patch("archon_search.cli.status._get_service", return_value=svc):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=None):
-            result = runner.invoke(main, ["status", "--json"])
+    with patch("archon_search.cli.status._get_service", return_value=svc), patch("archon_search.cli.status._fetch_server_status", return_value=None):
+        result = runner.invoke(main, ["status", "--json"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
     assert payload["running"] is True, f"Expected running=True in JSON; got: {payload!r}"
@@ -1011,12 +999,11 @@ def test_status_json_flag_normalizes_auth_failed_sentinel(runner: CliRunner) -> 
 
     svc = MagicMock()
     svc.status.return_value = ServiceStatus(running=True, pid=123, uptime_seconds=42.0)
-    with patch("archon_search.cli.status._get_service", return_value=svc):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value={"_auth_failed": True},
-        ):
-            result = runner.invoke(main, ["status", "--json"])
+    with patch("archon_search.cli.status._get_service", return_value=svc), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value={"_auth_failed": True},
+    ):
+        result = runner.invoke(main, ["status", "--json"])
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["server"] == {"auth_failed": True}
     assert "_auth_failed" not in result.stdout

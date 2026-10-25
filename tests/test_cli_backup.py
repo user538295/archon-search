@@ -11,7 +11,6 @@ from click.testing import CliRunner
 
 from archon_search.cli.backup_cmd import backup_cmd
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

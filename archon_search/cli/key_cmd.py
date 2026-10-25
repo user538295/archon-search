@@ -33,8 +33,8 @@ from datetime import UTC, datetime, timedelta
 import click
 import httpx
 
-from archon_search.key_manager import load_key
 from archon_search.cli._helpers import _CONNECT_FAIL, _server_connect_fail_msg
+from archon_search.key_manager import load_key
 
 _DEFAULT_API_URL = "http://localhost:8765"
 
@@ -81,7 +81,7 @@ def _parse_expires(value: str) -> datetime:
 
     # Try ISO-8601 datetime
     try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(value)
         if dt.tzinfo is None:
             raise click.BadParameter(
                 f"{value!r} is a naive datetime (no timezone). "

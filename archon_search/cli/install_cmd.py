@@ -8,7 +8,11 @@ from shutil import rmtree
 
 import click
 
-from archon_search.cli._helpers import _CONTAINER_MSG, _exit_on_config_error, _get_service
+from archon_search.cli._helpers import (
+    _CONTAINER_MSG,
+    _exit_on_config_error,
+    _get_service,
+)
 from archon_search.install import create_installer
 from archon_search.key_manager import _HEX_RE
 from archon_search.torch_runtime import DEVICE_SETTINGS
@@ -162,6 +166,7 @@ def wizard(
         installer = create_installer(
             config_file=str(config_path) if config_path else None,
             dry_run=dry_run,
+            legacy_config=True,
         )
     sys.exit(
         installer.run(
@@ -245,7 +250,7 @@ def uninstall(delete_db: bool, config_path: Path | None) -> None:
         else:
             click.echo(f"Error during service teardown: {exc}", err=True)
         raise SystemExit(1)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — CLI boundary: any service-teardown failure is reported as one line, exit 1
         click.echo(f"Error during service teardown: {exc}", err=True)
         raise SystemExit(1)
 

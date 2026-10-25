@@ -3,8 +3,9 @@
 Foreground-blocking uvicorn entry point used by the Docker container and any
 direct-run scenario where launchd/systemd service management is undesirable.
 
-`serve` calls `load_config(path, serve=True)` so the host default is `0.0.0.0`
-(overridable by TOML `[server].host` or `ARCHON_SEARCH_HOST`), then invokes
+`serve` calls `load_config(path, serve=True)`: the host defaults to loopback, or to `0.0.0.0` inside the container
+(`ARCHON_SEARCH_CONTAINER=1`, set by the Dockerfile), where the published port needs a non-loopback interface.
+TOML `[server].host` or `ARCHON_SEARCH_HOST` override either; then it invokes
 `run_server(config, config_path)`. It never touches platform service management.
 
 Without `--config` or `ARCHON_SEARCH_CONFIG`, the config file is
@@ -39,6 +40,6 @@ def serve(config_path: Path | None) -> None:
     with _exit_on_config_error():
         config = load_config(config_path, serve=True)
 
-    from archon_search.server.app import run_server  # noqa: PLC0415
+    from archon_search.server.app import run_server
 
     run_server(config, config_path)

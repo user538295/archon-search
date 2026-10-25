@@ -32,7 +32,9 @@ from archon_search.platform.runtime import get_runtime as get_runtime
 from archon_search.platform.runtime import get_search_service as get_search_service
 
 from .config_writer import WizardFeatures as WizardFeatures
-from .config_writer import _apply_wizard_features_to_toml as _apply_wizard_features_to_toml
+from .config_writer import (
+    _apply_wizard_features_to_toml as _apply_wizard_features_to_toml,
+)
 from .config_writer import _assert_features_persisted as _assert_features_persisted
 from .config_writer import _detect_config_hand_edits as _detect_config_hand_edits
 from .config_writer import _profile_toml as _profile_toml

@@ -253,7 +253,7 @@ class TestInstallExtraInUvToolEnv:
 
     def test_keeps_the_installed_torch_build(self, uv_tool_prefix, monkeypatch):
         """A re-resolving install without --torch-backend would swap a +cu126/+cpu torch for PyPI's build."""
-        import importlib.metadata  # noqa: PLC0415
+        import importlib.metadata
 
         monkeypatch.setattr(
             importlib.metadata, "version", lambda name: "2.14.1+cu126" if name == "torch" else "0"
@@ -266,15 +266,19 @@ class TestInstallExtraInUvToolEnv:
 
     def test_uv_failure_raises_install_error_without_pip_fallback(self, uv_tool_prefix):
         error = subprocess.CalledProcessError(1, "uv", stderr=b"No solution found")
-        with patch("subprocess.run", side_effect=error) as mock_run:
-            with pytest.raises(InstallError, match=r"Failed to install archon-search\[graph\]: No solution found"):
-                _install_graph_extra()
+        with (
+            patch("subprocess.run", side_effect=error) as mock_run,
+            pytest.raises(InstallError, match=r"Failed to install archon-search\[graph\]: No solution found"),
+        ):
+            _install_graph_extra()
         assert mock_run.call_count == 1
 
     def test_missing_uv_raises_install_error(self, uv_tool_prefix):
-        with patch("subprocess.run", side_effect=FileNotFoundError("uv")) as mock_run:
-            with pytest.raises(InstallError, match=r"Failed to install archon-search\[code\]"):
-                _install_code_extra()
+        with (
+            patch("subprocess.run", side_effect=FileNotFoundError("uv")) as mock_run,
+            pytest.raises(InstallError, match=r"Failed to install archon-search\[code\]"),
+        ):
+            _install_code_extra()
         assert mock_run.call_count == 1
 
     @pytest.mark.parametrize(
@@ -330,22 +334,26 @@ class TestInstallExtraInUvToolEnv:
         """uv tool envs ship no pip, so pip's "No module named pip" must not mask uv's error."""
         self._set_receipt(uv_tool_prefix, '[tool]\nrequirements = [{ name = "archon-search" }]\npython = "3.12"\n')
         error = subprocess.CalledProcessError(1, "uv", stderr=b"No solution found")
-        with patch("subprocess.run", side_effect=error) as mock_run:
-            with pytest.raises(InstallError, match=r"Failed to install archon-search\[graph\]: No solution found"):
-                _install_graph_extra()
+        with (
+            patch("subprocess.run", side_effect=error) as mock_run,
+            pytest.raises(InstallError, match=r"Failed to install archon-search\[graph\]: No solution found"),
+        ):
+            _install_graph_extra()
         assert mock_run.call_count == 1
         assert mock_run.call_args[0][0][:3] == ["uv", "pip", "install"]
 
     def test_fallback_without_uv_raises_install_error(self, uv_tool_prefix):
         self._set_receipt(uv_tool_prefix, '[tool]\nrequirements = [{ name = "archon-search" }]\npython = "3.12"\n')
-        with patch("subprocess.run", side_effect=FileNotFoundError("uv")) as mock_run:
-            with pytest.raises(InstallError, match=r"Failed to install archon-search\[graph\]: uv"):
-                _install_graph_extra()
+        with (
+            patch("subprocess.run", side_effect=FileNotFoundError("uv")) as mock_run,
+            pytest.raises(InstallError, match=r"Failed to install archon-search\[graph\]: uv"),
+        ):
+            _install_graph_extra()
         assert mock_run.call_count == 1
 
     def test_unmapped_torch_build_falls_back_to_uv_pip(self, uv_tool_prefix, monkeypatch, capsys):
         """A torch build uv has no --torch-backend for would be swapped by a re-resolve."""
-        import importlib.metadata  # noqa: PLC0415
+        import importlib.metadata
 
         monkeypatch.setattr(
             importlib.metadata, "version", lambda name: "2.14.1+git1234" if name == "torch" else "0"

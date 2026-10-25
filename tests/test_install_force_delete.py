@@ -11,7 +11,6 @@ from archon_search.config import load_config
 from archon_search.install import WizardFeatures, _execute_force_reinstall
 from archon_search.profiles import get_profile
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -297,7 +296,7 @@ def test_force_reinstall_handles_missing_db_directory(tmp_path):
     with (
         patch("archon_search.install.prewarm.get_search_service") as mock_svc,
         patch("archon_search.install.prewarm._write_profile_config") as mock_write,
-        patch("archon_search.install.shutil.rmtree") as mock_rmtree,
+        patch("archon_search.install.shutil.rmtree", side_effect=FileNotFoundError(db_path)) as mock_rmtree,
     ):
         mock_svc.return_value.stop.return_value = None
         _execute_force_reinstall(
@@ -309,7 +308,7 @@ def test_force_reinstall_handles_missing_db_directory(tmp_path):
             non_interactive=True,
         )
 
-    mock_rmtree.assert_not_called()
+    mock_rmtree.assert_called_once_with(db_path)
     mock_write.assert_called_once()
 
 
@@ -340,35 +339,6 @@ def test_force_reinstall_dry_run_skips_all_destructive_ops(tmp_path):
     mock_svc.return_value.stop.assert_not_called()
     mock_rmtree.assert_not_called()
     mock_write.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Test 10: RuntimeError from stop() is treated as no-op (proceeds to rmtree + write)
-# ---------------------------------------------------------------------------
-
-def test_force_reinstall_runtime_error_from_stop_is_no_op(tmp_path):
-    config_path = _make_config(tmp_path)
-    db_path = _make_db(tmp_path)
-    profile, profile_name = _profile_and_name()
-
-    with (
-        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
-        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
-        patch("archon_search.install.shutil.rmtree") as mock_rmtree,
-    ):
-        mock_svc.return_value.stop.side_effect = RuntimeError("service not running")
-        # Must NOT raise — RuntimeError from stop() is swallowed
-        _execute_force_reinstall(
-            config_path=config_path,
-            db_path=db_path,
-            profile=profile,
-            profile_name=profile_name,
-            multilingual=False,
-            non_interactive=True,
-        )
-
-    mock_rmtree.assert_called_once_with(db_path)
-    mock_write.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -575,3 +545,156 @@ def test_force_reinstall_without_a_config_writes_the_fresh_install_loopback_host
         )
 
     assert load_config(config_path, serve=True).host == "127.0.0.1"
+
+
+# ---------------------------------------------------------------------------
+# Races and causes: no check-then-act, and a failure's cause is never dropped
+# ---------------------------------------------------------------------------
+
+def test_force_reinstall_proceeds_when_the_config_vanishes_before_the_backup_copy(tmp_path):
+    config_path = _make_config(tmp_path)
+    db_path = _make_db(tmp_path)
+    profile, profile_name = _profile_and_name()
+
+    with (
+        patch("archon_search.install.prewarm.get_search_service"),
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
+        patch("archon_search.install.shutil.rmtree"),
+        patch("archon_search.install.shutil.copy2", side_effect=FileNotFoundError("config removed")),
+    ):
+        _execute_force_reinstall(
+            config_path=config_path,
+            db_path=db_path,
+            profile=profile,
+            profile_name=profile_name,
+            multilingual=False,
+            non_interactive=True,
+        )
+
+    mock_write.assert_called_once()
+    assert not config_path.with_suffix(".toml.bak").exists()
+
+
+def test_force_reinstall_proceeds_when_the_db_vanishes_before_the_delete(tmp_path):
+    config_path = _make_config(tmp_path)
+    db_path = _make_db(tmp_path)
+    profile, profile_name = _profile_and_name()
+
+    with (
+        patch("archon_search.install.prewarm.get_search_service"),
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
+        patch("archon_search.install.shutil.rmtree", side_effect=FileNotFoundError("db removed")),
+    ):
+        _execute_force_reinstall(
+            config_path=config_path,
+            db_path=db_path,
+            profile=profile,
+            profile_name=profile_name,
+            multilingual=False,
+            non_interactive=True,
+        )
+
+    mock_write.assert_called_once()
+
+
+def test_force_reinstall_names_the_cause_of_a_failed_database_deletion(tmp_path, capsys):
+    config_path = _make_config(tmp_path)
+    db_path = _make_db(tmp_path)
+    profile, profile_name = _profile_and_name()
+    cause = OSError("permission denied")
+
+    with (
+        patch("archon_search.install.prewarm.get_search_service"),
+        patch("archon_search.install.prewarm._write_profile_config"),
+        patch("archon_search.install.shutil.rmtree", side_effect=cause),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        _execute_force_reinstall(
+            config_path=config_path,
+            db_path=db_path,
+            profile=profile,
+            profile_name=profile_name,
+            multilingual=False,
+            non_interactive=True,
+        )
+
+    assert exc_info.value.__cause__ is cause
+    assert "permission denied" in capsys.readouterr().err
+
+
+def test_force_reinstall_names_the_cause_of_a_failed_config_write(tmp_path, capsys):
+    config_path = _make_config(tmp_path)
+    db_path = _make_db(tmp_path)
+    profile, profile_name = _profile_and_name()
+    cause = OSError("disk full")
+
+    with (
+        patch("archon_search.install.prewarm.get_search_service"),
+        patch("archon_search.install.prewarm._write_profile_config", side_effect=cause),
+        patch("archon_search.install.shutil.rmtree"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        _execute_force_reinstall(
+            config_path=config_path,
+            db_path=db_path,
+            profile=profile,
+            profile_name=profile_name,
+            multilingual=False,
+            non_interactive=True,
+        )
+
+    assert exc_info.value.__cause__ is cause
+    assert "disk full" in capsys.readouterr().err
+
+
+def test_force_reinstall_does_not_stop_a_service_that_is_not_running(tmp_path):
+    config_path = _make_config(tmp_path)
+    db_path = _make_db(tmp_path)
+    profile, profile_name = _profile_and_name()
+
+    with (
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
+        patch("archon_search.install.shutil.rmtree") as mock_rmtree,
+    ):
+        mock_svc.return_value.status.return_value.running = False
+        _execute_force_reinstall(
+            config_path=config_path,
+            db_path=db_path,
+            profile=profile,
+            profile_name=profile_name,
+            multilingual=False,
+            non_interactive=True,
+        )
+
+    mock_svc.return_value.stop.assert_not_called()
+    mock_rmtree.assert_called_once_with(db_path)
+    mock_write.assert_called_once()
+
+
+def test_force_reinstall_aborts_and_restores_the_config_when_a_running_service_cannot_be_stopped(tmp_path):
+    original = "[database]\noriginal = true\n"
+    config_path = _make_config(tmp_path, content=original)
+    db_path = _make_db(tmp_path)
+    profile, profile_name = _profile_and_name()
+
+    with (
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
+        patch("archon_search.install.shutil.rmtree") as mock_rmtree,
+    ):
+        mock_svc.return_value.status.return_value.running = True
+        mock_svc.return_value.stop.side_effect = RuntimeError("systemctl stop failed")
+        with pytest.raises(RuntimeError, match="systemctl stop failed"):
+            _execute_force_reinstall(
+                config_path=config_path,
+                db_path=db_path,
+                profile=profile,
+                profile_name=profile_name,
+                multilingual=False,
+                non_interactive=True,
+            )
+
+    mock_rmtree.assert_not_called()
+    mock_write.assert_not_called()
+    assert config_path.read_text() == original

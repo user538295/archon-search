@@ -5,9 +5,9 @@ from __future__ import annotations
 import textwrap
 
 import pytest
+import tomlkit
 
 from archon_search.config import ConfigError, JobsConfig, SearchConfig, _apply_toml
-import tomlkit
 
 
 class TestJobsConfigDefaults:

@@ -135,7 +135,7 @@ def test_dry_run_branch_b_no_config_written(tmp_path: Path) -> None:
 
 def test_dry_run_branch_b_no_bak_written(tmp_path: Path) -> None:
     """--dry-run on fresh install must NOT create a .toml.bak file."""
-    _, rc, config_path = _run_dry_run_fresh(tmp_path)
+    _, _rc, config_path = _run_dry_run_fresh(tmp_path)
     bak = config_path.with_suffix(".toml.bak")
     assert not bak.exists(), ".toml.bak must NOT be created in dry-run mode"
 

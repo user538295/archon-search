@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -13,16 +14,32 @@ from typing import TYPE_CHECKING
 
 import tomlkit
 
+from archon_search._durable_io import atomic_write_bytes, ensure_private_dir
 from archon_search.constants import (
+    CONTAINER_BIND_HOST,
+    CONTAINER_ENV_VAR,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_CONTEXT_WINDOW_MAX,
     DEFAULT_DOCLING_MAX_TASKS_PER_CHILD,
+    DEFAULT_DOCS_ENABLED,
     DEFAULT_FAST_MODEL,
+    DEFAULT_GRACEFUL_SHUTDOWN_SECONDS,
+    DEFAULT_MAX_CONCURRENT_INGEST_TASKS,
+    DEFAULT_MAX_CROSS_COLLECTION_COLLECTIONS,
+    DEFAULT_MAX_DISCOVERED_FILES,
+    DEFAULT_MAX_FILE_MB,
+    DEFAULT_MAX_REQUEST_BODY_MB,
+    DEFAULT_MAX_ZIP_ENTRIES,
+    DEFAULT_MAX_ZIP_UNCOMPRESSED_MB,
+    DEFAULT_PARSE_TIMEOUT_SECONDS,
+    DEFAULT_PARSE_TIMEOUT_SECONDS_PER_MB,
     DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
+    DEFAULT_VERSION_RETENTION_HOURS,
     LOG_FILE_DISABLED_WARNING,
     MAX_ROTATE_GRACE_SECONDS,
     _validate_namespace,
 )
+from archon_search.key_manager import namespace_token_problem
 from archon_search.paths import DEFAULT_DATA_DIR_NAME, get_data_dir
 from archon_search.torch_runtime import DEVICE_SETTINGS
 
@@ -32,6 +49,9 @@ if TYPE_CHECKING:  # pragma: no cover — import cycle guard, typing only
 _logger = logging.getLogger(__name__)
 
 _VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+
+# ``scheme://host[:port]`` with no path, query or wildcard: the shape of a browser ``Origin`` header value.
+_CORS_ORIGIN_RE = re.compile(r"https?://[A-Za-z0-9.\-\[\]:]+")
 
 
 class ConfigError(Exception):
@@ -114,6 +134,9 @@ class MaintenanceConfig:
     prune_expired_chunks: bool = True
     graph_gc: bool = True
     """Enable the graph garbage-collection maintenance policy (E2d)."""
+    version_retention_hours: int = DEFAULT_VERSION_RETENTION_HOURS
+    """How long a superseded LanceDB table version is kept before a maintenance pass deletes it. Must be >= 1:
+    a reader on an older version or an operator rolling back needs the window; the newest version is never removed."""
 
 
 @dataclass
@@ -128,10 +151,27 @@ class McpConfig:
 
 @dataclass
 class IngestConfig:
-    max_file_mb: int = 0
+    max_file_mb: int = DEFAULT_MAX_FILE_MB
+    """Largest file (and largest inline document) one ingest accepts, in MiB. 0 disables the cap."""
     max_tasks_per_child: int = DEFAULT_DOCLING_MAX_TASKS_PER_CHILD
     """Files a docling parse worker handles before it is recycled. Must be >= 1 — worker exit
     is what returns the native OCR memory to the OS."""
+    allowed_roots: list[str] = field(default_factory=list)
+    """Absolute directories a client-supplied ingest path must lie under. Empty (the default) adds no restriction
+    beyond the always-on deny list (the data directory, ``/proc``, ``/sys``, ``/dev`` and secret-named files);
+    collection paths named in this file are operator-trusted and exempt (the secret deny list still applies)."""
+    parse_timeout_seconds: float = DEFAULT_PARSE_TIMEOUT_SECONDS
+    """Wall-clock bound on one docling (PDF / image) conversion; the parse worker is replaced on timeout."""
+    parse_timeout_seconds_per_mb: float = DEFAULT_PARSE_TIMEOUT_SECONDS_PER_MB
+    """Seconds added to ``parse_timeout_seconds`` per MiB of the file being converted (0 = a flat bound)."""
+    max_zip_entries: int = DEFAULT_MAX_ZIP_ENTRIES
+    """Most entries a zip-based Office file (docx, pptx, xlsx, epub) may hold."""
+    max_zip_uncompressed_mb: int = DEFAULT_MAX_ZIP_UNCOMPRESSED_MB
+    """Most uncompressed MiB a zip-based Office file may declare across its entries."""
+    max_discovered_files: int = DEFAULT_MAX_DISCOVERED_FILES
+    """Most files one directory ingest enumerates; a larger tree is refused."""
+    max_concurrent_tasks: int = DEFAULT_MAX_CONCURRENT_INGEST_TASKS
+    """Ingest jobs running at once across all collections; a further request is refused with 503 ``ingest_busy``."""
 
 
 _GRAPH_BACKEND_THRESHOLD_EDGES_DEFAULT: int = 10_000
@@ -179,6 +219,8 @@ class GraphConfig:
     max_inspection_nodes: int = 5000
     """Maximum number of nodes to return in GET /graph/{collection} responses.
     Nodes are truncated deterministically by highest salience-first sort."""
+    max_cross_collection_collections: int = DEFAULT_MAX_CROSS_COLLECTION_COLLECTIONS
+    """Most collection names one ``GET /graph/cross-collection`` (or MCP ``get_graph_cross_collection``) call may name."""
     max_inspection_edges: int = 25000
     """Maximum number of edges to return in GET /graph/{collection} responses.
     Edges are truncated deterministically by highest weight-first sort."""
@@ -256,6 +298,16 @@ class SearchConfig:
     # [server]
     host: str = "127.0.0.1"
     port: int = 8765
+    docs_enabled: bool = DEFAULT_DOCS_ENABLED
+    """Serve the interactive ``/docs`` and ``/redoc`` pages (and leave ``/openapi.json`` public so they work)."""
+    cors_origins: list[str] = field(default_factory=list)
+    """Browser origins allowed to call the API cross-origin. Empty (the default) sends no CORS headers, so no page
+    on another origin can use the API from a browser; the API authenticates with a Bearer header, never cookies."""
+    max_request_body_mb: int = DEFAULT_MAX_REQUEST_BODY_MB
+    """Largest request body the server accepts, in MiB; a larger one is refused with 413 before it is read."""
+    graceful_shutdown_seconds: int = DEFAULT_GRACEFUL_SHUTDOWN_SECONDS
+    """Seconds uvicorn waits for open requests (an in-flight ingest) after SIGTERM before cancelling them; keep it
+    below the container runtime's stop grace period (30 s for ``docker stop``)."""
     # [database]
     db_path: str = "~/.archon-search/search"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
@@ -328,7 +380,7 @@ class SearchConfig:
     openai_shim: OpenAIShimConfig = field(default_factory=OpenAIShimConfig)
 
 
-def resolve_active_model(meta: "CollectionMeta | None", cfg: "SearchConfig | None") -> str:
+def resolve_active_model(meta: CollectionMeta | None, cfg: SearchConfig | None) -> str:
     """Return the embedding model a collection actually searches with.
 
     A collection pins its model in ``active_embedding_model``; the empty string
@@ -355,7 +407,7 @@ def save_config(config: SearchConfig, path: Path | str) -> None:
         # location) nor an `ARCHON_SEARCH_CONFIG` / `--config` parent is
         # guaranteed to exist yet, so a first-ever `collection add` would
         # otherwise raise FileNotFoundError → 500.
-        path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(path.parent)
         doc = tomlkit.document()
 
     if "collections" not in doc:
@@ -366,7 +418,7 @@ def save_config(config: SearchConfig, path: Path | str) -> None:
     col_section["pinned_collections"] = tomlkit.array()
     col_section["pinned_collections"].extend(config.pinned_collections)
 
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")  # noqa: durable-write
+    atomic_write_bytes(path, tomlkit.dumps(doc).encode("utf-8"))
 
 
 def _get_data_dir_or_config_error() -> Path:
@@ -498,6 +550,15 @@ def _coerce_device(raw: object, field_name: str) -> str:
     return raw
 
 
+#: ``(section, key)`` pairs of the ONNX-providers settings the PyTorch runtime removed; each is replaced
+#: by ``[section].device``.
+REMOVED_KEYS: tuple[tuple[str, str], ...] = (
+    ("database", "providers"),
+    ("database", "reranker_providers"),
+    ("graph", "providers"),
+)
+
+
 def _reject_removed_key(section: Mapping[str, object], key: str, section_name: str) -> None:
     """Raise ``ConfigError`` naming ``device`` when *section* still holds a removed ONNX-providers key."""
     if key in section:
@@ -506,11 +567,69 @@ def _reject_removed_key(section: Mapping[str, object], key: str, section_name: s
         )
 
 
+def _reject_removed_keys(doc: Mapping[str, Mapping[str, object]]) -> None:
+    """Raise ``ConfigError`` for the first ``REMOVED_KEYS`` entry *doc* still holds."""
+    for section_name, key in REMOVED_KEYS:
+        _reject_removed_key(doc.get(section_name, {}), key, f"[{section_name}]")
+
+
+def removed_keys_in(doc: Mapping[str, Mapping[str, object]]) -> list[str]:
+    """Return the ``[section].key`` names of the ``REMOVED_KEYS`` entries *doc* still holds."""
+    return [f"[{section_name}].{key}" for section_name, key in REMOVED_KEYS if key in doc.get(section_name, {})]
+
+
+def strip_removed_keys(doc: tomlkit.TOMLDocument) -> list[str]:
+    """Delete the ``REMOVED_KEYS`` entries from *doc* in place and return their ``[section].key`` names."""
+    dropped = removed_keys_in(doc)
+    for section_name, key in REMOVED_KEYS:
+        if key in doc.get(section_name, {}):
+            del doc[section_name][key]
+    return dropped
+
+
+def validate_document(doc: tomlkit.TOMLDocument, *, setting: tuple[str, str] | None = None) -> None:
+    """Raise ``ConfigError`` when *doc* would not load, ignoring ``REMOVED_KEYS`` entries the file still holds.
+
+    Runs the loader's own ``_apply_toml`` on a copy, so ``config set`` accepts exactly what ``load_config`` accepts.
+    *setting* is the ``(section, key)`` just written: when it is itself a removed key the loader's
+    ``ConfigError`` is raised for it, since only keys already in the file are tolerated.
+    """
+    if setting in REMOVED_KEYS:
+        section_name, key = setting
+        _reject_removed_key(doc[section_name], key, f"[{section_name}]")
+    copy = tomlkit.parse(tomlkit.dumps(doc))
+    strip_removed_keys(copy)
+    _apply_toml(SearchConfig(), copy)
+
+
 def _coerce_str(value: object, field_name: str) -> str:
     try:
         return str(value)
     except Exception as exc:
         raise ConfigError(f"Expected string for '{field_name}', got {type(value).__name__}") from exc
+
+
+def _coerce_str_list(value: object, field_name: str) -> list[str]:
+    """Return *value* as a list of non-empty strings; anything else is a ``ConfigError``."""
+    if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+        raise ConfigError(f"Expected a list of non-empty strings for '{field_name}'")
+    return [str(item) for item in value]
+
+
+def _coerce_cors_origins(value: object) -> list[str]:
+    """Validate ``[server].cors_origins``: explicit ``scheme://host[:port]`` origins, never ``*``.
+
+    The API authenticates with a Bearer header, so a browser page on another origin gets no access unless the
+    operator names that origin here. A wildcard would let any page script the API from a user's browser.
+    """
+    origins = _coerce_str_list(value, "[server].cors_origins")
+    for origin in origins:
+        if not _CORS_ORIGIN_RE.fullmatch(origin):
+            raise ConfigError(
+                f"[server].cors_origins entries must be explicit origins like 'https://app.example.com' "
+                f"(scheme://host[:port], no path, no wildcard), got {origin!r}"
+            )
+    return origins
 
 
 def _validate_provider_config(provider: str | None, extraction_model: str | None, section: str) -> None:
@@ -537,14 +656,16 @@ def _validate_provider_config(provider: str | None, extraction_model: str | None
         )
 
 
-def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfig:
+def load_config(path: Path | None = None, *, serve: bool = False, drop_removed_keys: bool = False) -> SearchConfig:
     """Load SearchConfig from a TOML file. Missing file returns all defaults.
 
     Args:
         path: Path to the TOML config file. Defaults to `get_default_config_path()`.
-        serve: When True, set `host` default to `"0.0.0.0"` BEFORE TOML/env processing
-            so foreground/container deployments bind to all interfaces by default.
-            TOML `[server].host` and `ARCHON_SEARCH_HOST` env var still override it.
+        serve: When True and ``ARCHON_SEARCH_CONTAINER=1``, set `host` default to `"0.0.0.0"` BEFORE TOML/env
+            processing so the containerised server binds all interfaces by default. Natively the default stays
+            loopback. TOML `[server].host` and `ARCHON_SEARCH_HOST` env var still override it.
+        drop_removed_keys: When True, ignore the ``REMOVED_KEYS`` entries the file still holds instead of
+            raising ``ConfigError`` (only the wizard, which rewrites the file, sets it).
 
     Env var overrides applied after TOML parsing:
         ARCHON_SEARCH_HOST: overrides `config.host` (any non-empty string).
@@ -559,9 +680,11 @@ def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfi
         path = get_default_config_path()
 
     config = SearchConfig()
-    if serve:
-        # Set the `serve` mode default BEFORE TOML/env processing so they can override.
-        config.host = "0.0.0.0"
+    if serve and os.environ.get(CONTAINER_ENV_VAR) == "1":
+        # Inside the container the published port is only reachable through a non-loopback interface, so `serve`
+        # binds all of them by default — set BEFORE TOML/env processing so those can override. Natively the
+        # loopback default stands: binding every interface is an explicit operator decision.
+        config.host = CONTAINER_BIND_HOST
 
     try:
         text = path.read_text(encoding="utf-8")
@@ -576,6 +699,8 @@ def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfi
         except Exception as exc:
             raise ConfigError(f"Failed to parse {path}: {exc}") from exc
 
+        if drop_removed_keys:
+            strip_removed_keys(doc)
         _apply_toml(config, doc)
 
     _apply_env_overrides(config)
@@ -588,6 +713,7 @@ def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfi
 
 def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     """Apply TOML document values onto `config` in place."""
+    _reject_removed_keys(doc)
     server = doc.get("server", {})
     if "host" in server:
         config.host = str(server["host"])
@@ -596,6 +722,18 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         if not 1 <= port <= 65535:
             raise ConfigError(f"port must be between 1 and 65535, got {port}")
         config.port = port
+    if "docs_enabled" in server:
+        config.docs_enabled = _coerce_bool(server["docs_enabled"], "[server].docs_enabled")
+    if "cors_origins" in server:
+        config.cors_origins = _coerce_cors_origins(server["cors_origins"])
+    if "max_request_body_mb" in server:
+        config.max_request_body_mb = _coerce_bounded_int(
+            server["max_request_body_mb"], "[server].max_request_body_mb", minimum=1
+        )
+    if "graceful_shutdown_seconds" in server:
+        config.graceful_shutdown_seconds = _coerce_bounded_int(
+            server["graceful_shutdown_seconds"], "[server].graceful_shutdown_seconds", minimum=1
+        )
 
     database = doc.get("database", {})
     if "db_path" in database:
@@ -613,8 +751,6 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         config.auto_reindex_on_chunk_size_change = _coerce_bool(
             database["auto_reindex_on_chunk_size_change"], "auto_reindex_on_chunk_size_change"
         )
-    _reject_removed_key(database, "providers", "[database]")
-    _reject_removed_key(database, "reranker_providers", "[database]")
     if "device" in database:
         config.device = _coerce_device(database["device"], "[database].device")
     if "top_k_retrieve" in database:
@@ -808,7 +944,8 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     for k, v in raw_ns.items():
         if not isinstance(v, str):
             raise ConfigError(
-                f"[namespaces] entries must be string key = string value; got {k!r} = {v!r}"
+                "[namespaces] entries must be string key = string value; the value of each entry "
+                "must be the namespace name"
             )
         try:
             _validate_namespace(v)
@@ -816,6 +953,12 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             raise ConfigError(
                 f"[namespaces] invalid namespace name {v!r}: {exc}"
             ) from exc
+        # The table key IS the bearer token. TOML rejects a repeated key, so a token can never map to two
+        # namespaces; what this guards is a token too weak to be a credential (an empty one would
+        # authenticate an empty ``Bearer`` value). The message names the namespace, never the token.
+        token_problem = namespace_token_problem(k)
+        if token_problem is not None:
+            raise ConfigError(f"[namespaces] the token for namespace {v!r} is not usable: {token_problem}")
         namespaces[k] = v
     config.namespaces = namespaces
 
@@ -973,6 +1116,13 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         )
     if "graph_gc" in maintenance_cfg:
         maintenance.graph_gc = _coerce_bool(maintenance_cfg["graph_gc"], "[maintenance].graph_gc")
+    if "version_retention_hours" in maintenance_cfg:
+        version_retention_hours = _coerce_int(
+            maintenance_cfg["version_retention_hours"], "[maintenance].version_retention_hours"
+        )
+        if version_retention_hours < 1:
+            raise ConfigError(f"[maintenance].version_retention_hours must be >= 1, got {version_retention_hours}")
+        maintenance.version_retention_hours = version_retention_hours
     config.maintenance = maintenance
 
     auth_cfg = doc.get("auth", {})
@@ -1021,6 +1171,35 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
                 f"[ingest].max_tasks_per_child must be >= 1, got {raw_tasks}"
             )
         ingest.max_tasks_per_child = raw_tasks
+    if "allowed_roots" in ingest_cfg:
+        ingest.allowed_roots = _coerce_str_list(ingest_cfg["allowed_roots"], "[ingest].allowed_roots")
+        for root in ingest.allowed_roots:
+            if not Path(root).expanduser().is_absolute():
+                raise ConfigError(f"[ingest].allowed_roots entries must be absolute paths, got {root!r}")
+    if "parse_timeout_seconds" in ingest_cfg:
+        parse_timeout = _coerce_float(ingest_cfg["parse_timeout_seconds"], "[ingest].parse_timeout_seconds")
+        if parse_timeout <= 0:
+            raise ConfigError(f"[ingest].parse_timeout_seconds must be > 0, got {parse_timeout}")
+        ingest.parse_timeout_seconds = parse_timeout
+    if "parse_timeout_seconds_per_mb" in ingest_cfg:
+        per_mb = _coerce_float(ingest_cfg["parse_timeout_seconds_per_mb"], "[ingest].parse_timeout_seconds_per_mb")
+        if per_mb < 0:
+            raise ConfigError(f"[ingest].parse_timeout_seconds_per_mb must be >= 0, got {per_mb}")
+        ingest.parse_timeout_seconds_per_mb = per_mb
+    if "max_zip_entries" in ingest_cfg:
+        ingest.max_zip_entries = _coerce_bounded_int(ingest_cfg["max_zip_entries"], "[ingest].max_zip_entries", minimum=1)
+    if "max_zip_uncompressed_mb" in ingest_cfg:
+        ingest.max_zip_uncompressed_mb = _coerce_bounded_int(
+            ingest_cfg["max_zip_uncompressed_mb"], "[ingest].max_zip_uncompressed_mb", minimum=1
+        )
+    if "max_discovered_files" in ingest_cfg:
+        ingest.max_discovered_files = _coerce_bounded_int(
+            ingest_cfg["max_discovered_files"], "[ingest].max_discovered_files", minimum=1
+        )
+    if "max_concurrent_tasks" in ingest_cfg:
+        ingest.max_concurrent_tasks = _coerce_bounded_int(
+            ingest_cfg["max_concurrent_tasks"], "[ingest].max_concurrent_tasks", minimum=1
+        )
     config.ingest = ingest
 
     graph_cfg = doc.get("graph", {})
@@ -1071,6 +1250,10 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     if "max_inspection_nodes" in graph_cfg:
         graph.max_inspection_nodes = _coerce_bounded_int(
             graph_cfg["max_inspection_nodes"], "[graph].max_inspection_nodes", minimum=1
+        )
+    if "max_cross_collection_collections" in graph_cfg:
+        graph.max_cross_collection_collections = _coerce_bounded_int(
+            graph_cfg["max_cross_collection_collections"], "[graph].max_cross_collection_collections", minimum=2
         )
     if "max_inspection_edges" in graph_cfg:
         graph.max_inspection_edges = _coerce_bounded_int(
@@ -1123,7 +1306,6 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         graph.relation_confidence = _coerce_bounded_float(
             graph_cfg["relation_confidence"], "[graph].relation_confidence", minimum=0.0, maximum=1.0
         )
-    _reject_removed_key(graph_cfg, "providers", "[graph]")
     if "device" in graph_cfg:
         graph.device = _coerce_device(graph_cfg["device"], "[graph].device")
     if "provider" in graph_cfg:

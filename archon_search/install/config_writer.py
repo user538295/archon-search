@@ -10,11 +10,10 @@ from pathlib import Path
 import tomlkit
 
 from archon_search._durable_io import atomic_write_bytes
-from archon_search.config import SearchConfig
+from archon_search.config import SearchConfig, strip_removed_keys
 from archon_search.profiles import InstallProfile, get_profile
 
 from .errors import InstallError
-
 
 # ---------------------------------------------------------------------------
 # WizardFeatures dataclass (Task C8-1.1)
@@ -137,9 +136,10 @@ def _fresh_config_doc() -> tomlkit.TOMLDocument:
     Every unanswered key is left out so it resolves to its ``SearchConfig`` default
     (20_wizard.md: "Only the choices you actually made are written"), with one
     deliberate security exception: ``[server].host`` is always written as the
-    loopback default. Without it, ``archon-search serve`` (``load_config(serve=True)``)
-    would default the bind address to ``0.0.0.0`` and expose the server on every
-    interface. An answered ``--host`` still overrides it via the feature overlay.
+    loopback default, so the bind address is explicit in the file and stays loopback even
+    if the config is later reused under ``ARCHON_SEARCH_CONTAINER=1``, where
+    ``archon-search serve`` (``load_config(serve=True)``) defaults to ``0.0.0.0``.
+    An answered ``--host`` still overrides it via the feature overlay.
     """
     doc = tomlkit.document()
     doc.add("server", tomlkit.table())
@@ -166,6 +166,7 @@ def _write_profile_config(
     that never had it.
     """
     doc = tomlkit.parse(config_path.read_text()) if config_path.exists() else _fresh_config_doc()
+    strip_removed_keys(doc)  # a pre-PyTorch file's ``providers`` keys no longer load; ``device`` replaces them
 
     _apply_profile_keys(doc, profile, profile_name, multilingual)
 

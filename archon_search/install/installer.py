@@ -22,8 +22,14 @@ from typing import Protocol, runtime_checkable
 import click
 import tomlkit
 
-from archon_search._durable_io import atomic_write_bytes
-from archon_search.config import SearchConfig, get_default_config_path, load_config, warn_if_legacy_config_ignored
+from archon_search._durable_io import atomic_write_bytes, ensure_private_dir
+from archon_search.config import (
+    SearchConfig,
+    get_default_config_path,
+    load_config,
+    removed_keys_in,
+    warn_if_legacy_config_ignored,
+)
 from archon_search.key_manager import get_key_file, load_or_generate_key
 from archon_search.paths import get_data_dir, get_fasttext_models_dir
 from archon_search.pipeline import create_pipeline
@@ -31,7 +37,12 @@ from archon_search.platform.runtime import get_runtime, get_search_service
 from archon_search.platform.service import get_secrets_env_file
 from archon_search.platform.types import GpuType
 from archon_search.profiles import InstallProfile, get_profile
-from archon_search.torch_runtime import AUTO_DEVICE, CPU_DEVICE, DEVICE_SETTINGS, resolve_device
+from archon_search.torch_runtime import (
+    AUTO_DEVICE,
+    CPU_DEVICE,
+    DEVICE_SETTINGS,
+    resolve_device,
+)
 
 from .config_writer import (
     WizardFeatures,
@@ -74,15 +85,18 @@ from .prewarm import (
 from .prompts import ask_yes_no
 from .provisioning import BYTES_PER_MB, TORCH_DEVICE_CPU
 from .render import _print_next_steps, _render_provision_failure, _render_summary
-from .service_ops import _create_secrets_env
+
 # Deliberately unused by run(): these names are the patch seam for the S194/S201/S202
 # regression guards asserting run() never calls the race-prone legacy cleanup.
-from .service_ops import _legacy_service_path as _legacy_service_path
-from .service_ops import _remove_legacy_service as _remove_legacy_service
+from .service_ops import (  # noqa: F401 — patch seam, see comment above
+    _create_secrets_env,
+    _legacy_service_path,
+    _remove_legacy_service,
+)
 from .wizard import (
     _graph_candidate_device,
-    _prompt_graph_accelerator,
     _prompt_gpu_confirm,
+    _prompt_graph_accelerator,
     _prompt_multilingual,
     _prompt_optional_features,
     _select_profile,
@@ -219,11 +233,27 @@ class BaseInstaller(ABC):
     dry_run: bool = False
     #: Banner printed at the very start of run() announcing the mode.
     _MODE_BANNER: str = ""
+    #: True only for the wizard: config reads ignore the removed ``providers`` keys it is about to rewrite.
+    _legacy_config: bool = False
 
-    def __init__(self, config_file: str | None = None) -> None:
+    def __init__(self, config_file: str | None = None, *, legacy_config: bool = False) -> None:
+        """*legacy_config* lets every config read ignore the removed ``providers`` keys (the wizard rewrites the file)."""
         self.config_file = config_file
-        cfg = load_config(self.config_path)
+        self._legacy_config = legacy_config
+        cfg = self._load_config(self.config_path)
         self.cfg: SearchConfig = cfg
+
+    def _load_config(self, path: Path) -> SearchConfig:
+        return load_config(path, drop_removed_keys=self._legacy_config)
+
+    def _announce_removed_keys(self, config_path: Path) -> None:
+        """Print one line naming the removed keys *config_path* holds and that the wizard drops."""
+        if not self._legacy_config or not config_path.exists():
+            return
+        removed = removed_keys_in(tomlkit.parse(config_path.read_text(encoding="utf-8")))
+        if removed:
+            verb = "Would drop" if self.dry_run else "Dropping"
+            print(f"{verb} removed config keys {', '.join(removed)} (replaced by device; see BREAKING.md)")
 
     @property
     def config_path(self) -> Path:
@@ -263,14 +293,14 @@ class BaseInstaller(ABC):
             embedder_ok, reranker_ok, warnings = validate_device(
                 AUTO_DEVICE, self.cfg.embedding_model, self.cfg.reranker_model
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — device validation runs third-party backends; any failure means "not validated"
             logger.warning("device validation failed: %s", exc)
             return False
         for warning in warnings:
             logger.warning("device validation: %s", warning)
         return embedder_ok and reranker_ok
 
-    def _probe_and_configure_device(self, gpu: "GpuType") -> list[str]:
+    def _probe_and_configure_device(self, gpu: GpuType) -> list[str]:
         """Step 9: write ``[database].device`` for the GPU the user accepted; return the summary labels.
 
         *gpu* is the accepted accelerator — ``GpuType.NONE`` when none was detected, the
@@ -309,7 +339,7 @@ class BaseInstaller(ABC):
         return [_CPU_LABEL]
 
     @staticmethod
-    def _print_accelerator_fallback(gpu: "GpuType") -> None:
+    def _print_accelerator_fallback(gpu: GpuType) -> None:
         """Warn that the accepted accelerator failed validation; CUDA adds why and where to fix it."""
         name = _ACCELERATOR_NAMES[gpu]
         logger.warning("%s validation failed — falling back to CPU", name)
@@ -325,7 +355,7 @@ class BaseInstaller(ABC):
             )
             print(f"  Commands for each install method: {_CUDA_GUIDE_URL}")
 
-    def _warn_if_retention_inert(self, features: "WizardFeatures") -> None:
+    def _warn_if_retention_inert(self, features: WizardFeatures) -> None:
         """After the config write, warn on stderr that an explicit retention_days is inert
         because the run's telemetry answer is not "on" (config_writer writes it regardless)."""
         if features.telemetry_retention_days is not None and not features.enable_telemetry:
@@ -339,8 +369,8 @@ class BaseInstaller(ABC):
 
     async def _bootstrap_collections(self) -> None:
         """Sync configured collections into the search store."""
-        from archon_search.progress import IndexingStateStore  # noqa: PLC0415
-        from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+        from archon_search.progress import IndexingStateStore
+        from archon_search.sync import SearchCollectionSync
 
         pipeline = create_pipeline(self.cfg)
         try:
@@ -365,7 +395,7 @@ class BaseInstaller(ABC):
             url = f"http://{self.cfg.host}:{self.cfg.port}/health"
             with urllib.request.urlopen(url, timeout=1):
                 return True
-        except Exception:
+        except Exception:  # noqa: BLE001 — any failure to reach the health endpoint means the service is not running
             return False
 
     def _service_log_offset(self) -> int:
@@ -470,7 +500,7 @@ class BaseInstaller(ABC):
     #    Real executes; Dry narrates. run() calls these unconditionally.
 
     @abstractmethod
-    def install_lock(self) -> "contextlib.AbstractContextManager[object]": ...
+    def install_lock(self) -> contextlib.AbstractContextManager[object]: ...
 
     @abstractmethod
     def create_logs_dir(self) -> None: ...
@@ -483,13 +513,13 @@ class BaseInstaller(ABC):
 
     @abstractmethod
     def persist_fresh_config(
-        self, config_path: Path, profile_name: str, is_multilingual: bool, features: "WizardFeatures"
+        self, config_path: Path, profile_name: str, is_multilingual: bool, features: WizardFeatures
     ) -> None: ...
 
     @abstractmethod
     def persist_reinstall_config(
         self, config_path: Path, prof: object, profile_name: str,
-        is_multilingual: bool, features: "WizardFeatures", has_edits: bool,
+        is_multilingual: bool, features: WizardFeatures, has_edits: bool,
     ) -> None: ...
 
     @abstractmethod
@@ -739,12 +769,13 @@ class BaseInstaller(ABC):
 
             # Step 4: config path
             config_path = self.config_path
+            self._announce_removed_keys(config_path)
 
             # Step 5: reinstall check
             db_path = Path(self.cfg.db_path).expanduser()
             reindex_confirmed = False
             if config_path.exists():
-                existing_cfg = load_config(config_path)
+                existing_cfg = self._load_config(config_path)
                 db_path = Path(existing_cfg.db_path).expanduser()
                 try:
                     _check_reinstall_guard(existing_cfg, prof, profile_name, is_multilingual)
@@ -849,7 +880,7 @@ class BaseInstaller(ABC):
                         os.close(fd)
                     os.unlink(tmp_path_str)
             else:
-                self.cfg = cfg = load_config(config_path)
+                self.cfg = cfg = self._load_config(config_path)
 
             # Step 8c: assert the wizard's HyDE / RAG Fusion choices persisted through
             # the write→parse→load round-trip. Surfaces a silent config-write failure
@@ -896,18 +927,17 @@ class BaseInstaller(ABC):
             ))
 
             # Step 13: confirmation
-            if not non_interactive:
-                if not ask_yes_no("Proceed? [y/n]: ", eof_default=False):
-                    print("Installation aborted.")
-                    if features.install_graph_extra:
-                        _revert_graph_enabled_flag(config_path, self.dry_run)
-                    if features.install_multilingual_extra:
-                        _revert_multilingual_flag(config_path, self.dry_run)
-                    if features.enable_hyde or features.enable_rag_fusion:
-                        _revert_query_expansion_flags(config_path, self.dry_run)
-                    if features.graph_provider:
-                        _revert_graph_enrichment_flags(config_path, self.dry_run)
-                    return 1
+            if not non_interactive and not ask_yes_no("Proceed? [y/n]: ", eof_default=False):
+                print("Installation aborted.")
+                if features.install_graph_extra:
+                    _revert_graph_enabled_flag(config_path, self.dry_run)
+                if features.install_multilingual_extra:
+                    _revert_multilingual_flag(config_path, self.dry_run)
+                if features.enable_hyde or features.enable_rag_fusion:
+                    _revert_query_expansion_flags(config_path, self.dry_run)
+                if features.graph_provider:
+                    _revert_graph_enrichment_flags(config_path, self.dry_run)
+                return 1
 
             # Step 9: device configuration (detection + user confirm already done in Step 2b)
             device_labels = self._probe_and_configure_device(gpu if enable_gpu else GpuType.NONE)
@@ -919,7 +949,7 @@ class BaseInstaller(ABC):
                 # Step 14's pre-warm reads self.cfg, and no step before it rewrites the
                 # [database] model or device keys again (the flag reverts below touch
                 # [graph], [hyde], [rag_fusion] and [database].multilingual only).
-                self.cfg = cfg = load_config(config_path)
+                self.cfg = cfg = self._load_config(config_path)
 
             # Step 9b: graph device candidate + the free stage-1 availability
             # pre-check (FE-5 / S31). Runs before the model pre-warm and never loads
@@ -1036,7 +1066,7 @@ class BaseInstaller(ABC):
                         graph_candidate, graph_availability,
                         graph_prewarm_device, non_interactive,
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 — auxiliary step: a failure here must never fail the install
                     # Sanitized on purpose: exc_info here would reach the operator's
                     # stderr through logging.lastResort in an unconfigured CLI process.
                     logger.warning("Could not settle [graph].device — leaving it unchanged (CPU).")
@@ -1088,12 +1118,16 @@ class BaseInstaller(ABC):
                         f"  (keep this key private; also stored at: {get_key_file()})"
                     )
             # Post-install hint: if ANTHROPIC_API_KEY not set and HyDE/RAG Fusion not requested
-            if not self.dry_run and not features.enable_hyde and not features.enable_rag_fusion:
-                if not os.environ.get("ANTHROPIC_API_KEY"):
-                    print(
-                        "Tip: Set $ANTHROPIC_API_KEY to enable AI query expansion "
-                        "(HyDE + RAG Fusion) next run."
-                    )
+            if (
+                not self.dry_run
+                and not features.enable_hyde
+                and not features.enable_rag_fusion
+                and not os.environ.get("ANTHROPIC_API_KEY")
+            ):
+                print(
+                    "Tip: Set $ANTHROPIC_API_KEY to enable AI query expansion "
+                    "(HyDE + RAG Fusion) next run."
+                )
 
             lang = "Multilingual" if is_multilingual else "English"
             print(f"archon-search installed and running. Profile: {profile_name.capitalize()} · {lang}.")
@@ -1188,7 +1222,7 @@ class DryRunInstaller(BaseInstaller):
 
     # -- extracted mutations: narrate, never touch the system -------------
 
-    def install_lock(self) -> "contextlib.AbstractContextManager[object]":
+    def install_lock(self) -> contextlib.AbstractContextManager[object]:
         # A dry-run writes no config/db, so it serializes against nothing and
         # skips the real lock — whose parent.mkdir would leave the data dir behind.
         return contextlib.nullcontext()
@@ -1215,14 +1249,14 @@ class DryRunInstaller(BaseInstaller):
         return True
 
     def persist_fresh_config(
-        self, config_path: Path, profile_name: str, is_multilingual: bool, features: "WizardFeatures"
+        self, config_path: Path, profile_name: str, is_multilingual: bool, features: WizardFeatures
     ) -> None:
         print(f"[DRY RUN] Would write config: {config_path}")
         print(f"[DRY RUN] Would write .bak: {config_path.with_suffix('.toml.bak')}")
 
     def persist_reinstall_config(
         self, config_path: Path, prof: object, profile_name: str,
-        is_multilingual: bool, features: "WizardFeatures", has_edits: bool,
+        is_multilingual: bool, features: WizardFeatures, has_edits: bool,
     ) -> None:
         if has_edits:
             print(
@@ -1291,7 +1325,7 @@ class RealInstaller(BaseInstaller):
     def create_data_dir(self) -> None:
         """Create the search database directory."""
         db_path = Path(self.cfg.db_path).expanduser()
-        db_path.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(db_path)
 
     def write_service_file(self) -> None:
         """Replace the registered service (validate, stop the running instance, register).
@@ -1313,18 +1347,18 @@ class RealInstaller(BaseInstaller):
 
     # -- extracted mutations: perform the real work ----------------------
 
-    def install_lock(self) -> "contextlib.AbstractContextManager[object]":
+    def install_lock(self) -> contextlib.AbstractContextManager[object]:
         return _acquire_install_lock()
 
     def create_logs_dir(self) -> None:
-        (get_data_dir() / "logs").mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(get_data_dir() / "logs")
 
     def download_fasttext_model(self) -> None:
         _download_fasttext_model(get_fasttext_models_dir())
 
     def prepare_db_path(self, expanded: Path) -> bool:
         try:
-            expanded.mkdir(parents=True, exist_ok=True)
+            ensure_private_dir(expanded)
         except OSError as exc:
             print(f"Error: could not create db_path directory {expanded}: {exc}", file=sys.stderr)
             return False
@@ -1337,7 +1371,7 @@ class RealInstaller(BaseInstaller):
         return True
 
     def persist_fresh_config(
-        self, config_path: Path, profile_name: str, is_multilingual: bool, features: "WizardFeatures"
+        self, config_path: Path, profile_name: str, is_multilingual: bool, features: WizardFeatures
     ) -> None:
         # config_path.parent IS the data dir on the default invocation, so this
         # mkdir must stay gated behind RealInstaller or a dry-run recreates it.
@@ -1348,7 +1382,7 @@ class RealInstaller(BaseInstaller):
 
     def persist_reinstall_config(
         self, config_path: Path, prof: object, profile_name: str,
-        is_multilingual: bool, features: "WizardFeatures", has_edits: bool,
+        is_multilingual: bool, features: WizardFeatures, has_edits: bool,
     ) -> None:
         shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
         _write_profile_config(config_path, prof, profile_name, is_multilingual, features=features)
@@ -1395,8 +1429,14 @@ class RealInstaller(BaseInstaller):
         return True
 
 
-def create_installer(config_file: str | None = None, dry_run: bool = False) -> InstallerProtocol:
-    """Return the installer for *dry_run*: DryRunInstaller if true, else RealInstaller."""
+def create_installer(
+    config_file: str | None = None, dry_run: bool = False, *, legacy_config: bool = False
+) -> InstallerProtocol:
+    """Return the installer for *dry_run*: DryRunInstaller if true, else RealInstaller.
+
+    ``legacy_config`` is for the wizard only: it drops the removed ``providers`` keys a config still holds
+    instead of raising ``ConfigError``, because it rewrites the file.
+    """
     if dry_run:
-        return DryRunInstaller(config_file)
-    return RealInstaller(config_file)
+        return DryRunInstaller(config_file, legacy_config=legacy_config)
+    return RealInstaller(config_file, legacy_config=legacy_config)

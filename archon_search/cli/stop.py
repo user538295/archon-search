@@ -5,7 +5,7 @@ import os
 
 import click
 
-from archon_search.cli._helpers import _get_service, _CONTAINER_MSG
+from archon_search.cli._helpers import _CONTAINER_MSG, _get_service
 
 
 @click.command()
@@ -36,6 +36,6 @@ def stop() -> None:
         else:
             click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — CLI boundary: any service failure is reported as one line, exit 1
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)

@@ -91,9 +91,8 @@ def test_unavailable_torch_device_reports_its_own_category(
 
 @pytest.mark.unit
 def test_step_down_to_cpu_is_reported_not_inferred(caplog: pytest.LogCaptureFixture) -> None:
-    with patch.dict(sys.modules, {"torch": _fake_torch(cuda_available=False)}):
-        with caplog.at_level("WARNING"):
-            resolved = probe_device_availability("cuda")
+    with patch.dict(sys.modules, {"torch": _fake_torch(cuda_available=False)}), caplog.at_level("WARNING"):
+        resolved = probe_device_availability("cuda")
     assert resolved == TORCH_DEVICE_CPU  # the real runtime answer, not "cuda"
     assert any("'cuda' is not available" in r.getMessage() for r in caplog.records)
 

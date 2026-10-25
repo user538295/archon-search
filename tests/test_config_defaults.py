@@ -97,6 +97,10 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         # [server]
         "host": "127.0.0.1",
         "port": 8765,
+        "docs_enabled": False,
+        "cors_origins": [],
+        "max_request_body_mb": 32,
+        "graceful_shutdown_seconds": 25,
         # [database]
         "db_path": "~/.archon-search/search",
         "embedding_model": "BAAI/bge-small-en-v1.5",
@@ -199,6 +203,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "exclude": [],
             "prune_expired_chunks": True,
             "graph_gc": True,
+            "version_retention_hours": 24,
         },
         # [auth]
         "auth": {
@@ -210,8 +215,15 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         },
         # [ingest]
         "ingest": {
-            "max_file_mb": 0,
+            "max_file_mb": 100,
             "max_tasks_per_child": DEFAULT_DOCLING_MAX_TASKS_PER_CHILD,
+            "allowed_roots": [],
+            "parse_timeout_seconds": 300.0,
+            "parse_timeout_seconds_per_mb": 10.0,
+            "max_zip_entries": 10_000,
+            "max_zip_uncompressed_mb": 512,
+            "max_discovered_files": 100_000,
+            "max_concurrent_tasks": 4,
         },
         # [graph]
         "graph": {
@@ -229,6 +241,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "community_summary_chunks": 3,
             "max_global_candidates": 100,
             "max_inspection_nodes": 5000,
+            "max_cross_collection_collections": 8,
             "max_inspection_edges": 25000,
             "gc_rebuild_communities": True,
             "gc_rebuild_cpu_priority": "low",
@@ -305,6 +318,7 @@ def test_load_config_rejects_reserved_namespace_deny_all(tmp_path: Path) -> None
 def test_load_config_accepts_valid_namespace_names(tmp_path: Path) -> None:
     """Valid namespace names must load without error."""
     toml = tmp_path / "archon-search.toml"
-    toml.write_text('[namespaces]\n"key1" = "team-a"\n"key2" = "org-b"\n')
+    token_a, token_b = "k1" * 20, "k2" * 20
+    toml.write_text(f'[namespaces]\n"{token_a}" = "team-a"\n"{token_b}" = "org-b"\n')
     config = load_config(path=toml)
-    assert config.namespaces == {"key1": "team-a", "key2": "org-b"}
+    assert config.namespaces == {token_a: "team-a", token_b: "org-b"}

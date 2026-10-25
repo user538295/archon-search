@@ -4,8 +4,12 @@ from __future__ import annotations
 import click
 import httpx
 
+from archon_search.cli._helpers import (
+    _CONNECT_FAIL,
+    _poll_job,
+    _server_connect_fail_msg,
+)
 from archon_search.cli.collection import _DEFAULT_API_URL, _resolve_api_key
-from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _server_connect_fail_msg
 
 
 @click.command()
@@ -40,7 +44,7 @@ def sync(wait_flag: bool, api_url: str, api_key: str | None) -> None:
     if resp.status_code == 409:
         try:
             detail = resp.json().get("detail", "sync already in progress")
-        except Exception:
+        except (ValueError, AttributeError):
             detail = "sync already in progress"
         click.echo(f"Error: {detail}", err=True)
         raise SystemExit(1)

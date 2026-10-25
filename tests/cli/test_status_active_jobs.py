@@ -42,12 +42,11 @@ def test_fetch_active_job_counts_returns_none_on_key_load_error() -> None:
 
 
 def test_fetch_active_job_counts_returns_none_on_http_error() -> None:
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch(
-            "archon_search.cli.status.httpx.get",
-            side_effect=httpx.ConnectError("refused"),
-        ):
-            result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch(
+        "archon_search.cli.status.httpx.get",
+        side_effect=httpx.ConnectError("refused"),
+    ):
+        result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None
 
 
@@ -58,9 +57,8 @@ def test_fetch_active_job_counts_returns_none_on_non_200() -> None:
     err_resp = MagicMock()
     err_resp.status_code = 503
     # First call (RUNNING) returns 200, second (PENDING) returns 503 → None
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=[ok_resp, err_resp]):
-            result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", side_effect=[ok_resp, err_resp]):
+        result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None
 
 
@@ -71,9 +69,8 @@ def test_fetch_active_job_counts_returns_none_on_non_200_first_call() -> None:
     ok_resp.status_code = 200
     ok_resp.json.return_value = {"total": 0}
     # First call (RUNNING) returns 503 → None immediately
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=[err_resp, ok_resp]):
-            result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", side_effect=[err_resp, ok_resp]):
+        result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None
 
 
@@ -84,9 +81,8 @@ def test_fetch_active_job_counts_returns_none_on_invalid_json() -> None:
     p_resp = MagicMock()
     p_resp.status_code = 200
     p_resp.json.return_value = {"total": 0}
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
-            result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
+        result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None
 
 
@@ -97,27 +93,24 @@ def test_fetch_active_job_counts_returns_none_on_attribute_error() -> None:
     p_resp = MagicMock()
     p_resp.status_code = 200
     p_resp.json.return_value = {"total": 0}
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
-            result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
+        result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None
 
 
 def test_fetch_active_job_counts_returns_zero_zero_when_no_active_jobs() -> None:
     r_resp = _mock_jobs_resp([], total=0)
     p_resp = _mock_jobs_resp([], total=0)
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
-            result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
+        result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result == (0, 0)
 
 
 def test_fetch_active_job_counts_counts_running_and_pending_separately() -> None:
     r_resp = _mock_jobs_resp([], total=2)
     p_resp = _mock_jobs_resp([], total=1)
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
-            result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
+        result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result == (2, 1)
 
 
@@ -128,9 +121,8 @@ def test_fetch_active_job_counts_sends_correct_url_and_params() -> None:
         captured.append({"url": url, "params": list(params)})
         return _mock_jobs_resp([], total=0)
 
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=fake_get):
-            status_mod._fetch_active_job_counts("http://localhost:9999/", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", side_effect=fake_get):
+        status_mod._fetch_active_job_counts("http://localhost:9999/", None)
 
     assert len(captured) == 2
     assert captured[0]["url"] == "http://localhost:9999/jobs"
@@ -148,9 +140,8 @@ def test_fetch_active_job_counts_sends_bearer_token() -> None:
         captured_headers.append(dict(headers))
         return _mock_jobs_resp([], total=0)
 
-    with patch("archon_search.cli.status.load_key", return_value="my-secret"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=fake_get):
-            status_mod._fetch_active_job_counts("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="my-secret"), patch("archon_search.cli.status.httpx.get", side_effect=fake_get):
+        status_mod._fetch_active_job_counts("http://localhost:8765", None)
 
     assert len(captured_headers) == 2
     assert captured_headers[0]["Authorization"] == "Bearer my-secret"
@@ -161,9 +152,8 @@ def test_fetch_active_job_counts_uses_total_not_items_count() -> None:
     """total field is used even when items list is empty (e.g. limit=1 returns 1 item but total=150)."""
     r_resp = _mock_jobs_resp([], total=150)
     p_resp = _mock_jobs_resp([], total=75)
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
-            result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
+        result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result == (150, 75)
 
 
@@ -171,9 +161,8 @@ def test_fetch_active_job_counts_total_above_page_cap_returns_accurate_count() -
     """total > 200 (server page cap) returns the real total, not the page size."""
     r_resp = _mock_jobs_resp([], total=500)
     p_resp = _mock_jobs_resp([], total=300)
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
-            result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
+        result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result == (500, 300)
 
 
@@ -183,9 +172,8 @@ def test_fetch_active_job_counts_returns_none_on_non_int_total() -> None:
     r_resp.status_code = 200
     r_resp.json.return_value = {"total": [1, 2]}  # list total — int([1,2]) → TypeError
     p_resp = _mock_jobs_resp([], total=0)
-    with patch("archon_search.cli.status.load_key", return_value="key"):
-        with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
-            result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
+    with patch("archon_search.cli.status.load_key", return_value="key"), patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
+        result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None
 
 
@@ -266,12 +254,12 @@ def test_print_active_jobs_includes_jobs_list_hint() -> None:
 def test_status_cli_shows_jobs_line_when_active_jobs_exist(runner: CliRunner) -> None:
     """Active jobs: status command prints Jobs summary line."""
     server_payload: dict = {"telemetry": None}
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            with patch(
-                "archon_search.cli.status._fetch_active_job_counts", return_value=(2, 5)
-            ):
-                result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+        patch("archon_search.cli.status._fetch_active_job_counts", return_value=(2, 5)),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "Jobs: 2 running, 5 queued" in result.output
     assert "archon-search jobs list" in result.output
@@ -280,25 +268,25 @@ def test_status_cli_shows_jobs_line_when_active_jobs_exist(runner: CliRunner) ->
 def test_status_cli_omits_jobs_line_when_no_active_jobs(runner: CliRunner) -> None:
     """Zero active jobs: jobs line is absent (no clutter in idle case)."""
     server_payload: dict = {"telemetry": None}
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            with patch(
-                "archon_search.cli.status._fetch_active_job_counts", return_value=(0, 0)
-            ):
-                result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+        patch("archon_search.cli.status._fetch_active_job_counts", return_value=(0, 0)),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "Jobs:" not in result.output
 
 
 def test_status_cli_omits_jobs_line_when_server_unreachable(runner: CliRunner) -> None:
     """Server unreachable (server_payload=None): no jobs line, no crash."""
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=None):
-            # _fetch_active_job_counts must NOT be called when server_payload is None
-            with patch(
-                "archon_search.cli.status._fetch_active_job_counts"
-            ) as mock_fetch:
-                result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=None),
+        # _fetch_active_job_counts must NOT be called when server_payload is None
+        patch("archon_search.cli.status._fetch_active_job_counts") as mock_fetch,
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "Jobs:" not in result.output
     mock_fetch.assert_not_called()
@@ -306,15 +294,13 @@ def test_status_cli_omits_jobs_line_when_server_unreachable(runner: CliRunner) -
 
 def test_status_cli_omits_jobs_line_when_auth_failed(runner: CliRunner) -> None:
     """401 response: auth failure message shown, jobs line absent."""
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch(
-            "archon_search.cli.status._fetch_server_status",
-            return_value={"_auth_failed": True},
-        ):
-            with patch(
-                "archon_search.cli.status._fetch_active_job_counts"
-            ) as mock_fetch:
-                result = runner.invoke(main, ["status"])
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()), patch(
+        "archon_search.cli.status._fetch_server_status",
+        return_value={"_auth_failed": True},
+    ), patch(
+        "archon_search.cli.status._fetch_active_job_counts"
+    ) as mock_fetch:
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "Jobs:" not in result.output
     mock_fetch.assert_not_called()
@@ -323,48 +309,48 @@ def test_status_cli_omits_jobs_line_when_auth_failed(runner: CliRunner) -> None:
 def test_status_cli_jobs_line_only_running(runner: CliRunner) -> None:
     """Only running jobs (no pending): 'N running, 0 queued'."""
     server_payload: dict = {"telemetry": None}
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            with patch(
-                "archon_search.cli.status._fetch_active_job_counts", return_value=(3, 0)
-            ):
-                result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+        patch("archon_search.cli.status._fetch_active_job_counts", return_value=(3, 0)),
+    ):
+        result = runner.invoke(main, ["status"])
     assert "Jobs: 3 running, 0 queued" in result.output
 
 
 def test_status_cli_jobs_line_only_pending(runner: CliRunner) -> None:
     """Only pending jobs (nothing running): '0 running, M queued'."""
     server_payload: dict = {"telemetry": None}
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            with patch(
-                "archon_search.cli.status._fetch_active_job_counts", return_value=(0, 4)
-            ):
-                result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+        patch("archon_search.cli.status._fetch_active_job_counts", return_value=(0, 4)),
+    ):
+        result = runner.invoke(main, ["status"])
     assert "Jobs: 0 running, 4 queued" in result.output
 
 
 def test_status_cli_jobs_line_caps_large_counts(runner: CliRunner) -> None:
     """Counts > 50 are capped at '50+' in the display."""
     server_payload: dict = {"telemetry": None}
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            with patch(
-                "archon_search.cli.status._fetch_active_job_counts", return_value=(100, 200)
-            ):
-                result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+        patch("archon_search.cli.status._fetch_active_job_counts", return_value=(100, 200)),
+    ):
+        result = runner.invoke(main, ["status"])
     assert "Jobs: 50+ running, 50+ queued" in result.output
 
 
 def test_status_cli_jobs_line_exactly_50_not_capped(runner: CliRunner) -> None:
     """Counts of exactly 50 are not capped (cap is >50)."""
     server_payload: dict = {"telemetry": None}
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            with patch(
-                "archon_search.cli.status._fetch_active_job_counts", return_value=(50, 50)
-            ):
-                result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+        patch("archon_search.cli.status._fetch_active_job_counts", return_value=(50, 50)),
+    ):
+        result = runner.invoke(main, ["status"])
     assert "Jobs: 50 running, 50 queued" in result.output
     assert "50+" not in result.output
 
@@ -372,12 +358,12 @@ def test_status_cli_jobs_line_exactly_50_not_capped(runner: CliRunner) -> None:
 def test_status_cli_jobs_error_is_silent(runner: CliRunner) -> None:
     """If _fetch_active_job_counts errors (returns None), no crash and no Jobs: line."""
     server_payload: dict = {"telemetry": None}
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            with patch(
-                "archon_search.cli.status._fetch_active_job_counts", return_value=None
-            ):
-                result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+        patch("archon_search.cli.status._fetch_active_job_counts", return_value=None),
+    ):
+        result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     assert "Jobs:" not in result.output
 
@@ -385,10 +371,10 @@ def test_status_cli_jobs_error_is_silent(runner: CliRunner) -> None:
 def test_status_cli_jobs_line_caps_only_running_not_pending(runner: CliRunner) -> None:
     """Asymmetric counts: only running exceeds cap — pending shows exact number."""
     server_payload: dict = {"telemetry": None}
-    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
-            with patch(
-                "archon_search.cli.status._fetch_active_job_counts", return_value=(51, 3)
-            ):
-                result = runner.invoke(main, ["status"])
+    with (
+        patch("archon_search.cli.status._get_service", return_value=_make_svc()),
+        patch("archon_search.cli.status._fetch_server_status", return_value=server_payload),
+        patch("archon_search.cli.status._fetch_active_job_counts", return_value=(51, 3)),
+    ):
+        result = runner.invoke(main, ["status"])
     assert "Jobs: 50+ running, 3 queued" in result.output

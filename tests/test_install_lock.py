@@ -29,13 +29,12 @@ def _dead_pid() -> int:
 
 def test_lock_creates_pid_file(tmp_path: Path) -> None:
     lock_path = tmp_path / ".install.lock"
-    with patch("archon_search.install.lock._install_lock_path", return_value=lock_path):
-        with _acquire_install_lock():
-            assert lock_path.exists()
-            contents = lock_path.read_text()
-            pid_str, ts_str = contents.split(":")
-            assert int(pid_str) == os.getpid()
-            assert int(ts_str) > 0
+    with patch("archon_search.install.lock._install_lock_path", return_value=lock_path), _acquire_install_lock():
+        assert lock_path.exists()
+        contents = lock_path.read_text()
+        pid_str, ts_str = contents.split(":")
+        assert int(pid_str) == os.getpid()
+        assert int(ts_str) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -57,9 +56,8 @@ def test_lock_removes_file_on_exit(tmp_path: Path) -> None:
 def test_lock_removes_file_on_exception(tmp_path: Path) -> None:
     lock_path = tmp_path / ".install.lock"
     with patch("archon_search.install.lock._install_lock_path", return_value=lock_path):
-        with pytest.raises(RuntimeError):
-            with _acquire_install_lock():
-                raise RuntimeError("boom")
+        with pytest.raises(RuntimeError), _acquire_install_lock():
+            raise RuntimeError("boom")
         assert not lock_path.exists()
 
 
@@ -71,10 +69,8 @@ def test_lock_raises_if_live_pid_holds_lock(tmp_path: Path) -> None:
     lock_path = tmp_path / ".install.lock"
     # Write current PID — definitely alive
     lock_path.write_text(f"{os.getpid()}:{int(time.time())}")
-    with patch("archon_search.install.lock._install_lock_path", return_value=lock_path):
-        with pytest.raises(InstallLockError):
-            with _acquire_install_lock():
-                pass
+    with patch("archon_search.install.lock._install_lock_path", return_value=lock_path), pytest.raises(InstallLockError), _acquire_install_lock():
+        pass
 
 
 def test_live_pid_lock_error_names_the_data_dir_lock_path(
@@ -106,12 +102,13 @@ def test_lock_removes_stale_dead_pid_and_proceeds(tmp_path: Path) -> None:
         if pid == dead_pid:
             raise ProcessLookupError
         # real process
-        return None
 
-    with patch("archon_search.install.lock._install_lock_path", return_value=lock_path):
-        with patch("archon_search.install.os.kill", side_effect=fake_kill):
-            with _acquire_install_lock():
-                assert lock_path.exists()
+    with (
+        patch("archon_search.install.lock._install_lock_path", return_value=lock_path),
+        patch("archon_search.install.os.kill", side_effect=fake_kill),
+        _acquire_install_lock(),
+    ):
+        assert lock_path.exists()
     assert not lock_path.exists()
 
 
@@ -127,11 +124,13 @@ def test_lock_treats_permission_error_from_kill_as_live_process(tmp_path: Path) 
     def fake_kill(pid: int, sig: int) -> None:
         raise PermissionError
 
-    with patch("archon_search.install.lock._install_lock_path", return_value=lock_path):
-        with patch("archon_search.install.os.kill", side_effect=fake_kill):
-            with pytest.raises(InstallLockError):
-                with _acquire_install_lock():
-                    pass
+    with (
+        patch("archon_search.install.lock._install_lock_path", return_value=lock_path),
+        patch("archon_search.install.os.kill", side_effect=fake_kill),
+        pytest.raises(InstallLockError),
+        _acquire_install_lock(),
+    ):
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -147,10 +146,12 @@ def test_lock_uses_o_excl_for_atomic_creation(tmp_path: Path) -> None:
         captured_flags.append(flags)
         return real_os_open(path, flags, mode)
 
-    with patch("archon_search.install.lock._install_lock_path", return_value=lock_path):
-        with patch("archon_search.install.os.open", side_effect=fake_os_open):
-            with _acquire_install_lock():
-                pass
+    with (
+        patch("archon_search.install.lock._install_lock_path", return_value=lock_path),
+        patch("archon_search.install.os.open", side_effect=fake_os_open),
+        _acquire_install_lock(),
+    ):
+        pass
 
     assert captured_flags, "os.open was not called"
     assert captured_flags[0] & os.O_EXCL, "O_EXCL flag not set"
@@ -169,12 +170,14 @@ def test_lock_uses_platform_safe_pid_check(tmp_path: Path) -> None:
     mock_psutil = MagicMock()
     mock_psutil.pid_exists.return_value = True  # treat as alive → InstallLockError
 
-    with patch("archon_search.install.lock._install_lock_path", return_value=lock_path):
-        with patch("archon_search.install.sys.platform", "win32"):
-            with patch.dict("sys.modules", {"psutil": mock_psutil}):
-                with pytest.raises(InstallLockError):
-                    with _acquire_install_lock():
-                        pass
+    with (
+        patch("archon_search.install.lock._install_lock_path", return_value=lock_path),
+        patch("archon_search.install.sys.platform", "win32"),
+        patch.dict("sys.modules", {"psutil": mock_psutil}),
+        pytest.raises(InstallLockError),
+        _acquire_install_lock(),
+    ):
+        pass
 
     mock_psutil.pid_exists.assert_called_once_with(some_pid)
 
@@ -187,10 +190,12 @@ def test_lock_handles_corrupted_pid_file(tmp_path: Path) -> None:
     lock_path = tmp_path / ".install.lock"
     lock_path.write_text("not-a-pid")
 
-    with patch("archon_search.install.lock._install_lock_path", return_value=lock_path):
+    with (
+        patch("archon_search.install.lock._install_lock_path", return_value=lock_path),
         # Should treat as stale and succeed
-        with _acquire_install_lock():
-            assert lock_path.exists()
+        _acquire_install_lock(),
+    ):
+        assert lock_path.exists()
     assert not lock_path.exists()
 
 
@@ -205,10 +210,9 @@ def test_lock_concurrent_acquisition_blocks_second_caller(tmp_path: Path) -> Non
     second_result: list[Exception | None] = [None]
 
     def first_thread() -> None:
-        with patch("archon_search.install.lock._install_lock_path", return_value=lock_path):
-            with _acquire_install_lock():
-                lock_held.set()
-                lock_released.wait(timeout=5)
+        with patch("archon_search.install.lock._install_lock_path", return_value=lock_path), _acquire_install_lock():
+            lock_held.set()
+            lock_released.wait(timeout=5)
 
     def second_thread() -> None:
         lock_held.wait(timeout=5)
@@ -257,6 +261,5 @@ def test_lock_retry_raises_when_second_o_excl_fails(tmp_path: Path) -> None:
         patch("archon_search.install.os.open", side_effect=patched_os_open),
     ):
         import pytest
-        with pytest.raises(InstallLockError):
-            with _acquire_install_lock():
-                pass
+        with pytest.raises(InstallLockError), _acquire_install_lock():
+            pass

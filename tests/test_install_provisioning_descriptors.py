@@ -5,7 +5,10 @@ import dataclasses
 
 import pytest
 
-from archon_search.install.extras import CODE_EXTRA_SIZE_ESTIMATE, GRAPH_MODEL_SIZE_ESTIMATE
+from archon_search.install.extras import (
+    CODE_EXTRA_SIZE_ESTIMATE,
+    GRAPH_MODEL_SIZE_ESTIMATE,
+)
 from archon_search.install.licenses import FASTTEXT_ARTIFACT, FASTTEXT_MODEL_URL
 from archon_search.install.provisioning import (
     DEVICE_PROBE_NOT_YET_VALIDATED,

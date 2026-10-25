@@ -1,7 +1,9 @@
 """Interactive prompts and pickers for the install wizard."""
 from __future__ import annotations
 
+import contextlib
 import functools
+import http.client
 import json
 import logging
 import os
@@ -131,9 +133,9 @@ def _fetch_ollama_models(base_url: str) -> list[str]:
     """
     url = _normalise_base_url(base_url, _OLLAMA_DEFAULT_PORT) + "/api/tags"
     try:
-        with urllib.request.urlopen(url, timeout=_OLLAMA_FETCH_TIMEOUT_SECONDS) as resp:  # noqa: S310 (operator-supplied Ollama URL)
+        with urllib.request.urlopen(url, timeout=_OLLAMA_FETCH_TIMEOUT_SECONDS) as resp:
             payload = json.loads(resp.read())
-    except Exception:  # noqa: BLE001 — best-effort probe; any failure (incl. http.client.IncompleteRead on a truncated body) → free-text fallback
+    except (OSError, ValueError, http.client.HTTPException):
         return []
     models = payload.get("models") if isinstance(payload, dict) else None
     if not isinstance(models, list):
@@ -267,7 +269,7 @@ def _list_cached_models_via_cli() -> list[str]:
     if binary is None:
         return []
     try:
-        proc = subprocess.run(  # noqa: S603 — fixed argv, no shell, binary resolved from PATH
+        proc = subprocess.run(
             [binary, "cli", "-cl"],
             capture_output=True,
             text=True,
@@ -275,7 +277,7 @@ def _list_cached_models_via_cli() -> list[str]:
             timeout=_LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS,
             check=False,
         )
-    except Exception:  # noqa: BLE001 — best-effort probe; any failure → free-text fallback
+    except (OSError, ValueError, subprocess.SubprocessError):
         return []
     if proc.returncode != 0:
         return []
@@ -310,9 +312,8 @@ def _gguf_cache_roots() -> list[Path]:
     root is skipped.
     """
     roots: list[Path] = []
-    if llama_cache := os.environ.get("LLAMA_CACHE"):
-        if (root := _expanded(llama_cache)) is not None:
-            roots.append(root)
+    if (llama_cache := os.environ.get("LLAMA_CACHE")) and (root := _expanded(llama_cache)) is not None:
+        roots.append(root)
 
     xdg_cache_env = os.environ.get("XDG_CACHE_HOME")
     xdg_cache = _expanded(xdg_cache_env or "~/.cache")
@@ -359,17 +360,15 @@ def _scan_gguf_cache_dirs() -> list[str]:
     found: dict[Path, tuple[Path, str]] = {}
     try:
         roots = _gguf_cache_roots()
-    except Exception:  # noqa: BLE001 — best-effort probe; any failure → free-text fallback
+    except Exception:  # noqa: BLE001 — documented "never raises": enumerating roots is best-effort and must not abort the wizard
         return []
     for root in roots:
-        try:
+        with contextlib.suppress(OSError, ValueError, RuntimeError):
             for path in sorted(root.glob("**/*.gguf")):
                 if path.is_file():
                     resolved = path.resolve()
                     if resolved not in found:
                         found[resolved] = (root, path.relative_to(root).as_posix())
-        except Exception:  # noqa: BLE001 — best-effort probe; one bad root must not cancel the others
-            continue
 
     label_counts: dict[str, int] = {}
     for _root, label in found.values():
@@ -472,8 +471,8 @@ def _prompt_local_provider_model(
 
 
 def _prompt_graph_provider(
-    ask_yn: "Callable[[str], bool]",
-    ask_choice: "Callable[[str, set[str], str], str]",
+    ask_yn: Callable[[str], bool],
+    ask_choice: Callable[[str, set[str], str], str],
     ollama_base_url_default: str,
     llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
 ) -> tuple[str, str, str, str]:
@@ -566,7 +565,7 @@ def _pick_claude_model(feature_label: str) -> str:
 
 def _prompt_provider(
     feature_label: str,
-    ask_choice: "Callable[[str, set[str], str], str]",
+    ask_choice: Callable[[str, set[str], str], str],
     ollama_base_url_default: str,
     llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
 ) -> tuple[str, str, str, str]:
@@ -594,7 +593,7 @@ def _prompt_provider(
     return provider, "", "", ""
 
 
-def _resolve_answer(flag: _T | None, non_interactive: bool, ask: Callable[[], _T]) -> _T | None:
+def _resolve_answer[T](flag: _T | None, non_interactive: bool, ask: Callable[[], _T]) -> _T | None:
     """Resolve one optional-feature question whose ``None`` means "never answered".
 
     An explicit CLI *flag* wins and is always written; a non-interactive run with

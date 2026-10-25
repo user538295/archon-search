@@ -6,7 +6,11 @@ import dataclasses
 import pytest
 
 from archon_search.config import SearchConfig
-from archon_search.install import InstallError, NeedsForceDeleteError, _check_reinstall_guard
+from archon_search.install import (
+    InstallError,
+    NeedsForceDeleteError,
+    _check_reinstall_guard,
+)
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
 
 

@@ -6,7 +6,12 @@ import logging
 import click
 import httpx
 
-from archon_search.cli._helpers import _CONNECT_FAIL, _LOCK_WAITING_REQUEST_TIMEOUT_S, _poll_job, _server_connect_fail_msg
+from archon_search.cli._helpers import (
+    _CONNECT_FAIL,
+    _LOCK_WAITING_REQUEST_TIMEOUT_S,
+    _poll_job,
+    _server_connect_fail_msg,
+)
 from archon_search.key_manager import load_key
 from archon_search.paths import get_data_dir
 
@@ -121,7 +126,7 @@ def add(path: str, wait_flag: bool, api_url: str, api_key: str | None) -> None:
     if resp.status_code == 409:
         try:
             detail = resp.json().get("detail", "collection already registered")
-        except Exception:
+        except (ValueError, AttributeError):
             detail = "collection already registered"
         click.echo(f"Error: {detail}", err=True)
         raise SystemExit(1)
@@ -305,7 +310,7 @@ def reindex_metadata_cmd(
     if resp.status_code == 409:
         try:
             detail = resp.json().get("detail", "metadata reindex already in progress")
-        except Exception:
+        except (ValueError, AttributeError):
             detail = "metadata reindex already in progress"
         click.echo(f"Error: {detail}", err=True)
         raise SystemExit(1)

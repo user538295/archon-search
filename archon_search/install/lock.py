@@ -44,7 +44,7 @@ def _acquire_install_lock() -> Iterator[None]:
 
     def _try_create() -> int:
         """Atomically create the lock file; return the fd or raise FileExistsError."""
-        return os.open(str(lock_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)  # noqa: durable-write — PID lock file; O_EXCL is the atomic guard, not a data write
+        return os.open(str(lock_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)  # durable-write-exempt — PID lock file; O_EXCL is the atomic guard, not a data write
 
     def _claim_lock() -> None:
         """Write our PID:timestamp into the fd obtained from _try_create."""

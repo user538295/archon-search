@@ -53,13 +53,12 @@ def _mock_installer(tmp_path: Path, **extra_patches: Any):
         k.replace("archon_search.install.installer.", ""): v
         for k, v in base_patches.items()
         if k.startswith("archon_search.install.") and "RealInstaller." not in k
+    }), patch.multiple(RealInstaller, **{
+        k.replace("archon_search.install.RealInstaller.", ""): v
+        for k, v in base_patches.items()
+        if "RealInstaller." in k
     }):
-        with patch.multiple(RealInstaller, **{
-            k.replace("archon_search.install.RealInstaller.", ""): v
-            for k, v in base_patches.items()
-            if "RealInstaller." in k
-        }):
-            yield config_path
+        yield config_path
 
 
 # ---------------------------------------------------------------------------
@@ -206,23 +205,23 @@ def test_run_reinstall_different_profile_no_force_returns_1(tmp_path: Path) -> N
 
 # All optional-feature flags are pre-answered so the ONLY input() call left in an
 # interactive run is the new reindex-confirmation prompt.
-_PREANSWERED_FEATURES = dict(
-    install_code=False,
-    disable_reranker=False,
-    enable_watch=False,
-    enable_telemetry=False,
-    eager_load=False,
-    routing_strategy="centroid",
-    log_format="text",
-)
+_PREANSWERED_FEATURES = {
+    "install_code": False,
+    "disable_reranker": False,
+    "enable_watch": False,
+    "enable_telemetry": False,
+    "eager_load": False,
+    "routing_strategy": "centroid",
+    "log_format": "text",
+}
 
 
 def test_run_interactive_guard_confirm_yes_reindexes(tmp_path: Path) -> None:
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
 
-    from archon_search.install import _profile_toml
     from archon_search.config import load_config
+    from archon_search.install import _profile_toml
     config_path.write_text(_profile_toml("minimal", False))
     existing_db_path = Path(load_config(config_path).db_path).expanduser()
     existing_db_path.mkdir(parents=True, exist_ok=True)  # simulate an existing index on disk
@@ -552,11 +551,10 @@ def test_run_writes_the_server_key_after_prewarm_and_before_the_service_starts(
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
-    }):
-        with patch.multiple(RealInstaller, **method_patches):
-            rc = create_installer(config_file=str(config_path)).run(
-                non_interactive=True, profile="minimal", skip_preload=False, server_key="a" * 32
-            )
+    }), patch.multiple(RealInstaller, **method_patches):
+        rc = create_installer(config_file=str(config_path)).run(
+            non_interactive=True, profile="minimal", skip_preload=False, server_key="a" * 32
+        )
 
     assert rc == 0
     method_patches["write_server_key"].assert_called_once_with("a" * 32)
@@ -707,8 +705,8 @@ def test_run_force_delete_db_different_profile_succeeds(tmp_path: Path) -> None:
     db_path.mkdir()  # simulate existing DB
 
     # Write existing minimal config
-    from archon_search.install import _profile_toml
     from archon_search.config import load_config
+    from archon_search.install import _profile_toml
     config_path.write_text(_profile_toml("minimal", False))
 
     # Read the db_path from the config before running (to verify rmtree target)
@@ -1235,7 +1233,7 @@ def test_run_non_interactive_uses_defaults(tmp_path: Path) -> None:
     # _prompt_multilingual receives non_interactive=True and flag_value=None (default)
     prompt_multilingual_mock.assert_called_once_with(True, None)
     # _prompt_optional_features receives non_interactive=True
-    args, kwargs = prompt_features_mock.call_args
+    args, _kwargs = prompt_features_mock.call_args
     assert args[0] is True  # non_interactive
     # _prompt_gpu_confirm receives non_interactive=True
     prompt_gpu_mock.assert_called_once_with(True, GpuType.NONE)
@@ -1246,8 +1244,8 @@ def test_run_disable_reranker_writes_empty_string(tmp_path: Path) -> None:
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
 
-    from archon_search.install import WizardFeatures
     from archon_search.config import load_config
+    from archon_search.install import WizardFeatures
     features = WizardFeatures(disable_reranker=True)
 
     with (
@@ -1279,8 +1277,8 @@ def test_run_watch_written_to_config(tmp_path: Path) -> None:
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
 
-    from archon_search.install import WizardFeatures
     from archon_search.config import load_config
+    from archon_search.install import WizardFeatures
     features = WizardFeatures(enable_watch=True)
 
     with (
@@ -1312,8 +1310,8 @@ def test_run_force_reinstall_preserves_features(tmp_path: Path) -> None:
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
 
-    from archon_search.install import WizardFeatures, _profile_toml
     from archon_search.config import load_config
+    from archon_search.install import WizardFeatures, _profile_toml
     features = WizardFeatures(enable_watch=True)
     config_path.write_text(_profile_toml("minimal", False))
 
@@ -1445,16 +1443,15 @@ def test_prompt_order_gpu_before_license(tmp_path: Path) -> None:
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
-    }):
-        with patch.multiple(RealInstaller, **method_patches):
-            installer = create_installer(config_file=str(config_path))
-            with patch("archon_search.install.installer._requires_jina_license", return_value=True):
-                rc = installer.run(
-                    non_interactive=True,
-                    profile="minimal",
-                    skip_preload=True,
-                    accept_jina_license=True,
-                )
+    }), patch.multiple(RealInstaller, **method_patches):
+        installer = create_installer(config_file=str(config_path))
+        with patch("archon_search.install.installer._requires_jina_license", return_value=True):
+            rc = installer.run(
+                non_interactive=True,
+                profile="minimal",
+                skip_preload=True,
+                accept_jina_license=True,
+            )
 
     assert rc == 0
     assert "gpu_confirm" in call_log
@@ -1470,16 +1467,15 @@ def test_prompt_order_optional_features_after_license(tmp_path: Path) -> None:
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
-    }):
-        with patch.multiple(RealInstaller, **method_patches):
-            installer = create_installer(config_file=str(config_path))
-            with patch("archon_search.install.installer._requires_jina_license", return_value=True):
-                rc = installer.run(
-                    non_interactive=True,
-                    profile="minimal",
-                    skip_preload=True,
-                    accept_jina_license=True,
-                )
+    }), patch.multiple(RealInstaller, **method_patches):
+        installer = create_installer(config_file=str(config_path))
+        with patch("archon_search.install.installer._requires_jina_license", return_value=True):
+            rc = installer.run(
+                non_interactive=True,
+                profile="minimal",
+                skip_preload=True,
+                accept_jina_license=True,
+            )
 
     assert rc == 0
     assert "optional_features" in call_log
@@ -1500,14 +1496,13 @@ def test_gpu_prompt_before_config_write(tmp_path: Path) -> None:
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
-    }):
-        with patch.multiple(RealInstaller, **method_patches):
-            installer = create_installer(config_file=str(config_path))
-            rc = installer.run(
-                non_interactive=True,
-                profile="minimal",
-                skip_preload=True,
-            )
+    }), patch.multiple(RealInstaller, **method_patches):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+        )
 
     assert rc == 0
     assert "gpu_confirm" in call_log
@@ -1527,14 +1522,13 @@ def test_device_probe_after_config_write(tmp_path: Path) -> None:
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
-    }):
-        with patch.multiple(RealInstaller, **method_patches):
-            installer = create_installer(config_file=str(config_path))
-            rc = installer.run(
-                non_interactive=True,
-                profile="minimal",
-                skip_preload=True,
-            )
+    }), patch.multiple(RealInstaller, **method_patches):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+        )
 
     assert rc == 0
     assert "write_profile_config" in call_log
@@ -1566,12 +1560,11 @@ def test_graph_device_is_settled_after_the_prewarm(tmp_path: Path) -> None:
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
-    }):
-        with patch.multiple(RealInstaller, **method_patches):
-            rc = create_installer(config_file=str(config_path)).run(
-                non_interactive=True, profile="minimal",
-                graph_device="cuda",
-            )
+    }), patch.multiple(RealInstaller, **method_patches):
+        rc = create_installer(config_file=str(config_path)).run(
+            non_interactive=True, profile="minimal",
+            graph_device="cuda",
+        )
 
     assert rc == 0
     assert call_log.index("preload_models") < call_log.index("settle_graph_device"), call_log
@@ -1598,12 +1591,11 @@ def test_graph_extra_and_graph_device_reach_the_prewarm(tmp_path: Path) -> None:
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
-    }):
-        with patch.multiple(RealInstaller, **method_patches):
-            rc = create_installer(config_file=str(config_path)).run(
-                non_interactive=True, profile="minimal",
-                graph_device="cuda",
-            )
+    }), patch.multiple(RealInstaller, **method_patches):
+        rc = create_installer(config_file=str(config_path)).run(
+            non_interactive=True, profile="minimal",
+            graph_device="cuda",
+        )
 
     assert rc == 0
     prewarm_mock.assert_called_once()
@@ -1627,11 +1619,10 @@ def test_a_failure_settling_graph_device_never_fails_the_install(tmp_path: Path)
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
-    }):
-        with patch.multiple(RealInstaller, **method_patches):
-            rc = create_installer(config_file=str(config_path)).run(
-                non_interactive=True, profile="minimal",
-            )
+    }), patch.multiple(RealInstaller, **method_patches):
+        rc = create_installer(config_file=str(config_path)).run(
+            non_interactive=True, profile="minimal",
+        )
 
     assert rc == 0
 
@@ -1651,11 +1642,10 @@ def test_graph_device_is_not_settled_when_prewarm_is_skipped(tmp_path: Path) -> 
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
-    }):
-        with patch.multiple(RealInstaller, **method_patches):
-            rc = create_installer(config_file=str(config_path)).run(
-                non_interactive=True, profile="minimal", skip_preload=True,
-            )
+    }), patch.multiple(RealInstaller, **method_patches):
+        rc = create_installer(config_file=str(config_path)).run(
+            non_interactive=True, profile="minimal", skip_preload=True,
+        )
 
     assert rc == 0
     graph_mock.assert_not_called()
@@ -1666,7 +1656,7 @@ def test_graph_device_is_not_settled_when_the_graph_extra_failed(tmp_path: Path)
     into a config whose graph is now off."""
     from archon_search.install import WizardFeatures
     from archon_search.install.errors import InstallError
-    config_path, call_log, patches, method_patches = _make_ordered_installer(tmp_path)
+    config_path, _call_log, patches, method_patches = _make_ordered_installer(tmp_path)
 
     patches["archon_search.install.installer._prompt_optional_features"] = MagicMock(
         return_value=WizardFeatures(install_graph_extra=True)
@@ -1681,11 +1671,10 @@ def test_graph_device_is_not_settled_when_the_graph_extra_failed(tmp_path: Path)
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
-    }):
-        with patch.multiple(RealInstaller, **method_patches):
-            rc = create_installer(config_file=str(config_path)).run(
-                non_interactive=True, profile="minimal",
-            )
+    }), patch.multiple(RealInstaller, **method_patches):
+        rc = create_installer(config_file=str(config_path)).run(
+            non_interactive=True, profile="minimal",
+        )
 
     assert rc == 0
     graph_mock.assert_not_called()
@@ -2208,7 +2197,7 @@ def test_run_success_prints_full_key_file(tmp_path: Path, capsys) -> None:
 
 def test_run_success_key_not_printed_in_dry_run(tmp_path: Path, capsys) -> None:
     """In dry-run mode, API key is NOT printed in success output."""
-    rc, stdout = _run_with_key_source(
+    _rc, stdout = _run_with_key_source(
         tmp_path,
         _FAKE_KEY,
         "auto-generated",
@@ -2464,16 +2453,15 @@ def test_multilingual_skip_preload_downloads_model_but_not_heavy_weights(tmp_pat
         _prompt_fasttext_license=MagicMock(),
     )
 
-    with patch.multiple("archon_search.install.installer", **patches):
-        with patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES):
-            installer = create_installer(config_file=str(config_path))
-            rc = installer.run(
-                non_interactive=True,
-                profile="minimal",
-                multilingual=True,
-                skip_preload=True,
-                accept_fasttext_license=True,
-            )
+    with patch.multiple("archon_search.install.installer", **patches), patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            multilingual=True,
+            skip_preload=True,
+            accept_fasttext_license=True,
+        )
 
     assert rc == 0
     download_mock.assert_called_once()   # tiny required model downloaded
@@ -2495,16 +2483,15 @@ def test_multilingual_skip_preload_without_license_flag_stops(tmp_path: Path) ->
         _download_fasttext_model=download_mock,
     )
 
-    with patch.multiple("archon_search.install.installer", **patches):
-        with patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES):
-            installer = create_installer(config_file=str(config_path))
-            rc = installer.run(
-                non_interactive=True,
-                profile="minimal",
-                multilingual=True,
-                skip_preload=True,
-                accept_fasttext_license=False,
-            )
+    with patch.multiple("archon_search.install.installer", **patches), patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            multilingual=True,
+            skip_preload=True,
+            accept_fasttext_license=False,
+        )
 
     assert rc == 1
     download_mock.assert_not_called()
@@ -2528,16 +2515,15 @@ def test_multilingual_download_failure_degrades_to_english(tmp_path: Path) -> No
         _install_multilingual_extra=install_extra_mock,
     )
 
-    with patch.multiple("archon_search.install.installer", **patches):
-        with patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES):
-            installer = create_installer(config_file=str(config_path))
-            rc = installer.run(
-                non_interactive=True,
-                profile="minimal",
-                multilingual=True,
-                skip_preload=True,
-                accept_fasttext_license=True,
-            )
+    with patch.multiple("archon_search.install.installer", **patches), patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            multilingual=True,
+            skip_preload=True,
+            accept_fasttext_license=True,
+        )
 
     assert rc == 0
     assert config_path.exists()
@@ -2569,17 +2555,19 @@ def test_no_rendered_failure_contains_exception_text(tmp_path: Path, capsys, cap
         _prompt_fasttext_license=MagicMock(),
     )
 
-    with caplog.at_level(logging.WARNING, logger="archon_search.install.installer"):
-        with patch.multiple("archon_search.install.installer", **patches):
-            with patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES):
-                installer = create_installer(config_file=str(config_path))
-                rc = installer.run(
-                    non_interactive=True,
-                    profile="minimal",
-                    multilingual=True,
-                    skip_preload=True,
-                    accept_fasttext_license=True,
-                )
+    with (
+        caplog.at_level(logging.WARNING, logger="archon_search.install.installer"),
+        patch.multiple("archon_search.install.installer", **patches),
+        patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES),
+    ):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            multilingual=True,
+            skip_preload=True,
+            accept_fasttext_license=True,
+        )
 
     assert rc == 0
     captured = capsys.readouterr()
@@ -2613,16 +2601,15 @@ def test_bare_oserror_from_provisioning_degrades_instead_of_crashing(tmp_path: P
         _prompt_fasttext_license=MagicMock(),
     )
 
-    with patch.multiple("archon_search.install.installer", **patches):
-        with patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES):
-            installer = create_installer(config_file=str(config_path))
-            rc = installer.run(
-                non_interactive=True,
-                profile="minimal",
-                multilingual=True,
-                skip_preload=True,
-                accept_fasttext_license=True,
-            )
+    with patch.multiple("archon_search.install.installer", **patches), patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            multilingual=True,
+            skip_preload=True,
+            accept_fasttext_license=True,
+        )
 
     assert rc == 0
     captured = capsys.readouterr()

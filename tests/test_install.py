@@ -116,7 +116,7 @@ class TestSearchInstallerInit:
             installer = create_installer()
         assert installer.config_file is None
         assert installer.config_path == tmp_path / "archon-search.toml"
-        mock_load.assert_called_once_with(tmp_path / "archon-search.toml")
+        mock_load.assert_called_once_with(tmp_path / "archon-search.toml", drop_removed_keys=False)
 
     @pytest.mark.parametrize("config_arg", ["conf/archon-search.toml", "~/conf/archon-search.toml"])
     def test_config_path_is_absolute_for_relative_or_tilde_config(
@@ -1340,9 +1340,8 @@ class TestWaitForService:
 
         with patch.object(installer, "_is_service_running", side_effect=KeyboardInterrupt), \
              patch.object(time_module, "sleep"), \
-             patch.object(time_module, "monotonic", side_effect=monotonic_values):
-            with pytest.raises(KeyboardInterrupt):
-                installer._wait_for_service()
+             patch.object(time_module, "monotonic", side_effect=monotonic_values), pytest.raises(KeyboardInterrupt):
+            installer._wait_for_service()
 
         captured = capsys.readouterr()
         assert "Waiting for search service" in captured.out
@@ -1757,8 +1756,8 @@ class TestRunNonBlocking:
         installer = _make_installer(tmp_path)
         call_order: list[str] = []
 
-        def record(name: str):  # noqa: ANN001, ANN202
-            def _side_effect(*args: object, **kwargs: object) -> object:  # noqa: ANN401
+        def record(name: str):
+            def _side_effect(*args: object, **kwargs: object) -> object:
                 call_order.append(name)
                 if name == "load_service":
                     return 0
@@ -1976,7 +1975,11 @@ class TestInstallerStructure:
 
 class TestCreateInstallerFactory:
     def test_dry_run_true_returns_dry_run_installer(self, tmp_path: Path) -> None:
-        from archon_search.install import DryRunInstaller, InstallerProtocol, create_installer
+        from archon_search.install import (
+            DryRunInstaller,
+            InstallerProtocol,
+            create_installer,
+        )
 
         config_toml = tmp_path / "archon-search.toml"
         config_toml.write_text("")
@@ -1989,7 +1992,11 @@ class TestCreateInstallerFactory:
         assert installer.config_file == str(config_toml)
 
     def test_dry_run_false_returns_real_installer(self, tmp_path: Path) -> None:
-        from archon_search.install import InstallerProtocol, RealInstaller, create_installer
+        from archon_search.install import (
+            InstallerProtocol,
+            RealInstaller,
+            create_installer,
+        )
 
         config_toml = tmp_path / "archon-search.toml"
         config_toml.write_text("")

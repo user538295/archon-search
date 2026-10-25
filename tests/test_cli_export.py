@@ -4,11 +4,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from _cli_server_stub import server_reported_stopped
 from click.testing import CliRunner
 
 from archon_search.cli.export_cmd import export_cmd, import_cmd
-from _cli_server_stub import server_reported_stopped
-
 
 # ---------------------------------------------------------------------------
 # Helpers

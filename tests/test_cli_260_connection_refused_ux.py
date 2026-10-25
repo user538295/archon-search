@@ -16,7 +16,6 @@ import httpx
 import pytest
 from click.testing import CliRunner
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -264,8 +263,8 @@ def test_collection_migrate_unreachable_api_url_reports_target_not_running() -> 
     correct answer — the local instance is a different server than the one the operator named.
     """
     from archon_search.cli import _helpers
-    from archon_search.cli.collection import collection
     from archon_search.cli._helpers import _SERVER_NOT_RUNNING_MSG
+    from archon_search.cli.collection import collection
     from archon_search.platform.service import ServiceStatus
 
     local_service = MagicMock()
@@ -313,16 +312,16 @@ def test_message_consistent_across_modules() -> None:
     the "not running" and "starting up" wording. That shared function is what must
     be the same object everywhere.
     """
-    from archon_search.cli._helpers import _server_connect_fail_msg
-    import archon_search.cli.key_cmd as km
     import archon_search.cli.backup_cmd as bm
-    import archon_search.cli.maintenance_cmd as mm
-    import archon_search.cli.sync as sm
-    import archon_search.cli.ingest as im
-    import archon_search.cli.graph_cmd as gm
-    import archon_search.cli.jobs_cmd as jm
     import archon_search.cli.collection as cm
     import archon_search.cli.export_cmd as em
+    import archon_search.cli.graph_cmd as gm
+    import archon_search.cli.ingest as im
+    import archon_search.cli.jobs_cmd as jm
+    import archon_search.cli.key_cmd as km
+    import archon_search.cli.maintenance_cmd as mm
+    import archon_search.cli.sync as sm
+    from archon_search.cli._helpers import _server_connect_fail_msg
 
     for mod in (km, bm, mm, sm, im, gm, jm, cm, em):
         assert hasattr(mod, "_server_connect_fail_msg"), (
@@ -347,7 +346,10 @@ def test_server_connect_fail_msg_custom_url_local_service_running_returns_not_ru
     must NOT appear. The message must describe the target the operator asked about,
     not the local instance.
     """
-    from archon_search.cli._helpers import _server_connect_fail_msg, _SERVER_NOT_RUNNING_MSG
+    from archon_search.cli._helpers import (
+        _SERVER_NOT_RUNNING_MSG,
+        _server_connect_fail_msg,
+    )
 
     mock_svc = MagicMock()
     mock_svc.status.return_value = MagicMock(running=True)

@@ -43,7 +43,7 @@ def _child_acquire(
     os.environ["ARCHON_SEARCH_DATA_DIR"] = data_dir
 
     # Import AFTER the env var is set so get_data_dir() picks it up.
-    from archon_search.install import InstallLockError, _acquire_install_lock  # noqa: PLC0415
+    from archon_search.install import InstallLockError, _acquire_install_lock
 
     if wait_event is not None:
         wait_event.wait(timeout=15)
@@ -56,7 +56,7 @@ def _child_acquire(
         result_queue.put(("ok", None))
     except InstallLockError:
         result_queue.put(("err", "InstallLockError"))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — child process must report any failure type to the parent via the queue instead of dying
         result_queue.put(("err", type(exc).__name__))
 
 

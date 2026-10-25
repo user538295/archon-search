@@ -432,7 +432,7 @@ def _print_status_text(data: dict[str, Any]) -> None:
         try:
             config = load_config()
             keep = config.backup.keep
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — the header's keep= is best-effort; any config failure just omits it
             keep = None
         keep_str = f", keep={keep}" if keep is not None else ""
         click.echo(

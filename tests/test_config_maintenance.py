@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.config import load_config
+from archon_search.config import ConfigError, load_config
 
 
 @pytest.fixture
@@ -70,6 +70,24 @@ def test_maintenance_config_from_toml(_no_env: None, tmp_path: Path) -> None:
     assert m.retry_max_attempts == 5
     assert m.retry_max_age_hours == 48
     assert m.exclude == ["ns1/col-a", "col-b"]
+
+
+def test_version_retention_hours_defaults_to_a_day_and_loads_from_toml(_no_env: None, tmp_path: Path) -> None:
+    assert load_config(path=tmp_path / "nonexistent.toml").maintenance.version_retention_hours == 24
+    cfg_path = tmp_path / "archon-search.toml"
+    cfg_path.write_text("[maintenance]\nversion_retention_hours = 6\n", encoding="utf-8")
+
+    assert load_config(path=cfg_path).maintenance.version_retention_hours == 6
+
+
+@pytest.mark.parametrize("value", ["0", "-3"])
+def test_version_retention_hours_below_one_is_rejected(_no_env: None, tmp_path: Path, value: str) -> None:
+    """Zero would delete versions a reader still holds; the message names the key."""
+    cfg_path = tmp_path / "archon-search.toml"
+    cfg_path.write_text(f"[maintenance]\nversion_retention_hours = {value}\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match=r"\[maintenance\]\.version_retention_hours must be >= 1"):
+        load_config(path=cfg_path)
 
 
 # ---------------------------------------------------------------------------

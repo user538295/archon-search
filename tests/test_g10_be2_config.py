@@ -26,7 +26,6 @@ import pytest
 
 from archon_search.config import ConfigError, HyDEConfig, RAGFusionConfig
 
-
 # ---------------------------------------------------------------------------
 # Default values
 # ---------------------------------------------------------------------------
@@ -51,7 +50,7 @@ def test_config_ollama_base_url_default() -> None:
 
 def _make_toml_doc(section: str, **kwargs: object) -> object:
     """Build a minimal tomlkit document with ``section`` and ``kwargs`` fields."""
-    import tomlkit  # noqa: PLC0415
+    import tomlkit
 
     doc = tomlkit.document()
     tbl = tomlkit.table()
@@ -63,7 +62,7 @@ def _make_toml_doc(section: str, **kwargs: object) -> object:
 
 def test_config_invalid_provider_raises_config_error() -> None:
     """_apply_toml with provider='foobar' must raise ConfigError for hyde and rag_fusion."""
-    from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
+    from archon_search.config import SearchConfig, _apply_toml
 
     # HyDE
     config = SearchConfig()
@@ -90,11 +89,11 @@ def test_config_ollama_package_absent_raises_config_error(
     """create_app() with provider='ollama' + ollama package absent → ConfigError."""
     monkeypatch.setitem(sys.modules, "ollama", None)  # type: ignore[arg-type]
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "ab" * 32)
 
-    from archon_search.config import HyDEConfig, SearchConfig  # noqa: PLC0415
-    from archon_search.jobs.store import JobStore  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.config import HyDEConfig, SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.hyde = HyDEConfig(provider="ollama")
@@ -114,16 +113,16 @@ def test_config_empty_model_with_non_anthropic_provider_raises_config_error(
 ) -> None:
     """provider='ollama', model='' → ConfigError at startup naming the field."""
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "ab" * 32)
 
     # Make sure ollama IS importable (so only the empty-model guard fires)
-    import types  # noqa: PLC0415
+    import types
     fake_ollama = types.ModuleType("ollama")
     monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
 
-    from archon_search.config import HyDEConfig, SearchConfig  # noqa: PLC0415
-    from archon_search.jobs.store import JobStore  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.config import HyDEConfig, SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.hyde = HyDEConfig(provider="ollama", model="")
@@ -137,16 +136,16 @@ def test_config_non_anthropic_with_explicit_model_ok(
     tmp_path: Path,
 ) -> None:
     """provider='ollama', model='llama3.2' (non-empty) → no ConfigError."""
-    import types  # noqa: PLC0415
+    import types
     fake_ollama = types.ModuleType("ollama")
     monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "ab" * 32)
 
-    from archon_search.config import HyDEConfig, SearchConfig  # noqa: PLC0415
-    from archon_search.jobs.store import JobStore  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.config import HyDEConfig, SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.hyde = HyDEConfig(provider="ollama", model="llama3.2")
@@ -165,11 +164,11 @@ def test_config_anthropic_with_empty_model_ok(
 ) -> None:
     """provider='anthropic', model='' → no ConfigError (sentinel only for non-Anthropic)."""
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "ab" * 32)
 
-    from archon_search.config import HyDEConfig, SearchConfig  # noqa: PLC0415
-    from archon_search.jobs.store import JobStore  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.config import HyDEConfig, SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.hyde = HyDEConfig(provider="anthropic", model="")
@@ -192,11 +191,11 @@ def test_config_openai_package_absent_raises_config_error(
     """create_app() with provider='openai' + openai package absent → ConfigError."""
     monkeypatch.setitem(sys.modules, "openai", None)  # type: ignore[arg-type]
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "ab" * 32)
 
-    from archon_search.config import HyDEConfig, SearchConfig  # noqa: PLC0415
-    from archon_search.jobs.store import JobStore  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.config import HyDEConfig, SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.hyde = HyDEConfig(provider="openai", model="gpt-4o-mini")
@@ -212,7 +211,7 @@ def test_config_openai_package_absent_raises_config_error(
 
 def test_config_ollama_base_url_empty_raises_config_error() -> None:
     """_apply_toml with ollama_base_url='' must raise ConfigError for hyde."""
-    from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
+    from archon_search.config import SearchConfig, _apply_toml
 
     config = SearchConfig()
     doc = _make_toml_doc("hyde", ollama_base_url="")
@@ -222,7 +221,7 @@ def test_config_ollama_base_url_empty_raises_config_error() -> None:
 
 def test_config_ollama_base_url_whitespace_raises_config_error() -> None:
     """_apply_toml with ollama_base_url='   ' (whitespace-only) must raise ConfigError."""
-    from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
+    from archon_search.config import SearchConfig, _apply_toml
 
     config = SearchConfig()
     doc = _make_toml_doc("hyde", ollama_base_url="   ")
@@ -232,7 +231,7 @@ def test_config_ollama_base_url_whitespace_raises_config_error() -> None:
 
 def test_config_rag_fusion_ollama_base_url_whitespace_raises_config_error() -> None:
     """_apply_toml with [rag_fusion].ollama_base_url='   ' must raise ConfigError."""
-    from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
+    from archon_search.config import SearchConfig, _apply_toml
 
     config = SearchConfig()
     doc = _make_toml_doc("rag_fusion", ollama_base_url="   ")
@@ -252,11 +251,11 @@ def test_config_rag_fusion_ollama_package_absent_raises_config_error(
     """create_app() with rag_fusion provider='ollama' + ollama package absent → ConfigError."""
     monkeypatch.setitem(sys.modules, "ollama", None)  # type: ignore[arg-type]
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "ab" * 32)
 
-    from archon_search.config import RAGFusionConfig, SearchConfig  # noqa: PLC0415
-    from archon_search.jobs.store import JobStore  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.config import RAGFusionConfig, SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.rag_fusion = RAGFusionConfig(provider="ollama", model="llama3.2")
@@ -301,11 +300,11 @@ def test_config_openai_empty_model_raises_config_error(
     fake_openai = types.ModuleType("openai")
     monkeypatch.setitem(sys.modules, "openai", fake_openai)
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "ab" * 32)
 
-    from archon_search.config import HyDEConfig, SearchConfig  # noqa: PLC0415
-    from archon_search.jobs.store import JobStore  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.config import HyDEConfig, SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.hyde = HyDEConfig(provider="openai", model="")
@@ -327,11 +326,11 @@ def test_config_rag_fusion_empty_model_raises_config_error(
     fake_ollama = types.ModuleType("ollama")
     monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "ab" * 32)
 
-    from archon_search.config import RAGFusionConfig, SearchConfig  # noqa: PLC0415
-    from archon_search.jobs.store import JobStore  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.config import RAGFusionConfig, SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.rag_fusion = RAGFusionConfig(provider="ollama", model="")
@@ -351,7 +350,7 @@ def test_config_toml_empty_model_with_ollama_provider_raises_config_error() -> N
     _apply_toml validates model non-emptiness independently of provider — the
     generic empty-string guard in ``_apply_toml``'s ``[hyde]`` branch fires before _check_provider_deps.
     """
-    from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
+    from archon_search.config import SearchConfig, _apply_toml
 
     config = SearchConfig()
     doc = _make_toml_doc("hyde", provider="ollama", model="")
@@ -366,28 +365,28 @@ def test_config_toml_empty_model_with_ollama_provider_raises_config_error() -> N
 
 def test_llama_cpp_in_valid_providers() -> None:
     """'llama_cpp' must be a member of _VALID_PROVIDERS after registry derivation."""
-    from archon_search.config import _VALID_PROVIDERS  # noqa: PLC0415
+    from archon_search.config import _VALID_PROVIDERS
 
     assert "llama_cpp" in _VALID_PROVIDERS
 
 
 def test_provider_key_available_llama_cpp() -> None:
     """provider_key_available('llama_cpp') must return True (local inference; no key)."""
-    from archon_search.query_expansion_protocol import provider_key_available  # noqa: PLC0415
+    from archon_search.query_expansion_protocol import provider_key_available
 
     assert provider_key_available("llama_cpp") is True
 
 
 def test_llama_cpp_base_url_default() -> None:
     """LLAMA_CPP_BASE_URL_DEFAULT must be 'http://localhost:8080'."""
-    from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT  # noqa: PLC0415
+    from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT
 
     assert LLAMA_CPP_BASE_URL_DEFAULT == "http://localhost:8080"
 
 
 def test_toml_loader_hyde_llama_cpp_base_url(tmp_path: Path) -> None:
     """A non-default [hyde].llama_cpp_base_url round-trips through load_config()."""
-    from archon_search.config import load_config  # noqa: PLC0415
+    from archon_search.config import load_config
 
     toml_file = tmp_path / "archon-search.toml"
     toml_file.write_text(
@@ -400,7 +399,7 @@ def test_toml_loader_hyde_llama_cpp_base_url(tmp_path: Path) -> None:
 
 def test_toml_loader_rag_fusion_llama_cpp_base_url(tmp_path: Path) -> None:
     """A non-default [rag_fusion].llama_cpp_base_url round-trips through load_config()."""
-    from archon_search.config import load_config  # noqa: PLC0415
+    from archon_search.config import load_config
 
     toml_file = tmp_path / "archon-search.toml"
     toml_file.write_text(
@@ -417,7 +416,7 @@ def test_config_llama_cpp_base_url_empty_raises_config_error() -> None:
     Mirrors test_config_ollama_base_url_empty_raises_config_error — the
     llama_cpp_base_url loader branch uses the same non-empty-string validation.
     """
-    from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
+    from archon_search.config import SearchConfig, _apply_toml
 
     config = SearchConfig()
     doc = _make_toml_doc("hyde", llama_cpp_base_url="")
@@ -427,7 +426,7 @@ def test_config_llama_cpp_base_url_empty_raises_config_error() -> None:
 
 def test_config_llama_cpp_base_url_whitespace_raises_config_error() -> None:
     """_apply_toml with llama_cpp_base_url='   ' (whitespace-only) must raise ConfigError."""
-    from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
+    from archon_search.config import SearchConfig, _apply_toml
 
     config = SearchConfig()
     doc = _make_toml_doc("hyde", llama_cpp_base_url="   ")
@@ -437,7 +436,7 @@ def test_config_llama_cpp_base_url_whitespace_raises_config_error() -> None:
 
 def test_config_rag_fusion_llama_cpp_base_url_whitespace_raises_config_error() -> None:
     """_apply_toml with [rag_fusion].llama_cpp_base_url='   ' must raise ConfigError."""
-    from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
+    from archon_search.config import SearchConfig, _apply_toml
 
     config = SearchConfig()
     doc = _make_toml_doc("rag_fusion", llama_cpp_base_url="   ")
@@ -458,14 +457,14 @@ def test_config_hyde_llama_cpp_provider_builds_successfully(
 ) -> None:
     """create_app() with [hyde].provider='llama_cpp' builds the real adapter (BE-3)."""
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "ab" * 32)
 
-    from archon_search.config import HyDEConfig, SearchConfig  # noqa: PLC0415
-    from archon_search.jobs.store import JobStore  # noqa: PLC0415
-    from archon_search.providers.llama_cpp_provider import (  # noqa: PLC0415
+    from archon_search.config import HyDEConfig, SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.providers.llama_cpp_provider import (
         LlamaCppQueryExpansionProvider,
     )
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.hyde = HyDEConfig(provider="llama_cpp")
@@ -481,14 +480,14 @@ def test_config_rag_fusion_llama_cpp_provider_builds_successfully(
 ) -> None:
     """create_app() with [rag_fusion].provider='llama_cpp' builds the real adapter (BE-3)."""
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "ab" * 32)
 
-    from archon_search.config import RAGFusionConfig, SearchConfig  # noqa: PLC0415
-    from archon_search.jobs.store import JobStore  # noqa: PLC0415
-    from archon_search.providers.llama_cpp_provider import (  # noqa: PLC0415
+    from archon_search.config import RAGFusionConfig, SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.providers.llama_cpp_provider import (
         LlamaCppQueryExpansionProvider,
     )
-    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.server.app import create_app
 
     config = SearchConfig()
     config.rag_fusion = RAGFusionConfig(provider="llama_cpp")
@@ -505,10 +504,10 @@ def test_config_rag_fusion_llama_cpp_provider_builds_successfully(
 
 def test_build_query_expansion_provider_builds_llama_cpp() -> None:
     """_build_query_expansion_provider('llama_cpp', ...) returns the real adapter."""
-    from archon_search.providers.llama_cpp_provider import (  # noqa: PLC0415
+    from archon_search.providers.llama_cpp_provider import (
         LlamaCppQueryExpansionProvider,
     )
-    from archon_search.server.app import _build_query_expansion_provider  # noqa: PLC0415
+    from archon_search.server.app import _build_query_expansion_provider
 
     provider = _build_query_expansion_provider(
         "llama_cpp", "some-model", "http://localhost:11434", "http://localhost:9090"
@@ -524,8 +523,8 @@ def test_check_provider_deps_llama_cpp_no_raise(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig  # noqa: PLC0415
-    from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+    from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig
+    from archon_search.server.app import _check_provider_deps
 
     config = SearchConfig()
     config.hyde = HyDEConfig(provider="llama_cpp")
@@ -536,6 +535,6 @@ def test_check_provider_deps_llama_cpp_no_raise(monkeypatch: pytest.MonkeyPatch)
 
 def test_no_pip_extra_for_llama_cpp() -> None:
     """_PROVIDER_EXTRA.get('llama_cpp') is None — no new package to install (S14)."""
-    from archon_search.install.extras import _PROVIDER_EXTRA  # noqa: PLC0415
+    from archon_search.install.extras import _PROVIDER_EXTRA
 
     assert _PROVIDER_EXTRA.get("llama_cpp") is None

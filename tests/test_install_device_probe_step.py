@@ -196,9 +196,8 @@ class TestProbeAndConfigureDevice:
         toml_file = _make_toml(tmp_path)
         installer = create_installer(config_file=str(toml_file))
 
-        with patch(_RESOLVE, return_value="mps"), patch(_VALIDATE, side_effect=RuntimeError("boom")):
-            with caplog.at_level(logging.WARNING):
-                labels = installer._probe_and_configure_device(GpuType.METAL)
+        with patch(_RESOLVE, return_value="mps"), patch(_VALIDATE, side_effect=RuntimeError("boom")), caplog.at_level(logging.WARNING):
+            labels = installer._probe_and_configure_device(GpuType.METAL)
 
         assert labels == ["CPU"]
         assert _device(toml_file) == "cpu"
@@ -207,9 +206,12 @@ class TestProbeAndConfigureDevice:
     def test_the_probe_warnings_are_logged(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         installer = create_installer(config_file=str(_make_toml(tmp_path)))
 
-        with patch(_RESOLVE, return_value="mps"), patch(_VALIDATE, return_value=(True, True, ["reranker probe failed"])):
-            with caplog.at_level(logging.WARNING):
-                installer._probe_and_configure_device(GpuType.METAL)
+        with (
+            patch(_RESOLVE, return_value="mps"),
+            patch(_VALIDATE, return_value=(True, True, ["reranker probe failed"])),
+            caplog.at_level(logging.WARNING),
+        ):
+            installer._probe_and_configure_device(GpuType.METAL)
 
         assert "device validation: reranker probe failed" in caplog.text
 
@@ -233,10 +235,10 @@ class TestProbeAndConfigureDevice:
         assert _device(toml_file) == "cpu"
         assert capsys.readouterr().out.splitlines() == [
             "Warning: CUDA validation failed — falling back to CPU.",
-            "  Text search and result ranking will run on CPU: PyTorch found no usable CUDA device "
-            "(a CPU-only PyTorch build, or no compatible NVIDIA driver), or a model failed its check.",
-            "  To run them on the GPU, install a CUDA build of PyTorch and an NVIDIA driver it supports, "
-            "then re-run the wizard.",
+            ("  Text search and result ranking will run on CPU: PyTorch found no usable CUDA device "
+            "(a CPU-only PyTorch build, or no compatible NVIDIA driver), or a model failed its check."),
+            ("  To run them on the GPU, install a CUDA build of PyTorch and an NVIDIA driver it supports, "
+            "then re-run the wizard."),
             f"  Commands for each install method: {_CUDA_GUIDE_URL}",
         ]
         assert any(

@@ -28,7 +28,6 @@ from .config_writer import WizardFeatures
 from .errors import InstallError
 from .provisioning import SizeEstimateSpec
 
-
 # ---------------------------------------------------------------------------
 # Code enrichment package install (Task C8-2.3)
 # ---------------------------------------------------------------------------
@@ -226,10 +225,10 @@ _CUDA_PROBE_SNIPPET = "import torch; print(torch.cuda.is_available())"
 def _torch_cuda_available() -> bool:
     """True when this process's PyTorch sees a CUDA device; False when torch is unusable."""
     try:
-        import torch  # noqa: PLC0415 — lazy: keeps wizard startup free of PyTorch
+        import torch
 
         return bool(torch.cuda.is_available())
-    except Exception:  # a broken torch install must not abort the wizard
+    except Exception:  # noqa: BLE001 — a broken torch install must not abort the wizard
         return False
 
 

@@ -2,7 +2,7 @@
 
 The `serve` command is a foreground-blocking entry point used by the Docker
 container. It:
-  - Calls `load_config(path, serve=True)` so the host default is `0.0.0.0`.
+  - Calls `load_config(path, serve=True)` so the host default is `0.0.0.0` inside the container (loopback natively).
   - Calls `run_server(config, config_path)` and never touches platform service management.
   - Resolves the default config under ARCHON_SEARCH_DATA_DIR, so a container's
     config lives inside its /data volume without an explicit ARCHON_SEARCH_CONFIG.
@@ -17,7 +17,12 @@ import pytest
 from click.testing import CliRunner
 
 from archon_search.cli.main import main
-from archon_search.config import ConfigError, SearchConfig, warn_if_legacy_config_ignored
+from archon_search.config import (
+    ConfigError,
+    SearchConfig,
+    warn_if_legacy_config_ignored,
+)
+from archon_search.constants import CONTAINER_BIND_HOST, CONTAINER_ENV_VAR
 
 
 @pytest.fixture
@@ -67,12 +72,21 @@ def test_serve_uses_serve_load_config(runner: CliRunner) -> None:
     assert kwargs.get("serve") is True, f"Expected serve=True, got {mock_load.call_args}"
 
 
-def test_serve_host_defaults_to_0000(
+@pytest.mark.parametrize(
+    ("container_env", "expected_host"),
+    [(None, "127.0.0.1"), ("1", CONTAINER_BIND_HOST)],
+    ids=["native-loopback", "container-binds-all-interfaces"],
+)
+def test_serve_host_default_depends_on_the_container_flag(
     runner: CliRunner,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    container_env: str | None,
+    expected_host: str,
 ) -> None:
-    """With no env/TOML overrides, the loaded config's host is 0.0.0.0 in serve mode."""
+    """With no env/TOML overrides, `serve` binds loopback natively and every interface only inside the container."""
+    if container_env is not None:
+        monkeypatch.setenv(CONTAINER_ENV_VAR, container_env)
     captured: dict[str, SearchConfig] = {}
 
     def _capture(cfg: SearchConfig, config_path: Path | None = None) -> None:
@@ -84,7 +98,7 @@ def test_serve_host_defaults_to_0000(
     with patch("archon_search.server.app.run_server", side_effect=_capture):
         result = runner.invoke(main, ["serve", "--config", str(nonexistent)])
     assert result.exit_code == 0, result.output
-    assert captured["cfg"].host == "0.0.0.0"
+    assert captured["cfg"].host == expected_host
 
 
 def test_serve_respects_host_env_var(
@@ -264,7 +278,7 @@ def test_serve_does_not_call_service_management(runner: CliRunner) -> None:
 
 def test_serve_registered_in_cli() -> None:
     """`serve` must be registered as a top-level subcommand of `main`."""
-    from archon_search.cli.main import main as main_group  # noqa: F401 — import in test for explicitness
+    from archon_search.cli.main import main as main_group
 
     assert "serve" in main_group.commands, (
         f"`serve` missing from CLI commands: {sorted(main_group.commands)}"

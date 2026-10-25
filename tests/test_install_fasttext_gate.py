@@ -5,7 +5,6 @@ import pytest
 
 from archon_search.install import _prompt_fasttext_license
 
-
 # ---------------------------------------------------------------------------
 # _prompt_fasttext_license
 # ---------------------------------------------------------------------------

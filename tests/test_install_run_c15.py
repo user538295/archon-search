@@ -80,15 +80,14 @@ def _run_installer(
     with patch.multiple(
         "archon_search.install.installer",
         **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
-    ):
-        with patch.multiple(RealInstaller, **method_patches):
-            installer = create_installer(config_file=str(config_path))
-            rc = installer.run(
-                non_interactive=True,
-                profile="minimal",
-                skip_preload=True,
-                **run_kwargs,
-            )
+    ), patch.multiple(RealInstaller, **method_patches):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+            **run_kwargs,
+        )
     return rc, config_path
 
 
@@ -269,28 +268,30 @@ def _run_with_server_key(
         {"ARCHON_SEARCH_DATA_DIR": str(tmp_path), **(extra_env or {})},
     )
 
-    with env_context:
-        with patch.multiple(
+    with (
+        env_context,
+        patch.multiple(
             "archon_search.install.installer",
             **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
-        ):
-            with patch.multiple(RealInstaller, **method_patches):
-                with patch("archon_search.install.installer.atomic_write_bytes", side_effect=capturing_atomic_write):
-                    with patch("archon_search.install.os.chmod"):
-                        installer = create_installer(config_file=str(config_path))
-                        rc = installer.run(
-                            non_interactive=True,
-                            profile="minimal",
-                            skip_preload=True,
-                            server_key=server_key,
-                        )
+        ),
+        patch.multiple(RealInstaller, **method_patches),
+        patch("archon_search.install.installer.atomic_write_bytes", side_effect=capturing_atomic_write),
+        patch("archon_search.install.os.chmod"),
+    ):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+            server_key=server_key,
+        )
     return rc, config_path, atomic_calls
 
 
 def test_run_server_key_writes_key_file(tmp_path: Path) -> None:
     """run(server_key=<32-hex>) → KEY_FILE written with correct content."""
     key_file = tmp_path / ".search.env"
-    rc, config_path, atomic_calls = _run_with_server_key(tmp_path, _VALID_SERVER_KEY)
+    rc, _config_path, atomic_calls = _run_with_server_key(tmp_path, _VALID_SERVER_KEY)
 
     assert rc == 0
     # Find the call that targeted key_file
@@ -315,20 +316,17 @@ def test_run_server_key_sets_mode_600(tmp_path: Path) -> None:
         chmod_calls.append((path, mode))
         # Don't actually chmod in tests (key_file doesn't need real mode change)
 
-    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
-        with patch.multiple(
-            "archon_search.install.installer",
-            **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
-        ):
-            with patch.multiple(RealInstaller, **method_patches):
-                with patch("archon_search.install.os.chmod", side_effect=capturing_chmod):
-                    installer = create_installer(config_file=str(config_path))
-                    rc = installer.run(
-                        non_interactive=True,
-                        profile="minimal",
-                        skip_preload=True,
-                        server_key=_VALID_SERVER_KEY,
-                    )
+    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}), patch.multiple(
+        "archon_search.install.installer",
+        **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
+    ), patch.multiple(RealInstaller, **method_patches), patch("archon_search.install.os.chmod", side_effect=capturing_chmod):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+            server_key=_VALID_SERVER_KEY,
+        )
 
     assert rc == 0
     # Find the chmod call for the key file (may be other chmod calls e.g. from shutil)
@@ -339,7 +337,7 @@ def test_run_server_key_sets_mode_600(tmp_path: Path) -> None:
 
 def test_run_server_key_prints_history_warning(tmp_path: Path, capsys) -> None:
     """run(server_key=...) → shell history warning printed to stdout."""
-    rc, config_path, _ = _run_with_server_key(tmp_path, _VALID_SERVER_KEY)
+    rc, _config_path, _ = _run_with_server_key(tmp_path, _VALID_SERVER_KEY)
 
     assert rc == 0
     captured = capsys.readouterr()
@@ -348,7 +346,7 @@ def test_run_server_key_prints_history_warning(tmp_path: Path, capsys) -> None:
 
 def test_run_server_key_prints_restart_note(tmp_path: Path, capsys) -> None:
     """run(server_key=...) → restart note printed."""
-    rc, config_path, _ = _run_with_server_key(tmp_path, _VALID_SERVER_KEY)
+    rc, _config_path, _ = _run_with_server_key(tmp_path, _VALID_SERVER_KEY)
 
     assert rc == 0
     captured = capsys.readouterr()
@@ -357,7 +355,7 @@ def test_run_server_key_prints_restart_note(tmp_path: Path, capsys) -> None:
 
 def test_run_server_key_with_env_var_prints_priority_warning(tmp_path: Path, capsys) -> None:
     """run(server_key=...) with ARCHON_SEARCH_API_KEY env set → priority warning printed."""
-    rc, config_path, _ = _run_with_server_key(
+    rc, _config_path, _ = _run_with_server_key(
         tmp_path,
         _VALID_SERVER_KEY,
         extra_env={"ARCHON_SEARCH_API_KEY": "b" * 64},
@@ -374,7 +372,7 @@ def test_run_no_server_key_does_not_write_key_file(tmp_path: Path) -> None:
     key_file = tmp_path / ".search.env"
 
     # Run without server_key and verify key_file is not created
-    rc, config_path = _run_installer(tmp_path, {})
+    rc, _config_path = _run_installer(tmp_path, {})
 
     assert rc == 0
     assert not key_file.exists(), "Key file should not be created when server_key not passed"
@@ -390,20 +388,17 @@ def test_run_dry_run_server_key_prints_message(tmp_path: Path, capsys) -> None:
 
     method_patches = _method_patches()
 
-    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
-        with patch.multiple(
-            "archon_search.install.installer",
-            **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
-        ):
-            with patch.multiple(DryRunInstaller, **method_patches):
-                with patch("archon_search.install.config_writer.atomic_write_bytes") as mock_write:
-                    installer = create_installer(config_file=str(config_path), dry_run=True)
-                    rc = installer.run(
-                        non_interactive=True,
-                        profile="minimal",
-                        skip_preload=True,
-                        server_key=_VALID_SERVER_KEY,
-                    )
+    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}), patch.multiple(
+        "archon_search.install.installer",
+        **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
+    ), patch.multiple(DryRunInstaller, **method_patches), patch("archon_search.install.config_writer.atomic_write_bytes") as mock_write:
+        installer = create_installer(config_file=str(config_path), dry_run=True)
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+            server_key=_VALID_SERVER_KEY,
+        )
 
     assert rc == 0
     captured = capsys.readouterr()
@@ -423,7 +418,7 @@ def test_run_db_path_creates_directory(tmp_path: Path) -> None:
     db_dir = tmp_path / "custom_db"
     assert not db_dir.exists()
 
-    rc, config_path = _run_installer(tmp_path, {"db_path": str(db_dir)})
+    rc, _config_path = _run_installer(tmp_path, {"db_path": str(db_dir)})
 
     assert rc == 0
     assert db_dir.exists()
@@ -435,7 +430,7 @@ def test_run_db_path_not_writable_exits(tmp_path: Path) -> None:
     db_dir.mkdir()
 
     with patch("archon_search.install.os.access", return_value=False):
-        rc, config_path = _run_installer(tmp_path, {"db_path": str(db_dir)})
+        rc, _config_path = _run_installer(tmp_path, {"db_path": str(db_dir)})
 
     assert rc == 1
 
@@ -469,15 +464,14 @@ def test_run_db_path_migration_note_when_different(tmp_path: Path, capsys) -> No
     with patch.multiple(
         "archon_search.install.installer",
         **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
-    ):
-        with patch.multiple(RealInstaller, **method_patches):
-            installer = create_installer(config_file=str(config_path))
-            rc = installer.run(
-                non_interactive=True,
-                profile="minimal",
-                skip_preload=True,
-                db_path=str(db_dir),
-            )
+    ), patch.multiple(RealInstaller, **method_patches):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+            db_path=str(db_dir),
+        )
 
     assert rc == 0
     captured = capsys.readouterr()

@@ -12,7 +12,6 @@ from archon_search.config import load_config
 from archon_search.install import WizardFeatures
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
 
-
 # ---------------------------------------------------------------------------
 # _write_profile_config tests
 # ---------------------------------------------------------------------------

@@ -500,6 +500,7 @@ def test_mask_api_key_with_equals_in_value(tmp_path):
 def test_next_steps_not_printed_in_dry_run(tmp_path, capsys):
     """_print_next_steps must NOT be called during a dry-run wizard run."""
     from unittest.mock import patch
+
     from archon_search.install import BaseInstaller, DryRunInstaller, create_installer
     from archon_search.platform.types import GpuType
 

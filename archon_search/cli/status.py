@@ -214,7 +214,7 @@ def status(as_json: bool, api_url: str, api_key: str | None) -> None:
     """Show archon-search service status."""
     try:
         svc_status = _get_service().status()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — CLI boundary: any service failure is reported as one line, exit 1
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
 

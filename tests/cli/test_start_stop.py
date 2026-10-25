@@ -187,9 +187,8 @@ def test_get_service_win32_returns_windows() -> None:
 def test_get_service_unknown_platform_raises() -> None:
     from archon_search.cli._helpers import _get_service
 
-    with patch.object(sys, "platform", "freebsd13"):
-        with pytest.raises(NotImplementedError, match="Unsupported platform"):
-            _get_service()
+    with patch.object(sys, "platform", "freebsd13"), pytest.raises(NotImplementedError, match="Unsupported platform"):
+        _get_service()
 
 
 def test_get_service_returns_correct_type_for_current_platform() -> None:

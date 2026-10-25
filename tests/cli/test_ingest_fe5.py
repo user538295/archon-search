@@ -13,10 +13,10 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from _cli_server_stub import server_reported_stopped
 from click.testing import CliRunner
 
 from archon_search.cli.ingest import ingest
-from _cli_server_stub import server_reported_stopped
 
 
 def _mock_response(status_code: int, body: dict | None = None, text: str = "") -> MagicMock:

@@ -1,11 +1,14 @@
 """Secrets-env creation and legacy service-file cleanup."""
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import sys
 from pathlib import Path
 
 import click
+
+from archon_search._durable_io import ensure_private_dir
 
 
 def _create_secrets_env(secrets_path: Path, *, dry_run: bool = False) -> bool:
@@ -22,7 +25,7 @@ def _create_secrets_env(secrets_path: Path, *, dry_run: bool = False) -> bool:
         return False
     if secrets_path.exists():
         return False
-    secrets_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(secrets_path.parent)
     secrets_path.touch(mode=0o600)
     secrets_path.chmod(0o600)
     return True
@@ -41,17 +44,15 @@ def _legacy_service_path() -> Path:
 
 def _remove_legacy_service(legacy_path: Path) -> None:
     """Unload and remove a legacy externally-managed service definition."""
-    try:
+    with contextlib.suppress(OSError):  # best-effort
         if sys.platform == "darwin":
             subprocess.run(["launchctl", "unload", str(legacy_path)], check=False, capture_output=True)
         elif sys.platform.startswith("linux"):
             service_name = legacy_path.stem
             subprocess.run(["systemctl", "--user", "stop", service_name], check=False, capture_output=True)
             subprocess.run(["systemctl", "--user", "disable", service_name], check=False, capture_output=True)
-    except Exception:
-        pass  # best-effort
     try:
         legacy_path.unlink(missing_ok=True)
         click.echo(f"Removed legacy service file: {legacy_path}")
-    except Exception as exc:
+    except OSError as exc:
         click.echo(f"Warning: could not remove legacy service file: {exc}", err=True)

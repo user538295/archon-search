@@ -67,15 +67,15 @@ class DeviceProbeResult:
             )
 
     @staticmethod
-    def resolved(device: str) -> "DeviceProbeResult":
+    def resolved(device: str) -> DeviceProbeResult:
         return DeviceProbeResult(device=device, failure=None, not_yet_validated=False)
 
     @staticmethod
-    def failed(kind: ProvisionFailureKind) -> "DeviceProbeResult":
+    def failed(kind: ProvisionFailureKind) -> DeviceProbeResult:
         return DeviceProbeResult(device=None, failure=kind, not_yet_validated=False)
 
     @staticmethod
-    def not_validated() -> "DeviceProbeResult":
+    def not_validated() -> DeviceProbeResult:
         return DeviceProbeResult(
             device=DEVICE_PROBE_NOT_YET_VALIDATED, failure=None, not_yet_validated=True
         )

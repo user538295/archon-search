@@ -32,13 +32,34 @@ enabled = true
 # rotate_grace_seconds = 0
 
 [ingest]
-# Maximum file size allowed for ingest operations. 0 = no limit (default).
-# When set to a positive integer, any single file whose size exceeds this limit
-# is rejected with a clear error naming the file size, the limit, and this key.
+# Largest file (and largest inline document) one ingest accepts, in MiB. Default 100;
+# 0 = no limit. A single file over the limit is rejected with a clear error naming the
+# file size, the limit, and this key.
 # Use this to protect memory-constrained hosts from unexpectedly large files.
 # Directory ingest: oversized files produce per-file errors; the batch continues.
 # Negative values are invalid and raise a ConfigError at server start.
-# max_file_mb = 0  # 0 = no limit
+# max_file_mb = 100
+
+# Absolute directories a client-supplied ingest path must lie under. Empty (default) adds no
+# restriction beyond the always-on deny list (the data dir, /proc, /sys, /dev, credential
+# files such as .env, *.pem, .ssh/*). Set it in production. Paths in [collections] are
+# operator-trusted and exempt from this list (the credential deny list still applies).
+# allowed_roots = ["/srv/docs"]
+
+# Wall-clock bound (seconds) on one PDF / image conversion; the worker is replaced on timeout.
+# parse_timeout_seconds = 300
+# Seconds added to that bound per MiB of the file, so a large scanned PDF is judged by its size (a 100 MiB scan
+# converts in about 6.5 minutes on a Mac's CPU, where docling runs). 0 keeps the bound flat.
+# parse_timeout_seconds_per_mb = 10
+# Limits on zip-based Office files (docx, pptx, xlsx, epub): entry count and total
+# uncompressed MiB, checked on the central directory before the file is opened.
+# max_zip_entries = 10000
+# max_zip_uncompressed_mb = 512
+# Most files one directory ingest enumerates; a larger tree is refused.
+# max_discovered_files = 100000
+# Ingest jobs (POST /ingest, POST /collections/) running at once across all collections.
+# A further request is refused with 503 code ingest_busy and a Retry-After header.
+# max_concurrent_tasks = 4
 
 # PDFs and images are parsed (and OCR'd) in a separate worker process. The worker exits
 # after this many files and a fresh one replaces it — process exit is the only way the OCR
@@ -50,6 +71,20 @@ enabled = true
 # Bind address and port for the HTTP API.
 host = "127.0.0.1"
 port = 8765
+# Largest request body in MiB. A larger one (declared or streamed) is refused with 413
+# before authentication and before it is buffered. Must be >= 1.
+# max_request_body_mb = 32
+# Browser origins (scheme://host[:port]) allowed to call the API cross-origin. Empty (the
+# default) sends no CORS headers at all. "*" is rejected; credentials are never allowed.
+# cors_origins = ["https://app.example.com"]
+# Seconds the server lets open requests (an in-flight ingest) finish after SIGTERM before it
+# cancels them. Keep it below your container runtime's stop grace period (`docker stop`
+# waits 30 s before SIGKILL). Must be >= 1.
+# graceful_shutdown_seconds = 25
+# Serve the interactive /docs and /redoc pages (Swagger UI loads its JavaScript from a CDN).
+# Default false: both pages are off and /openapi.json needs an API key. true: /docs, /redoc and
+# /openapi.json are served without authentication.
+# docs_enabled = false
 
 [database]
 # On-disk location for the vector store and metadata.
@@ -79,7 +114,8 @@ multilingual = false
 # Results below this threshold are stored as "unknown" instead of a language code.
 # language_detection_confidence_threshold = 0.7
 
-# Maximum number of embedder model instances to cache in memory (LRU cache, minimum 1).
+# Maximum number of per-collection embedder model instances to cache in memory (LRU cache, minimum 1). The default
+# embedding_model is the pipeline's own embedder: it is pinned, never evicted and not counted here.
 # embedder_cache_size = 3
 
 # Startup model warm-up always runs; this flag only widens its SCOPE. Left false, the
@@ -434,12 +470,22 @@ num_queries = 2
 # (the window does not restart with each retry).
 # retry_max_age_hours = 72
 #
+# How long a superseded LanceDB table version (its manifest, transaction and data files) is kept before
+# a maintenance pass deletes it, in hours (>= 1). Every ingest batch and every collection-meta write commits
+# a table version, so disk use grows with ingest volume until a pass cleans up; the newest version is never
+# removed, so a reader is unaffected. The same window applies to the cleanup that follows a document delete.
+# Needs maintenance passes: set interval_hours > 0 or call POST /maintenance/trigger.
+# version_retention_hours = 24
+#
 # Collections to exclude from maintenance passes. Accepts bare names (matches across
 # all namespaces) or qualified namespace/collection names.
 # exclude = []
 # exclude = ["scratch", "tenants/staging"]
 
 [graph]
+# Most collection names one GET /graph/cross-collection (or MCP get_graph_cross_collection)
+# call may name; more is refused with 422 / validation_error. Must be >= 2.
+# max_cross_collection_collections = 8
 # GraphRAG entity extraction and naive query expansion (E1a).
 # Disabled by default. Requires the optional graph extras:
 #   pip install 'archon-search[graph]'

@@ -10,7 +10,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.install import _download_fasttext_model, InstallError, FASTTEXT_MODEL_URL
+from archon_search.install import (
+    FASTTEXT_MODEL_URL,
+    InstallError,
+    _download_fasttext_model,
+)
 from archon_search.install.licenses import FASTTEXT_ARTIFACT
 from archon_search.install.provisioning import ProvisionFailureKind
 from tests.test_no_raw_durable_writes import ARCHON_SEARCH_PKG, find_violations
@@ -155,9 +159,8 @@ def test_download_fasttext_model_insufficient_disk_space_raises_its_own_category
 
     with patch("shutil.disk_usage", return_value=fake_usage), patch(
         "urllib.request.urlopen"
-    ) as mock_urlopen:
-        with pytest.raises(InstallError) as exc_info:
-            _download_fasttext_model(tmp_path)
+    ) as mock_urlopen, pytest.raises(InstallError) as exc_info:
+        _download_fasttext_model(tmp_path)
 
     mock_urlopen.assert_not_called()
     assert exc_info.value.kind is ProvisionFailureKind.insufficient_disk
@@ -170,16 +173,14 @@ def test_download_fasttext_model_insufficient_disk_space_raises_its_own_category
 
 def test_download_fasttext_model_network_error_raises_install_error(tmp_path: Path):
     """URLError from urlopen must raise InstallError."""
-    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("connection refused")):
-        with pytest.raises(InstallError):
-            _download_fasttext_model(tmp_path)
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("connection refused")), pytest.raises(InstallError):
+        _download_fasttext_model(tmp_path)
 
 
 def test_download_fasttext_model_network_error_message(tmp_path: Path):
     """InstallError from network failure must contain useful context."""
-    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")):
-        with pytest.raises(InstallError) as exc_info:
-            _download_fasttext_model(tmp_path)
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")), pytest.raises(InstallError) as exc_info:
+        _download_fasttext_model(tmp_path)
     message = str(exc_info.value).lower()
     assert "fasttext" in message
     assert "lid.176" in message
@@ -189,9 +190,8 @@ def test_download_fasttext_model_network_error_message(tmp_path: Path):
 
 def test_download_fasttext_model_network_error_leaves_nothing_on_disk(tmp_path: Path):
     """A network failure never touches disk — nothing is staged before the read."""
-    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")):
-        with pytest.raises(InstallError):
-            _download_fasttext_model(tmp_path)
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")), pytest.raises(InstallError):
+        _download_fasttext_model(tmp_path)
 
     assert not (tmp_path / "lid.176.ftz").exists()
     assert not (tmp_path / "lid.176.ftz.tmp").exists()
@@ -210,9 +210,8 @@ def test_short_download_fails_the_byte_count_assert_before_placement(tmp_path: P
 
     with _pin_digest_of(b"the full pinned bytes" * 10), patch(
         "urllib.request.urlopen", return_value=_fake_response(short_content)
-    ):
-        with pytest.raises(InstallError) as exc_info:
-            _download_fasttext_model(tmp_path)
+    ), pytest.raises(InstallError) as exc_info:
+        _download_fasttext_model(tmp_path)
 
     assert exc_info.value.kind is ProvisionFailureKind.size_mismatch
     assert not (tmp_path / "lid.176.ftz").exists()
@@ -222,9 +221,8 @@ def test_short_download_fails_the_byte_count_assert_before_placement(tmp_path: P
 def test_download_fasttext_model_empty_file_raises_install_error(tmp_path: Path):
     """If the downloaded content is empty, InstallError must be raised via the
     byte-count assert."""
-    with patch("urllib.request.urlopen", return_value=_fake_response(b"")):
-        with pytest.raises(InstallError) as exc_info:
-            _download_fasttext_model(tmp_path)
+    with patch("urllib.request.urlopen", return_value=_fake_response(b"")), pytest.raises(InstallError) as exc_info:
+        _download_fasttext_model(tmp_path)
 
     assert "corrupt" in str(exc_info.value).lower()
     assert not (tmp_path / "lid.176.ftz").exists()
@@ -244,9 +242,8 @@ def test_digest_mismatch_places_nothing_and_reports_its_own_category(tmp_path: P
 
     with _pin_digest_of(pinned_same_length), patch(
         "urllib.request.urlopen", return_value=_fake_response(tampered)
-    ):
-        with pytest.raises(InstallError) as exc_info:
-            _download_fasttext_model(tmp_path)
+    ), pytest.raises(InstallError) as exc_info:
+        _download_fasttext_model(tmp_path)
 
     assert exc_info.value.kind is ProvisionFailureKind.digest_mismatch
     assert not (tmp_path / "lid.176.ftz").exists()
@@ -259,9 +256,8 @@ def test_fresh_download_with_mismatching_digest_raises_install_error(tmp_path: P
 
     with _pin_digest_of(b"the bytes we actually expect here!!!!!!!"), patch(
         "urllib.request.urlopen", return_value=_fake_response(same_length_wrong_bytes)
-    ):
-        with pytest.raises(InstallError) as exc_info:
-            _download_fasttext_model(tmp_path)
+    ), pytest.raises(InstallError) as exc_info:
+        _download_fasttext_model(tmp_path)
 
     assert "digest" in str(exc_info.value).lower()
     assert not (tmp_path / "lid.176.ftz").exists()

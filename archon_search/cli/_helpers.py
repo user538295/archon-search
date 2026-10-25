@@ -130,7 +130,7 @@ def _server_connect_fail_msg(base_url: str | None = None) -> str:
     try:
         if _get_service().status().running:
             return _SERVER_STARTING_MSG
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 — best-effort status hint; any lifecycle-probe failure falls back to "not running"
         pass
     return _SERVER_NOT_RUNNING_MSG
 

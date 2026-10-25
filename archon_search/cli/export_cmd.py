@@ -43,12 +43,6 @@ def _resolve_api_key(api_key: str | None) -> str:
 @click.command("export")
 @click.argument("collection")
 @click.option(
-    "--output-dir",
-    default="",
-    metavar="PATH",
-    help="Directory to write the archive to (default: server data dir/exports).",
-)
-@click.option(
     "--wait/--no-wait",
     default=False,
     help="Poll until the job completes and print progress.",
@@ -77,7 +71,6 @@ def _resolve_api_key(api_key: str | None) -> str:
 )
 def export_cmd(
     collection: str,
-    output_dir: str,
     wait: bool,
     timeout_seconds: int,
     api_url: str,
@@ -87,14 +80,10 @@ def export_cmd(
     key = _resolve_api_key(api_key)
     headers = {"Authorization": f"Bearer {key}"}
 
-    body: dict[str, str] = {}
-    if output_dir:
-        body["output_path"] = output_dir
-
     url = f"{api_url.rstrip('/')}/collections/{collection}/export"
 
     try:
-        resp = httpx.post(url, json=body, headers=headers)
+        resp = httpx.post(url, json={}, headers=headers)
     except _CONNECT_FAIL:
         click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
         raise SystemExit(1)

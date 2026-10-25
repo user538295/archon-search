@@ -10,9 +10,11 @@ import pytest
 import tomlkit
 
 from archon_search.install import WizardFeatures, _write_profile_config
-from archon_search.install.config_writer import _record_wizard_values, _wizard_record_path
+from archon_search.install.config_writer import (
+    _record_wizard_values,
+    _wizard_record_path,
+)
 from archon_search.profiles import get_profile
-
 
 # ---------------------------------------------------------------------------
 # Helpers

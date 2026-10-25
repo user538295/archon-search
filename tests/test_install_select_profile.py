@@ -8,7 +8,6 @@ import pytest
 
 from archon_search.install import _select_profile
 
-
 # ---------------------------------------------------------------------------
 # Non-interactive defaults
 # ---------------------------------------------------------------------------

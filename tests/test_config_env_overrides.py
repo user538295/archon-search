@@ -16,7 +16,6 @@ import pytest
 
 from archon_search.config import ConfigError, SearchConfig, load_config
 
-
 # ---------------------------------------------------------------------------
 # ARCHON_SEARCH_HOST override
 # ---------------------------------------------------------------------------
@@ -84,21 +83,41 @@ def test_port_env_empty_string_ignored(monkeypatch: pytest.MonkeyPatch, tmp_path
 # ---------------------------------------------------------------------------
 
 
-def test_serve_kwarg_sets_default_host(tmp_path: Path) -> None:
-    """`serve=True` with no env/TOML → host defaults to `0.0.0.0`."""
+def test_serve_kwarg_binds_loopback_natively(tmp_path: Path) -> None:
+    """`serve=True` with no env/TOML and no container signal → host stays loopback."""
+    config = load_config(tmp_path / "nonexistent.toml", serve=True)
+    assert config.host == "127.0.0.1"
+
+
+def test_serve_kwarg_binds_all_interfaces_in_the_container(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`serve=True` under `ARCHON_SEARCH_CONTAINER=1` → host defaults to `0.0.0.0` (the port mapping needs it)."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
     config = load_config(tmp_path / "nonexistent.toml", serve=True)
     assert config.host == "0.0.0.0"
 
 
-def test_serve_kwarg_overridable_by_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """`serve=True` with `ARCHON_SEARCH_HOST` set → env var wins."""
+def test_container_signal_without_serve_keeps_loopback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Only `serve` binds a socket: a container-side client command still resolves the loopback default."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    config = load_config(tmp_path / "nonexistent.toml")
+    assert config.host == "127.0.0.1"
+
+
+@pytest.mark.parametrize("container", [False, True], ids=["native", "container"])
+def test_serve_kwarg_overridable_by_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, container: bool) -> None:
+    """`serve=True` with `ARCHON_SEARCH_HOST` set → env var wins, natively and in the container."""
+    if container:
+        monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
     monkeypatch.setenv("ARCHON_SEARCH_HOST", "192.168.1.1")
     config = load_config(tmp_path / "nonexistent.toml", serve=True)
     assert config.host == "192.168.1.1"
 
 
-def test_serve_kwarg_overridable_by_toml(tmp_path: Path) -> None:
+@pytest.mark.parametrize("container", [False, True], ids=["native", "container"])
+def test_serve_kwarg_overridable_by_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, container: bool) -> None:
     """`serve=True` with TOML host → TOML wins. Positional argument required (`path`)."""
+    if container:
+        monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
     toml_file = tmp_path / "archon-search.toml"
     toml_file.write_text("[server]\nhost = \"10.0.0.5\"\n", encoding="utf-8")
     config = load_config(toml_file, serve=True)
@@ -229,9 +248,10 @@ def test_data_dir_empty_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
 
 
 def test_serve_kwarg_with_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Full container path: `serve=True` + `ARCHON_SEARCH_DATA_DIR` + no TOML
+    """Full container path: `serve=True` + `ARCHON_SEARCH_CONTAINER=1` + `ARCHON_SEARCH_DATA_DIR` + no TOML
     sets host to `0.0.0.0` and routes all derived paths through the data dir.
     This is the canonical production container invocation."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
     config = load_config(path=tmp_path / "nonexistent.toml", serve=True)
     assert config.host == "0.0.0.0"

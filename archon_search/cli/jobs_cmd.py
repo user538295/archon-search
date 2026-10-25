@@ -13,10 +13,16 @@ Provides:
 """
 from __future__ import annotations
 
+from datetime import UTC
+
 import click
 import httpx
 
-from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _server_connect_fail_msg
+from archon_search.cli._helpers import (
+    _CONNECT_FAIL,
+    _poll_job,
+    _server_connect_fail_msg,
+)
 from archon_search.cli.collection import _DEFAULT_API_URL, _resolve_api_key
 
 _EXIT_1_STATUSES = {"FAILED", "FAILED_EXPIRED", "CANCELLED"}
@@ -44,14 +50,14 @@ def _clean(value: str) -> str:
 
 def _fmt_elapsed(created_at: str, updated_at: str, status: str) -> str:
     """Return a human-readable elapsed duration string."""
-    from datetime import datetime, timezone  # noqa: PLC0415
+    from datetime import datetime
 
     try:
         start = datetime.fromisoformat(created_at)
         if status in _EXIT_1_STATUSES or status == "DONE":
             end = datetime.fromisoformat(updated_at)
         else:
-            end = datetime.now(timezone.utc)
+            end = datetime.now(UTC)
         secs = max(0, int((end - start).total_seconds()))
     except (ValueError, TypeError):
         return "-"

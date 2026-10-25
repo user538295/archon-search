@@ -82,6 +82,7 @@ def _run_lightweight_cmd() -> set[str]:
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
 
     assert result.returncode == 0, (

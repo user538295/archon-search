@@ -16,15 +16,14 @@ Tests:
 """
 from __future__ import annotations
 
-import httpx
 from unittest.mock import MagicMock, patch
 
+import httpx
+from _cli_server_stub import server_reported_stopped
 from click.testing import CliRunner
 
 import archon_search.cli.collection as collection_mod
 from archon_search.cli.collection import collection
-from _cli_server_stub import server_reported_stopped
-
 
 # ---------------------------------------------------------------------------
 # list_cmd — HTTP proxy (DCS)
