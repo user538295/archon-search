@@ -9,21 +9,20 @@ Documentation/UserManual/60_searching.md) requires HyDE on such a collection to 
 embed the hypothesis with the collection's embedder or fall back to plain query
 embedding with ``hyde_applied: false`` — never to error.
 
-The fake fastembed backend installed here maps each model name to its own output
-dimension and records every ``(model_name, text)`` it embeds, so a test can tell which
+The fake ``ModelEmbedder.encode`` installed here maps each model name to its spec dimension
+and records every ``(model_name, text)`` it embeds, so a test can tell which
 model embedded the hypothesis.
 """
 from __future__ import annotations
 
-import sys
-from collections.abc import Iterator
+import math
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
+from archon_search.embedder import ModelEmbedder
 from archon_search.store import STORE_SCHEMA_VERSION
 from tests.integration.conftest import (
     ingest_doc,
@@ -35,11 +34,8 @@ from tests.integration.conftest import (
 pytestmark = pytest.mark.integration
 
 _GLOBAL_MODEL = SearchConfig().embedding_model
-_GLOBAL_DIM = 384
-_OTHER_DIM_MODEL = "test/collection-model-768"
-_OTHER_DIM = 768
-_SAME_DIM_MODEL = "test/collection-model-384"
-_MODEL_DIMS = {_GLOBAL_MODEL: _GLOBAL_DIM, _OTHER_DIM_MODEL: _OTHER_DIM, _SAME_DIM_MODEL: _GLOBAL_DIM}
+_OTHER_DIM_MODEL = "BAAI/bge-base-en-v1.5"
+_SAME_DIM_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 _COLLECTION = "percolhyde"
 _DOC_TEXT = "Widgets are calibrated with the torque gauge before shipping."
@@ -64,20 +60,20 @@ def _stub_hyde_provider(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def embed_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
-    """Install a model-aware fake ``fastembed.TextEmbedding``; return its call log."""
+    """Replace ``ModelEmbedder.encode`` with a model-aware fake; return its call log.
+
+    The fake returns a unit vector of the model's spec dimension and records every
+    ``(model_name, text)`` it embeds. It marks the backend warm, as a real load would.
+    """
     calls: list[tuple[str, str]] = []
 
-    class _ModelAwareTextEmbedding:
-        def __init__(self, model_name: str, **kwargs: object) -> None:
-            self._model_name = model_name
-            self._dim = _MODEL_DIMS[model_name]
+    def _encode(self: ModelEmbedder, texts: list[str]) -> list[list[float]]:
+        self._encoder = object()  # type: ignore[assignment]
+        dim = self._spec.dim
+        calls.extend((self.model_name, text) for text in texts)
+        return [[1.0 / math.sqrt(dim)] * dim for _ in texts]
 
-        def embed(self, texts: list[str]) -> Iterator[np.ndarray]:
-            for text in texts:
-                calls.append((self._model_name, text))
-                yield np.full(self._dim, 1.0 / np.sqrt(self._dim), dtype=np.float32)
-
-    monkeypatch.setattr(sys.modules["fastembed"], "TextEmbedding", _ModelAwareTextEmbedding)
+    monkeypatch.setattr(ModelEmbedder, "encode", _encode)
     return calls
 
 

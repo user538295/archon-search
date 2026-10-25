@@ -8,10 +8,6 @@ A :class:`Container` is one image plus one ``/pip-packages`` named volume:
   to the real interpreter, so the entrypoint drives REAL pip, but it also
   records every ``pip install`` call (the ``PIP_DEFAULT_TIMEOUT`` each one saw)
   and can simulate the failures listed at :data:`PYTHON_WRAPPER`;
-* :meth:`Container.swap_onnxruntime_for_gpu` turns the image into the GPU
-  variant the way the Dockerfile does: CPU ``onnxruntime`` uninstalled,
-  ``onnxruntime-gpu`` (same import package ``onnxruntime``, another version)
-  installed;
 * pip is offline (``PIP_NO_INDEX``), ignores every pip config file
   (``PIP_CONFIG_FILE=os.devnull``), keeps no cache (``PIP_NO_CACHE_DIR``, as the
   image's Dockerfile sets it) and resolves from a wheelhouse of tiny hand-built
@@ -54,10 +50,6 @@ GRAPHDEP_VERSION = "1.0"
 FUSIONDEP_VERSION = "1.0"
 MULTILINGUALDEP_VERSION = "1.0"
 ONNXRUNTIME_VERSION = "1.0"
-# Older than the CPU build, as when the image's onnxruntime-gpu lags the onnxruntime a later resolution picks.
-ONNXRUNTIME_GPU_VERSION = "0.9"
-# The (lower-cased) distributions that ship the ``onnxruntime`` import package.
-ONNXRUNTIME_DISTRIBUTIONS = frozenset({"onnxruntime", "onnxruntime-gpu"})
 SUBPROCESS_TIMEOUT_S = 180
 # Modules the CMD probe reports on: the app, a base dependency, one package per extra.
 PROBED_MODULES = (
@@ -138,16 +130,10 @@ class WheelSpec:
     build_tag: str = ""
     # What the module's ``VERSION`` reports; defaults to ``version``.
     module_version: str = ""
-    # The import package the wheel ships; defaults to the distribution name (``onnxruntime-gpu`` ships ``onnxruntime``).
-    module_name: str = ""
 
     @property
     def distribution(self) -> str:
         return self.name.replace("-", "_")
-
-    @property
-    def module(self) -> str:
-        return self.module_name or self.distribution
 
     @property
     def filename(self) -> str:
@@ -166,7 +152,7 @@ def _build_wheel(directory: Path, spec: WheelSpec) -> Path:
     metadata += [f"Provides-Extra: {extra}" for extra in spec.extras]
     metadata += [f"Requires-Dist: {req}" for req in spec.requires]
     files = {
-        f"{spec.module}/__init__.py": f'VERSION = "{spec.module_version or spec.version}"\n'.encode(),
+        f"{spec.distribution}/__init__.py": f'VERSION = "{spec.module_version or spec.version}"\n'.encode(),
         f"{dist_info}/METADATA": ("\n".join(metadata) + "\n").encode(),
         f"{dist_info}/WHEEL": b"Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
     }
@@ -188,8 +174,7 @@ def build_wheelhouse(directory: Path) -> None:
     basedep<2.0, like the real ``code`` extra's tree-sitter pin: on an image
     that ships basedep 2.0 the ``graph`` extra adds basedep 1.0 to the volume,
     and that copy must win. Both also need ``onnxruntime``, as the real
-    archon-search does through fastembed; ``onnxruntime-gpu`` provides the same
-    import package under another distribution name, like the real one.
+    archon-search does through gliner, magika and RapidOCR.
     """
     for app_version, basedep_min in ((IMAGE_VERSION, BASEDEP_OLD), (NEW_IMAGE_VERSION, BASEDEP_NEW)):
         _build_wheel(directory, WheelSpec(
@@ -212,7 +197,6 @@ def build_wheelhouse(directory: Path) -> None:
     _build_wheel(directory, WheelSpec("fusiondep", FUSIONDEP_VERSION))
     _build_wheel(directory, WheelSpec("multilingualdep", MULTILINGUALDEP_VERSION))
     _build_wheel(directory, WheelSpec("onnxruntime", ONNXRUNTIME_VERSION))
-    _build_wheel(directory, WheelSpec("onnxruntime-gpu", ONNXRUNTIME_GPU_VERSION, module_name="onnxruntime"))
 
 
 def _clean_env(**extra: str) -> dict[str, str]:
@@ -307,19 +291,10 @@ class Container:
             env=_clean_env(PIP_DISABLE_PIP_VERSION_CHECK="1"), check=True,
         )
 
-    def swap_onnxruntime_for_gpu(self) -> None:
-        """Turn the image into the GPU variant as the Dockerfile does: CPU ``onnxruntime`` out, ``onnxruntime-gpu`` in."""
-        self.uninstall("onnxruntime")
-        self.bake("onnxruntime-gpu")
-
     def upgrade_image(self, app_version: str) -> None:
         """Pull a newer image: archon-search ``app_version`` and the base deps it needs baked in, its own /app."""
         self.bake(f"archon-search=={app_version}")
         self._app = _create_source_tree(self._tmp_path / f"app-{app_version}", self._wheelhouse, app_version)
-
-    def publish(self, spec: WheelSpec) -> None:
-        """Make ``spec`` available on the index from now on, for the entrypoint's resolution and install alike."""
-        _build_wheel(self._late_uploads, spec)
 
     def publish_after_resolution(self, spec: WheelSpec) -> None:
         """Make ``spec`` appear on the index after the entrypoint resolved, right before it installs."""

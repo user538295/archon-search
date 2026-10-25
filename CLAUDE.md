@@ -6,7 +6,7 @@ and in `Documentation/`; see the map at the bottom. Testing rules live in `tests
 
 ## Project
 
-`archon-search` is a standalone hybrid retrieval + routing server: LanceDB vector store, fastembed dense
+`archon-search` is a standalone hybrid retrieval + routing server: LanceDB vector store, PyTorch dense
 embeddings, a cross-encoder reranker, a multi-collection router, FastAPI HTTP control plane, and an MCP
 endpoint sharing the same auth. Runtime state lives under `~/.archon-search/`.
 
@@ -50,8 +50,8 @@ These are the rules that are not discoverable by reading one file. Everything el
 - **`GET /openapi.json` is the authoritative HTTP contract.** Keep it in sync; record breaking REST/MCP
   changes in `BREAKING.md`.
 - **`paths.py` `get_data_dir()`** (env `ARCHON_SEARCH_DATA_DIR`, default `~/.archon-search/`) is the single
-  source every path accessor derives from — one env var relocates the whole runtime tree. Exception:
-  fastembed weights honour `FASTEMBED_CACHE_PATH` via `get_fastembed_cache_dir()` (S493), else `<data>/models`.
+  source every path accessor derives from — one env var relocates the whole runtime tree, including model
+  weights (`get_models_dir()` = `<data>/models`, Hugging Face hub layout; no separate cache env var).
 - **Lifespan startup never awaits slow work.** uvicorn binds the listening socket only after lifespan
   startup returns, so anything awaited there keeps the port closed (clients get `ConnectError`, not a
   served 503). Spawn with `asyncio.create_task` and track in `app.state._background_tasks`.
@@ -103,7 +103,7 @@ Start here: `Architecture/990_documentation_index_and_contribution_guide.md` (in
 | `release.sh`, CalVer, CI workflows | `Architecture/510_release_and_environment_strategy.md` |
 | OpenAPI as authoritative, MCP/REST relationship | `Architecture/520_api_design_and_contracts.md` |
 | Tech-debt register | `Architecture/530_technical_debt_refactoring_roadmap.md` |
-| MCP mount + namespace propagation | `ADRs/09_mcp_http_mount_and_namespace_propagation.md` (see `ADRs/` for LanceDB, fastembed, reranker, router, telemetry) |
+| MCP mount + namespace propagation | `ADRs/09_mcp_http_mount_and_namespace_propagation.md` (see `ADRs/` for LanceDB, embedder, reranker, router, telemetry) |
 | Graph operations, community rebuilds | `OperatorGuide/60_graph_operations.md`, `UserManual/65_graph_search.md` |
 | Config reference | `UserManual/30_configuration.md`, `archon-search.toml.example` |
 | Roadmap, planned work | `Documentation/Backlog/03_world_class_roadmap.md`, `Documentation/Backlog/` |

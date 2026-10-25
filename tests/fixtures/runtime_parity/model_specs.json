@@ -1,0 +1,1806 @@
+{
+ "embedders": {
+  "BAAI/bge-small-en-v1.5": {
+   "torch_repo": "BAAI/bge-small-en-v1.5",
+   "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+   "max_length": 512,
+   "pooling": "cls",
+   "normalize": true,
+   "output_dim": 384,
+   "fastembed_class": "OnnxTextEmbedding",
+   "fastembed_source_repo": "Qdrant/bge-small-en-v1.5-onnx-Q",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": true,
+   "torch_weight_MB": 133.5,
+   "notes": [
+    "fastembed runs a graph with FastGelu (the tanh approximation of GELU) and fp32 weights, not a quantized one. PyTorch with the published exact GELU deviates slightly; with hidden_act='gelu_new' the worst cosine is 0.9999995. With the exact GELU it is 0.9999981."
+   ]
+  },
+  "BAAI/bge-base-en-v1.5": {
+   "torch_repo": "BAAI/bge-base-en-v1.5",
+   "revision": "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+   "max_length": 512,
+   "pooling": "cls",
+   "normalize": true,
+   "output_dim": 768,
+   "fastembed_class": "OnnxTextEmbedding",
+   "fastembed_source_repo": "Qdrant/bge-base-en-v1.5-onnx-Q",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": true,
+   "torch_weight_MB": 438.0,
+   "notes": [
+    "fastembed runs a graph with FastGelu (the tanh approximation of GELU) and fp32 weights, not a quantized one. PyTorch with the published exact GELU deviates slightly; with hidden_act='gelu_new' the worst cosine is 0.9999995. With the exact GELU it is 0.9999447."
+   ]
+  },
+  "BAAI/bge-large-en-v1.5": {
+   "torch_repo": "BAAI/bge-large-en-v1.5",
+   "revision": "d4aa6901d3a41ba39fb536a557fa166f842b0e09",
+   "max_length": 512,
+   "pooling": "cls",
+   "normalize": true,
+   "output_dim": 1024,
+   "fastembed_class": "OnnxTextEmbedding",
+   "fastembed_source_repo": "Qdrant/bge-large-en-v1.5-onnx",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 1340.6
+  },
+  "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2": {
+   "torch_repo": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+   "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+   "max_length": 128,
+   "pooling": "mean",
+   "normalize": false,
+   "output_dim": 384,
+   "fastembed_class": "PooledEmbedding",
+   "fastembed_source_repo": "Qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q",
+   "tokenizer_class_hf": "TokenizersBackend",
+   "fastembed_graph_uses_tanh_gelu": true,
+   "torch_weight_MB": 470.6,
+   "notes": [
+    "fastembed runs a graph with FastGelu (the tanh approximation of GELU) and fp32 weights, not a quantized one. PyTorch with the published exact GELU deviates slightly; with hidden_act='gelu_new' the worst cosine is 0.9999993. With the exact GELU it is 0.9999921."
+   ]
+  },
+  "sentence-transformers/paraphrase-multilingual-mpnet-base-v2": {
+   "torch_repo": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+   "revision": "4328cf26390c98c5e3c738b4460a05b95f4911f5",
+   "max_length": 512,
+   "pooling": "mean",
+   "normalize": false,
+   "output_dim": 768,
+   "fastembed_class": "PooledEmbedding",
+   "fastembed_source_repo": "Xenova/paraphrase-multilingual-mpnet-base-v2",
+   "tokenizer_class_hf": "XLMRobertaTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 1112.2
+  },
+  "intfloat/multilingual-e5-large": {
+   "torch_repo": "intfloat/multilingual-e5-large",
+   "revision": "3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3",
+   "max_length": 512,
+   "pooling": "mean",
+   "normalize": false,
+   "output_dim": 1024,
+   "fastembed_class": "PooledEmbedding",
+   "fastembed_source_repo": "Qdrant/multilingual-e5-large-onnx",
+   "tokenizer_class_hf": "XLMRobertaTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 2239.6
+  },
+  "BAAI/bge-base-en": {
+   "torch_repo": "BAAI/bge-base-en",
+   "revision": "b737bf5dcc6ee8bdc530531266b4804a5d77b5d8",
+   "max_length": 512,
+   "pooling": "cls",
+   "normalize": true,
+   "output_dim": 768,
+   "fastembed_class": "OnnxTextEmbedding",
+   "fastembed_source_repo": "Qdrant/fast-bge-base-en",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": true,
+   "torch_weight_MB": 438.0,
+   "torch_model_type": "bert",
+   "torch_weight_dtype_on_disk": "F32",
+   "fastembed_source_revision": "c6080e5aaeee3b64f52aa336e414e74d168ff5a9",
+   "fastembed_batch_size": 256,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 768]",
+   "pooling_source": "OnnxTextEmbedding: embeddings[:, 0] then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 0.999994122,
+     "norm_ratio_min": 0.999999852,
+     "norm_ratio_max": 1.000000154
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 0.999994122,
+     "norm_ratio_min": 14.960779938,
+     "norm_ratio_max": 17.146798427
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 0.969271107,
+     "norm_ratio_min": 0.999999847,
+     "norm_ratio_max": 1.000000198
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 0.969271107,
+     "norm_ratio_min": 15.569002625,
+     "norm_ratio_max": 17.103733789
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 0.758044638,
+     "norm_ratio_min": 0.999999855,
+     "norm_ratio_max": 1.000000193
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 0.758044639,
+     "norm_ratio_min": 17.433850134,
+     "norm_ratio_max": 18.6021302
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling",
+     "Normalize"
+    ],
+    "pooling_modes": [
+     "cls"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": true,
+    "max_seq_length": 512,
+    "prompts": null
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 512,
+    "max_length": null
+   },
+   "tokenizer_json_identical_to_fastembed": true,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": null,
+   "corpus_max_tokens_untruncated": 2669,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 0.999994122,
+     "norm_ratio_min": 0.999999852,
+     "norm_ratio_max": 1.000000154,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 0.999994121,
+     "norm_ratio_min": 0.999999802,
+     "norm_ratio_max": 1.000000145,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 0.999994127,
+     "norm_ratio_min": 0.999999836,
+     "norm_ratio_max": 1.000000182,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": {
+     "hidden_act": "gelu_new",
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999872,
+     "norm_ratio_max": 1.000000136,
+     "texts_below_threshold": []
+    }
+   },
+   "notes": [
+    "fastembed runs an ORT-optimized graph (model_optimized.onnx) with FastGelu, the tanh approximation of GELU, and fp32 weights (not quantized). PyTorch computes the exact GELU, which is the whole deviation: the same PyTorch run with hidden_act=gelu_new reaches cosine 1.0 (parity.cpu_one_by_one_with_tanh_gelu)."
+   ]
+  },
+  "BAAI/bge-small-en": {
+   "torch_repo": "BAAI/bge-small-en",
+   "revision": "2275a7bdee235e9b4f01fa73aa60d3311983cfea",
+   "max_length": 512,
+   "pooling": "cls",
+   "normalize": true,
+   "output_dim": 384,
+   "fastembed_class": "OnnxTextEmbedding",
+   "fastembed_source_repo": "Qdrant/bge-small-en",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": true,
+   "torch_weight_MB": 133.5,
+   "torch_model_type": "bert",
+   "torch_weight_dtype_on_disk": "F32",
+   "fastembed_source_revision": "8791246cc2a79c7949a4dc0d4a018cbd7d024879",
+   "fastembed_batch_size": 256,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 384]",
+   "pooling_source": "OnnxTextEmbedding: embeddings[:, 0] then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 0.99999902,
+     "norm_ratio_min": 0.999999884,
+     "norm_ratio_max": 1.000000175
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 0.99999902,
+     "norm_ratio_min": 9.456796512,
+     "norm_ratio_max": 9.732275969
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 0.855776387,
+     "norm_ratio_min": 0.999999865,
+     "norm_ratio_max": 1.000000118
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 0.855776384,
+     "norm_ratio_min": 8.441669278,
+     "norm_ratio_max": 9.202721691
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 0.999999021,
+     "norm_ratio_min": 0.999999852,
+     "norm_ratio_max": 1.000000126
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 0.999999021,
+     "norm_ratio_min": 9.456797387,
+     "norm_ratio_max": 9.732278727
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling",
+     "Normalize"
+    ],
+    "pooling_modes": [
+     "cls"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": true,
+    "max_seq_length": 512,
+    "prompts": null
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 512,
+    "max_length": null
+   },
+   "tokenizer_json_identical_to_fastembed": true,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": null,
+   "corpus_max_tokens_untruncated": 2669,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 0.99999902,
+     "norm_ratio_min": 0.999999884,
+     "norm_ratio_max": 1.000000175,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 0.99999902,
+     "norm_ratio_min": 0.999999763,
+     "norm_ratio_max": 1.000000215,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 0.99999902,
+     "norm_ratio_min": 0.999999865,
+     "norm_ratio_max": 1.000000184,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": {
+     "hidden_act": "gelu_new",
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999857,
+     "norm_ratio_max": 1.000000176,
+     "texts_below_threshold": []
+    }
+   },
+   "notes": [
+    "fastembed runs an ORT-optimized graph (model_optimized.onnx) with FastGelu, the tanh approximation of GELU, and fp32 weights (not quantized). PyTorch computes the exact GELU, which is the whole deviation: the same PyTorch run with hidden_act=gelu_new reaches cosine 1.0 (parity.cpu_one_by_one_with_tanh_gelu).",
+    "The final hidden states of [CLS] and [SEP] are identical for this model, so pooling_variant_scan cannot tell cls from last_token; cls is the pooling of fastembed's OnnxTextEmbedding."
+   ]
+  },
+  "BAAI/bge-small-zh-v1.5": {
+   "torch_repo": "BAAI/bge-small-zh-v1.5",
+   "revision": "7999e1d3359715c523056ef9478215996d62a620",
+   "max_length": 512,
+   "pooling": "cls",
+   "normalize": true,
+   "output_dim": 512,
+   "fastembed_class": "OnnxTextEmbedding",
+   "fastembed_source_repo": "Qdrant/bge-small-zh-v1.5",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": true,
+   "torch_weight_MB": 95.8,
+   "torch_model_type": "bert",
+   "torch_weight_dtype_on_disk": "F32",
+   "fastembed_source_revision": "46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59",
+   "fastembed_batch_size": 256,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 512]",
+   "pooling_source": "OnnxTextEmbedding: embeddings[:, 0] then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 0.999998084,
+     "norm_ratio_min": 0.999999918,
+     "norm_ratio_max": 1.000000106
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 0.999998084,
+     "norm_ratio_min": 5.749121362,
+     "norm_ratio_max": 6.929528902
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 0.787945642,
+     "norm_ratio_min": 0.999999812,
+     "norm_ratio_max": 1.000000151
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 0.787945641,
+     "norm_ratio_min": 9.621855067,
+     "norm_ratio_max": 12.222866635
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 0.798725794,
+     "norm_ratio_min": 0.999999867,
+     "norm_ratio_max": 1.000000086
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 0.798725797,
+     "norm_ratio_min": 10.310900821,
+     "norm_ratio_max": 14.82345584
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling",
+     "Normalize"
+    ],
+    "pooling_modes": [
+     "cls"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": true,
+    "max_seq_length": 512,
+    "prompts": null
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 512,
+    "max_length": null
+   },
+   "tokenizer_json_identical_to_fastembed": true,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": null,
+   "corpus_max_tokens_untruncated": 4733,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 0.999998084,
+     "norm_ratio_min": 0.999999918,
+     "norm_ratio_max": 1.000000106,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 0.999998084,
+     "norm_ratio_min": 0.999999878,
+     "norm_ratio_max": 1.000000079,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 0.999998084,
+     "norm_ratio_min": 0.999999862,
+     "norm_ratio_max": 1.000000128,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": {
+     "hidden_act": "gelu_new",
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999907,
+     "norm_ratio_max": 1.000000101,
+     "texts_below_threshold": []
+    }
+   },
+   "notes": [
+    "fastembed runs an ORT-optimized graph (model_optimized.onnx) with FastGelu, the tanh approximation of GELU, and fp32 weights (not quantized). PyTorch computes the exact GELU, which is the whole deviation: the same PyTorch run with hidden_act=gelu_new reaches cosine 1.0 (parity.cpu_one_by_one_with_tanh_gelu)."
+   ]
+  },
+  "mixedbread-ai/mxbai-embed-large-v1": {
+   "torch_repo": "mixedbread-ai/mxbai-embed-large-v1",
+   "revision": "b33106f585b9ce46904ad7443a3b52b7a63e231c",
+   "max_length": 512,
+   "pooling": "cls",
+   "normalize": true,
+   "output_dim": 1024,
+   "fastembed_class": "OnnxTextEmbedding",
+   "fastembed_source_repo": "mixedbread-ai/mxbai-embed-large-v1",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 670.3,
+   "torch_model_type": "bert",
+   "torch_weight_dtype_on_disk": "F16",
+   "fastembed_source_revision": "b33106f585b9ce46904ad7443a3b52b7a63e231c",
+   "fastembed_batch_size": 256,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 1024]",
+   "pooling_source": "OnnxTextEmbedding: embeddings[:, 0] then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999891,
+     "norm_ratio_max": 1.000000232
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 16.255975023,
+     "norm_ratio_max": 20.212776908
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 0.802021205,
+     "norm_ratio_min": 0.999999812,
+     "norm_ratio_max": 1.000000141
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 0.802021204,
+     "norm_ratio_min": 15.938547605,
+     "norm_ratio_max": 18.942693363
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 0.764440203,
+     "norm_ratio_min": 0.999999818,
+     "norm_ratio_max": 1.000000095
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 0.764440203,
+     "norm_ratio_min": 16.790700263,
+     "norm_ratio_max": 23.217588002
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling"
+    ],
+    "pooling_modes": [
+     "cls"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": false,
+    "max_seq_length": 512,
+    "prompts": {
+     "query": "Represent this sentence for searching relevant passages: ",
+     "passage": ""
+    }
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 512,
+    "max_length": null
+   },
+   "tokenizer_json_identical_to_fastembed": true,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": null,
+   "corpus_max_tokens_untruncated": 2669,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999891,
+     "norm_ratio_max": 1.000000232,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999869,
+     "norm_ratio_max": 1.000000205,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999812,
+     "norm_ratio_max": 1.000000151,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": null
+   },
+   "notes": [
+    "fastembed L2-normalizes every OnnxTextEmbedding output although this repo's sentence-transformers pipeline has no Normalize module; the golden has norm 1, so normalize is true.",
+    "The repo defines a query prompt in config_sentence_transformers.json (sentence_transformers.prompts); fastembed's embed() applies none and the golden was produced from raw text, which is also what archon sends, so the PyTorch side must not add it.",
+    "Weights are stored as float16 on disk (torch_weight_MB is the download size); transformers upcasts them to fp32 exactly and the result matches the fp32 ONNX graph."
+   ]
+  },
+  "snowflake/snowflake-arctic-embed-xs": {
+   "torch_repo": "Snowflake/snowflake-arctic-embed-xs",
+   "revision": "d8c86521100d3556476a063fc2342036d45c106f",
+   "max_length": 512,
+   "pooling": "cls",
+   "normalize": true,
+   "output_dim": 384,
+   "fastembed_class": "OnnxTextEmbedding",
+   "fastembed_source_repo": "Snowflake/snowflake-arctic-embed-xs",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 90.3,
+   "torch_model_type": "bert",
+   "torch_weight_dtype_on_disk": "F32",
+   "fastembed_source_revision": "d8c86521100d3556476a063fc2342036d45c106f",
+   "fastembed_batch_size": 256,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 384]",
+   "pooling_source": "OnnxTextEmbedding: embeddings[:, 0] then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999882,
+     "norm_ratio_max": 1.000000134
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 10.697079019,
+     "norm_ratio_max": 12.038445895
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 0.723846943,
+     "norm_ratio_min": 0.999999867,
+     "norm_ratio_max": 1.000000097
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 0.723846942,
+     "norm_ratio_min": 9.50763485,
+     "norm_ratio_max": 10.706209297
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 0.72594888,
+     "norm_ratio_min": 0.999999863,
+     "norm_ratio_max": 1.000000154
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 0.725948884,
+     "norm_ratio_min": 9.783546695,
+     "norm_ratio_max": 11.279965798
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling",
+     "Normalize"
+    ],
+    "pooling_modes": [
+     "cls"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": true,
+    "max_seq_length": 512,
+    "prompts": {
+     "query": "Represent this sentence for searching relevant passages: "
+    }
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 512,
+    "max_length": 512
+   },
+   "tokenizer_json_identical_to_fastembed": true,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": "right",
+   "corpus_max_tokens_untruncated": 2669,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999882,
+     "norm_ratio_max": 1.000000134,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999882,
+     "norm_ratio_max": 1.000000136,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999837,
+     "norm_ratio_max": 1.000000104,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": null
+   },
+   "notes": [
+    "The repo defines a query prompt in config_sentence_transformers.json (sentence_transformers.prompts); fastembed's embed() applies none and the golden was produced from raw text, which is also what archon sends, so the PyTorch side must not add it."
+   ]
+  },
+  "snowflake/snowflake-arctic-embed-s": {
+   "torch_repo": "Snowflake/snowflake-arctic-embed-s",
+   "revision": "e596f507467533e48a2e17c007f0e1dacc837b33",
+   "max_length": 512,
+   "pooling": "cls",
+   "normalize": true,
+   "output_dim": 384,
+   "fastembed_class": "OnnxTextEmbedding",
+   "fastembed_source_repo": "Snowflake/snowflake-arctic-embed-s",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 132.9,
+   "torch_model_type": "bert",
+   "torch_weight_dtype_on_disk": "F32",
+   "fastembed_source_revision": "e596f507467533e48a2e17c007f0e1dacc837b33",
+   "fastembed_batch_size": 256,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 384]",
+   "pooling_source": "OnnxTextEmbedding: embeddings[:, 0] then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999908,
+     "norm_ratio_max": 1.00000015
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 4.14157305,
+     "norm_ratio_max": 4.767005421
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 0.891120879,
+     "norm_ratio_min": 0.999999867,
+     "norm_ratio_max": 1.000000123
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 0.891120877,
+     "norm_ratio_min": 4.572063924,
+     "norm_ratio_max": 6.053216472
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999848,
+     "norm_ratio_max": 1.000000121
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 4.141572316,
+     "norm_ratio_max": 4.767006162
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling",
+     "Normalize"
+    ],
+    "pooling_modes": [
+     "cls"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": true,
+    "max_seq_length": 512,
+    "prompts": {
+     "query": "Represent this sentence for searching relevant passages: "
+    }
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 512,
+    "max_length": 512
+   },
+   "tokenizer_json_identical_to_fastembed": true,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": "right",
+   "corpus_max_tokens_untruncated": 2669,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999908,
+     "norm_ratio_max": 1.00000015,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999846,
+     "norm_ratio_max": 1.000000104,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999837,
+     "norm_ratio_max": 1.000000167,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": null
+   },
+   "notes": [
+    "The repo defines a query prompt in config_sentence_transformers.json (sentence_transformers.prompts); fastembed's embed() applies none and the golden was produced from raw text, which is also what archon sends, so the PyTorch side must not add it.",
+    "The final hidden states of [CLS] and [SEP] are identical for this model, so pooling_variant_scan cannot tell cls from last_token; cls is the pooling of fastembed's OnnxTextEmbedding."
+   ]
+  },
+  "snowflake/snowflake-arctic-embed-m": {
+   "torch_repo": "Snowflake/snowflake-arctic-embed-m",
+   "revision": "fc74610d18462d218e312aa986ec5c8a75a98152",
+   "max_length": 512,
+   "pooling": "cls",
+   "normalize": true,
+   "output_dim": 768,
+   "fastembed_class": "OnnxTextEmbedding",
+   "fastembed_source_repo": "Snowflake/snowflake-arctic-embed-m",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 435.6,
+   "torch_model_type": "bert",
+   "torch_weight_dtype_on_disk": "F32",
+   "fastembed_source_revision": "fc74610d18462d218e312aa986ec5c8a75a98152",
+   "fastembed_batch_size": 256,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 768]",
+   "pooling_source": "OnnxTextEmbedding: embeddings[:, 0] then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999854,
+     "norm_ratio_max": 1.000000138
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 11.325525931,
+     "norm_ratio_max": 13.941544993
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 0.929860642,
+     "norm_ratio_min": 0.999999841,
+     "norm_ratio_max": 1.000000199
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 0.929860642,
+     "norm_ratio_min": 11.426120184,
+     "norm_ratio_max": 13.853508858
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 0.74928448,
+     "norm_ratio_min": 0.999999917,
+     "norm_ratio_max": 1.000000073
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 0.749284481,
+     "norm_ratio_min": 13.889289057,
+     "norm_ratio_max": 16.137512081
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling",
+     "Normalize"
+    ],
+    "pooling_modes": [
+     "cls"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": true,
+    "max_seq_length": 512,
+    "prompts": {
+     "query": "Represent this sentence for searching relevant passages: "
+    }
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 512,
+    "max_length": 512
+   },
+   "tokenizer_json_identical_to_fastembed": true,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": "right",
+   "corpus_max_tokens_untruncated": 2669,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999854,
+     "norm_ratio_max": 1.000000138,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999843,
+     "norm_ratio_max": 1.000000138,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999853,
+     "norm_ratio_max": 1.000000077,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": null
+   },
+   "notes": [
+    "The repo defines a query prompt in config_sentence_transformers.json (sentence_transformers.prompts); fastembed's embed() applies none and the golden was produced from raw text, which is also what archon sends, so the PyTorch side must not add it."
+   ]
+  },
+  "snowflake/snowflake-arctic-embed-l": {
+   "torch_repo": "Snowflake/snowflake-arctic-embed-l",
+   "revision": "d8fb21ca8d905d2832ee8b96c894d3298964346b",
+   "max_length": 512,
+   "pooling": "cls",
+   "normalize": true,
+   "output_dim": 1024,
+   "fastembed_class": "OnnxTextEmbedding",
+   "fastembed_source_repo": "Snowflake/snowflake-arctic-embed-l",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 1336.4,
+   "torch_model_type": "bert",
+   "torch_weight_dtype_on_disk": "F32",
+   "fastembed_source_revision": "d8fb21ca8d905d2832ee8b96c894d3298964346b",
+   "fastembed_batch_size": 256,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 1024]",
+   "pooling_source": "OnnxTextEmbedding: embeddings[:, 0] then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999861,
+     "norm_ratio_max": 1.000000173
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 20.160695196,
+     "norm_ratio_max": 23.308425163
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 0.946531986,
+     "norm_ratio_min": 0.999999902,
+     "norm_ratio_max": 1.000000141
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 0.946531988,
+     "norm_ratio_min": 16.701275809,
+     "norm_ratio_max": 19.294555768
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 0.873678824,
+     "norm_ratio_min": 0.999999842,
+     "norm_ratio_max": 1.000000168
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 0.873678824,
+     "norm_ratio_min": 17.334458106,
+     "norm_ratio_max": 20.62863783
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling",
+     "Normalize"
+    ],
+    "pooling_modes": [
+     "cls"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": true,
+    "max_seq_length": 512,
+    "prompts": {
+     "query": "Represent this sentence for searching relevant passages: "
+    }
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 512,
+    "max_length": 512
+   },
+   "tokenizer_json_identical_to_fastembed": true,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": "right",
+   "corpus_max_tokens_untruncated": 2669,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999861,
+     "norm_ratio_max": 1.000000173,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.99999987,
+     "norm_ratio_max": 1.000000173,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999859,
+     "norm_ratio_max": 1.000000128,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": null
+   },
+   "notes": [
+    "The repo defines a query prompt in config_sentence_transformers.json (sentence_transformers.prompts); fastembed's embed() applies none and the golden was produced from raw text, which is also what archon sends, so the PyTorch side must not add it."
+   ]
+  },
+  "sentence-transformers/all-MiniLM-L6-v2": {
+   "torch_repo": "sentence-transformers/all-MiniLM-L6-v2",
+   "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+   "max_length": 256,
+   "pooling": "mean",
+   "normalize": true,
+   "output_dim": 384,
+   "fastembed_class": "PooledNormalizedEmbedding",
+   "fastembed_source_repo": "Qdrant/all-MiniLM-L6-v2-onnx",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 90.9,
+   "torch_model_type": "bert",
+   "torch_weight_dtype_on_disk": "F32",
+   "fastembed_source_revision": "d13954661f83248295ba75c1ed411eef3b7b936e",
+   "fastembed_batch_size": 256,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 384]",
+   "pooling_source": "PooledNormalizedEmbedding: masked mean then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 0.353003069,
+     "norm_ratio_min": 0.999999807,
+     "norm_ratio_max": 1.000000181
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 0.353003066,
+     "norm_ratio_min": 6.882411,
+     "norm_ratio_max": 8.335240475
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.9999999,
+     "norm_ratio_max": 1.000000084
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 1.693380534,
+     "norm_ratio_max": 7.197427552
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 0.47019555,
+     "norm_ratio_min": 0.999999799,
+     "norm_ratio_max": 1.000000116
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 0.470195551,
+     "norm_ratio_min": 5.897527678,
+     "norm_ratio_max": 12.366589099
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling",
+     "Normalize"
+    ],
+    "pooling_modes": [
+     "mean"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": true,
+    "max_seq_length": 256,
+    "prompts": null
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 256,
+    "max_length": null
+   },
+   "tokenizer_json_identical_to_fastembed": false,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": null,
+   "corpus_max_tokens_untruncated": 2669,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.9999999,
+     "norm_ratio_max": 1.000000084,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.9999999,
+     "norm_ratio_max": 1.000000146,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999925,
+     "norm_ratio_max": 1.000000104,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": null
+   },
+   "notes": [
+    "max_length 256 is the ONNX repo's tokenizer_config.json value and equals the repo's sentence_bert_config.json max_seq_length.",
+    "The ONNX repo's tokenizer.json differs from the PyTorch repo's only in its serialized truncation and padding sections, which the runtime overrides."
+   ]
+  },
+  "thenlper/gte-base": {
+   "torch_repo": "thenlper/gte-base",
+   "revision": "c078288308d8dee004ab72c6191778064285ec0c",
+   "max_length": 512,
+   "pooling": "mean",
+   "normalize": true,
+   "output_dim": 768,
+   "fastembed_class": "PooledNormalizedEmbedding",
+   "fastembed_source_repo": "thenlper/gte-base",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 219.0,
+   "torch_model_type": "bert",
+   "torch_weight_dtype_on_disk": "F16",
+   "fastembed_source_revision": "c078288308d8dee004ab72c6191778064285ec0c",
+   "fastembed_batch_size": 256,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 768]",
+   "pooling_source": "PooledNormalizedEmbedding: masked mean then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 0.875652611,
+     "norm_ratio_min": 0.999999877,
+     "norm_ratio_max": 1.000000167
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 0.875652612,
+     "norm_ratio_min": 14.354876517,
+     "norm_ratio_max": 17.078403764
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999829,
+     "norm_ratio_max": 1.000000135
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 15.076462669,
+     "norm_ratio_max": 16.626056974
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 0.483810131,
+     "norm_ratio_min": 0.999999885,
+     "norm_ratio_max": 1.000000138
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 0.48381013,
+     "norm_ratio_min": 17.819253421,
+     "norm_ratio_max": 18.694652211
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling",
+     "Normalize"
+    ],
+    "pooling_modes": [
+     "mean"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": true,
+    "max_seq_length": 512,
+    "prompts": null
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 512,
+    "max_length": null
+   },
+   "tokenizer_json_identical_to_fastembed": true,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": null,
+   "corpus_max_tokens_untruncated": 2669,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999829,
+     "norm_ratio_max": 1.000000135,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.99999993,
+     "norm_ratio_max": 1.000000128,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999919,
+     "norm_ratio_max": 1.000000146,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": null
+   },
+   "notes": [
+    "Weights are stored as float16 on disk (torch_weight_MB is the download size); transformers upcasts them to fp32 exactly and the result matches the fp32 ONNX graph."
+   ]
+  },
+  "thenlper/gte-large": {
+   "torch_repo": "thenlper/gte-large",
+   "revision": "4bef63f39fcc5e2d6b0aae83089f307af4970164",
+   "max_length": 512,
+   "pooling": "mean",
+   "normalize": true,
+   "output_dim": 1024,
+   "fastembed_class": "PooledNormalizedEmbedding",
+   "fastembed_source_repo": "Qdrant/gte-large-onnx",
+   "tokenizer_class_hf": "BertTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 670.3,
+   "torch_model_type": "bert",
+   "torch_weight_dtype_on_disk": "F16",
+   "fastembed_source_revision": "10c17e77fd5c3b1357ef35a391e1f7210944c6fa",
+   "fastembed_batch_size": 256,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 1024]",
+   "pooling_source": "PooledNormalizedEmbedding: masked mean then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 0.849215618,
+     "norm_ratio_min": 0.999999871,
+     "norm_ratio_max": 1.000000183
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 0.849215618,
+     "norm_ratio_min": 20.049043355,
+     "norm_ratio_max": 22.929629715
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999917,
+     "norm_ratio_max": 1.000000087
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 18.178673575,
+     "norm_ratio_max": 20.083873136
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 0.855394456,
+     "norm_ratio_min": 0.999999914,
+     "norm_ratio_max": 1.000000125
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 0.855394456,
+     "norm_ratio_min": 19.722699276,
+     "norm_ratio_max": 23.746926944
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling",
+     "Normalize"
+    ],
+    "pooling_modes": [
+     "mean"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": true,
+    "max_seq_length": 512,
+    "prompts": null
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 512,
+    "max_length": null
+   },
+   "tokenizer_json_identical_to_fastembed": false,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": null,
+   "corpus_max_tokens_untruncated": 2669,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999917,
+     "norm_ratio_max": 1.000000087,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999868,
+     "norm_ratio_max": 1.000000088,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999903,
+     "norm_ratio_max": 1.000000062,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": null
+   },
+   "notes": [
+    "Weights are stored as float16 on disk (torch_weight_MB is the download size); transformers upcasts them to fp32 exactly and the result matches the fp32 ONNX graph.",
+    "The ONNX repo's tokenizer.json differs from the PyTorch repo's only in its serialized truncation and padding sections, which the runtime overrides."
+   ]
+  },
+  "ibm-granite/granite-embedding-small-english-r2": {
+   "torch_repo": "ibm-granite/granite-embedding-small-english-r2",
+   "revision": "2ab6fa8ea2d674564defd37171ae19079b864b33",
+   "max_length": 8192,
+   "pooling": "cls",
+   "normalize": false,
+   "output_dim": 384,
+   "fastembed_class": "BuiltinSentenceEmbedding",
+   "fastembed_source_repo": "onnx-community/granite-embedding-small-english-r2-ONNX",
+   "tokenizer_class_hf": "PreTrainedTokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 95.3,
+   "torch_model_type": "modernbert",
+   "torch_weight_dtype_on_disk": "BF16",
+   "fastembed_source_revision": "1dc7835ba0cb9c76a3618d0bf0c427c97671b3c8",
+   "fastembed_batch_size": 1,
+   "fastembed_onnx_output": "sentence_embedding ['batch_size', 384]",
+   "pooling_source": "BuiltinSentenceEmbedding: ONNX graph pools; read from sentence-transformers files",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.056950353,
+     "norm_ratio_max": 0.058097712
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999776,
+     "norm_ratio_max": 1.000000309
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 0.831013169,
+     "norm_ratio_min": 0.056950349,
+     "norm_ratio_max": 0.058097714
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 0.831013177,
+     "norm_ratio_min": 0.872488572,
+     "norm_ratio_max": 0.943984979
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 0.829204926,
+     "norm_ratio_min": 0.056950353,
+     "norm_ratio_max": 0.058097718
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 0.829204927,
+     "norm_ratio_min": 0.945847442,
+     "norm_ratio_max": 1.037778251
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling"
+    ],
+    "pooling_modes": [
+     "cls"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": false,
+    "max_seq_length": 8192,
+    "prompts": null
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 8192,
+    "max_length": null
+   },
+   "tokenizer_json_identical_to_fastembed": false,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "[CLS]",
+    "x",
+    "[SEP]"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": null,
+   "corpus_max_tokens_untruncated": 2270,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999776,
+     "norm_ratio_max": 1.000000309,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999829,
+     "norm_ratio_max": 1.00000033,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999828,
+     "norm_ratio_max": 1.000000358,
+     "texts_below_threshold": []
+    },
+    "long_probe": {
+     "max_length": 8192,
+     "probe_tokens_untruncated": 8596,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.99999997,
+     "norm_ratio_max": 0.99999997,
+     "texts_below_threshold": []
+    },
+    "cpu_one_by_one_with_tanh_gelu": null
+   },
+   "notes": [
+    "BuiltinSentenceEmbedding returns output 1 of the ONNX graph (sentence_embedding), which pools inside the graph. Pooling comes from the repo's 1_Pooling/config.json (cls) and modules.json (no Normalize module) and is proven by pooling_variant_scan: cls without normalization reaches cosine 1.0 with norm ratio 1 +- 3.1e-7, mean 0.83, last_token 0.83.",
+    "The vectors are NOT normalized: golden norms are 17.2 to 17.6.",
+    "fastembed fails on this corpus at its default batch size (onnxruntime InvalidArgument: the Tile node of global_attn_mask would exceed 4 GiB at 27 texts x 2669 tokens); the golden was produced at batch size 1.",
+    "max_length 8192 is reproduced by parity.long_probe (8596 tokens, truncated by both runtimes); the corpus alone (2270 tokens at most) cannot show it.",
+    "The ONNX repo's tokenizer.json differs from the PyTorch repo's only in its serialized truncation and padding sections, which the runtime overrides."
+   ]
+  },
+  "Qwen/Qwen3-Embedding-0.6B": {
+   "torch_repo": "Qwen/Qwen3-Embedding-0.6B",
+   "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+   "max_length": 32768,
+   "pooling": "last_token",
+   "normalize": true,
+   "output_dim": 1024,
+   "fastembed_class": "LastTokenNormalizedEmbedding",
+   "fastembed_source_repo": "Qdrant/Qwen3-Embedding-0.6B-onnx",
+   "tokenizer_class_hf": "Qwen2Tokenizer",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 1191.6,
+   "torch_model_type": "qwen3",
+   "torch_weight_dtype_on_disk": "BF16",
+   "fastembed_source_revision": "af95f2c416ffe9379369ad64f9113e865db6112c",
+   "fastembed_batch_size": 1,
+   "fastembed_onnx_output": "last_hidden_state ['batch_size', 'sequence_length', 1024]",
+   "pooling_source": "LastTokenNormalizedEmbedding: last non-padding token then normalize",
+   "pooling_variant_scan": [
+    {
+     "pooling": "cls",
+     "normalize": true,
+     "min_cosine": 0.079632701,
+     "norm_ratio_min": 0.999999864,
+     "norm_ratio_max": 1.000000191
+    },
+    {
+     "pooling": "cls",
+     "normalize": false,
+     "min_cosine": 0.0796327,
+     "norm_ratio_min": 98.22363479,
+     "norm_ratio_max": 121.582644732
+    },
+    {
+     "pooling": "mean",
+     "normalize": true,
+     "min_cosine": 0.5817625,
+     "norm_ratio_min": 0.999999854,
+     "norm_ratio_max": 1.000000148
+    },
+    {
+     "pooling": "mean",
+     "normalize": false,
+     "min_cosine": 0.581762499,
+     "norm_ratio_min": 62.292685348,
+     "norm_ratio_max": 88.493886307
+    },
+    {
+     "pooling": "last_token",
+     "normalize": true,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999868,
+     "norm_ratio_max": 1.000000105
+    },
+    {
+     "pooling": "last_token",
+     "normalize": false,
+     "min_cosine": 1.0,
+     "norm_ratio_min": 77.391808425,
+     "norm_ratio_max": 118.559751433
+    }
+   ],
+   "sentence_transformers": {
+    "modules": [
+     "Transformer",
+     "Pooling",
+     "Normalize"
+    ],
+    "pooling_modes": [
+     "last_token"
+    ],
+    "unsupported_pooling_modes": [],
+    "normalize_module": true,
+    "max_seq_length": null,
+    "prompts": {
+     "query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+     "document": ""
+    }
+   },
+   "tokenizer_config_limits": {
+    "model_max_length": 32768,
+    "max_length": null
+   },
+   "tokenizer_json_identical_to_fastembed": true,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": true,
+   "token_ids_identical": "27/27",
+   "example_tokens": [
+    "x",
+    "<|endoftext|>"
+   ],
+   "fastembed_truncation_direction": "right",
+   "fastembed_padding_direction": "right",
+   "torch_tokenizer_config_padding_side": null,
+   "corpus_max_tokens_untruncated": 2135,
+   "parity": {
+    "cpu_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999868,
+     "norm_ratio_max": 1.000000105,
+     "texts_below_threshold": []
+    },
+    "cpu_batched": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999884,
+     "norm_ratio_max": 1.000000167,
+     "texts_below_threshold": []
+    },
+    "mps_one_by_one": {
+     "min_cosine": 1.0,
+     "norm_ratio_min": 0.999999776,
+     "norm_ratio_max": 1.000000145,
+     "texts_below_threshold": []
+    },
+    "long_probe": null,
+    "cpu_one_by_one_with_tanh_gelu": null
+   },
+   "notes": [
+    "Decoder with last-token pooling: the tokenizer appends <|endoftext|> (example_tokens) and the pooled vector is the hidden state of that last real token. tokenizer.json is byte-identical in the ONNX and PyTorch repos.",
+    "PyTorch right-pads and takes position (attention_mask.sum - 1); batched cosine is 1.0, so the padding side of the batch does not matter as long as pooling uses the mask.",
+    "Weights are bfloat16 on disk (torch_weight_MB is the download size) and about 2.4 GB in fp32 memory; transformers upcasts them exactly.",
+    "max_length 32768 is the ONNX repo's tokenizer_config.json value; the corpus reaches 2135 tokens and a 32k-token probe was not attempted (tens of GB of attention scores in the ONNX graph), so the limit itself is not exercised.",
+    "fastembed ran at batch size 1, chosen up front to bound attention memory; the default batch size was not tried.",
+    "The repo defines a query prompt in config_sentence_transformers.json (sentence_transformers.prompts); fastembed's embed() applies none and the golden was produced from raw text, which is also what archon sends, so the PyTorch side must not add it."
+   ],
+   "fastembed_quantized_aliases": [
+    "Qwen/Qwen3-Embedding-0.6B-Q"
+   ]
+  }
+ },
+ "rerankers": {
+  "Xenova/ms-marco-MiniLM-L-6-v2": {
+   "torch_repo": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+   "torch_revision_sha": "233902d25c440f23af6f7d6e94d2946bac0bee0a",
+   "max_length": 512,
+   "pair_encoding": "tokenizer.encode(query, document) -> text pair, query first; [CLS] q [SEP] d [SEP], token_type_ids 0/1 REQUIRED",
+   "padding": "batch-longest, right, pad_id 0 ([PAD])",
+   "output": "logits[:,0] of shape [batch,1] (num_labels=1), RAW, no sigmoid/activation (cross-encoder default activation = Identity)",
+   "tokenizer_class": "AutoTokenizer -> BertTokenizer (v5) / BertTokenizerFast (v4); ids 100% identical to fastembed",
+   "torch_weight_MB": 90.9
+  },
+  "Xenova/ms-marco-MiniLM-L-12-v2": {
+   "torch_repo": "cross-encoder/ms-marco-MiniLM-L-12-v2",
+   "torch_revision_sha": "7b0235231ca2674cb8ca8f022859a6eba2b1c968",
+   "max_length": 512,
+   "pair_encoding": "tokenizer.encode(query, document) -> text pair, query first; [CLS] q [SEP] d [SEP], token_type_ids 0/1 REQUIRED",
+   "padding": "batch-longest, right, pad_id 0 ([PAD])",
+   "output": "logits[:,0] of shape [batch,1] (num_labels=1), RAW, no sigmoid/activation (cross-encoder default activation = Identity)",
+   "tokenizer_class": "AutoTokenizer -> BertTokenizer (v5) / BertTokenizerFast (v4); ids 100% identical to fastembed",
+   "torch_weight_MB": 133.5
+  },
+  "BAAI/bge-reranker-base": {
+   "torch_repo": "BAAI/bge-reranker-base",
+   "torch_revision_sha": "2cfc18c9415c912f9d8155881c133215df768a70",
+   "max_length": 512,
+   "pair_encoding": "tokenizer.encode(query, document) -> text pair, query first; <s> q </s></s> d </s>, no token_type_ids",
+   "padding": "batch-longest, right, pad_id 1 (<pad>)",
+   "output": "logits[:,0] of shape [batch,1] (num_labels=1), RAW, no sigmoid",
+   "tokenizer_class": "PreTrainedTokenizerFast (NOT AutoTokenizer on transformers 5.x: AutoTokenizer gives XLMRobertaTokenizer which differs from fastembed on trailing whitespace); equivalently raw tokenizers.Tokenizer",
+   "torch_weight_MB": 1112.2
+  },
+  "jinaai/jina-reranker-v2-base-multilingual": {
+   "torch_repo": "jinaai/jina-reranker-v2-base-multilingual",
+   "torch_revision_sha": "9cfeff2df7d40d1b78e75e5e9cebec92a99813c9",
+   "max_length": 1024,
+   "pair_encoding": "tokenizer.encode(query, document) -> text pair, query first; <s> q </s></s> d </s>, no token_type_ids",
+   "padding": "batch-longest, right, pad_id 1 (<pad>)",
+   "output": "logits[:,0] of shape [batch,1] (num_labels=1), RAW, no sigmoid",
+   "tokenizer_class": "AutoTokenizer -> XLMRobertaTokenizer (v5) / XLMRobertaTokenizerFast (v4); tokenizer.json has WhitespaceSplit+Metaspace; matches fastembed 100% on tf>=5.3.0 and 4.57.x; DO NOT pass fix_mistral_regex=True (changes ids)",
+   "torch_weight_MB": 556.9
+  },
+  "BAAI/bge-reranker-v2-m3": {
+   "torch_repo": "BAAI/bge-reranker-v2-m3",
+   "torch_revision_sha": "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e",
+   "max_length": 8192,
+   "pair_encoding": "tokenizer.encode(query, document) -> text pair, query first; <s> ▁x </s> </s> ▁x </s> (query 'x', document 'x'); token_type_ids not used",
+   "padding": "batch-longest, right, pad_id 1",
+   "output": "logits[:,0] of shape [batch,1] (num_labels=1), RAW, no sigmoid",
+   "architecture": "xlm_roberta",
+   "uses_token_type_ids": false,
+   "pad_token_id": 1,
+   "fastembed_class": "OnnxTextCrossEncoder",
+   "fastembed_source_repo": "onnx-community/bge-reranker-v2-m3-ONNX",
+   "fastembed_source_revision": "6f5ff65298512715a1e669753bc754d2bc8f367b",
+   "fastembed_graph_uses_tanh_gelu": false,
+   "torch_weight_MB": 2271.1,
+   "torch_weight_dtype_on_disk": "F32",
+   "tokenizer_config_limits": {
+    "model_max_length": 8192,
+    "max_length": null
+   },
+   "tokenizer_json_identical_to_fastembed": false,
+   "tokenizer_json_identical_to_fastembed_ignoring_truncation_padding": false,
+   "token_ids_identical": "14/14",
+   "token_ids_identical_on_every_corpus_text_as_query_and_document": "729/729",
+   "fastembed_truncation_direction": "right",
+   "corpus_max_tokens_untruncated": 3278,
+   "parity": {
+    "cpu_one_by_one_max_abs_diff": 1.6451e-05,
+    "cpu_batched_max_abs_diff": 1.4722e-05,
+    "mps_one_by_one_max_abs_diff": 1.3828e-05,
+    "pairs_above_tolerance": [],
+    "max_abs_diff_by_truncation_length": {
+     "512": 0.420521855,
+     "1024": 0.405228257,
+     "2048": 0.425516367,
+     "8192": 1.6451e-05
+    },
+    "long_probe": {
+     "max_length": 8192,
+     "probe_tokens_untruncated": 8603,
+     "abs_diff": 7.153e-06
+    }
+   },
+   "notes": [
+    "The ONNX repo's tokenizer.json differs from the PyTorch repo's in serialization only (Unigram scores written with different float digits, Metaspace written with split instead of add_prefix_space); all 14 pairs and all 729 corpus text pairs tokenize identically.",
+    "max_length 8192 is required: truncating at 512, 1024 or 2048 misses the golden by 0.4 (parity.max_abs_diff_by_truncation_length) and parity.long_probe (8603 tokens) matches at 8192.",
+    "bge-reranker-v2-m3 is plain XLM-RoBERTa (stock XLMRobertaForSequenceClassification, no remote code)."
+   ],
+   "fastembed_quantized_aliases": [
+    "BAAI/bge-reranker-v2-m3-int8"
+   ]
+  }
+ },
+ "_provenance": {
+  "generated_with": "fastembed 0.9.0, onnxruntime 1.31 CPUExecutionProvider, 2026-10-24",
+  "note": "Golden outputs are what fastembed produced; stored user vectors and exposed reranker scores come from this behavior. Frozen reference: do not regenerate from a different runtime.",
+  "environment": {
+   "torch": "2.14.1",
+   "transformers_shared_env": "5.20.2",
+   "tokenizers_shared": "0.23.3",
+   "fastembed": "0.9.0",
+   "onnxruntime": "1.31",
+   "parity_threshold_abs_score": 0.001,
+   "all_rerankers_max_absdiff_observed": 1.4e-05
+  },
+  "tier2": {
+   "generated_with": "fastembed 0.9.0, onnxruntime 1.30.0 CPUExecutionProvider, 2026-10-25",
+   "note": "Golden outputs are what fastembed produced; stored user vectors and exposed reranker scores come from this behavior. Frozen reference: do not regenerate from a different runtime. A model with `supported: false` keeps its golden array; `unsupported_reason` is the measurement.",
+   "thresholds": {
+    "embedder_min_cosine": 0.99994,
+    "embedder_norm_ratio_tolerance": 0.001,
+    "reranker_abs_score_diff": 0.0001
+   },
+   "environment": {
+    "fastembed": "0.9.0",
+    "onnxruntime": "1.30.0",
+    "onnx": "1.23.2",
+    "torch": "2.13.0",
+    "transformers": "5.8.1",
+    "tokenizers": "0.22.2",
+    "numpy": "2.5.1",
+    "python": "3.13.14"
+   },
+   "method": "fastembed 0.9.0 embed(texts) / rerank(query, documents) as archon calls them, then reproduced with tokenizers + stock transformers classes in fp32; two complete runs (project environment and a throwaway one with the same package versions) gave bit-identical goldens. One-off freeze script removed with fastembed."
+  }
+ }
+}

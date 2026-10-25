@@ -9,6 +9,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from archon_search.embedder_cache import EmbedderCache
+from archon_search.model_specs import UnsupportedModelError
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +27,7 @@ def _mock_embedder(name: str, is_warm: bool = True) -> MagicMock:
     return m
 
 
-def _slow_make(name: str, providers: list[str] | None = None) -> MagicMock:
+def _slow_make(name: str, device: str = "auto") -> MagicMock:
     """Synchronous slow factory; runs inside asyncio.to_thread."""
     time.sleep(0.05)
     return _mock_embedder(name)
@@ -64,7 +65,7 @@ async def test_get_or_load_caches_result():
 async def test_lru_eviction_removes_oldest():
     """max_size=1: load A then B; only B remains in cache."""
     cache = EmbedderCache(max_size=1)
-    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: _mock_embedder(n)):
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)):
         await cache.get_or_load("model-A")
         await cache.get_or_load("model-B")
     assert cache.cached_models() == ["model-B"]
@@ -75,7 +76,7 @@ async def test_lru_eviction_removes_oldest():
 async def test_evicted_embedder_still_usable_by_caller():
     """Caller holding reference to evicted embedder can still access its model_name."""
     cache = EmbedderCache(max_size=1)
-    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: _mock_embedder(n)):
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)):
         emb_a = await cache.get_or_load("model-A")
         await cache.get_or_load("model-B")  # evicts A
     assert emb_a.model_name == "model-A"  # still accessible via caller's reference
@@ -112,7 +113,7 @@ async def test_concurrent_miss_deduplication():
     cache = EmbedderCache(max_size=3)
     call_count = 0
 
-    def _counting_slow_make(name: str, providers: list[str] | None = None) -> MagicMock:
+    def _counting_slow_make(name: str, device: str = "auto") -> MagicMock:
         nonlocal call_count
         call_count += 1
         time.sleep(0.05)
@@ -151,7 +152,7 @@ async def test_preload_skips_unknown_model_without_abort():
     """make_embedder raises for one model; preload completes; other model is cached."""
     cache = EmbedderCache(max_size=3)
 
-    def _selective_make(name: str, providers: list[str] | None = None) -> MagicMock:
+    def _selective_make(name: str, device: str = "auto") -> MagicMock:
         if name == "bad-model":
             raise ValueError("unknown model")
         return _mock_embedder(name)
@@ -169,7 +170,7 @@ async def test_preload_warms_up_each_loaded_model():
     cache = EmbedderCache(max_size=3)
     embedders = {name: _mock_embedder(name) for name in ("model-A", "model-B")}
 
-    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: embedders[n]):
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": embedders[n]):
         await cache.preload(["model-A", "model-B"])
 
     for embedder in embedders.values():
@@ -193,7 +194,7 @@ async def test_preload_warmup_failure_evicts_and_does_not_abort_other_models(
     embedders = {"good-model": good, "cold-model": cold}
 
     with caplog.at_level(logging.WARNING, logger="archon_search.embedder_cache"):
-        with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: embedders[n]):
+        with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": embedders[n]):
             await cache.preload(["good-model", "cold-model"])  # must not raise
 
     assert "good-model" in cache.cached_models()
@@ -233,7 +234,7 @@ async def test_preload_load_failure_logs_load_message(caplog: pytest.LogCaptureF
     """A load failure is reported as a load failure, distinct from a warm-up failure."""
     cache = EmbedderCache(max_size=3)
 
-    def _selective_make(name: str, providers: list[str] | None = None) -> MagicMock:
+    def _selective_make(name: str, device: str = "auto") -> MagicMock:
         if name == "bad-model":
             raise ValueError("unknown model")
         return _mock_embedder(name)
@@ -250,7 +251,7 @@ async def test_preload_load_failure_logs_load_message(caplog: pytest.LogCaptureF
 async def test_preload_returns_no_failures_when_every_model_loads_and_warms() -> None:
     """S632: a clean preload reports nothing failed."""
     cache = EmbedderCache(max_size=3)
-    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: _mock_embedder(n)):
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)):
         failed = await cache.preload(["model-A", "model-B"])
 
     assert failed == []
@@ -275,7 +276,7 @@ async def test_preload_returns_every_failed_model_in_request_order() -> None:
         "warm-broken-model": warm_but_broken,
     }
 
-    def _make(name: str, providers: list[str] | None = None) -> MagicMock:
+    def _make(name: str, device: str = "auto") -> MagicMock:
         if name == "missing-model":
             raise ValueError("unknown model")
         return embedders[name]
@@ -295,7 +296,7 @@ async def test_preload_does_not_report_a_model_the_lru_evicted_after_it_warmed()
     state left behind.
     """
     cache = EmbedderCache(max_size=1)
-    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: _mock_embedder(n)):
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)):
         failed = await cache.preload(["model-A", "model-B"])
 
     assert failed == []
@@ -306,7 +307,7 @@ async def test_preload_does_not_report_a_model_the_lru_evicted_after_it_warmed()
 async def test_cold_models_is_empty_when_every_requested_model_is_cached_warm() -> None:
     """S632: a cache holding every requested model warm reports nothing cold."""
     cache = EmbedderCache(max_size=3)
-    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: _mock_embedder(n)):
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)):
         await cache.preload(["model-A", "model-B"])
 
     assert cache.cold_models(["model-A", "model-B"]) == []
@@ -326,7 +327,7 @@ async def test_cold_models_names_uncached_and_cached_but_cold_models_in_request_
         "warm-model": _mock_embedder("warm-model", is_warm=True),
         "cold-model": _mock_embedder("cold-model", is_warm=False),
     }
-    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: embedders[n]):
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": embedders[n]):
         await cache.get_or_load("warm-model")
         await cache.get_or_load("cold-model")
 
@@ -338,7 +339,7 @@ async def test_cold_models_is_a_pure_query() -> None:
     """Asking which models are cold must not load them or touch the LRU order."""
     cache = EmbedderCache(max_size=3)
     with patch(
-        "archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: _mock_embedder(n)
+        "archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)
     ) as mock_make:
         await cache.get_or_load("model-A")
         await cache.get_or_load("model-B")
@@ -351,25 +352,86 @@ async def test_cold_models_is_a_pure_query() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_or_load_forwards_configured_providers() -> None:
-    """The ONNX execution providers reach make_embedder — the hot search path uses the GPU too."""
-    cache = EmbedderCache(max_size=3, providers=["CoreMLExecutionProvider"])
+async def test_get_or_load_forwards_configured_device() -> None:
+    """[database].device reaches make_embedder — the hot search path uses the accelerator too."""
+    cache = EmbedderCache(max_size=3, device="mps")
 
     with patch("archon_search.embedder_cache.make_embedder", return_value=_mock_embedder("model-A")) as mock_make:
         await cache.get_or_load("model-A")
 
-    assert mock_make.call_args.kwargs["providers"] == ["CoreMLExecutionProvider"]
+    assert mock_make.call_args.kwargs["device"] == "mps"
 
 
 @pytest.mark.asyncio
-async def test_get_or_load_defaults_providers_to_none() -> None:
-    """No providers configured → make_embedder gets None (CPU), not an empty list."""
+async def test_get_or_load_defaults_device_to_auto() -> None:
     cache = EmbedderCache(max_size=3)
 
     with patch("archon_search.embedder_cache.make_embedder", return_value=_mock_embedder("model-A")) as mock_make:
         await cache.get_or_load("model-A")
 
-    assert mock_make.call_args.kwargs["providers"] is None
+    assert mock_make.call_args.kwargs["device"] == "auto"
+
+
+# ---------------------------------------------------------------------------
+# A pinned model outside the registry: real make_embedder fails fast at construction
+# ---------------------------------------------------------------------------
+
+_SUPPORTED_MODEL = "BAAI/bge-small-en-v1.5"
+_UNSUPPORTED_MODEL = "custom/unknown-model"
+_PROMPT_SECONDS = 5.0
+
+
+@pytest.mark.asyncio
+async def test_unsupported_pinned_model_fails_cleanly_and_is_not_cached() -> None:
+    cache = EmbedderCache(max_size=3)
+
+    with pytest.raises(UnsupportedModelError):
+        await asyncio.wait_for(cache.get_or_load(_UNSUPPORTED_MODEL), timeout=_PROMPT_SECONDS)
+
+    assert cache.cached_models() == []
+
+
+@pytest.mark.asyncio
+async def test_unsupported_pinned_model_fails_again_without_hanging_on_a_stale_registration() -> None:
+    cache = EmbedderCache(max_size=3)
+
+    for _ in range(2):
+        with pytest.raises(UnsupportedModelError):
+            await asyncio.wait_for(cache.get_or_load(_UNSUPPORTED_MODEL), timeout=_PROMPT_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_callers_for_an_unsupported_model_all_fail_promptly() -> None:
+    cache = EmbedderCache(max_size=3)
+
+    outcomes = await asyncio.wait_for(
+        asyncio.gather(*[cache.get_or_load(_UNSUPPORTED_MODEL) for _ in range(3)], return_exceptions=True),
+        timeout=_PROMPT_SECONDS,
+    )
+
+    assert [type(outcome) for outcome in outcomes] == [UnsupportedModelError] * 3
+
+
+@pytest.mark.asyncio
+async def test_unsupported_pinned_model_does_not_poison_a_supported_one() -> None:
+    cache = EmbedderCache(max_size=3)
+    with pytest.raises(UnsupportedModelError):
+        await cache.get_or_load(_UNSUPPORTED_MODEL)
+
+    embedder = await cache.get_or_load(_SUPPORTED_MODEL)
+
+    assert embedder.model_name == _SUPPORTED_MODEL
+    assert cache.cached_models() == [_SUPPORTED_MODEL]
+
+
+@pytest.mark.asyncio
+async def test_preload_names_an_unsupported_model_as_failed_and_still_warms_the_rest() -> None:
+    cache = EmbedderCache(max_size=3)
+
+    failed = await cache.preload([_UNSUPPORTED_MODEL, _SUPPORTED_MODEL])
+
+    assert failed == [_UNSUPPORTED_MODEL]
+    assert cache.cached_models() == [_SUPPORTED_MODEL]
 
 
 @pytest.mark.asyncio
@@ -384,7 +446,7 @@ async def test_preload_uses_asyncio_to_thread():
         return await original_to_thread(func, *args, **kwargs)
 
     with patch("asyncio.to_thread", side_effect=tracking_to_thread):
-        with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: _mock_embedder(n)):
+        with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, device="auto": _mock_embedder(n)):
             await cache.preload(["model-A", "model-B"])
 
     assert len(to_thread_calls) == 2
@@ -400,7 +462,7 @@ async def test_get_or_load_make_embedder_raises_cleans_up_loading_event():
     cache = EmbedderCache(max_size=3)
     call_count = 0
 
-    def _flaky_make(name: str, providers: list[str] | None = None) -> MagicMock:
+    def _flaky_make(name: str, device: str = "auto") -> MagicMock:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -426,7 +488,7 @@ async def test_concurrent_waiters_retry_after_failed_load():
     cache = EmbedderCache(max_size=3)
     call_count = 0
 
-    def _flaky_make(name: str, providers: list[str] | None = None) -> MagicMock:
+    def _flaky_make(name: str, device: str = "auto") -> MagicMock:
         nonlocal call_count
         call_count += 1
         time.sleep(0.02)
@@ -458,7 +520,7 @@ async def test_preload_failure_does_not_leave_dangling_loading_event():
     cache = EmbedderCache(max_size=3)
     call_count = 0
 
-    def _flaky_make(name: str, providers: list[str] | None = None) -> MagicMock:
+    def _flaky_make(name: str, device: str = "auto") -> MagicMock:
         nonlocal call_count
         call_count += 1
         if call_count == 1:

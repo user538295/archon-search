@@ -55,7 +55,7 @@ def test_failure_category_enum_has_exactly_eight_members():
         "extract_failed",
         "smoke_load_failed",
         "relations_not_supported",
-        "conflicting_onnx_runtimes",
+        "device_unavailable",
     }
 
 

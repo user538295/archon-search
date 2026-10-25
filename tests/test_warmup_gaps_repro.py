@@ -375,7 +375,7 @@ async def test_get_or_load_concurrent_waiter_hangs_without_timeout(
     release = threading.Event()
     loader_entered = threading.Event()
 
-    def stalled_make_embedder(model_name: str, providers=None):
+    def stalled_make_embedder(model_name: str, device: str = "auto"):
         loader_entered.set()
         release.wait()  # park the loader thread; released in the finally below
         return MagicMock()

@@ -58,7 +58,6 @@ from archon_search.store import (
 from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
 from archon_search.graph_types import ChunkInput, GraphNode
 from archon_search.graph_expander import build_expanded_text, tokenize_and_generate_ngrams
-from archon_search.config import resolve_reranker_providers
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig, RAGFusionConfig, SearchConfig
@@ -442,7 +441,7 @@ class SearchPipeline:
         reranker_timeout: float | None = None,
         embedder_timeout: float | None = None,
     ) -> bool:
-        """Build the lazy ONNX models now, off any request-timeout budget (S184).
+        """Build the lazy PyTorch models now, off any request-timeout budget (S184).
 
         Both ML backends load their weights on first use, inside the callers'
         ``asyncio.wait_for`` budget — so an uninitialised model turned a valid
@@ -455,7 +454,7 @@ class SearchPipeline:
 
         *embedder_timeout* bounds the embedder warm-up (S290); without one the
         wait is unbounded, which is right for the lifespan/ingest warm-ups but
-        parks a request for the whole cold ONNX build. Giving up on the wait does
+        parks a request for the whole cold model build. Giving up on the wait does
         not abandon the build — it runs on in its worker thread — and the caller
         checks :attr:`embedder_is_warm` (or the embedder it passed) to decide:
         a still-cold embedder means the search must run ``fts_only=True`` rather
@@ -479,7 +478,7 @@ class SearchPipeline:
             else:
                 await asyncio.wait_for(target_embedder.warmup(), timeout=embedder_timeout)
         except EmbedderWarmupTimeout:
-            # The build itself (model download / ONNX session) outran its own
+            # The build itself (model download / weight load) outran its own
             # limit — distinct from this caller merely giving up on waiting.
             logger.warning(
                 "warm-up: embedder build exceeded its own %ss limit; this search runs FTS-only",
@@ -508,7 +507,7 @@ class SearchPipeline:
             else:
                 await asyncio.wait_for(self._reranker.warmup(), timeout=reranker_timeout)
         except RerankerWarmupTimeout:
-            # The build itself (model download / ONNX session) outran its own
+            # The build itself (model download / weight load) outran its own
             # limit — distinct from this caller merely giving up on waiting.
             logger.warning(
                 "warm-up: reranker build exceeded its own %ss limit; this search skips reranking",
@@ -1315,7 +1314,7 @@ class SearchPipeline:
     ) -> SearchPipelineResult:
         """*rerank=False* skips the cross-encoder stage and returns the fused
         vector+FTS ranking — how a caller degrades when the reranker is still
-        cold rather than blocking a request on the ONNX build (S286).
+        cold rather than blocking a request on the model build (S286).
 
         *fts_only=True* is the same degrade one stage earlier: the query is never
         embedded, so the ranking comes from the FTS leg alone. Callers pass it
@@ -3942,12 +3941,12 @@ def create_pipeline(
     store = SearchStore(cfg.db_path)
     _embedder_backend: EmbedderBackend = embedder_backend or ModelEmbedder(
         cfg.embedding_model,
-        providers=cfg.providers,
+        device=cfg.device,
     )
     if cfg.reranker_model:
         _reranker_backend: RerankerBackend = reranker_backend or ModelReranker(
             cfg.reranker_model,
-            providers=resolve_reranker_providers(cfg),
+            device=cfg.device,
         )
         reranker: Reranker | None = Reranker(_reranker_backend)
     else:

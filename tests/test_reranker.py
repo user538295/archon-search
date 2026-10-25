@@ -1,15 +1,24 @@
-"""packages/archon-search/tests/test_reranker.py — unit tests for Reranker (fastembed backend)."""
+"""Unit tests for Reranker (async wrapper) and ModelReranker (PyTorch backend, tiny synthetic cross-encoders)."""
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 
+import _tiny_encoder as tiny_encoder
 import pytest
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import SearchResult
 import archon_search.reranker as reranker_module
+from archon_search.model_specs import UnsupportedModelError
+from archon_search.model_store import ModelDownloadError
 from archon_search.reranker import (
     ModelReranker,
     Reranker,
@@ -17,6 +26,8 @@ from archon_search.reranker import (
     RerankerWarmupTimeout,
     make_reranker,
 )
+
+pytestmark = pytest.mark.real_torch_backends
 
 
 # ---------------------------------------------------------------------------
@@ -148,17 +159,22 @@ async def test_S279_rerank_populates_reranker_score_on_every_result() -> None:
 
 
 @pytest.mark.asyncio
-async def test_make_reranker_returns_reranker() -> None:
-    """Factory creates a working Reranker that exercises the lazy import path."""
-    r = make_reranker("BAAI/bge-reranker-v2-m3", providers=[])
+async def test_make_reranker_returns_a_working_reranker_over_a_pytorch_backend(
+    use_tiny_reranker: Callable[..., MagicMock], reference_logits: Callable[..., list[float]]
+) -> None:
+    use_tiny_reranker("bert")
+    r = make_reranker("tiny/bert-reranker", device="cpu")
     assert isinstance(r, Reranker)
-    # Also verify the lazy import fires correctly by calling rerank()
+    assert r.is_warm is False
     candidates = [
-        SearchResult(doc_id="d0", chunk_id="d0-000000", text="text", score=0.0, source_path="/tmp/f.md")
+        SearchResult(doc_id="d0", chunk_id="d0-000000", text="w3 w4", score=0.0, source_path="/tmp/f.md")
     ]
-    result = await r.rerank("query", candidates, top_k=1)
+
+    result = await r.rerank("w1 w2", candidates, top_k=1)
+
     assert len(result) == 1
-    assert result[0].score == pytest.approx(0.5)
+    assert result[0].score == pytest.approx(reference_logits("bert", [("w1 w2", "w3 w4")])[0], abs=_TOLERANCE)
+    assert r.is_warm is True
 
 
 def test_reranker_backend_protocol() -> None:
@@ -212,52 +228,42 @@ async def test_P14_7_reranker_score_count_mismatch_raises_valueerror() -> None:
         await reranker.rerank("query", candidates, top_k=3)
 
 
-def test_model_reranker_init_called_once_under_concurrent_predict() -> None:
-    """Double-checked locking: concurrent predict() calls init the model exactly once."""
-    import sys
-    import threading
-    import time
-    from typing import Any
-
-    from archon_search.reranker import ModelReranker
-
-    init_count = 0
+def test_model_reranker_init_called_once_under_concurrent_predict(
+    tiny_snapshots: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Double-checked locking: concurrent predict() calls load the model exactly once."""
+    loads = 0
     barrier = threading.Barrier(2)
 
-    class _SlowTextCrossEncoder:
-        def __init__(self, model_name: str, **kwargs: Any) -> None:
-            nonlocal init_count
-            init_count += 1
-            time.sleep(0.05)  # slow enough to expose the race
+    def slow_ensure(_spec: object) -> Path:
+        nonlocal loads
+        loads += 1
+        time.sleep(0.05)  # slow enough to expose the race
+        return tiny_snapshots["bert"]
 
-        def rerank(self, query: str, documents: object) -> list[float]:
-            return [0.5] * len(list(documents))  # type: ignore[arg-type]
+    monkeypatch.setattr(reranker_module, "get_reranker_spec", lambda _name: tiny_encoder.tiny_reranker_spec("bert"))
+    monkeypatch.setattr(reranker_module, "ensure_model", slow_ensure)
+    reranker = ModelReranker("tiny/bert-reranker", device="cpu")
+    results: list[list[float]] = []
+    exceptions: list[Exception] = []
 
-    original = sys.modules["fastembed.rerank.cross_encoder"].TextCrossEncoder
-    sys.modules["fastembed.rerank.cross_encoder"].TextCrossEncoder = _SlowTextCrossEncoder
-    try:
-        reranker = ModelReranker("BAAI/bge-reranker-v2-m3")
-        results: list[list[float]] = []
-        exceptions: list[Exception] = []
+    def run_predict() -> None:
+        barrier.wait()  # force simultaneous entry
+        try:
+            results.append(reranker.predict([("w1", "w2"), ("w1", "w3")]))
+        except Exception as exc:
+            exceptions.append(exc)
 
-        def run_predict() -> None:
-            barrier.wait()  # force simultaneous entry
-            try:
-                results.append(reranker.predict([("q", "doc1"), ("q", "doc2")]))
-            except Exception as exc:
-                exceptions.append(exc)
+    threads = [threading.Thread(target=run_predict) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
-        threads = [threading.Thread(target=run_predict) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert not exceptions, f"Unexpected exceptions: {exceptions}"
-        assert len(results) == 2
-        assert init_count == 1, f"Model __init__ called {init_count} times — lock missing"
-    finally:
-        sys.modules["fastembed.rerank.cross_encoder"].TextCrossEncoder = original
+    assert not exceptions, f"Unexpected exceptions: {exceptions}"
+    assert len(results) == 2
+    assert results[0] == results[1]
+    assert loads == 1, f"Model loaded {loads} times — lock missing"
 
 
 # ===========================================================================
@@ -364,28 +370,6 @@ async def test_rerank_empty_candidates_keeps_no_scores() -> None:
     assert result == []
 
 
-def test_model_reranker_uses_submodule_import_path() -> None:
-    """Regression: predict() must resolve TextCrossEncoder from fastembed.rerank.cross_encoder.
-
-    If the import in reranker.py is reverted to `from fastembed import TextCrossEncoder`,
-    this test fails because TextCrossEncoder is temporarily hidden from the top-level module.
-    """
-    import sys
-
-    from archon_search.reranker import ModelReranker
-
-    top_level = sys.modules["fastembed"]
-    original = getattr(top_level, "TextCrossEncoder", None)
-    # Hide TextCrossEncoder from the top-level fastembed module
-    if hasattr(top_level, "TextCrossEncoder"):
-        delattr(top_level, "TextCrossEncoder")
-    try:
-        reranker = ModelReranker("test-model")
-        result = reranker.predict([("query", "doc")])
-        assert result == [0.5], f"Expected [0.5], got {result}"
-    finally:
-        if original is not None:
-            top_level.TextCrossEncoder = original
 
 
 # ---------------------------------------------------------------------------
@@ -527,15 +511,8 @@ async def test_rerank_with_trace_alias_delegates() -> None:
 
 
 def test_model_reranker_is_warm_false_before_predict() -> None:
-    mr = ModelReranker("some-model")
+    mr = ModelReranker("BAAI/bge-reranker-base", device="cpu")
     assert mr.is_warm is False
-    assert mr._model is None
-
-
-def test_model_reranker_is_warm_true_after_model_set() -> None:
-    mr = ModelReranker("some-model")
-    mr._model = object()
-    assert mr.is_warm is True
 
 
 def test_reranker_is_warm_delegates_to_backend() -> None:
@@ -547,59 +524,12 @@ def test_reranker_is_warm_delegates_to_backend() -> None:
     assert reranker.is_warm is True
 
 
-def test_reading_reranker_is_warm_does_not_construct_TextCrossEncoder() -> None:
-    from unittest.mock import patch
-
-    with patch(
-        "fastembed.rerank.cross_encoder.TextCrossEncoder",
-        side_effect=RuntimeError("should not be called"),
-    ):
-        mr = ModelReranker("x")
-        result = mr.is_warm
-    assert result is False
-
-
-def test_reading_reranker_is_warm_does_not_acquire_lock() -> None:
-    import time
-
-    mr = ModelReranker("x")
-    lock_acquired = threading.Event()
-    test_done = threading.Event()
-
-    def hold_lock() -> None:
-        with mr._lock:
-            lock_acquired.set()
-            test_done.wait(timeout=5.0)
-
-    t = threading.Thread(target=hold_lock)
-    t.start()
-    lock_acquired.wait(timeout=5.0)
-
-    start = time.monotonic()
-    result = mr.is_warm
-    elapsed = time.monotonic() - start
-
-    test_done.set()
-    t.join()
-
-    assert result is False
-    assert elapsed < 0.1
 
 
 def test_mock_reranker_backend_satisfies_protocol_after_is_warm_added() -> None:
     assert isinstance(_MockRerankerBackend(), RerankerBackend)
 
 
-def test_model_reranker_is_warm_true_after_predict() -> None:
-    from unittest.mock import MagicMock, patch
-
-    fake_model = MagicMock()
-    fake_model.rerank.return_value = [0.9]
-    mr = ModelReranker("some-model")
-    assert mr.is_warm is False
-    with patch("fastembed.rerank.cross_encoder.TextCrossEncoder", return_value=fake_model):
-        mr.predict([("query", "doc")])
-    assert mr.is_warm is True
 
 
 def test_reranker_is_warm_propagates_backend_exception() -> None:
@@ -660,41 +590,6 @@ async def test_warmup_retries_after_a_failed_attempt() -> None:
     await reranker.warmup()
     assert backend.call_count == 2
 
-
-def _s493_cache_dir_passed_by_predict() -> str:
-    """The ``cache_dir`` ModelReranker.predict() hands to fastembed's TextCrossEncoder."""
-    from unittest.mock import MagicMock, patch
-
-    fake_model = MagicMock()
-    fake_model.rerank.return_value = [0.9]
-    with patch("fastembed.rerank.cross_encoder.TextCrossEncoder", return_value=fake_model) as mock_tce:
-        ModelReranker("some-model").predict([("query", "doc")])
-    return mock_tce.call_args.kwargs["cache_dir"]
-
-
-def test_s493_fastembed_cache_path_relocates_the_reranker_weight_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """S493: FASTEMBED_CACHE_PATH, set to a directory OUTSIDE ARCHON_SEARCH_DATA_DIR, is
-    where the reranker's fastembed weights go (UserManual/30_configuration.md,
-    150_multi_instance_setup.md: "overrides the ARCHON_SEARCH_DATA_DIR-derived default")."""
-    data_dir = tmp_path / "archon-data"
-    fastembed_cache = tmp_path / "fastembed-cache"
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
-    monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(fastembed_cache))
-
-    assert _s493_cache_dir_passed_by_predict() == str(fastembed_cache)
-
-
-def test_reranker_caches_models_under_the_archon_data_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """BE-26 (S493 presence anchor): with FASTEMBED_CACHE_PATH unset, predict() hands
-    TextCrossEncoder ``$ARCHON_SEARCH_DATA_DIR/models`` as its cache_dir."""
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv("FASTEMBED_CACHE_PATH", raising=False)
-
-    assert _s493_cache_dir_passed_by_predict() == str(tmp_path / "models")
 
 
 # ---------------------------------------------------------------------------
@@ -849,3 +744,267 @@ async def test_warmup_raises_rerankerwarmuptimeout_not_asyncio_timeouterror(
     assert not issubclass(RerankerWarmupTimeout, asyncio.TimeoutError)
     assert not issubclass(RerankerWarmupTimeout, OSError)
     assert reranker._warmup_failed is True
+
+
+# ---------------------------------------------------------------------------
+# ModelReranker — PyTorch backend on tiny synthetic cross-encoders (no weights, no network)
+# ---------------------------------------------------------------------------
+
+_TOLERANCE = 1e-5
+#: Tiny snapshot kinds: (architecture, uses_token_type_ids) of the spec describing them.
+_SPEC_OPTIONS: dict[str, bool] = {"bert": True, "xlm_roberta": False}
+
+
+@pytest.fixture(scope="module")
+def tiny_snapshots(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    return {
+        architecture: tiny_encoder.build_cross_encoder_snapshot(tmp_path_factory.mktemp(f"tiny-{architecture}"), architecture)  # type: ignore[arg-type]
+        for architecture in _SPEC_OPTIONS
+    }
+
+
+@pytest.fixture
+def use_tiny_reranker(tiny_snapshots: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Callable[..., MagicMock]:
+    """Point ``ModelReranker`` at a tiny snapshot; returns the ``ensure_model`` mock."""
+    ensure = MagicMock()
+
+    def install(architecture: str, **spec_options: Any) -> MagicMock:
+        options = {"uses_token_type_ids": _SPEC_OPTIONS[architecture], **spec_options}
+        spec = tiny_encoder.tiny_reranker_spec(architecture, **options)  # type: ignore[arg-type]
+        ensure.return_value = tiny_snapshots[architecture]
+        monkeypatch.setattr(reranker_module, "get_reranker_spec", lambda _name: spec)
+        monkeypatch.setattr(reranker_module, "ensure_model", ensure)
+        return ensure
+
+    return install
+
+
+@pytest.fixture
+def reference_logits(tiny_snapshots: dict[str, Path]) -> Callable[..., list[float]]:
+    """Raw logits of a plain ``AutoModelForSequenceClassification`` run on hand-built pair ids, one pair at a time."""
+
+    def run(architecture: str, pairs: list[tuple[str, str]], *, token_types: bool | None = None) -> list[float]:
+        import torch
+        from transformers import AutoModelForSequenceClassification
+
+        use_types = _SPEC_OPTIONS[architecture] if token_types is None else token_types
+        model = AutoModelForSequenceClassification.from_pretrained(tiny_snapshots[architecture], dtype=torch.float32).eval()
+        logits: list[float] = []
+        for query, document in pairs:
+            query_ids, document_ids = tiny_encoder.token_ids(query), tiny_encoder.token_ids(document)[1:]
+            inputs = {"input_ids": torch.tensor([[*query_ids, *document_ids]])}
+            if use_types:
+                inputs["token_type_ids"] = torch.tensor([[0] * len(query_ids) + [1] * len(document_ids)])
+            with torch.inference_mode():
+                logits.append(model(**inputs).logits[0, 0].item())
+        return logits
+
+    return run
+
+
+def _predict(pairs: list[tuple[str, str]]) -> list[float]:
+    return ModelReranker("tiny/bert-reranker", device="cpu").predict(pairs)
+
+
+def test_an_unsupported_model_raises_at_construction() -> None:
+    with pytest.raises(UnsupportedModelError, match="no-such-model"):
+        ModelReranker("no-such-model")
+
+
+def test_empty_input_returns_empty_list_without_loading(use_tiny_reranker: Callable[..., MagicMock]) -> None:
+    ensure = use_tiny_reranker("bert")
+    reranker = ModelReranker("tiny/bert-reranker", device="cpu")
+
+    assert reranker.predict([]) == []
+    ensure.assert_not_called()
+    assert reranker.is_warm is False
+
+
+def test_lazy_load_and_is_warm(use_tiny_reranker: Callable[..., MagicMock]) -> None:
+    ensure = use_tiny_reranker("bert")
+    reranker = ModelReranker("tiny/bert-reranker", device="cpu")
+    assert reranker.is_warm is False
+    ensure.assert_not_called()
+
+    reranker.predict([("w1", "w2")])
+    reranker.predict([("w1", "w3")])
+
+    assert reranker.is_warm is True
+    ensure.assert_called_once()
+
+
+def test_load_failure_is_not_latched(tiny_snapshots: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(reranker_module, "get_reranker_spec", lambda _name: tiny_encoder.tiny_reranker_spec("bert"))
+    ensure = MagicMock(side_effect=[ModelDownloadError("tiny/bert", "offline"), tiny_snapshots["bert"]])
+    monkeypatch.setattr(reranker_module, "ensure_model", ensure)
+    reranker = ModelReranker("tiny/bert-reranker", device="cpu")
+
+    with pytest.raises(ModelDownloadError):
+        reranker.predict([("w1", "w2")])
+    assert reranker.is_warm is False
+
+    assert len(reranker.predict([("w1", "w2")])) == 1
+    assert reranker.is_warm is True
+
+
+def test_reading_is_warm_does_not_wait_for_a_load_in_progress(
+    tiny_snapshots: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered, release = threading.Event(), threading.Event()
+
+    def blocking_ensure(_spec: object) -> Path:
+        entered.set()
+        release.wait(timeout=5.0)
+        return tiny_snapshots["bert"]
+
+    monkeypatch.setattr(reranker_module, "get_reranker_spec", lambda _name: tiny_encoder.tiny_reranker_spec("bert"))
+    monkeypatch.setattr(reranker_module, "ensure_model", blocking_ensure)
+    reranker = ModelReranker("tiny/bert-reranker", device="cpu")
+    loader = threading.Thread(target=reranker.predict, args=([("w1", "w2")],))
+    loader.start()
+    try:
+        assert entered.wait(timeout=5.0)
+        started = time.monotonic()
+        warm = reranker.is_warm
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        loader.join()
+
+    assert warm is False
+    assert elapsed < 0.1
+    assert reranker.is_warm is True
+
+
+@pytest.mark.parametrize("architecture", ["bert", "xlm_roberta"])
+def test_scores_are_raw_logits_not_sigmoid(
+    architecture: str, use_tiny_reranker: Callable[..., MagicMock], reference_logits: Callable[..., list[float]]
+) -> None:
+    import math
+
+    use_tiny_reranker(architecture)
+    pairs = [("w1 w2", "w3 w4 w5"), ("w6", "w7 w8")]
+    expected = reference_logits(architecture, pairs)
+
+    scores = _predict(pairs)
+
+    assert scores == pytest.approx(expected, abs=_TOLERANCE)
+    for score, logit in zip(scores, expected, strict=True):
+        assert abs(score - 1 / (1 + math.exp(-logit))) > 1e-3
+
+
+def test_token_type_ids_are_passed_when_the_spec_asks_for_them(
+    use_tiny_reranker: Callable[..., MagicMock], reference_logits: Callable[..., list[float]]
+) -> None:
+    use_tiny_reranker("bert")
+    pairs = [("w1 w2", "w3 w4 w5")]
+    with_types = reference_logits("bert", pairs, token_types=True)
+    without_types = reference_logits("bert", pairs, token_types=False)
+    assert abs(with_types[0] - without_types[0]) > 1e-3  # the comparison below is only meaningful then
+
+    assert _predict(pairs) == pytest.approx(with_types, abs=_TOLERANCE)
+
+
+def test_token_type_ids_are_omitted_when_the_spec_does_not_ask_for_them(
+    use_tiny_reranker: Callable[..., MagicMock], reference_logits: Callable[..., list[float]]
+) -> None:
+    use_tiny_reranker("bert", uses_token_type_ids=False)
+    pairs = [("w1 w2", "w3 w4 w5")]
+
+    assert _predict(pairs) == pytest.approx(reference_logits("bert", pairs, token_types=False), abs=_TOLERANCE)
+
+
+def test_xlm_roberta_runs_without_token_type_ids(
+    use_tiny_reranker: Callable[..., MagicMock], reference_logits: Callable[..., list[float]]
+) -> None:
+    use_tiny_reranker("xlm_roberta")
+    pairs = [("w1 w2", "w3 w4 w5")]
+
+    assert _predict(pairs) == pytest.approx(reference_logits("xlm_roberta", pairs), abs=_TOLERANCE)
+
+
+def test_order_preserved_across_batches(
+    use_tiny_reranker: Callable[..., MagicMock],
+    reference_logits: Callable[..., list[float]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    use_tiny_reranker("bert")
+    monkeypatch.setattr(reranker_module, "DEFAULT_TOKEN_BUDGET", 12)
+    # Pair lengths 6..17 tokens, scrambled, with differing queries: a length-sorted plan cannot be the identity.
+    pairs = [
+        ("w1 w2", "w1 w2 w3 w4 w5 w6"),
+        ("w3", "w1"),
+        ("w4 w5 w6", "w7 w8 w9 w10 w11 w12 w13 w14"),
+        ("w2", "w5 w6 w7"),
+        ("w9 w8", "w4 w3 w2 w1 w7"),
+        ("w1", "w2 w3"),
+    ]
+    plans: list[list[list[int]]] = []
+    real_plan = reranker_module.plan_batches
+    monkeypatch.setattr(reranker_module, "plan_batches", lambda *a, **k: plans.append(real_plan(*a, **k)) or plans[-1])
+
+    scores = _predict(pairs)
+
+    assert len(plans[0]) > 1
+    assert [i for batch in plans[0] for i in batch] != list(range(len(pairs)))
+    assert scores == pytest.approx(reference_logits("bert", pairs), abs=_TOLERANCE)
+
+
+def test_padding_does_not_change_a_score(use_tiny_reranker: Callable[..., MagicMock]) -> None:
+    use_tiny_reranker("xlm_roberta")
+    pairs = [("w1", "w2"), ("w1 w2 w3", "w4 w5 w6 w7 w8"), ("w3", "w9 w10"), ("w5 w6", "w7")]
+
+    batched = _predict(pairs)
+    one_by_one = [_predict([pair])[0] for pair in pairs]
+
+    assert batched == pytest.approx(one_by_one, abs=_TOLERANCE)
+
+
+def test_long_document_is_truncated_to_spec_length(use_tiny_reranker: Callable[..., MagicMock]) -> None:
+    use_tiny_reranker("bert", max_length=8)  # [CLS] 2 query words [SEP] + 3 document words + [SEP]
+    long_document = " ".join(f"w{i}" for i in range(1, 15))
+
+    truncated = _predict([("w1 w2", long_document)])[0]
+    three_words = _predict([("w1 w2", "w1 w2 w3")])[0]
+    use_tiny_reranker("bert", max_length=tiny_encoder.MAX_POSITIONS)
+    untruncated = _predict([("w1 w2", long_document)])[0]
+
+    assert truncated == pytest.approx(three_words, abs=_TOLERANCE)
+    assert abs(truncated - untruncated) > 1e-3
+
+
+def test_scores_are_python_floats_one_per_pair(use_tiny_reranker: Callable[..., MagicMock]) -> None:
+    use_tiny_reranker("bert")
+
+    scores = _predict([("w1", "w2"), ("w3", "w4"), ("w5", "w6")])
+
+    assert len(scores) == 3
+    assert all(type(score) is float for score in scores)
+
+
+def test_accelerator_cache_is_released_only_after_an_oversize_batch(
+    use_tiny_reranker: Callable[..., MagicMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_tiny_reranker("bert")
+    monkeypatch.setattr(reranker_module, "DEFAULT_TOKEN_BUDGET", 12)
+    release = MagicMock()
+    monkeypatch.setattr(reranker_module, "release_accelerator_cache", release)
+    reranker = ModelReranker("tiny/bert-reranker", device="cpu")
+
+    reranker.predict([("w1", "w2"), ("w3", "w4")])  # 5 tokens each: one batch of two, 10 <= 12
+    release.assert_not_called()
+
+    reranker.predict([("w1 w2 w3 w4", "w5 w6 w7 w8")])  # 11 tokens alone: padded 11 <= 12 ...
+    release.assert_not_called()
+    reranker.predict([("w1 w2 w3 w4 w5", "w5 w6 w7 w8 w9")])  # 13 tokens alone: 13 > 12
+    release.assert_called_once_with("cpu")
+
+
+def test_importing_the_reranker_module_does_not_import_the_ml_stack() -> None:
+    code = (
+        "import sys; import archon_search.reranker; "
+        "loaded = [m for m in ('torch', 'transformers', 'tokenizers', 'safetensors', 'onnxruntime') if m in sys.modules]; "
+        "assert not loaded, loaded; print('ok')"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert result.stdout.strip() == "ok", result.stderr

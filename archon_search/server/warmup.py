@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Terminal ceiling for the model warm-up task. A cold cache legitimately
-# takes minutes (ONNX build + download), but an unbounded await would pin
+# takes minutes (model load + download), but an unbounded await would pin
 # ``app.state.warmup_result`` at "pending" — and ``GET /ready`` at 503 — forever.
 _WARMUP_TASK_TIMEOUT_SECONDS: float = 600.0
 
@@ -87,7 +87,7 @@ async def run_model_warmup(
                 # build several large embedders. Warming it after them let a slow
                 # embedder fetch (e.g. the "max" profile's ~1.3 GB BAAI/bge-large-en-v1.5)
                 # consume the whole budget, so the reranker stayed cold and the first
-                # search paid its 91 s ONNX build inline.
+                # search paid its 91 s model build inline.
                 await pipeline.warmup_models()
                 # Only the equally lazy embedders are still cold (S184).
                 embedder_failures = await embedder_cache.preload(model_names)

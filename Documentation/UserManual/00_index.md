@@ -6,7 +6,7 @@
 # archon-search User Manual
 
 `archon-search` is a standalone hybrid retrieval + routing server: a LanceDB vector
-store, fastembed dense embeddings, a cross-encoder reranker, a multi-collection router,
+store, PyTorch dense embeddings, a cross-encoder reranker, a multi-collection router,
 a FastAPI HTTP control plane, and an MCP endpoint that shares the same auth — all in one
 process, with runtime state under `~/.archon-search/`. This manual is written for a
 **medior-technical operator** running that one process on their own workstation or server:

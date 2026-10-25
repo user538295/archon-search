@@ -237,24 +237,18 @@ def test_no_docling_parse_pool_import_on_engine_call_path() -> None:
     )
 
 
-# --- S42 property 4: torch thread-count pin -------------------------------------------
+# --- S42 property 4 (superseded): no process-global torch thread pin ------------------
 
 _PROSE_BACKEND = "archon_search/prose_extraction_backend.py"
 
 
-def test_engine_pins_torch_thread_counts() -> None:
-    """S42(4)/S28: the backend pins both torch thread counts to module constants rather
-    than leaving them at torch's defaults.
-    """
+def test_engine_does_not_pin_torch_thread_counts() -> None:
+    """The backend must not touch the process-global torch thread counts: it shares the
+    process with the PyTorch embedder and reranker, and a 1-thread pin made their CPU
+    inference 3x slower (ADR 18)."""
     src = (_REPO_ROOT / _PROSE_BACKEND).read_text(encoding="utf-8")
-    for call in (
-        "torch.set_num_threads(_TORCH_INTRA_OP_THREADS)",
-        "torch.set_num_interop_threads(_TORCH_INTER_OP_THREADS)",
-    ):
-        assert _names_on_code_line(src, call), (
-            f"{_PROSE_BACKEND} must pin torch threads via {call!r} on a live code line (not "
-            "commented out), not leave them at torch defaults"
-        )
+    for call in ("torch.set_num_threads", "torch.set_num_interop_threads"):
+        assert not _names_on_code_line(src, call), f"{_PROSE_BACKEND} must not call {call}"
 
 
 # --- S52: BREAKING.md heading -> migration-guide index parity -------------------------

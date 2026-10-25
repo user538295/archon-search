@@ -29,7 +29,7 @@ S281 left open and explicitly deferred.
 The ratio is the point, not the absolute numbers: a real cold cross-encoder
 download+ONNX build on a throttled link outruns the 180 s ceiling the same way
 ``_COLD_CROSS_ENCODER_LOAD_SECONDS`` outruns the rebound ceiling here. The build
-is simulated (``_ColdLoadTextCrossEncoder``, as in
+is simulated (a sleeping stand-in, as in
 ``test_s281_add_wait_then_search_cold_reranker.py``) so the test stays
 deterministic and weight-free.
 
@@ -41,11 +41,11 @@ path touches.
 """
 from __future__ import annotations
 
-import sys
 import time
 
 import pytest
 
+from tests._cold_model_builds import install_cold_reranker_build
 from tests.integration.conftest import make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("s286")]
@@ -77,26 +77,6 @@ _TOML = """
 [database]
 reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
 """
-
-
-def _install_cold_cross_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make cross-encoder construction cost ``_COLD_CROSS_ENCODER_LOAD_SECONDS``.
-
-    ``ModelReranker.predict`` imports ``TextCrossEncoder`` from
-    ``fastembed.rerank.cross_encoder`` on its first call (``reranker.py:42``), so
-    patching the class there puts the cost exactly where the real ONNX build sits.
-    Installed before the app starts, so the cost lands in the background startup
-    warm-up — where production puts it.
-    """
-    module = sys.modules["fastembed.rerank.cross_encoder"]
-    base = module.TextCrossEncoder
-
-    class _ColdLoadTextCrossEncoder(base):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            time.sleep(_COLD_CROSS_ENCODER_LOAD_SECONDS)
-            super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr(module, "TextCrossEncoder", _ColdLoadTextCrossEncoder)
 
 
 def _ingest_file_and_wait(client, file_path, headers) -> None:
@@ -140,7 +120,7 @@ def test_s286_search_answers_after_single_file_ingest_wait_reports_success(tmp_p
     )
     # Before the app starts: the warm-up that runs at startup is the one that must
     # still be in flight when step 2 arrives.
-    _install_cold_cross_encoder(monkeypatch)
+    install_cold_reranker_build(monkeypatch, _COLD_CROSS_ENCODER_LOAD_SECONDS)
 
     with make_real_app(data_dir, monkeypatch, toml_content=_TOML) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}", "X-Ingested-By": "cli"}

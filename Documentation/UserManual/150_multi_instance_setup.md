@@ -40,11 +40,11 @@ Each instance has its own:
 | API key file | `~/.archon-search/.search.env` | `/data/.search.env` inside volume |
 | LanceDB index | `~/.archon-search/search/` | `/data/search/` inside volume |
 | Config TOML | `~/.archon-search/archon-search.toml` | `/data/archon-search.toml` inside volume (`<ARCHON_SEARCH_DATA_DIR>/archon-search.toml`; `ARCHON_SEARCH_CONFIG` overrides) |
-| Fastembed model cache | `~/.archon-search/models/` (`<ARCHON_SEARCH_DATA_DIR>/models`; `FASTEMBED_CACHE_PATH` overrides) | `/data/fastembed-cache/` inside volume (image `FASTEMBED_CACHE_PATH`); mount `archon-model-cache:/data/fastembed-cache` to share one copy across services (see [`140_running_with_docker.md`](140_running_with_docker.md)) |
+| Model cache (embedder, reranker, fasttext) | `~/.archon-search/models/` (`<ARCHON_SEARCH_DATA_DIR>/models`) | `/data/models/` inside volume; mount `archon-model-cache:/data/models` to share one copy across services (see [`140_running_with_docker.md`](140_running_with_docker.md)) |
 | Host port | `8765` | `18765` |
 | MCP endpoint | `127.0.0.1:8765/mcp` | `127.0.0.1:18765/mcp` |
 
-> **Two isolation boundaries follow `ARCHON_SEARCH_DATA_DIR` only by default:** the TOML config path defaults to `<ARCHON_SEARCH_DATA_DIR>/archon-search.toml`, but `ARCHON_SEARCH_CONFIG` overrides it and may point anywhere. The fastembed embedding/reranker model cache follows `ARCHON_SEARCH_DATA_DIR` by default (`<ARCHON_SEARCH_DATA_DIR>/models`), but `FASTEMBED_CACHE_PATH` (fastembed's own env var, which archon-search honours via `paths.get_fastembed_cache_dir()`) overrides it and may point outside the data directory — the Docker image bakes `FASTEMBED_CACHE_PATH=/data/fastembed-cache`, so native and Docker defaults differ. For fastembed cache sharing across multiple Docker instances, see [Part 7 below](#part-7--sharing-the-fastembed-model-cache-optional) or the [shared cache section in `140_running_with_docker.md`](140_running_with_docker.md#sharing-the-fastembed-model-cache).
+> **Two isolation boundaries follow `ARCHON_SEARCH_DATA_DIR` only by default:** the TOML config path defaults to `<ARCHON_SEARCH_DATA_DIR>/archon-search.toml`, but `ARCHON_SEARCH_CONFIG` overrides it and may point anywhere. The model cache has no override of its own: it is always `<ARCHON_SEARCH_DATA_DIR>/models` (`paths.get_models_dir()`), so a native instance and a Docker instance share nothing unless you mount the same directory or volume at the container's `/data/models`. For model cache sharing across multiple Docker instances, see [Part 7 below](#part-7--sharing-the-model-cache-optional) or the [shared cache section in `140_running_with_docker.md`](140_running_with_docker.md#sharing-the-model-cache).
 
 ---
 
@@ -90,13 +90,13 @@ archon-search stop
 
 **macOS — what gets created:**
 
-- `~/Library/LaunchAgents/com.archon.search.plist` — launchd plist with `Label=com.archon.search` and `WorkingDirectory` set to the fully-expanded home path (e.g., `/Users/<username>/.archon-search` — the plist stores the expanded path, not the tilde form), and an `EnvironmentVariables` dict with `ARCHON_SEARCH_CONFIG=<path-to-toml>` and `ARCHON_SEARCH_DATA_DIR=<data-dir>`, every value XML-escaped. It does not carry `FASTEMBED_CACHE_PATH`; to relocate the service's fastembed cache, set it in `<data-dir>/.secrets.env`, which the plist's wrapper script sources.
+- `~/Library/LaunchAgents/com.archon.search.plist` — launchd plist with `Label=com.archon.search` and `WorkingDirectory` set to the fully-expanded home path (e.g., `/Users/<username>/.archon-search` — the plist stores the expanded path, not the tilde form), and an `EnvironmentVariables` dict with `ARCHON_SEARCH_CONFIG=<path-to-toml>` and `ARCHON_SEARCH_DATA_DIR=<data-dir>`, every value XML-escaped.
 - Prod data directory: `~/.archon-search/`
 - Config TOML: `~/.archon-search/archon-search.toml`
 
 **Linux — what gets created:**
 
-- `~/.config/systemd/user/archon-search.service` — systemd user unit with `ExecStart` pointing at the installed Python, `Environment="ARCHON_SEARCH_CONFIG=<path-to-toml>"` and `Environment="ARCHON_SEARCH_DATA_DIR=<data-dir>"`. It does not carry `FASTEMBED_CACHE_PATH`; to relocate the service's fastembed cache, set it in `<data-dir>/.secrets.env`, the unit's `EnvironmentFile`.
+- `~/.config/systemd/user/archon-search.service` — systemd user unit with `ExecStart` pointing at the installed Python, `Environment="ARCHON_SEARCH_CONFIG=<path-to-toml>"` and `Environment="ARCHON_SEARCH_DATA_DIR=<data-dir>"`.
 
 **Port conflict (native service):**
 
@@ -523,36 +523,24 @@ docker compose down archon-dev -v
 
 ---
 
-## Part 7 — Sharing the fastembed model cache (optional)
+## Part 7 — Sharing the model cache (optional)
 
-By default each Docker service downloads its own fastembed model weights into its own `/data/fastembed-cache` directory. The exception is `archon-dev` when `docker-compose.override.yml` is merged in (`docker compose` does that automatically when the file is present): the override bind-mounts the host `~/.cache/fastembed` at `/data/fastembed-cache`, so archon-dev keeps its weights there — a directory native installs do not fill. On first start with a cold cache, this download is typically several hundred MB per service.
+By default each Docker service downloads its own model weights (embedder and reranker, from Hugging Face) into its own `/data/models` directory. The exception is `archon-dev` when `docker-compose.override.yml` is merged in (`docker compose` does that automatically when the file is present): the override bind-mounts the host `~/.archon-search/models` at `/data/models`, so archon-dev uses the same weights as a native install on that host. On first start with a cold cache, the download is typically several hundred MB to a few GB per service, depending on the profile.
 
-> **Scope: Docker-only.** The shared `archon-model-cache` volume is shared only among Docker-based instances. The native prod service manages its own fastembed cache at `<ARCHON_SEARCH_DATA_DIR>/models` (when `FASTEMBED_CACHE_PATH` is unset) and does not share `archon-model-cache` with any Docker container. `FASTEMBED_CACHE_PATH` is a fastembed-native env var; when set it overrides the `ARCHON_SEARCH_DATA_DIR`-derived default.
+> **Scope: Docker-only.** The shared `archon-model-cache` volume is shared only among Docker-based instances. The native prod service keeps its own models at `<ARCHON_SEARCH_DATA_DIR>/models` and does not share `archon-model-cache` with any Docker container.
 
-To share the cache across `archon-dev` and `archon-test` (or any combination of Docker services), follow the three-step uncomment procedure in `docker-compose.yml`. **Steps 2 and 3 are required** (mount + declaration must be added together); Step 1 is optional but recommended for clarity. `docker compose` rejects the config with "undefined volume" if the volume is mounted (Step 2) but not declared (Step 3):
+To share the cache across `archon-test` and `archon-prod` (or any combination of Docker services), follow the two-step uncomment procedure in `docker-compose.yml`. **Both steps are required** (mount + declaration must be added together): `docker compose` rejects the config with "undefined volume" if the volume is mounted (Step 1) but not declared (Step 2):
 
-**Step 1 — Enable `FASTEMBED_CACHE_PATH` in each service's `environment:` block:**
-
-> **Note:** The Docker image already bakes in `FASTEMBED_CACHE_PATH=/data/fastembed-cache`. Uncommenting this line in compose does not change the path — it makes the intent visible in the compose file so the cache mount (Step 2) is clearly associated with the env var. The functionally required steps are Steps 2 and 3.
+**Step 1 — Mount the shared volume in each service's `volumes:` block:**
 
 ```yaml
-# In archon-dev (and repeat for archon-test / archon-prod if needed):
-environment:
-  ARCHON_SEARCH_API_KEY: ${ARCHON_SEARCH_API_KEY:-}
-  ARCHON_SEARCH_DATA_DIR: /data
-  FASTEMBED_CACHE_PATH: /data/fastembed-cache   # uncomment this line
-```
-
-**Step 2 — Mount the shared volume in each service's `volumes:` block:**
-
-```yaml
-# In archon-dev (and repeat for each service):
+# In archon-test (and repeat for each service):
 volumes:
-  - archon-dev-data:/data
-  - archon-model-cache:/data/fastembed-cache   # uncomment this line
+  - archon-test-data:/data
+  - archon-model-cache:/data/models   # uncomment this line
 ```
 
-**Step 3 — Declare the named volume at the bottom of the file:**
+**Step 2 — Declare the named volume at the bottom of the file:**
 
 ```yaml
 volumes:
@@ -565,16 +553,16 @@ volumes:
 After editing, bring up the services:
 
 ```bash
-docker compose up archon-dev archon-test -d
+docker compose up archon-test archon-prod -d
 ```
 
-The first service to start that mounts `archon-model-cache` populates it; the next one reuses the cached weights. With `docker-compose.override.yml` loaded (the default without `-f`), that excludes `archon-dev`: compose merges `volumes:` by container target, so the override's `~/.cache/fastembed` bind replaces its `archon-model-cache` mount, and only `archon-test` (and `archon-prod`) share the volume. Start with `docker compose -f docker-compose.yml` to include `archon-dev`. A volume created from 26.10.2181 or earlier is root-owned and unwritable — see [`140_running_with_docker.md#sharing-the-fastembed-model-cache`](140_running_with_docker.md#sharing-the-fastembed-model-cache).
+The first service to start that mounts `archon-model-cache` populates it; the next one reuses the cached weights. With `docker-compose.override.yml` loaded (the default without `-f`), `archon-dev` is excluded: compose merges `volumes:` by container target, so the override's `~/.archon-search/models` bind replaces its `archon-model-cache` mount, and only `archon-test` (and `archon-prod`) share the volume. Start with `docker compose -f docker-compose.yml` to include `archon-dev`. A volume created from an image that did not pre-create `/data/models` is root-owned and unwritable — see [`140_running_with_docker.md#sharing-the-model-cache`](140_running_with_docker.md#sharing-the-model-cache).
 
-> **Cold-cache startup:** if both services start simultaneously against an empty `archon-model-cache`, both containers will attempt to download model weights concurrently into the same volume. To avoid a race on first use, start one service first and wait for it to become healthy (`docker compose up archon-dev -d` → poll `/ready`) before starting the second.
+> **Cold-cache startup:** if both services start simultaneously against an empty `archon-model-cache`, both containers will attempt to download model weights concurrently into the same volume. To avoid a race on first use, start one service first and wait for it to become healthy (`docker compose up archon-test -d` → poll `/ready`) before starting the second.
 
-> **Single-writer constraint does not apply to the model cache.** Unlike LanceDB (`archon-dev-data`), the fastembed model cache is effectively read-only once the initial download is complete. Multiple containers reading from `archon-model-cache` concurrently after the first download is safe.
+> **Single-writer constraint does not apply to the model cache.** Unlike LanceDB (`archon-dev-data`), the model cache is effectively read-only once the initial download is complete. Multiple containers reading from `archon-model-cache` concurrently after the first download is safe.
 
-For full details on the Docker persistence layout and the model cache, see [`140_running_with_docker.md#sharing-the-fastembed-model-cache`](140_running_with_docker.md#sharing-the-fastembed-model-cache).
+For full details on the Docker persistence layout and the model cache, see [`140_running_with_docker.md#sharing-the-model-cache`](140_running_with_docker.md#sharing-the-model-cache).
 
 ---
 

@@ -31,7 +31,7 @@ def test_live_eval_excluded_from_default_run() -> None:
     """live_eval must be registered AND excluded from the default run.
 
     The tests/eval/live/ suite uses real model backends (``backend="live"``,
-    real fastembed weights — see tests/eval/live/conftest.py) and hangs on
+    real PyTorch weights — see tests/eval/live/conftest.py) and hangs on
     model inference if collected by default. It is therefore excluded exactly
     like ``live_benchmark``: ``norecursedirs`` (primary guard, prevents
     auto-traversal) plus the ``-m`` addopts filter (secondary guard). Run it

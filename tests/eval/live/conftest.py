@@ -4,28 +4,21 @@ Shadows the parent conftest's autouse fixture so that
 ARCHON_SEARCH_EVAL_BACKENDS is never set to "1" for tests in this
 directory.  Live tests must use real model backends.
 
-Imports the shared fastembed-cache fixtures (``tests/_live_fastembed_cache.py``) so the
-real models load from the session's cache — the one CI restores — not from the root
-conftest's empty per-worker data dir (S493).
-
-At module load it also drops the fake fastembed the root conftest's ``install_stubs()``
-puts in ``sys.modules`` (mirrors ``tests/eval/live_benchmark/conftest.py``);
-``embedder.py``/``reranker.py`` import fastembed lazily, so the real package is resolved.
+Imports the shared model-cache fixtures (``tests/_live_model_cache.py``) so the real
+models load from the session's cache — the one CI restores — not from the root conftest's
+empty per-worker data dir. The root conftest's autouse stubs of ``ModelEmbedder.encode`` /
+``ModelReranker.predict`` skip tests marked ``live_eval``, so the real PyTorch backends run.
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-from tests._live_fastembed_cache import (  # noqa: F401 — fixtures, used by name
-    _pin_live_fastembed_cache,
-    live_fastembed_cache_dir,
+from tests._live_model_cache import (  # noqa: F401 — fixtures, used by name
+    _pin_live_models_dir,
+    live_models_dir,
 )
-
-for _key in ("fastembed", "fastembed.rerank", "fastembed.rerank.cross_encoder"):
-    sys.modules.pop(_key, None)
 
 
 @pytest.fixture(autouse=True)

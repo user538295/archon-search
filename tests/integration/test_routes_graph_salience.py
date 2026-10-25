@@ -37,7 +37,7 @@ import pytest
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 from tests._graph_engine_stub import install_graph_engine_stub
 
-# Embedding dimension produced by the fastembed stub (see tests/_search_stubs.py).
+# Embedding dimension produced by the embedder stub (see tests/_search_stubs.py).
 _STUB_EMBEDDING_DIM = 384
 
 pytestmark = pytest.mark.integration

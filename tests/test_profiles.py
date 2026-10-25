@@ -50,3 +50,24 @@ def test_valid_profile_names_matches_dict_keys():
 def test_get_profile_all_combinations_no_error(name, multilingual):
     profile = get_profile(name, multilingual=multilingual)
     assert profile.name == name
+
+
+@pytest.mark.parametrize(
+    ("multilingual", "name", "expected_mb"),
+    [
+        (False, "minimal", 225),
+        (False, "balanced", 572),
+        (False, "max", 2453),
+        (True, "minimal", 471),
+        (True, "balanced", 1670),
+        (True, "max", 2797),
+    ],
+)
+def test_download_mb_is_the_sum_of_the_spec_weights_rounded_up(multilingual, name, expected_mb):
+    assert get_profile(name, multilingual).download_mb == expected_mb
+
+
+def test_download_mb_counts_only_the_embedder_when_there_is_no_reranker():
+    profile = get_profile("minimal", multilingual=True)
+    assert profile.reranker is None
+    assert profile.download_mb == 471

@@ -35,7 +35,7 @@ def _render_profile_table(multilingual: bool, width: int = 80) -> str:
             )
         lines.append("")
         # Models section
-        lines.append("  Models (all sizes from fastembed registry, verified):")
+        lines.append("  Models (download = embedder + reranker weights from the Hugging Face Hub):")
         for n, (name, p) in enumerate(zip(_PROFILE_ORDER, profiles), start=1):
             if p.reranker is None:
                 lines.append(f"  {n}) {p.embedder}  (no reranker)")
@@ -75,7 +75,7 @@ def _render_summary(
     profile_name: str,
     profile: InstallProfile,
     multilingual: bool,
-    providers: list[str],
+    device_labels: list[str],
     features: WizardFeatures | None = None,
     *,
     db_path: str = "",
@@ -89,13 +89,13 @@ def _render_summary(
     cap = _PROFILE_CAPS.get(profile_name, profile_name.capitalize())
     lang = "Multilingual" if multilingual else "English"
     reranker_str = profile.reranker if profile.reranker is not None else "(none)"
-    providers_str = ", ".join(providers) if providers else "(CPU default)"
+    device_str = ", ".join(device_labels) if device_labels else "CPU"
     lines = [
         f"  Installing: {cap} · {lang}",
         f"  Embedder:   {profile.embedder}",
         f"  Reranker:   {reranker_str}",
         f"  Chunk size: {profile.chunk_size} tokens",
-        f"  Providers:  {providers_str}",
+        f"  Device:     {device_str}",
     ]
     if db_path:
         lines.append(f"  Database:   {db_path}")

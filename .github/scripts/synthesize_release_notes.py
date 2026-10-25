@@ -25,7 +25,7 @@ PROMPT = f"""\
 Write GitHub release notes for archon-search version {TAG}.
 
 archon-search is a standalone hybrid retrieval + routing server: LanceDB vector store, \
-fastembed dense embeddings, cross-encoder reranker, multi-collection router, \
+PyTorch dense embeddings, cross-encoder reranker, multi-collection router, \
 FastAPI HTTP control plane, MCP endpoint.
 
 Style rules — follow exactly:

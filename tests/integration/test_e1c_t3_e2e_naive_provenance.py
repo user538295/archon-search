@@ -46,11 +46,11 @@ Corpus design for S7 (chunk_size=16, top_k_retrieve=3, ~60 total chunks):
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
+from archon_search.embedder import ModelEmbedder
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
@@ -88,10 +88,10 @@ def _install_code_graph_stub(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _install_deterministic_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace the zero-vector fastembed stub with a deterministic, content-aware one.
+    """Replace the zero-vector ``ModelEmbedder.encode`` stub with a deterministic, content-aware one.
 
-    The shared stub (tests/_search_stubs.py) yields all-zero vectors, so every
-    chunk's vector score ties. The S7 assertion depends on a knife-edge boundary
+    The shared stub (tests/conftest.py ``_stub_model_backends``) yields all-zero vectors, so
+    every chunk's vector score ties. The S7 assertion depends on a knife-edge boundary
     (one chunk in the plain-query top-k but not the expanded-query top-k), and
     which tied chunks fill each top-k is decided by LanceDB's tied-row order —
     which lancedb 0.36 no longer keeps stable, making this test ~40% flaky.
@@ -104,20 +104,21 @@ def _install_deterministic_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     import hashlib
 
-    import numpy as np
-
-    def _embed(self: object, texts: list[str]):  # type: ignore[no-untyped-def]
+    def _encode(self: ModelEmbedder, texts: list[str]) -> list[list[float]]:
+        self._encoder = object()  # type: ignore[assignment]  # a real load would turn the backend warm
+        vectors = []
         for t in texts:
-            v = np.zeros(384, dtype=np.float32)
+            v = [0.0] * self._spec.dim
             if "AuthService" in t:
                 v[0] = 1.0
             if "TokenValidator" in t:
                 v[1] = 1.0
             h = int.from_bytes(hashlib.sha256(t.encode()).digest()[:4], "big")
             v[2] = (h % 10_000) / 1_000_000.0  # deterministic tie-break, <= 0.01
-            yield v
+            vectors.append(v)
+        return vectors
 
-    monkeypatch.setattr(sys.modules["fastembed"].TextEmbedding, "embed", _embed)
+    monkeypatch.setattr(ModelEmbedder, "encode", _encode)
 
 
 def _auth(api_key: str) -> dict[str, str]:

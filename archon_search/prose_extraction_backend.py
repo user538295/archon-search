@@ -22,7 +22,7 @@ from archon_search.paths import (
     GRAPH_NER_MODEL_REVISION,
     get_graph_models_dir,
 )
-from archon_search.torch_device import resolve_torch_device
+from archon_search.torch_runtime import CPU_DEVICE, resolve_device
 
 if TYPE_CHECKING:
     # Type-checking only — the runtime import stays deferred inside load_gliner_model().
@@ -30,12 +30,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ponytail: fixed 1/1 intra/inter-op thread pin (ceiling), not derived from cpu_count()
-# — this process already runs N pytest-xdist/uvicorn workers plus the embedder/
-# reranker threads, and oversubscribing torch threads per worker regressed
-# throughput in the fastembed backends.
-_TORCH_INTRA_OP_THREADS = 1
-_TORCH_INTER_OP_THREADS = 1
 
 # Mirrors embedder.py / reranker.py's _WARMUP_TIMEOUT_SECONDS: bounds the blocking
 # GLiNER.from_pretrained() download so a stalled network cannot hang the caller
@@ -255,13 +249,12 @@ class ProseExtractionBackend:
         self,
         model_name: str = GRAPH_NER_MODEL_NAME,
         revision: str = GRAPH_NER_MODEL_REVISION,
-        providers: list[str] | None = None,
+        device: str = CPU_DEVICE,
     ) -> None:
         self._model_name = model_name
         self._revision = revision
-        # [graph].providers only — never the embedder's or reranker's own provider
-        # list. Unset (None/[]) means CPU.
-        self._providers = providers or None
+        # [graph].device only — never [database].device (the embedder's and reranker's).
+        self._device = device
         self._model: GLiNER | None = None
         # Monotonic count of ACTUAL model constructions (C1 `EngineCapability.loadCount`,
         # S26/S48). Incremented only where `GLiNER.from_pretrained` really ran, so it
@@ -301,8 +294,12 @@ class ProseExtractionBackend:
         return self._load_count
 
     def _resolve_device(self) -> str:
-        """Map [graph].providers onto a torch device via ``resolve_torch_device`` (Task BE-14)."""
-        return resolve_torch_device(self._providers)
+        """Map [graph].device onto a torch device via ``torch_runtime.resolve_device``.
+
+        An accelerator this host lacks steps down to ``cpu`` (``resolve_device`` logs the
+        warning once per process), so a stale config cannot latch a load failure.
+        """
+        return resolve_device(self._device)
 
     def _load_sync(self) -> None:
         """Blocking model construction — runs off the event loop via asyncio.to_thread."""
@@ -311,22 +308,11 @@ class ProseExtractionBackend:
         with self._sync_lock:
             if self._model is not None:
                 return
-            # Deferred: gliner/torch/transformers must never load at module import
-            # time, so create_app() stays cheap (BE-8's contract) — these load only
-            # on the first real load(), off the event loop.
-            import torch  # noqa: PLC0415 — lazy; not installed at import time
-
-            # Thread pinning is best-effort, not fatal to the load: torch raises
-            # RuntimeError if either setter is called more than once per process
-            # (e.g. a second ProseExtractionBackend instance, or a retried load
-            # after CancelledError) — that must never poison the load-exception
-            # latch below.
-            try:
-                torch.set_num_threads(_TORCH_INTRA_OP_THREADS)
-                torch.set_num_interop_threads(_TORCH_INTER_OP_THREADS)
-            except RuntimeError as exc:
-                logger.debug("torch thread pinning skipped (already set): %s", exc)
-
+            # gliner/torch/transformers must never load at module import time, so
+            # create_app() stays cheap (BE-8's contract) — they load only on the first
+            # real load(), off the event loop. No process-global torch thread pin: the
+            # embedder and reranker share this process's intra-op pool, and pinning it
+            # to one thread made PyTorch CPU embedding 3x slower.
             model = load_gliner_model(self._model_name, self._revision)
             # After `.to(device)` succeeds, not right after `from_pretrained` — a
             # device-placement failure (e.g. CUDA OOM) must not count as a load: the

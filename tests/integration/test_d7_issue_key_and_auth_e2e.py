@@ -21,7 +21,7 @@ from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 
-# Embedding dimension used by the stub fastembed backend.
+# Embedding dimension used by the stub embedder backend.
 _EMBEDDING_DIM = 384
 _COL = "test-d7-t1-managed-key"
 _DOC_PATH = "/data/d7-t1/doc.md"

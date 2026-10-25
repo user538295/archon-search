@@ -236,69 +236,44 @@ def test_load_config_invalid_port_raises_config_error(tmp_path: Path) -> None:
         load_config(path=toml_file)
 
 
-def test_load_config_providers_from_database_section(tmp_path: Path) -> None:
+def test_device_default_is_auto() -> None:
+    assert SearchConfig().device == "auto"
+
+
+@pytest.mark.parametrize("value", ["auto", "cpu", "mps", "cuda"])
+def test_load_config_device_from_database_section(tmp_path: Path, value: str) -> None:
     toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text(
-        '[database]\nproviders = ["CUDAExecutionProvider"]\n',
-        encoding="utf-8",
-    )
-    config = load_config(path=toml_file)
-    assert config.providers == ["CUDAExecutionProvider"]
+    toml_file.write_text(f'[database]\ndevice = "{value}"\n', encoding="utf-8")
+    assert load_config(path=toml_file).device == value
 
 
-def test_load_config_providers_default_is_empty_list() -> None:
-    config = SearchConfig()
-    assert config.providers == []
-
-
-def test_load_config_database_providers_bare_string_raises_config_error(tmp_path: Path) -> None:
-    """A bare string must not be silently iterated into one-character elements."""
+@pytest.mark.parametrize("bad_value", ['"gpu"', '"CUDA"', '""', "1", "true", '["cpu"]'])
+def test_invalid_device_rejected(tmp_path: Path, bad_value: str) -> None:
     toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text('[database]\nproviders = "CUDAExecutionProvider"\n', encoding="utf-8")
-    with pytest.raises(ConfigError, match="providers"):
+    toml_file.write_text(f"[database]\ndevice = {bad_value}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=r"\[database\]\.device must be one of"):
         load_config(path=toml_file)
 
 
-def test_load_config_database_providers_non_list_raises_config_error(tmp_path: Path) -> None:
-    toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text("[database]\nproviders = 1\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="providers"):
-        load_config(path=toml_file)
-
-
-def test_load_config_database_providers_non_string_element_raises_config_error(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("key", "replacement"),
+    [
+        ("providers", "[database].providers was replaced by [database].device (auto|cpu|mps|cuda); see BREAKING.md"),
+        (
+            "reranker_providers",
+            "[database].reranker_providers was replaced by [database].device (auto|cpu|mps|cuda); see BREAKING.md",
+        ),
+    ],
+)
+@pytest.mark.parametrize("value", ['["CUDAExecutionProvider"]', "[]", '"CUDAExecutionProvider"'])
+def test_removed_provider_keys_name_their_replacement(
+    tmp_path: Path, key: str, replacement: str, value: str
 ) -> None:
     toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text("[database]\nproviders = [1]\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="providers"):
+    toml_file.write_text(f"[database]\n{key} = {value}\n", encoding="utf-8")
+    with pytest.raises(ConfigError) as excinfo:
         load_config(path=toml_file)
-
-
-def test_load_config_reranker_providers_bare_string_raises_config_error(tmp_path: Path) -> None:
-    """A bare string must not be silently iterated into one-character elements."""
-    toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text(
-        '[database]\nreranker_providers = "CUDAExecutionProvider"\n', encoding="utf-8"
-    )
-    with pytest.raises(ConfigError, match="providers"):
-        load_config(path=toml_file)
-
-
-def test_load_config_reranker_providers_non_list_raises_config_error(tmp_path: Path) -> None:
-    toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text("[database]\nreranker_providers = 1\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="providers"):
-        load_config(path=toml_file)
-
-
-def test_load_config_reranker_providers_non_string_element_raises_config_error(
-    tmp_path: Path,
-) -> None:
-    toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text("[database]\nreranker_providers = [1]\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="providers"):
-        load_config(path=toml_file)
+    assert str(excinfo.value) == replacement
 
 
 def test_load_config_top_k_from_database_section(tmp_path: Path) -> None:
@@ -377,7 +352,7 @@ def test_c11_13_search_config_no_args_all_defaults_valid() -> None:
     assert config.reranker_model == "Xenova/ms-marco-MiniLM-L-6-v2"
     assert config.chunk_size == 512
     assert config.auto_reindex_on_chunk_size_change is True
-    assert config.providers == []
+    assert config.device == "auto"
     assert config.routing_shortlist_size == 8
     assert config.routing_confidence_threshold == 0.30
     assert config.pinned_collections == []
@@ -425,7 +400,7 @@ def test_c11_16_all_four_sections_populated(tmp_path: Path, monkeypatch: pytest.
         'reranker_model = "custom/reranker"\n'
         "chunk_size = 256\n"
         "auto_reindex_on_chunk_size_change = false\n"
-        'providers = ["CPUExecutionProvider"]\n\n'
+        'device = "cpu"\n\n'
         "[routing]\n"
         "routing_shortlist_size = 5\n"
         "routing_confidence_threshold = 0.75\n\n"
@@ -443,7 +418,7 @@ def test_c11_16_all_four_sections_populated(tmp_path: Path, monkeypatch: pytest.
     assert config.reranker_model == "custom/reranker"
     assert config.chunk_size == 256
     assert config.auto_reindex_on_chunk_size_change is False
-    assert config.providers == ["CPUExecutionProvider"]
+    assert config.device == "cpu"
     assert config.routing_shortlist_size == 5
     assert config.routing_confidence_threshold == 0.75
     assert config.pinned_collections == ["/pinned/a"]

@@ -32,7 +32,7 @@ per-request budget with a real HTTP response (the 503/504 the error taxonomy
 already defines for an unavailable backend) instead of parking the connection —
 so a client sees a status code, never a read timeout.
 
-The build is *simulated* (``_ColdLoadTextEmbedding``) so the test stays
+The build is *simulated* (``install_cold_embedder_build``) so the test stays
 deterministic and weight-free, as in
 ``test_s288_multi_collection_search_cold_reranker.py``. The ratio is the point,
 not the absolute numbers: a real cold embedder download+ONNX build on a
@@ -41,13 +41,13 @@ restarted server outruns a client's read budget exactly the way
 """
 from __future__ import annotations
 
-import sys
 import time
 
 import pytest
 from click.testing import CliRunner
 
 from archon_search.cli.config_cmd import config as config_group
+from tests._cold_model_builds import install_cold_embedder_build
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("s290")]
@@ -76,24 +76,6 @@ _FILE_TEXT = (
     "Archon Search is a hybrid retrieval server that combines dense vector "
     "search with full-text search over a document collection."
 )
-
-
-def _install_cold_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make query-embedder construction cost ``_COLD_EMBEDDER_LOAD_SECONDS``.
-
-    ``FastEmbedBackend.encode`` does ``from fastembed import TextEmbedding`` on its
-    first call (``archon_search/embedder.py``), so patching the class on the
-    ``fastembed`` module puts the cost exactly where the real ONNX build sits.
-    """
-    module = sys.modules["fastembed"]
-    base = module.TextEmbedding
-
-    class _ColdLoadTextEmbedding(base):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            time.sleep(_COLD_EMBEDDER_LOAD_SECONDS)
-            super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr(module, "TextEmbedding", _ColdLoadTextEmbedding)
 
 
 def test_s290_restarted_server_answers_within_ceiling_top_k(tmp_path, monkeypatch) -> None:
@@ -125,7 +107,7 @@ def test_s290_restarted_server_answers_within_ceiling_top_k(tmp_path, monkeypatc
 
     # Every model is cold in the restarted process — install the simulated build
     # before the second app starts, so the cost lands where production puts it.
-    _install_cold_embedder(monkeypatch)
+    install_cold_embedder_build(monkeypatch, _COLD_EMBEDDER_LOAD_SECONDS)
 
     # --- Step 3: restart, re-reading the TOML the CLI just wrote. -------------
     toml_content = config_path.read_text(encoding="utf-8")

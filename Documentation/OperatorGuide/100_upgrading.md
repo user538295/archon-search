@@ -196,6 +196,16 @@ Upgrading to the C2 release activates language tagging at ingest time when `mult
 3. Existing collections have `language=""` on all chunks — `GET /status` warns per collection when `multilingual = true` and untagged chunks are present. Re-ingest to populate language tags.
 4. Enabling multilingual on an English-only install: run `archon-search install --multilingual` to download `lid.176.ftz`, set `multilingual = true`, and restart. Switching between an English profile and a multilingual profile still requires re-ingesting all data.
 
+### PyTorch runtime upgrade
+
+Embedding and reranking now run on PyTorch instead of fastembed / ONNX Runtime. Read the matching `BREAKING.md` entry for the full contract. Operationally:
+
+- **Every model is downloaded again.** The weights are a different file format, fetched from Hugging Face at pinned revisions into `<data dir>/models`. Per-profile downloads (embedder plus reranker): English minimal 225 MB, balanced 572 MB, max 2453 MB; multilingual minimal 471 MB, balanced 1670 MB, max 2797 MB. Allow for them, or run `archon-search wizard` to pre-warm while you watch.
+- **Old ONNX directories are orphaned.** `models--Qdrant--*` and `models--Xenova--*` directories in `<data dir>/models` are no longer used and can be deleted.
+- **Config keys changed.** `[database].providers`, `[database].reranker_providers` and `[graph].providers` are replaced by `[database].device` and `[graph].device` (`auto|cpu|mps|cuda`). A config file that still holds a removed key fails to load with `<section>.<key> was replaced by <section>.device (auto|cpu|mps|cuda); see BREAKING.md`. The `FASTEMBED_CACHE_PATH` variable is gone; models live under `ARCHON_SEARCH_DATA_DIR`.
+- **Only registry models load.** Any embedding or reranker name outside the supported registry is rejected (`unsupported model '<name>'; supported: ...`). Check your `embedding_model`, `reranker_model` and per-collection models before upgrading.
+- **Scores shift slightly.** Vectors for a few models differ in small amounts from the old ones (see `tests/fixtures/runtime_parity/README.md`).
+
 ## Version probing
 
 ```bash

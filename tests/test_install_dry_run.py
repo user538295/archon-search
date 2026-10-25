@@ -79,11 +79,8 @@ def _patched_install(
         mocks["detect_gpu"] = stack.enter_context(
             patch.object(DryRunInstaller, "detect_gpu", return_value=GpuType.NONE)
         )
-        mocks["validate_providers"] = stack.enter_context(
-            patch.object(DryRunInstaller, "validate_providers", return_value=False)
-        )
-        mocks["configure_providers"] = stack.enter_context(
-            patch.object(DryRunInstaller, "configure_providers")
+        mocks["_probe_and_configure_device"] = stack.enter_context(
+            patch.object(DryRunInstaller, "_probe_and_configure_device", return_value=["CPU"])
         )
         mocks["write_service_file"] = stack.enter_context(
             patch.object(DryRunInstaller, "write_service_file")

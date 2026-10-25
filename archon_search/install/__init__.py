@@ -93,7 +93,7 @@ from .wizard import _OLLAMA_FETCH_TIMEOUT_SECONDS as _OLLAMA_FETCH_TIMEOUT_SECON
 from .wizard import _check_claude_cli_present as _check_claude_cli_present
 from .wizard import _fetch_llama_cpp_models as _fetch_llama_cpp_models
 from .wizard import _fetch_ollama_models as _fetch_ollama_models
-from .wizard import _graph_candidate_providers as _graph_candidate_providers
+from .wizard import _graph_candidate_device as _graph_candidate_device
 from .wizard import _pick_claude_model as _pick_claude_model
 from .wizard import _pick_llama_cpp_model as _pick_llama_cpp_model
 from .wizard import _pick_ollama_model as _pick_ollama_model

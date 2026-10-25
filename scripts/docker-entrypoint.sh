@@ -71,75 +71,20 @@ image_fingerprint() {
     printf 'extras=%s\npython=%s\n%s' "$1" "$_python_version" "$_image_packages"
 }
 
-# Prints the version of the image's onnxruntime-gpu, or nothing on an image
-# without it. The GPU image swapped `onnxruntime` for `onnxruntime-gpu`, which
-# ships the same `onnxruntime` import package. fastembed and magika (in the base
-# closure) still require `onnxruntime` by name, as does gliner 0.2.26-0.2.28
-# (the `graph` extra), so the extras resolution adds the CPU build back, and
-# a CPU copy in the volume, first on PYTHONPATH, would shadow the GPU build; on
-# that image the CPU `onnxruntime` is therefore left out. Leaving it out
-# leaves none of its dependencies missing: the CPU onnxruntime's
-# Requires-Dist equals onnxruntime-gpu's outside their extras (flatbuffers,
-# numpy, packaging, protobuf as of 1.31.0:
-# https://pypi.org/pypi/onnxruntime/1.31.0/json,
-# https://pypi.org/pypi/onnxruntime-gpu/1.31.0/json), and the image installed
-# those with onnxruntime-gpu. The resolution's
-# requirements on onnxruntime (e.g. fastembed's version range) are NOT
-# re-checked against the image's onnxruntime-gpu: its version stands in for
-# whichever onnxruntime version the resolution picked, and the log names both.
-print_image_onnxruntime_gpu_version() {
+# Reads pip's dry-run report $1 and writes one `name @ url` line per package to
+# install into requirements file $2 — the exact artifacts the resolution chose,
+# so the install cannot pick another one by re-resolving a name. Prints the
+# packages written as `name==version` for the log; prints nothing when there
+# are none.
+write_exact_requirements() {
     python3 -I -c '
-import importlib.metadata
-try:
-    print(importlib.metadata.version("onnxruntime-gpu"))
-except importlib.metadata.PackageNotFoundError:
-    pass
-'
-}
-
-# Python shared by the helpers that read pip's dry-run report. Argument
-# contract of every helper built on it: sys.argv[1] is the report path,
-# sys.argv[2] the distribution to leave out (empty: none), and the appended
-# fragment reads its own arguments from sys.argv[3] on. Defines `packages`,
-# the report's install list; `is_left_out(package)`, which compares the
-# package's name PEP 503-normalised with sys.argv[2]; and
-# `format_pins(packages)`, which returns them as a space-separated
-# `name==version` list.
-READ_REPORT_PY='
-import json, pathlib, re, sys
-
-def normalise(name):
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-def is_left_out(package):
-    return bool(sys.argv[2]) and normalise(package["metadata"]["name"]) == normalise(sys.argv[2])
-
-def format_pins(packages):
-    return " ".join(p["metadata"]["name"] + "==" + p["metadata"]["version"] for p in packages)
+import json, pathlib, sys
 
 packages = json.loads(pathlib.Path(sys.argv[1]).read_text())["install"]
-'
-
-# Reads pip's dry-run report $1 and writes one `name @ url` line per package to
-# install into requirements file $3 — the exact artifacts the resolution chose,
-# so the install cannot pick another one by re-resolving a name — leaving out
-# distribution $2 (empty: none). Prints the packages written as
-# `name==version` for the log; prints nothing when there are none.
-write_exact_requirements() {
-    python3 -I -c "${READ_REPORT_PY}"'
-installed = [p for p in packages if not is_left_out(p)]
-pathlib.Path(sys.argv[3]).write_text(
-    "".join(p["metadata"]["name"] + " @ " + p["download_info"]["url"] + "\n" for p in installed)
+pathlib.Path(sys.argv[2]).write_text(
+    "".join(p["metadata"]["name"] + " @ " + p["download_info"]["url"] + "\n" for p in packages)
 )
-print(format_pins(installed))
-' "$1" "$2" "$3"
-}
-
-# Prints, as `name==version`, the packages of pip's dry-run report $1 that are
-# distribution $2 (empty: none); prints nothing when there are none.
-print_left_out_pins() {
-    python3 -I -c "${READ_REPORT_PY}"'
-print(format_pins([p for p in packages if is_left_out(p)]))
+print(" ".join(p["metadata"]["name"] + "==" + p["metadata"]["version"] for p in packages))
 ' "$1" "$2"
 }
 
@@ -147,8 +92,7 @@ print(format_pins([p for p in packages if is_left_out(p)]))
 # archon-search is version $2, using work directory $3 for pip's report.
 # Resolves archon-search[$1]==$2 against the image's environment only (`-I`
 # ignores PYTHONPATH, so the volume is invisible) and installs exactly what
-# that resolution adds, less the CPU onnxruntime on an image with onnxruntime-gpu
-# (see print_image_onnxruntime_gpu_version). pip keeps every image package that already satisfies
+# that resolution adds. pip keeps every image package that already satisfies
 # the extras (its default only-if-needed strategy), so a base package is added
 # only when an extra forces a different version — e.g. the `code` extra pins
 # tree-sitter<0.26 while the image's base closure can ship a newer tree-sitter
@@ -163,16 +107,7 @@ install_extras_into() {
     _target=$4
     PIP_DEFAULT_TIMEOUT="$PIP_INSTALL_TIMEOUT_S" python3 -I -m pip install --dry-run --quiet \
         --report "${_work_dir}/report.json" "archon-search[${_extras}]==${_image_version}" 2>&1 || return 1
-    _gpu_version=$(print_image_onnxruntime_gpu_version) || return 1
-    _left_out_name=""
-    if [ -n "$_gpu_version" ]; then
-        _left_out_name=onnxruntime
-    fi
-    _left_out=$(print_left_out_pins "${_work_dir}/report.json" "$_left_out_name") || return 1
-    if [ -n "$_left_out" ]; then
-        log "Leaving out ${_left_out}: the image's onnxruntime-gpu ${_gpu_version} replaces it (same onnxruntime import package)."
-    fi
-    _packages=$(write_exact_requirements "${_work_dir}/report.json" "$_left_out_name" "${_work_dir}/requirements.txt") || return 1
+    _packages=$(write_exact_requirements "${_work_dir}/report.json" "${_work_dir}/requirements.txt") || return 1
     if [ -z "$_packages" ]; then
         log "The image already provides every package of [${_extras}] — nothing to install."
         return 0

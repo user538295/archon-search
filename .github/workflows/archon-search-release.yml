@@ -94,7 +94,7 @@ jobs:
       # created for different tag names". This workflow triggers on tag push, every tag is
       # a fresh ref, and NO workflow in this repo runs on push to main — so a cache step
       # here could never hit. It would only WRITE ~1.2 GB per release into the repo's 10 GB
-      # LRU budget and evict the fastembed/HF caches the PR gate actually depends on.
+      # LRU budget and evict the model/HF caches the PR gate actually depends on.
       # The accepted cost of GRAPH-4 is therefore a cold ~1.2 GB fetch on every release.
       - name: Prefetch graph NER artifact (3 attempts, linear backoff)
         # Bounded explicitly: the fetch is always cold here, and three sequential retries
@@ -242,14 +242,13 @@ jobs:
   # Builds two image variants from the tagged source tree and pushes them to
   # GHCR:
   #   - CPU: `archon-search:<tag>` and `archon-search:latest`
-  #         base = python:3.12-slim (fastembed CPU onnxruntime)
+  #         base = python:3.12-slim (CPU-only PyTorch wheels)
   #   - GPU: `archon-search:<tag>-gpu` and `archon-search:gpu`
   #         base = the job's `GPU_BASE_IMAGE` (the CUDA 13 `-base` tag)
-  #         (Python 3.12 added via the deadsnakes PPA; onnxruntime swapped for
-  #          onnxruntime-gpu[cuda,cudnn] — fastembed does not ship a `[gpu]`
-  #          extra; the CUDA 13 / cuDNN 9 libraries come from the pip wheels
-  #          torch and onnxruntime-gpu share, so the base ships only the CUDA
-  #          runtime and env — see the Dockerfile)
+  #         (Python 3.12 added via the deadsnakes PPA; PyPI's CUDA build of
+  #          torch, whose CUDA 13 / cuDNN 9 libraries come from the pip
+  #          wheels it depends on, so the base ships only the CUDA runtime
+  #          and env — see the Dockerfile)
   #
   # The Dockerfile uses `COPY .` so the image always contains the exact source
   # at the tagged commit. `needs: [test, unlocked-deps]` (not `needs: publish`) —
@@ -267,8 +266,8 @@ jobs:
   #
   # GPU build is best-effort: `continue-on-error: true` lets the workflow
   # finish even if the NVIDIA registry is rate-limited, the deadsnakes PPA is
-  # transiently unreachable, fastembed/onnxruntime-gpu cannot resolve, or the
-  # Dockerfile's guard finds onnxruntime-gpu, torch and the base on different
+  # transiently unreachable, the CUDA torch wheels cannot resolve, or the
+  # Dockerfile's guard finds torch and the base on different
   # CUDA majors. A follow-up step annotates the workflow job summary so a silent GPU failure
   # is loud — without this, operators pulling `:gpu` or `:<tag>-gpu` would get
   # "image not found" with no warning, or worse, the previous `:gpu` floating

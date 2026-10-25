@@ -71,7 +71,7 @@ async def _measure_inprocess(iterations: int, warmup: int) -> list[float]:
 
     config = load_config()
     # Reuse the embedder across iterations (matches server-side app.state.embedder caching).
-    backend = ModelEmbedder(config.embedding_model, providers=config.providers or None)
+    backend = ModelEmbedder(config.embedding_model, device=config.device)
     embedder = Embedder(backend)
 
     def _make_router() -> MultiCollectionRouter:

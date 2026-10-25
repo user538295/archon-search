@@ -42,7 +42,7 @@ from tests._fastmcp_stub import stubbed_fastmcp
 class MockEmbedderBackend:
     """Returns dim=4 vectors for all texts."""
 
-    model_name: str = "mock-embedder"
+    model_name: str = "BAAI/bge-small-en-v1.5"
     is_warm: bool = False
 
     def encode(self, texts: list[str]) -> list[list[float]]:
@@ -482,7 +482,7 @@ async def test_post_explain_pinned_collection_happy_path(tmp_path: Path) -> None
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -539,7 +539,7 @@ async def test_post_explain_collectionless_includes_routing_block(tmp_path: Path
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     # Set threshold low so routing proceeds
     config.routing_confidence_threshold = 0.0
     job_store = JobStore(path=tmp_path / "jobs.json")
@@ -615,7 +615,7 @@ async def test_post_explain_routing_covers_every_collection_no_gating(tmp_path: 
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     # Set threshold very high so the chosen collection is below it
     # Set threshold > 1.0 so any cosine score (max 1.0) is always below threshold
     config.routing_confidence_threshold = 1.1
@@ -685,7 +685,7 @@ async def test_post_explain_routing_candidates_acl_filtered(tmp_path: Path) -> N
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.routing_confidence_threshold = 0.0
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
@@ -761,7 +761,7 @@ async def test_post_explain_collectionless_all_collections_acl_filtered_returns_
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -814,7 +814,7 @@ async def test_post_explain_search_top_k_equality_at_top_k_return(tmp_path: Path
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -881,7 +881,7 @@ async def test_post_explain_near_miss_no_text_field(tmp_path: Path) -> None:
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -935,7 +935,7 @@ async def test_post_explain_rerank_false_orders_by_rrf(tmp_path: Path) -> None:
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -1001,7 +1001,7 @@ async def test_post_explain_rerank_false_collectionless(tmp_path: Path) -> None:
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.routing_confidence_threshold = 0.0
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
@@ -1061,7 +1061,7 @@ async def test_post_explain_near_miss_pool_sizes(tmp_path: Path) -> None:
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     job_store = JobStore(path=tmp_path / "jobs.json")
 
     top_k = 5
@@ -1130,7 +1130,7 @@ async def test_post_explain_near_miss_at_exact_boundary(tmp_path: Path) -> None:
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     job_store = JobStore(path=tmp_path / "jobs.json")
 
     top_k = 5
@@ -1192,7 +1192,7 @@ async def test_post_explain_acl_filtered_returns_empty_and_flag(tmp_path: Path) 
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -1252,7 +1252,7 @@ async def test_post_explain_empty_collection_returns_empty_results(tmp_path: Pat
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -1308,7 +1308,7 @@ async def test_post_explain_pinned_collection_wrong_namespace_returns_404(tmp_pa
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -1363,7 +1363,7 @@ async def test_post_explain_telemetry_emits_no_query(tmp_path: Path) -> None:
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -1460,7 +1460,7 @@ def test_explain_telemetry_has_correlation_id(tmp_path: Path) -> None:
     pipeline = MagicMock()
     pipeline.explain = AsyncMock(return_value=_make_explain_result())
     pipeline.get_collection_meta = AsyncMock(return_value=CollectionMeta(
-        name="docs", centroid=[0.1, 0.2, 0.3, 0.4], active_embedding_model="mock-embedder", namespace="default"
+        name="docs", centroid=[0.1, 0.2, 0.3, 0.4], active_embedding_model="BAAI/bge-small-en-v1.5", namespace="default"
     ))
     pipeline._global_embedder = MagicMock()
     pipeline._global_embedder.embed = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
@@ -1513,7 +1513,7 @@ async def test_explain_stage_timings_keys_pinned_collection_with_rerank(tmp_path
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.observability.stage_timings_enabled = True
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
@@ -1576,7 +1576,7 @@ async def test_explain_stage_timings_keys_collectionless(tmp_path: Path) -> None
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.routing_confidence_threshold = 0.0
     config.observability.stage_timings_enabled = True
     job_store = JobStore(path=tmp_path / "jobs.json")
@@ -1631,7 +1631,7 @@ async def test_explain_stage_timings_no_rerank(tmp_path: Path) -> None:
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.observability.stage_timings_enabled = True
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
@@ -1688,7 +1688,7 @@ async def test_explain_stage_timings_values_non_negative(tmp_path: Path) -> None
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.observability.stage_timings_enabled = True
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
@@ -1746,7 +1746,7 @@ async def test_explain_stage_timings_disabled(tmp_path: Path) -> None:
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.observability.stage_timings_enabled = False
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
@@ -1805,7 +1805,7 @@ async def test_mcp_explain_emits_stage_timings_log_record(
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.observability.stage_timings_enabled = True
 
     store = SearchStore(tmp_path / "realdb")
@@ -1866,7 +1866,7 @@ async def test_explain_stage_timings_fts_absent_degradation(tmp_path: Path) -> N
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.observability.stage_timings_enabled = True
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
@@ -1927,7 +1927,7 @@ async def test_rest_mcp_explain_key_parity(tmp_path: Path) -> None:
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.observability.stage_timings_enabled = True
     job_store = JobStore(path=tmp_path / "jobs.json")
     rest_app = create_app(config, job_store)

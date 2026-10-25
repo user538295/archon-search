@@ -110,8 +110,12 @@ def test_no_test_file_names_the_removed_engine() -> None:
         text=True,
         check=True,
     ).stdout.splitlines()
+    # ``git ls-files`` still lists a tracked file deleted in the working tree until the
+    # deletion is committed; a deleted file names nothing.
     files = [
-        f for f in tracked if f not in _ALLOWLIST and not f.startswith(_DATA_PREFIX)
+        f
+        for f in tracked
+        if f not in _ALLOWLIST and not f.startswith(_DATA_PREFIX) and (_REPO_ROOT / f).is_file()
     ]
 
     offenders: list[str] = []

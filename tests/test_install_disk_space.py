@@ -137,7 +137,7 @@ def test_disk_guard_timeouts_and_display_all_derive_from_one_total(minimal_profi
     )
 
     output = _render_summary(
-        "minimal", minimal_profile, multilingual=False, providers=[],
+        "minimal", minimal_profile, multilingual=False, device_labels=[],
         features=features, total_bytes=total,
         config_path="archon-search.toml",
     )

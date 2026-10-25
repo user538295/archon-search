@@ -1,14 +1,30 @@
-"""Embedding layer for RAG — wraps fastembed.TextEmbedding with async support."""
+"""Embedding layer for RAG — a PyTorch encoder backend with async support."""
 from __future__ import annotations
 
 import asyncio
 import threading
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
+from archon_search.model_specs import get_embedder_spec
+from archon_search.model_store import ensure_model
 from archon_search.observability import record_stage
-from archon_search.onnx_providers import select_onnx_providers
-from archon_search.paths import get_fastembed_cache_dir
+from archon_search.text_batching import DEFAULT_TOKEN_BUDGET, plan_batches
+from archon_search.torch_runtime import (
+    AUTO_DEVICE,
+    accelerator_lock,
+    load_encoder,
+    pad_encodings,
+    release_accelerator_cache,
+    resolve_device,
+)
 
+if TYPE_CHECKING:
+    from tokenizers import Encoding, Tokenizer
+    from transformers import PreTrainedModel
+
+    from archon_search.model_specs import Pooling
+
+_DEFAULT_PAD_TOKEN_ID = 0
 _WARMUP_TEXT = "warmup"
 _WARMUP_TIMEOUT_SECONDS = 300.0
 
@@ -27,37 +43,103 @@ class EmbedderBackend(Protocol):
     def encode(self, texts: list[str]) -> list[list[float]]: ...
 
 
-class ModelEmbedder:
-    """Lazy-loading fastembed TextEmbedding backend.
+class _Encoder(NamedTuple):
+    """A loaded model with everything ``encode`` needs to drive it."""
 
-    *providers* is the configured ONNX provider list; at load time it is narrowed to
-    the providers the installed onnxruntime has (``onnx_providers.select_onnx_providers``:
-    falls back to CPU with a WARNING instead of failing the load).
+    tokenizer: Tokenizer
+    model: PreTrainedModel
+    device: str
+    pad_token_id: int
+    uses_token_type_ids: bool
+
+
+class ModelEmbedder:
+    """Lazy-loading PyTorch embedding backend.
+
+    The spec is resolved eagerly, so an unsupported *model_name* fails at
+    construction. The weights are fetched (``ensure_model``) and loaded onto the
+    device resolved from *device* (``torch_runtime.resolve_device``) on the first
+    non-empty ``encode``; a failed load is not latched, the next call retries.
+    ``encode`` is safe to call from several threads.
+
+    Raises:
+        UnsupportedModelError: from the constructor, for a model outside the registry.
     """
 
-    def __init__(self, model_name: str, providers: list[str] | None = None) -> None:
+    def __init__(self, model_name: str, device: str = AUTO_DEVICE) -> None:
         self.model_name = model_name
-        self._providers = providers or None  # None = fastembed's default device
-        self._model: Any = None  # loaded on first encode()
+        self._spec = get_embedder_spec(model_name)
+        self._device_setting = device
+        self._encoder: _Encoder | None = None  # loaded on first encode()
         self._lock = threading.Lock()
 
     @property
     def is_warm(self) -> bool:
-        return self._model is not None
+        return self._encoder is not None
+
+    def _load(self) -> _Encoder:
+        """Return the encoder, loading it once; concurrent callers wait on the lock."""
+        if self._encoder is None:
+            with self._lock:
+                if self._encoder is None:
+                    path = ensure_model(self._spec)
+                    device = resolve_device(self._device_setting)
+                    tokenizer, model = load_encoder(self._spec, path, device)
+                    self._encoder = _Encoder(
+                        tokenizer,
+                        model,
+                        device,
+                        getattr(model.config, "pad_token_id", None) or _DEFAULT_PAD_TOKEN_ID,
+                        getattr(model.config, "type_vocab_size", 1) > 1,
+                    )
+        return self._encoder
 
     def encode(self, texts: list[str]) -> list[list[float]]:
-        if self._model is None:
-            with self._lock:
-                if self._model is None:
-                    from fastembed import TextEmbedding  # noqa: PLC0415
+        """Embed *texts*; the result is in input order, one ``spec.dim`` vector per text."""
+        if not texts:
+            return []
+        encoder = self._load()
+        encodings = [encoder.tokenizer.encode(text) for text in texts]
+        vectors: list[list[float]] = [[] for _ in texts]
+        for batch in plan_batches([len(e.ids) for e in encodings], token_budget=DEFAULT_TOKEN_BUDGET):
+            batch_encodings = [encodings[i] for i in batch]
+            for index, vector in zip(batch, self._embed_batch(encoder, batch_encodings), strict=True):
+                vectors[index] = vector
+            if len(batch) * max(len(e.ids) for e in batch_encodings) > DEFAULT_TOKEN_BUDGET:
+                release_accelerator_cache(encoder.device)
+        return vectors
 
-                    self._model = TextEmbedding(
-                        self.model_name,
-                        providers=select_onnx_providers(self._providers).providers,
-                        cache_dir=str(get_fastembed_cache_dir()),
-                    )
-        # TextEmbedding.embed() returns a generator of 1-D numpy arrays
-        return [e.tolist() for e in self._model.embed(texts)]
+    def _embed_batch(self, encoder: _Encoder, encodings: list[Encoding]) -> list[list[float]]:
+        import torch  # noqa: PLC0415 — lazy: keeps ``import archon_search.embedder`` free of PyTorch
+
+        with accelerator_lock(encoder.device):
+            inputs = pad_encodings(
+                torch,
+                encodings,
+                pad_token_id=encoder.pad_token_id,
+                device=encoder.device,
+                with_token_types=encoder.uses_token_type_ids,
+            )
+            with torch.inference_mode():
+                hidden = encoder.model(**inputs).last_hidden_state
+                pooled = _pool(torch, hidden, inputs["attention_mask"], self._spec.pooling)
+                if self._spec.normalize:
+                    pooled = torch.nn.functional.normalize(pooled, dim=-1)
+            return pooled.cpu().tolist()  # type: ignore[no-any-return]
+
+
+def _pool(torch: Any, hidden: Any, attention_mask: Any, pooling: Pooling) -> Any:
+    """Reduce ``(batch, tokens, dim)`` hidden states to ``(batch, dim)``.
+
+    ``last_token`` relies on ``pad_encodings`` right-padding: row ``i`` ends at ``attention_mask[i].sum() - 1``.
+    """
+    if pooling == "cls":
+        return hidden[:, 0]
+    if pooling == "last_token":
+        last = attention_mask.sum(dim=1) - 1
+        return hidden[torch.arange(hidden.shape[0], device=hidden.device), last]
+    mask = attention_mask.unsqueeze(-1).to(hidden.dtype)
+    return (hidden * mask).sum(dim=1) / mask.sum(dim=1)
 
 
 class Embedder:
@@ -130,9 +212,9 @@ class Embedder:
             raise
 
     async def warmup(self) -> None:
-        """Load the backend's ONNX model now, off the request path.
+        """Load the backend's model now, off the request path.
 
-        ``ModelEmbedder`` constructs its ONNX model on the *first* ``encode``
+        ``ModelEmbedder`` loads its model on the *first* ``encode``
         call. Callers must run this outside any request timeout budget,
         otherwise the one-off load consumes the whole budget and an otherwise
         valid search fails with 504 (S184). Contract:
@@ -143,7 +225,7 @@ class Embedder:
           gives up cancels nothing but that wait. The build keeps running, warms
           the backend for later requests, and later callers join it instead of
           each starting another ``to_thread`` encode that would queue behind the
-          one ONNX build on ``ModelEmbedder._lock`` — a pinned executor thread
+          one model build on ``ModelEmbedder._lock`` — a pinned executor thread
           per concurrent cold request (S290).
         - Not latched on failure (S283): ``_warmup_failed`` records only the most
           recent attempt and is diagnostic; the next caller retries with a fresh
@@ -190,6 +272,6 @@ class Embedder:
         return results[0]
 
 
-def make_embedder(model_name: str, providers: list[str] | None = None) -> Embedder:
-    """Factory: create a ModelEmbedder-backed Embedder."""
-    return Embedder(ModelEmbedder(model_name, providers=providers))
+def make_embedder(model_name: str, device: str = AUTO_DEVICE) -> Embedder:
+    """Factory: create a ModelEmbedder-backed Embedder (no weights are loaded yet)."""
+    return Embedder(ModelEmbedder(model_name, device=device))

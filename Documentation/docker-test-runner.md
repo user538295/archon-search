@@ -19,17 +19,17 @@ You do **not** need this for everyday development. Running `uv run pytest` on yo
 ## The 30-second version
 
 ```bash
-# First time only: create the host weight cache (on a Linux host Docker would
+# First time only: create the host model folder (on a Linux host Docker would
 # otherwise create the bind-mount source root-owned, unwritable for uid 1000),
 # then build the throwaway test image (takes a minute or two)
-mkdir -p ~/.cache/fastembed
+mkdir -p ~/.archon-search/models
 docker compose build archon-test-runner
 
 # Run the full suite + smoke tests, then delete the container
 docker compose run --rm archon-test-runner
 ```
 
-That second command spins up a Linux container, installs the project (core + `hyde` + `rag-fusion` + `graph` extras), runs ~7,800 tests in parallel, then runs the smoke tests, and prints the results. When it finishes, the container is thrown away (`--rm`), but the downloaded packages, the installed venv, and the fastembed model weights are kept for next time.
+That second command spins up a Linux container, installs the project (core + `hyde` + `rag-fusion` + `graph` extras), runs ~7,800 tests in parallel, then runs the smoke tests, and prints the results. When it finishes, the container is thrown away (`--rm`), but the downloaded packages, the installed venv, and the model weights in `~/.archon-search/models` are kept for next time.
 
 ---
 
@@ -56,8 +56,8 @@ This is the blueprint Docker follows to build the environment your tests run ins
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 1000 --create-home --shell /bin/sh runner && \
-    mkdir -p /cache/uv /cache/fastembed /venv && \
-    chown runner:runner /cache/uv /cache/fastembed /venv
+    mkdir -p /cache/uv /venv /tmp/archon-test/models && \
+    chown -R runner:runner /cache/uv /venv /tmp/archon-test
 USER runner
 WORKDIR /workspace
 ENV PATH="/venv/bin:$PATH" \
@@ -67,7 +67,6 @@ ENV PATH="/venv/bin:$PATH" \
     # Persistent named volume so uv sync survives container restarts.
     UV_PROJECT_ENVIRONMENT=/venv \
     UV_CACHE_DIR=/cache/uv \
-    FASTEMBED_CACHE_PATH=/cache/fastembed \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 ```
@@ -82,10 +81,9 @@ Line by line, in plain terms:
 | `WORKDIR /workspace` | Sets the working folder inside the container to `/workspace`. | This is the folder your Mac's source code gets mounted onto (see below). |
 | `PATH="/venv/bin:$PATH"` | Puts the container's own venv first on `PATH`. | Bare `python`/`pytest` inside an interactive shell resolve to the container venv rather than the base image's interpreter. |
 | `ARCHON_SEARCH_CONTAINER=1` | Tells the app it's running inside a container. | This flag makes the app send its logs to standard error so `docker logs` captures them — otherwise container output can vanish. |
-| `ARCHON_SEARCH_DATA_DIR=/tmp/archon-test` | Points the app's runtime data (its database, keys, job state) at a temporary folder. | Keeps test data out of the way and disposable — it lives inside the container's temp space, not your project. |
+| `ARCHON_SEARCH_DATA_DIR=/tmp/archon-test` | Points the app's runtime data (its database, keys, job state) at a temporary folder. | Keeps test data out of the way and disposable — it lives inside the container's temp space, not your project. The one exception is `/tmp/archon-test/models`, the model folder, which compose bind-mounts from your Mac (see below). |
 | `UV_PROJECT_ENVIRONMENT=/venv` | Tells `uv` to build its virtual environment at `/venv` *inside the container*, not at the default `/workspace/.venv`. | **This is the most important line.** `/venv` is a named volume, so the installed environment survives container restarts. See the next section. |
 | `UV_CACHE_DIR=/cache/uv` | Points uv's package download cache at `/cache/uv`. | Also a named volume — downloaded wheels persist across runs, so the second `uv sync` is fast. |
-| `FASTEMBED_CACHE_PATH=/cache/fastembed` | Points the ML model cache at `/cache/fastembed`. | Bind-mounted from your Mac's `~/.cache/fastembed`, a cache the container owns: the first run downloads the weights into it once and every later run reuses them. |
 
 The two remaining vars are hygiene: `PYTHONDONTWRITEBYTECODE=1` stops Python writing `.pyc` files back onto your mounted source, and `PYTHONUNBUFFERED=1` makes test progress print live instead of in a delayed burst.
 
@@ -104,9 +102,7 @@ Notice what is **not** here: there is no `COPY` of your source code, and no `RUN
       - .:/workspace
       - archon-uv-cache:/cache/uv
       - archon-docker-venv:/venv
-      - ~/.cache/fastembed:/cache/fastembed
-    environment:
-      FASTEMBED_CACHE_PATH: /cache/fastembed
+      - ~/.archon-search/models:/tmp/archon-test/models
     command:
       - sh
       - -c
@@ -126,7 +122,7 @@ The four `volumes` lines are the heart of the whole design, so we'll give them t
 - **`.:/workspace`** — mount your current project folder (`.`) onto `/workspace` inside the container, live. The container reads *your* code, not a frozen copy.
 - **`archon-uv-cache:/cache/uv`** — a persistent cache of downloaded Python packages, so the second run is much faster than the first.
 - **`archon-docker-venv:/venv`** — a persistent copy of the installed Linux venv, so `uv sync` only pays its full cost once.
-- **`~/.cache/fastembed:/cache/fastembed`** — a persistent ML model-weight cache on your Mac, so only the first run downloads hundreds of megabytes.
+- **`~/.archon-search/models:/tmp/archon-test/models`** — your Mac's model folder, mounted where the container's `ARCHON_SEARCH_DATA_DIR` expects it (`<data-dir>/models`), so weights already downloaded by a native install are visible in the container and anything the container downloads is kept.
 
 The `command` runs, in sequence: install the project with the `hyde`, `rag-fusion`, and `graph` extras, run the main test suite, then run the smoke tests. The three steps are chained with `;`, not `&&` — a failing suite does not stop the next one, so you always see both phases' results. See [Why the graph extra](#why-the-graph-extra) for what those extras buy you.
 
@@ -158,7 +154,7 @@ A **volume** is a way to connect a folder to the container. Two kinds are used h
 flowchart TB
     subgraph mac["Your Mac (host)"]
         SRC["Project source folder<br/>(your working directory)"]
-        FE["~/.cache/fastembed<br/>(container-owned ML model weights)"]
+        FE["~/.archon-search/models<br/>(ML model weights, Hugging Face layout)"]
     end
     subgraph docker["Docker-managed storage"]
         UVCACHE["archon-uv-cache<br/>(named volume — survives runs)"]
@@ -168,7 +164,7 @@ flowchart TB
         WS["/workspace<br/>← your live source"]
         VENV["/venv<br/>← the container's OWN venv"]
         UVC["/cache/uv<br/>← package download cache"]
-        FEC["/cache/fastembed<br/>← shared model weights"]
+        FEC["/tmp/archon-test/models<br/>← shared model weights"]
     end
     SRC -->|"bind mount (live)"| WS
     FE -->|"bind mount (shared)"| FEC
@@ -176,7 +172,7 @@ flowchart TB
     VENVVOL -->|"named volume"| VENV
 ```
 
-Three things are worth calling out. Both the `archon-test-runner` and `archon-dev-shell` services mount **the same three named volumes** (`archon-uv-cache`, `archon-docker-venv`) and the same fastembed bind mount, so a `uv sync` done by one service is immediately reused by the other.
+Three things are worth calling out. Both the `archon-test-runner` and `archon-dev-shell` services mount **the same three named volumes** (`archon-uv-cache`, `archon-docker-venv`) and the same model-folder bind mount, so a `uv sync` done by one service is immediately reused by the other.
 
 ### Why the virtual environment lives *inside* the container
 
@@ -190,7 +186,9 @@ The first `uv sync` downloads every dependency wheel *and* builds the venv — t
 
 ### Why the model weights are kept on your Mac
 
-This project uses `fastembed`, which relies on machine-learning model files that are hundreds of megabytes. Native development does **not** fill `~/.cache/fastembed`: a host-installed archon-search keeps its weights in `~/.archon-search/models` (or wherever `FASTEMBED_CACHE_PATH` points). The bind-mounted `~/.cache/fastembed` is therefore the container's own persistent cache — the first run downloads the weights into it once, and every later run reuses them, saving several minutes per run. `FASTEMBED_CACHE_PATH=/cache/fastembed` tells archon-search (`paths.get_fastembed_cache_dir()`) to use it. Who honours it: the smoke-suite `archon-search serve` subprocesses inherit the exported value. Ordinary in-process tests do not, because the root `tests/conftest.py` `_archon_isolated_data_dir` fixture deletes the variable so each test's weights resolve under its isolated data directory. The two real-model lanes re-pin it (`tests/_live_fastembed_cache.py`): `tests/eval/live/` simply loads from the session's value, while `tests/eval/live_benchmark/` additionally skips the session when that directory lacks the two benchmark models.
+The embedder and reranker run on PyTorch and need model weights that are hundreds of megabytes to over a gigabyte each. archon-search downloads them from Hugging Face into `<data-dir>/models` (`archon_search/model_store.py`, `archon_search/paths.py`), and the container's data directory is `/tmp/archon-test`. Compose bind-mounts your Mac's `~/.archon-search/models` — the folder a native install fills — onto `/tmp/archon-test/models`, so the container reuses weights you already have and keeps whatever it downloads.
+
+Who actually reads that folder is narrower than it looks. The default suite does not need weights at all: it stubs the embedder and reranker (see `tests/CLAUDE.md`), and the root `tests/conftest.py` gives every test its own empty data directory anyway. The smoke suite's `archon-search serve` subprocesses run on a throwaway data directory whose `models/` is symlinked by `_link_model_cache` (`tests/smoke/conftest.py`) to `~/.archon-search/models` of the user running pytest. Inside the container that user is `runner` with `HOME=/home/runner`, and compose does not mount that path, so the smoke servers download their weights inside the container on each run (the bind mount above is not what they read). This is read from `Dockerfile.test`, `docker-compose.override.yml` and `tests/smoke/conftest.py`, not observed in a container run.
 
 ---
 
@@ -204,13 +202,13 @@ The install command names three optional extras — `hyde`, `rag-fusion`, and `g
 
 Why bother? Because two of the smoke tests exercise the graph feature end-to-end (entity extraction plus a community rebuild via Leiden). Their session fixture `importorskip`s `gliner` before it starts the server, so without the extra installed those two tests **skip**. With it installed they run and pass — which is why the base smoke suite (pre-DCS) reported `31 passed` rather than `29 passed, 2 skipped`. The DCS feature added `tests/smoke/docker/` with 20 additional Docker-mode CLI tests, bringing the smoke-suite total to approximately 51 tests. `hyde` and `rag-fusion` are installed for completeness of the dev/test dependency surface.
 
-> **The graph checkpoint is not cached between runs.** The graph smoke fixture points the server subprocess at a fresh temporary data directory per session (`tests/smoke/conftest.py`, `tmp_path_factory.mktemp("smoke_data_graph")`), and `<data-dir>/models/graph/` lives inside it — so unlike the fastembed weights, the GLiNER checkpoint is re-fetched on every smoke run and the container needs network access for those two tests. The heavyweight `graph_real_artifact` lane is a separate opt-in suite, excluded from both phases here; see `tests/CLAUDE.md` for how to run it against a pre-downloaded checkpoint.
+> **The graph checkpoint is not cached between runs.** The graph smoke fixture points the server subprocess at a fresh temporary data directory per session (`tests/smoke/conftest.py`, `tmp_path_factory.mktemp("smoke_data_graph")`), and `<data-dir>/models/graph/` lives inside it — so the GLiNER checkpoint is re-fetched on every smoke run and the container needs network access for those two tests. The heavyweight `graph_real_artifact` lane is a separate opt-in suite, excluded from both phases here; see `tests/CLAUDE.md` for how to run it against a pre-downloaded checkpoint.
 
 ---
 
 ## The dev shell (interactive work)
 
-The `archon-test-runner` runs the suites once and exits. When you want to *work inside* the Linux environment — iterate on a failing test, run a scoped path repeatedly, or start the server by hand — use `archon-dev-shell` instead. It uses the same image and the same dependency volumes (`.:/workspace`, `archon-uv-cache:/cache/uv`, `archon-docker-venv:/venv`, and the `~/.cache/fastembed` bind mount), but instead of running the suites and exiting, it does its one-time setup and then stays alive. Its `command`:
+The `archon-test-runner` runs the suites once and exits. When you want to *work inside* the Linux environment — iterate on a failing test, run a scoped path repeatedly, or start the server by hand — use `archon-dev-shell` instead. It uses the same image and the same dependency volumes (`.:/workspace`, `archon-uv-cache:/cache/uv`, `archon-docker-venv:/venv`, and the `~/.archon-search/models` bind mount), but instead of running the suites and exiting, it does its one-time setup and then stays alive. Its `command`:
 
 ```yaml
     command:
@@ -263,7 +261,7 @@ sequenceDiagram
 
     You->>Compose: docker compose run --rm archon-test-runner
     Compose->>Container: start container from the built image
-    Note over Container: mounts source, uv-cache,<br/>venv volume, fastembed weights
+    Note over Container: mounts source, uv-cache,<br/>venv volume, model folder
     Container->>UV: uv sync --dev --extra ... graph
     Note over UV: reads pyproject.toml,<br/>builds Linux venv in /venv volume,<br/>reuses cached wheels (seconds after first run)
     UV-->>Container: environment ready
@@ -275,7 +273,7 @@ sequenceDiagram
     Pytest-->>Container: smoke results
     Container-->>You: prints all results
     Compose->>Container: --rm → delete the container
-    Note over Compose: named volumes + fastembed cache survive
+    Note over Compose: named volumes survive
 ```
 
 The command runs, in order (`;` chains them in the shell, so each step runs whether or not the previous one succeeded):
@@ -410,8 +408,8 @@ Notes:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| First run is very slow | Downloading all dependencies and (if absent) model weights for the first time, plus building the venv. | Normal. Subsequent runs reuse the `archon-uv-cache` and `archon-docker-venv` volumes and the container-owned `~/.cache/fastembed` folder — expect `uv sync` to drop to a few seconds. The ~1.2 GB GLiNER checkpoint is re-fetched every smoke run regardless (see [Why the graph extra](#why-the-graph-extra)). |
-| Tests can't find the ML models / try to re-download them | `~/.cache/fastembed` on your Mac is empty — expected on the first run, since a native archon-search never writes there. | Let the container download them once (slower first run); later runs reuse the bind-mounted cache. |
+| First run is very slow | Downloading all dependencies and (if absent) model weights for the first time, plus building the venv. | Normal. Subsequent runs reuse the `archon-uv-cache` and `archon-docker-venv` volumes — expect `uv sync` to drop to a few seconds. The ~1.2 GB GLiNER checkpoint is re-fetched every smoke run regardless (see [Why the graph extra](#why-the-graph-extra)). |
+| Tests can't find the ML models / try to re-download them | `~/.archon-search/models` on your Mac is empty or missing, so there is nothing to reuse (on a Linux host, a folder Docker created itself is root-owned and not writable by the container's uid 1000). | Create it first with `mkdir -p ~/.archon-search/models`, and let a native install or the first container run download the weights into it. |
 | `ModuleNotFoundError` on a targeted single-file run | The container's venv hasn't been created yet on a fresh volume. | Run the default command (`docker compose run --rm archon-test-runner`) once, or start the dev shell once, to populate `/venv`, then targeted runs work. |
 | The 2 graph smoke tests skip | `gliner` missing from the venv (e.g. an old venv volume built before the `graph` extra was added). | Remove the stale venv volume (`docker volume rm archon-docker-venv`) and re-run so `uv sync --extra graph` repopulates it. |
 | Any failure in either phase | The suite is expected to be fully green. | Treat as a genuine problem and read the failure names — there are no known-good failures anymore. |

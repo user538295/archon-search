@@ -51,8 +51,7 @@ def _base_run_patches(tmp_path: Path, features_override: WizardFeatures | None =
 def _method_patches():
     return {
         "detect_gpu": MagicMock(return_value=GpuType.NONE),
-        "validate_providers": MagicMock(return_value=False),
-        "configure_providers": MagicMock(),
+        "_probe_and_configure_device": MagicMock(return_value=["CPU"]),
         "write_service_file": MagicMock(),
         "load_service": MagicMock(return_value=0),
         "_wait_for_service": MagicMock(return_value=True),

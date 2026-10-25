@@ -1,10 +1,9 @@
-"""Validate embedding model names and retrieve their output dimension.
+"""Validate embedding model names and startup model probes.
 
-Dimension lookup strategy:
-1. Try ``fastembed.TextEmbedding.list_supported_models()`` — O(1), no download.
-2. If the model is not in the list (or the method is unavailable on older
-   fastembed versions), fall back to instantiating the model with a timeout
-   guard so that slow/unreachable downloads do not hang indefinitely.
+``validate_embedding_model`` resolves an embedder's output dimension from its
+spec (``archon_search.model_specs``) without loading anything. ``validate_device``
+loads the configured embedder and reranker on ``[database].device`` and runs one
+inference each; ``validate_models_async`` runs it in the background at server startup.
 """
 from __future__ import annotations
 
@@ -13,18 +12,14 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
-from fastembed import TextEmbedding
 
-from archon_search.embedder import make_embedder
-from archon_search.onnx_providers import (
-    missing_providers_message,
-    select_onnx_providers,
-    unavailable_onnx_providers,
-)
-from archon_search.paths import get_fastembed_cache_dir
+from archon_search.embedder import ModelEmbedder
+from archon_search.model_specs import UnsupportedModelError, get_embedder_spec
+from archon_search.reranker import ModelReranker
+from archon_search.torch_runtime import AUTO_DEVICE, CPU_DEVICE, resolve_device
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
@@ -43,17 +38,8 @@ _LLAMA_CPP_PROBE_TIMEOUT_SECONDS: float = 3.0
 #
 # validate_models_async's two `except BaseException` branches (logged with a traceback).
 VALIDATION_FAILED_WARNING: Final[str] = "model validation failed unexpectedly; see the log for details"
-RERANKER_SPLIT_VALIDATION_FAILED_WARNING: Final[str] = (
-    "reranker split-provider validation failed unexpectedly; see the log for details"
-)
-# validate_models_async's timeout outcomes; ``seconds`` is the budget that ran out.
+# validate_models_async's timeout outcome; ``seconds`` is the budget that ran out.
 VALIDATION_TIMED_OUT_TEMPLATE: Final[str] = "validation timed out after {seconds}s"
-RERANKER_SPLIT_TIMED_OUT_TEMPLATE: Final[str] = (
-    "reranker split-provider validation timed out after {seconds:.1f}s"
-)
-RERANKER_SPLIT_BUDGET_EXHAUSTED_WARNING: Final[str] = (
-    "reranker split-provider validation skipped: timeout budget exhausted"
-)
 # The lifespan's validation-task crash fallback (server/app.py, through failed_result).
 VALIDATION_TASK_FAILED_WARNING: Final[str] = "validation task failed unexpectedly; see the log for details"
 # graph_ner_status's probe failing, and failed_result's own graph_ner_status call failing.
@@ -67,13 +53,18 @@ GLINER_NOT_INSTALLED_WARNING: Final[str] = (
     "graph prose entity extraction is disabled: gliner is not installed. "
     "Install archon-search[graph] to use graph prose entity extraction"
 )
-# validate_providers_shared's per-probe handlers. A failed probe is an expected outcome (e.g. a
-# CoreML/CUDA fallback), so it logs a WARNING with the exception message and keeps the
+# validate_device's per-probe handlers. A failed probe is an expected outcome (e.g. an
+# unloadable model), so it logs a WARNING with the exception message and keeps the
 # traceback at DEBUG: the wizard configures no logging, and Python's last-resort handler would
 # print a WARNING's traceback straight to the user.
-ONNX_PROVIDER_QUERY_FAILED_WARNING: Final[str] = "could not query ONNX providers; see the log for details"
 EMBEDDER_PROBE_FAILED_WARNING: Final[str] = "embedder probe failed; see the log for details"
 RERANKER_PROBE_FAILED_WARNING: Final[str] = "reranker probe failed; see the log for details"
+# validate_device's step-down outcome: an explicit accelerator the host lacks. ``requested`` is
+# the configured ``mps`` / ``cuda``; the models run on CPU.
+DEVICE_UNAVAILABLE_WARNING_TEMPLATE: Final[str] = "device unavailable: {requested}; models loaded on cpu"
+# validate_device's fixed probe inputs: one text through the embedder, one pair through the reranker.
+_EMBEDDER_PROBE_TEXT: Final[str] = "archon search validation probe"
+_RERANKER_PROBE_PAIR: Final[tuple[str, str]] = ("archon search query", "archon search document")
 
 # BE-23 (2026-08-19-035 K3): fixed, trivial probe inputs for _probe_extraction_model — never
 # derived from real ingest content, so a large production prompt's own truncation behaviour can
@@ -111,16 +102,7 @@ _EXTRACTION_MODEL_PROBE_ECONOMIC_CEILING_SECONDS: float = 75.0
 
 
 class ModelValidationError(ValueError):
-    """Raised when the embedding model dimension cannot be determined."""
-
-
-# Wire-safe detail every surface (REST, MCP) maps an unknown/unreachable-model
-# ModelValidationError to. Never interpolate the caught backend exception into
-# this message — it can embed internals (cache paths, HF error bodies, stack
-# text); str(exc) is fine in a logger.warning call, never in a response body.
-_MODEL_LOAD_FAILED_DETAIL = (
-    "could not load embedding model; verify the model name and ensure it is reachable."
-)
+    """Raised when the requested embedding model is not supported."""
 
 
 @dataclass
@@ -422,107 +404,86 @@ async def _probe_extraction_model(
     return []
 
 
-def _load_cross_encoder(model_name: str, providers: list[str] | None) -> Any:
-    """Instantiate a fastembed ``TextCrossEncoder`` (reranker probe entry point)."""
-    from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
+def _device_step_down_warning(device: str) -> str | None:
+    """The warning for an explicit accelerator this host lacks, else ``None``.
 
-    return TextCrossEncoder(
-        model_name, providers=providers, cache_dir=str(get_fastembed_cache_dir())
-    )
+    ``auto`` and ``cpu`` never step down, so they skip resolution (and the PyTorch
+    import it implies). A resolution failure yields ``None``: the model probes that
+    follow resolve the device themselves and report their own failure.
+    """
+    if device in (AUTO_DEVICE, CPU_DEVICE):
+        return None
+    try:
+        resolved = resolve_device(device)
+    except Exception:  # never raises
+        logger.warning("could not resolve device %r: model probes will report any failure", device, exc_info=True)
+        return None
+    if resolved == device:
+        return None
+    return DEVICE_UNAVAILABLE_WARNING_TEMPLATE.format(requested=device)
 
 
-def validate_providers_shared(
-    providers: list[str],
+def _probe_embedder(model_name: str, device: str) -> bool:
+    """Load *model_name* on *device* and embed one text; ``False`` (logged) on any failure."""
+    try:
+        ModelEmbedder(model_name, device=device).encode([_EMBEDDER_PROBE_TEXT])
+    except Exception as exc:  # never raises
+        logger.warning("embedder probe failed for %s on device %s: %s", model_name, device, exc)
+        logger.debug("embedder probe failed for %s on device %s", model_name, device, exc_info=True)
+        return False
+    return True
+
+
+def _probe_reranker(model_name: str, device: str) -> bool:
+    """Load *model_name* on *device* and score one pair; ``False`` (logged) on any failure."""
+    try:
+        ModelReranker(model_name, device=device).predict([_RERANKER_PROBE_PAIR])
+    except Exception as exc:  # never raises
+        logger.warning("reranker probe failed for %s on device %s: %s", model_name, device, exc)
+        logger.debug("reranker probe failed for %s on device %s", model_name, device, exc_info=True)
+        return False
+    return True
+
+
+def validate_device(
+    device: str,
     embedding_model: str,
     reranker_model: str,
 ) -> tuple[bool, bool, list[str]]:
-    """Probe the embedder and reranker under *providers* (C3).
+    """Probe the embedder and reranker on *device* (C3).
 
     Synchronous and never raises — all exceptions are captured as warnings so
     the caller (wizard or :func:`validate_models_async`) can decide on fallback.
 
     Returns ``(embedder_ok, reranker_ok, warnings)``:
 
-    - Both models are probed on the providers the runtime backends would load them
-      on (:func:`~archon_search.onnx_providers.select_onnx_providers`): a configured
-      provider the installed onnxruntime lacks is dropped (CPU when none remain) and
-      reported as the warning ``configured ONNX providers not available: <names>``
-      (S635) — so a successful probe yields ``(True, True, [that warning])``.
-    - If onnxruntime cannot be queried for its providers, neither model is probed:
-      ``embedder_ok = False`` and ``reranker_ok = False`` (``True`` when the reranker
-      is disabled) with a ``could not query ONNX providers`` warning.
-    - A failed probe or provider query is logged at WARNING with *providers* and the
-      exception message and at DEBUG with its traceback; its warning is fixed text, never the exception
-      message (it reaches ``GET /status``).
+    - Each non-empty model is loaded through ``ModelEmbedder`` / ``ModelReranker`` (the
+      classes the runtime uses, so the probe warms the same weights the first search
+      reads) and runs one inference.
+    - An explicit ``mps`` / ``cuda`` the host lacks runs on CPU and is reported as the
+      warning ``device unavailable: <requested>; models loaded on cpu`` — so a
+      successful probe yields ``(True, True, [that warning])``. ``auto`` and ``cpu``
+      never warn.
+    - A failed probe (including a model name outside the registry) is logged at WARNING
+      with the exception message and at DEBUG with its traceback; its warning is fixed
+      text, never the exception message (it reaches ``GET /status``).
     - ``reranker_model == ""`` disables the reranker: ``reranker_ok = True`` with
       no probe attempted.
     - ``embedding_model == ""`` skips the embedder probe and reports
       ``embedder_ok = True`` (caller has confirmed it is already warm).
     """
     warnings: list[str] = []
-    reranker_disabled = reranker_model == ""
+    step_down = _device_step_down_warning(device)
+    if step_down is not None:
+        warnings.append(step_down)
 
-    try:
-        selection = select_onnx_providers(providers)
-    except Exception as exc:  # never raises
-        logger.warning("could not query ONNX providers for %s: %s", providers, exc)
-        logger.debug("could not query ONNX providers for %s", providers, exc_info=True)
-        warnings.append(ONNX_PROVIDER_QUERY_FAILED_WARNING)
-        return False, reranker_disabled, warnings
-    if selection.unavailable:
-        warnings.append(missing_providers_message(selection.unavailable))
-    # `None` for an unset list (SearchConfig default) leaves the device to fastembed,
-    # exactly as the runtime ModelEmbedder/ModelReranker do.
-    load_providers = selection.providers
+    embedder_ok = embedding_model == "" or _probe_embedder(embedding_model, device)
+    if not embedder_ok:
+        warnings.append(EMBEDDER_PROBE_FAILED_WARNING)
 
-    # Embedder probe (skipped when caller already confirmed warm via "" model).
-    # `cache_dir` (S278): both probes MUST warm the same cache the runtime
-    # ModelEmbedder/ModelReranker read from, or /ready reports models ok while the first
-    # search still pays a full cold download inline.
-    if embedding_model == "":
-        embedder_ok = True
-    else:
-        embedder_ok = True
-        try:
-            model = TextEmbedding(
-                embedding_model,
-                providers=load_providers,
-                cache_dir=str(get_fastembed_cache_dir()),
-            )
-            list(model.embed(["archon search validation probe"]))
-        except Exception as exc:  # never raises
-            logger.warning(
-                "embedder probe failed for %s under providers %s: %s", embedding_model, providers, exc
-            )
-            logger.debug(
-                "embedder probe failed for %s under providers %s",
-                embedding_model,
-                providers,
-                exc_info=True,
-            )
-            embedder_ok = False
-            warnings.append(EMBEDDER_PROBE_FAILED_WARNING)
-
-    # Reranker probe.
-    if reranker_disabled:
-        reranker_ok = True
-    else:
-        reranker_ok = True
-        try:
-            ce = _load_cross_encoder(reranker_model, load_providers)
-            list(ce.rerank("archon search query", ["archon search document"]))
-        except Exception as exc:  # never raises
-            logger.warning(
-                "reranker probe failed for %s under providers %s: %s", reranker_model, providers, exc
-            )
-            logger.debug(
-                "reranker probe failed for %s under providers %s",
-                reranker_model,
-                providers,
-                exc_info=True,
-            )
-            reranker_ok = False
-            warnings.append(RERANKER_PROBE_FAILED_WARNING)
+    reranker_ok = reranker_model == "" or _probe_reranker(reranker_model, device)
+    if not reranker_ok:
+        warnings.append(RERANKER_PROBE_FAILED_WARNING)
 
     return embedder_ok, reranker_ok, warnings
 
@@ -534,7 +495,7 @@ async def validate_models_async(
 ) -> ModelValidationResult:
     """Validate the configured embedder and reranker without blocking startup (C1).
 
-    Runs :func:`validate_providers_shared` in a worker thread guarded by
+    Runs :func:`validate_device` in a worker thread guarded by
     ``asyncio.wait_for``. Never raises, with one exception: a timeout or any other
     failure of the embedder/reranker probe (including ``CancelledError``) yields a
     result with both ``ok`` flags ``False`` and a descriptive warning, rather than
@@ -565,11 +526,6 @@ async def validate_models_async(
         config, llama_cpp_ok=llama_cpp_ok
     )
     embedding_model = "" if embedder_is_warm else config.embedding_model
-    split_reranker = config.reranker_providers is not None and bool(config.reranker_model)
-    # A split config never loads the reranker under `providers`, so the first pass skips it:
-    # its failure there would leave a warning (WARN on /ready) on a healthy split install.
-    first_pass_reranker = "" if split_reranker else config.reranker_model
-    _start = time.monotonic()
 
     def _result(
         embedder_ok: bool | None,
@@ -589,10 +545,10 @@ async def validate_models_async(
     try:
         embedder_ok, reranker_ok, warnings = await asyncio.wait_for(
             asyncio.to_thread(
-                validate_providers_shared,
-                config.providers,
+                validate_device,
+                config.device,
                 embedding_model,
-                first_pass_reranker,
+                config.reranker_model,
             ),
             timeout=timeout_seconds,
         )
@@ -602,116 +558,17 @@ async def validate_models_async(
         logger.warning("model validation failed unexpectedly: %s", exc, exc_info=True)
         return _result(False, False, [VALIDATION_FAILED_WARNING])
 
-    # If split config, validate the reranker under its actual providers.
-    # Use remaining budget so total wall time stays within timeout_seconds.
-    if split_reranker:
-        _remaining = timeout_seconds - (time.monotonic() - _start)
-        if _remaining <= 0:
-            reranker_ok = False
-            warnings = warnings + [RERANKER_SPLIT_BUDGET_EXHAUSTED_WARNING]
-        else:
-            try:
-                _, reranker_ok_actual, split_warns = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        validate_providers_shared,
-                        config.reranker_providers,
-                        "",  # skip embedder (already validated above)
-                        config.reranker_model,
-                    ),
-                    timeout=_remaining,
-                )
-                reranker_ok = reranker_ok_actual
-                # Both lists dropping the same provider would repeat its warning.
-                warnings = list(dict.fromkeys(warnings + split_warns))
-            except asyncio.TimeoutError:
-                reranker_ok = False
-                warnings = warnings + [RERANKER_SPLIT_TIMED_OUT_TEMPLATE.format(seconds=_remaining)]
-            except BaseException as exc:  # includes CancelledError — never re-raise
-                logger.warning(
-                    "reranker split-provider validation failed: %s", exc, exc_info=True
-                )
-                return _result(
-                    embedder_ok, False, warnings + [RERANKER_SPLIT_VALIDATION_FAILED_WARNING]
-                )
-
-    result = _result(embedder_ok, reranker_ok, warnings)
-
-    # Stale-config advisory: CoreML set, no split written, reranker enabled, AND
-    # CoreML actually failed for the reranker (distinguishes stale from both-pass).
-    # CoreML missing from onnxruntime means the reranker ran on CPU (S635), so its
-    # failure says nothing about CoreML.
-    if (
-        "CoreMLExecutionProvider" in config.providers
-        and config.reranker_providers is None
-        and config.reranker_model != ""
-        and not reranker_ok
-        and _coreml_available()
-    ):
-        logger.warning(
-            "providers=[CoreMLExecutionProvider] is set but reranker_providers is absent "
-            "and the reranker failed under CoreML — re-run `archon-search wizard` to apply "
-            "the split configuration."
-        )
-
-    return result
+    return _result(embedder_ok, reranker_ok, warnings)
 
 
-def _coreml_available() -> bool:
-    """True when the installed onnxruntime has CoreML; False when it lacks it or the
-    query fails (then nothing is known about CoreML, so nothing can be advised)."""
-    try:
-        return not unavailable_onnx_providers(["CoreMLExecutionProvider"])
-    except Exception:  # noqa: BLE001 — advisory only; validation already reported the failure
-        return False
-
-
-async def validate_embedding_model(
-    model_name: str,
-    timeout_seconds: float = 30.0,
-) -> int:
-    """Return the output dimension of *model_name*.
-
-    Steps:
-    1. Try ``TextEmbedding.list_supported_models()``; return ``dim`` if found.
-    2. Instantiate the model in a thread (timeout-guarded) and call ``embed``
-       to populate ``embedding_dim``.
+async def validate_embedding_model(model_name: str) -> int:
+    """Return the output dimension of *model_name* from its spec; nothing is loaded.
 
     Raises:
-        ModelValidationError: if the model cannot be reached within the timeout,
-            or if the backend fails to load it (e.g. an unknown model name).
+        ModelValidationError: ``unsupported model ...; supported: ...`` when
+            *model_name* is not in the embedder registry (REST 422 / MCP validation error).
     """
-    # Step 1: fast path via the supported-model registry
     try:
-        models = TextEmbedding.list_supported_models()
-        for descriptor in models:
-            # fastembed keys the model identifier under "model" (NOT "name").
-            if descriptor.get("model") == model_name:
-                return int(descriptor["dim"])
-    except AttributeError:
-        # Older fastembed without list_supported_models — fall through
-        pass
-
-    # Step 2: instantiate then probe with a timeout guard.
-    # make_embedder() is non-blocking (no I/O). The first embed() call triggers
-    # model download + initialization inside a thread, which is what we guard.
-    # No `providers=` on purpose: this probe answers "what output dimension does
-    # this model name have?", which is provider-independent. Running it under an
-    # accelerator would only make a PATCH slower and could fail for provider
-    # reasons that say nothing about the model name's validity.
-    embedder = make_embedder(model_name)
-    try:
-        await asyncio.wait_for(embedder.embed(["probe"]), timeout=timeout_seconds)
-    except asyncio.TimeoutError:
-        raise ModelValidationError(
-            "could not determine model output dimension; "
-            "verify the model name and ensure it is reachable."
-        )
-    except Exception as exc:
-        # An unknown/unsupported model name makes the backend raise (fastembed
-        # raises ValueError). Surface it as ModelValidationError so callers can
-        # map it to 422 rather than letting it escape as an unhandled 500. The
-        # backend exception is logged (may embed cache paths, HF error bodies)
-        # but never placed on the wire — see _MODEL_LOAD_FAILED_DETAIL above.
-        logger.warning("failed to load embedding model %r: %s", model_name, exc, exc_info=True)
-        raise ModelValidationError(_MODEL_LOAD_FAILED_DETAIL) from exc
-    return embedder.embedding_dim
+        return get_embedder_spec(model_name).dim
+    except UnsupportedModelError as exc:
+        raise ModelValidationError(str(exc)) from exc

@@ -1006,8 +1006,8 @@ def test_add_collection_unknown_embedding_model_returns_422(
 ) -> None:
     """POST /collections/ with an unknown embedding_model returns 422, not 500 (S221).
 
-    An unknown model makes the underlying embedder raise a plain ValueError
-    (real fastembed does this). That must surface as 422 before any job is
+    An unknown model makes the underlying embedder raise ``UnsupportedModelError``
+    (a ``ValueError``; the real ``ModelEmbedder`` does this). That must surface as 422 before any job is
     created — not escape as an unhandled 500.
     """
     src = tmp_path / "myproject"
@@ -1026,17 +1026,10 @@ def test_add_collection_unknown_embedding_model_returns_422(
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
-    # Mimic real fastembed: an unknown model raises ValueError when probed.
-    bad_embedder = MagicMock()
-    bad_embedder.embed = AsyncMock(
-        side_effect=ValueError("Model unknown-model-xyz-404 is not supported")
+    response = c.post(
+        "/collections/",
+        json={"path": str(src), "embedding_model": "unknown-model-xyz-404"},
     )
-
-    with patch("archon_search.model_validation.make_embedder", return_value=bad_embedder):
-        response = c.post(
-            "/collections/",
-            json={"path": str(src), "embedding_model": "unknown-model-xyz-404"},
-        )
 
     assert response.status_code == 422
     # Validation must fail before any job/meta is created.

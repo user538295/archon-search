@@ -49,7 +49,7 @@ def _build_router(
     HTTP fetch (which posts to the bare REST root, not ``/mcp``, and returns []).
     """
     if embedder is None:
-        backend = ModelEmbedder(config.embedding_model, providers=config.providers or None)
+        backend = ModelEmbedder(config.embedding_model, device=config.device)
         embedder = Embedder(backend)
     search_url = f"http://{config.host}:{config.port}"
     return MultiCollectionRouter(

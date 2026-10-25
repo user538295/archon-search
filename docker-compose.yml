@@ -28,18 +28,17 @@ services:
     environment:
       ARCHON_SEARCH_API_KEY: ${ARCHON_SEARCH_API_KEY:-}
       ARCHON_SEARCH_DATA_DIR: /data
-      # To enable the shared fastembed cache: (1) uncomment the next env
-      # line, (2) uncomment the `archon-model-cache` volume mount below,
-      # AND (3) uncomment the `archon-model-cache:` volume declaration at
-      # the bottom of this file. (1) only restates the image's baked value;
-      # (2) and (3) must be uncommented together or compose rejects the
-      # config with "undefined volume". With docker-compose.override.yml
-      # loaded (the default without `-f`), its `~/.cache/fastembed` bind at
-      # the same target replaces this service's opt-in mount.
-      # FASTEMBED_CACHE_PATH: /data/fastembed-cache
+      # To enable the shared model cache: (1) uncomment the
+      # `archon-model-cache` volume mount below AND (2) uncomment the
+      # `archon-model-cache:` volume declaration at the bottom of this file;
+      # the two must be uncommented together or compose rejects the config
+      # with "undefined volume". The mount target is the image's model cache
+      # (`$ARCHON_SEARCH_DATA_DIR/models`). With docker-compose.override.yml
+      # loaded (the default without `-f`), its `~/.archon-search/models` bind
+      # at the same target replaces this service's opt-in mount.
     volumes:
       - archon-dev-data:/data
-      # - archon-model-cache:/data/fastembed-cache
+      # - archon-model-cache:/data/models
     ports:
       - "18765:8765"
     stop_grace_period: 30s
@@ -49,12 +48,11 @@ services:
     environment:
       ARCHON_SEARCH_API_KEY: ${ARCHON_SEARCH_API_KEY:-}
       ARCHON_SEARCH_DATA_DIR: /data
-      # See `archon-dev` for the three-step uncomment procedure required
-      # to wire up the shared fastembed model cache.
-      # FASTEMBED_CACHE_PATH: /data/fastembed-cache
+      # See `archon-dev` for the two-step uncomment procedure required
+      # to wire up the shared model cache.
     volumes:
       - archon-test-data:/data
-      # - archon-model-cache:/data/fastembed-cache
+      # - archon-model-cache:/data/models
     ports:
       - "18766:8765"
     stop_grace_period: 30s
@@ -64,12 +62,11 @@ services:
     environment:
       ARCHON_SEARCH_API_KEY: ${ARCHON_SEARCH_API_KEY:-}
       ARCHON_SEARCH_DATA_DIR: /data
-      # See `archon-dev` for the three-step uncomment procedure required
-      # to wire up the shared fastembed model cache.
-      # FASTEMBED_CACHE_PATH: /data/fastembed-cache
+      # See `archon-dev` for the two-step uncomment procedure required
+      # to wire up the shared model cache.
     volumes:
       - archon-prod-data:/data
-      # - archon-model-cache:/data/fastembed-cache
+      # - archon-model-cache:/data/models
     ports:
       - "8765:8765"
     restart: unless-stopped
@@ -79,10 +76,10 @@ volumes:
   archon-dev-data:
   archon-test-data:
   archon-prod-data:
-  # Optional shared cache for fastembed model weights. Uncomment this
+  # Optional shared cache for model weights. Uncomment this
   # volume AND the `archon-model-cache` mount in every service that
   # should reuse the cache. Mount target inside the container is the
-  # image's `FASTEMBED_CACHE_PATH=/data/fastembed-cache`, so the services
+  # image's model cache `/data/models`, so the services
   # download the weights (several hundred MB) once instead of once per
   # data volume.
   # archon-model-cache:

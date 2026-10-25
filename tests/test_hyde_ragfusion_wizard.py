@@ -445,7 +445,7 @@ class TestRenderSummaryQueryExpansion:
     def test_hyde_bullet_shows_provider(self) -> None:
         profile = get_profile("minimal", multilingual=False)
         out = _render_summary(
-            "minimal", profile, multilingual=False, providers=[],
+            "minimal", profile, multilingual=False, device_labels=["CPU"],
             features=WizardFeatures(enable_hyde=True, hyde_provider="anthropic"),
             config_path="archon-search.toml",
         )
@@ -456,7 +456,7 @@ class TestRenderSummaryQueryExpansion:
     def test_rag_fusion_bullet_shows_provider(self) -> None:
         profile = get_profile("minimal", multilingual=False)
         out = _render_summary(
-            "minimal", profile, multilingual=False, providers=[],
+            "minimal", profile, multilingual=False, device_labels=["CPU"],
             features=WizardFeatures(enable_rag_fusion=True, rag_fusion_provider="ollama"),
             config_path="archon-search.toml",
         )
@@ -465,7 +465,7 @@ class TestRenderSummaryQueryExpansion:
     def test_no_bullets_when_disabled(self) -> None:
         profile = get_profile("minimal", multilingual=False)
         out = _render_summary(
-            "minimal", profile, multilingual=False, providers=[], features=WizardFeatures(),
+            "minimal", profile, multilingual=False, device_labels=["CPU"], features=WizardFeatures(),
             config_path="archon-search.toml",
         )
         assert "HyDE" not in out

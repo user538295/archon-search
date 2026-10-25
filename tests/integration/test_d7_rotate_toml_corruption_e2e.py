@@ -32,7 +32,7 @@ from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 
-# Embedding dimension used by the stub fastembed backend.
+# Embedding dimension used by the stub embedder backend.
 _EMBEDDING_DIM = 384
 _COL_COEXIST = "managed-coexist-col"
 _DOC_PATH_COEXIST = "/data/t3/coexist-doc.md"

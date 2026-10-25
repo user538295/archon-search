@@ -38,37 +38,33 @@ jobs:
       - name: Verify pytest-cov plugin is importable
         run: uv run python -c "import pytest_cov"
 
-      - name: Restore fastembed + HuggingFace model cache
+      - name: Restore model cache (PyTorch snapshots + HuggingFace)
         uses: actions/cache@v6.1.0
         with:
+          # The two live-lane snapshot directories of <ARCHON_SEARCH_DATA_DIR>/models (the
+          # data dir defaults to ~/.archon-search on a runner; its models/graph is cached by
+          # the graph NER step below, so the whole models/ dir is deliberately not listed),
+          # plus ~/.cache/huggingface: the docling lane below pulls the layout/TableFormer
+          # and RapidOCR weights into it.
           path: |
-            ~/.cache/fastembed
+            ~/.archon-search/models/models--BAAI--bge-small-en-v1.5
+            ~/.archon-search/models/models--cross-encoder--ms-marco-MiniLM-L-6-v2
             ~/.cache/huggingface
-          # Update the key suffix (v1→v2 etc.) if model names change, or if a new step
-          # populates these directories — the docling lane below pulls the layout/TableFormer
-          # and RapidOCR weights into ~/.cache/huggingface, and an exact hit on the old key
-          # never re-saves, so every run would re-download them. v3 (S493): the prefetch
-          # step now fills ~/.cache/fastembed (it wrote <tempdir>/fastembed_cache before),
-          # so a v2 entry lacks the fastembed weights and must not be hit exactly.
-          key: model-cache-bge-small-en-v1.5-ms-marco-MiniLM-L-6-v2-docling-v3
-          restore-keys: model-cache-bge-small-en-v1.5-ms-marco-MiniLM-L-6-v2-
+          # The key names the pinned revisions (archon_search/model_specs.py), so bumping
+          # one invalidates the entry; tests/test_workflow_model_cache_lint.py enforces it.
+          # Bump the trailing suffix (v4→v5) if a new step starts populating these
+          # directories — an exact hit on the old key never re-saves.
+          key: model-cache-bge-small-en-v1.5-5c38ec7c405ec4b44b94cc5a9bb96e735b38267a-ms-marco-MiniLM-L-6-v2-233902d25c440f23af6f7d6e94d2946bac0bee0a-docling-v4
+          restore-keys: model-cache-bge-small-en-v1.5-
 
       - name: Prefetch models (3 attempts, exponential backoff)
-        # FASTEMBED_CACHE_PATH points fastembed (no cache_dir here) at the cached
-        # ~/.cache/fastembed instead of <tempdir>/fastembed_cache; the live_benchmark step
-        # exports the same path so its guard and archon's get_fastembed_cache_dir() read
-        # the weights fetched here (S493).
+        # Downloads the live-lane models through archon_search.model_store.ensure_model at
+        # their pinned revisions into <ARCHON_SEARCH_DATA_DIR>/models (a no-op on a cache
+        # hit). The live_benchmark step runs offline and reads the same directory.
         run: |
-          export FASTEMBED_CACHE_PATH="$HOME/.cache/fastembed"
           prefetch_ok=false
           for attempt in 1 2 3; do
-            uv run python -c "
-          from fastembed import TextEmbedding
-          from fastembed.rerank.cross_encoder import TextCrossEncoder
-          TextEmbedding('BAAI/bge-small-en-v1.5')
-          TextCrossEncoder('Xenova/ms-marco-MiniLM-L-6-v2')
-          print('Models prefetched')
-          " && { prefetch_ok=true; break; }
+            uv run python -m tests._live_model_cache && { prefetch_ok=true; break; }
             echo "Attempt $attempt failed; retrying in $((attempt * 5))s..."
             sleep $((attempt * 5))
           done
@@ -113,12 +109,11 @@ jobs:
 
       - name: Run real-model latency benchmark
         timeout-minutes: 3
-        # Same cache the prefetch step filled (S493): without the export, archon resolves
-        # <ARCHON_SEARCH_DATA_DIR>/models, which the cache step never restores.
-        # HF_HUB_OFFLINE makes fastembed load local files only, so a cache mismatch fails
-        # the lane instead of silently downloading inside the 3-minute latency budget.
+        # Same cache the prefetch step filled: archon resolves <ARCHON_SEARCH_DATA_DIR>/models
+        # (default ~/.archon-search/models) in the guard and the backends alike.
+        # HF_HUB_OFFLINE makes model_store.ensure_model fail on a cache miss instead of
+        # silently downloading inside the 3-minute latency budget.
         run: |
-          export FASTEMBED_CACHE_PATH="$HOME/.cache/fastembed"
           export HF_HUB_OFFLINE=1
           uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m live_benchmark --junitxml=benchmark-results.xml tests/eval/live_benchmark/
 

@@ -59,7 +59,7 @@ This comparison therefore has two layers:
 ## Dimension 2 — Indexing / Ingestion Pipeline
 
 ### Archon
-**What it does:** Full document ingestion: file discovery (multi-format, ~40 binary extensions excluded via `_BINARY_EXTENSIONS` in `pipeline.py`, symlink-skipping, hidden-file filtering) → format-specific parsing (trafilatura/docling/markitdown) → Chonkie RecursiveChunker (GPT-2 tokenizer; chunk size from `SearchConfig.chunk_size`, default 512) → fastembed embedding → LanceDB persist → incremental FTS update (C6; O(delta), not full rebuild). SHA256 content addressing gives idempotent re-ingest. Declarative sync with file change detection and crash-recovery state machine.
+**What it does:** Full document ingestion: file discovery (multi-format, ~40 binary extensions excluded via `_BINARY_EXTENSIONS` in `pipeline.py`, symlink-skipping, hidden-file filtering) → format-specific parsing (trafilatura/docling/markitdown) → Chonkie RecursiveChunker (GPT-2 tokenizer; chunk size from `SearchConfig.chunk_size`, default 512) → embedding → LanceDB persist → incremental FTS update (C6; O(delta), not full rebuild). SHA256 content addressing gives idempotent re-ingest. Declarative sync with file change detection and crash-recovery state machine.
 
 **Strengths:**
 - Parses HTML, PDF (with OCR), Office docs, images via trafilatura/docling/markitdown #Unverified (exact format count not enforced in source)
@@ -486,7 +486,7 @@ Server tests live under `tests/server/` and `tests/test_app.py` (no monolithic `
 | Schema migration tooling (D3) | `STORE_SCHEMA_VERSION`, `MigrationSpec`, documented rollback rules; runs at startup |
 | Container support CPU+GPU (C9) | Docker + GHCR; CPU and GPU images; single `ARCHON_SEARCH_DATA_DIR` env var relocates full runtime tree |
 | Tiered install profiles (C0) | minimal/balanced/max; operators can ship a smaller dependency footprint |
-| Real-model latency benchmark (C16) | `tests/eval/live_benchmark/`; p50/p95 regression guard against real fastembed model weights |
+| Real-model latency benchmark (C16) | `tests/eval/live_benchmark/`; p50/p95 regression guard against real embedder and reranker model weights |
 
 **Score: 9/10**
 

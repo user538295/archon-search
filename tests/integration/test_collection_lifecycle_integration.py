@@ -28,7 +28,7 @@ from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 
-# Embedding dimension used by the stub fastembed backend (384-dim zeros).
+# Embedding dimension used by the stub embedder backend (384-dim zeros).
 _EMBEDDING_DIM = 384
 
 

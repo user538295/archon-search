@@ -27,7 +27,6 @@ import networkx
 import pytest
 from fastapi.testclient import TestClient
 
-from archon_search import model_validation
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.graph_inspector import GRAPHML_DEPENDENCY_DETAIL, CollectionGraphView, CrossCollectionGraphView
@@ -312,32 +311,6 @@ def test_explain_failure_outside_its_handlers_is_a_plain_text_500_without_teleme
     assert response.status_code == _HTTP_INTERNAL_ERROR, response.text
     assert response.text == _STARLETTE_UNHANDLED_BODY
     writer.enqueue.assert_not_called()
-
-
-def test_add_collection_model_load_failure_answers_422_and_logs_traceback(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """``POST /collections`` validates ``embedding_model`` first; a backend load failure answers
-    the fixed ``_MODEL_LOAD_FAILED_DETAIL`` and keeps the cause in the log with its traceback."""
-    _, client = _make_app(tmp_path)
-    embedder = MagicMock()
-    embedder.embed = AsyncMock(side_effect=RuntimeError(ONNX_MSG))
-
-    # The suite's fastembed stub has no ``list_supported_models``, so the registry fast path
-    # falls through to instantiating the model, as it does for a name outside the registry.
-    with (
-        patch.object(model_validation, "make_embedder", return_value=embedder),
-        caplog.at_level(logging.WARNING),
-    ):
-        response = client.post(
-            "/collections/", json={"path": str(tmp_path), "embedding_model": "unknown/model"}
-        )
-
-    embedder.embed.assert_awaited_once()
-    assert response.status_code == _HTTP_UNPROCESSABLE, response.text
-    assert response.json() == {"detail": model_validation._MODEL_LOAD_FAILED_DETAIL}
-    assert LEAK_NEEDLE not in response.text, f"internal path leaked into the response: {response.text!r}"
-    assert_logged_with_traceback(caplog, ONNX_MSG)
 
 
 def test_search_hyde_runtime_error_with_failing_telemetry_still_answers_json_500(

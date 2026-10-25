@@ -1,7 +1,7 @@
 """Suite 15 — Crash Recovery e2e tests (S15.7–S15.9).
 
 Uses real SearchCollectionSync + real IndexingStateStore + real SearchPipeline
-with the fastembed stubs from conftest.py.  No HTTP involved.
+with the model-backend stubs from conftest.py.  No HTTP involved.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class MockEmbedderBackend:
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         import numpy as np
-        # 384-dim zeros match the conftest _FakeTextEmbedding to avoid schema divergence
+        # 384-dim zeros match the conftest stub embedder to avoid schema divergence
         # when sharing the module-scoped connected_store with other test functions.
         return [np.zeros(384, dtype=float).tolist() for _ in texts]
 

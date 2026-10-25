@@ -55,35 +55,6 @@ def test_fixture_api_key_format() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Unit tests — FASTEMBED_CACHE_PATH reaches function-scoped servers too (S493)
-# ---------------------------------------------------------------------------
-
-
-def test_subprocess_env_passes_the_shell_fastembed_cache_path(tmp_path, monkeypatch) -> None:
-    """The root conftest deletes FASTEMBED_CACHE_PATH before every test, so a server a
-    test starts itself (S04) would lose the shell's export; the import-time capture keeps
-    it, exactly as the session-scoped servers inherit it."""
-    monkeypatch.setattr(smoke_conftest, "_SHELL_FASTEMBED_CACHE_PATH", "/cache/fastembed")
-    assert "FASTEMBED_CACHE_PATH" not in os.environ  # the root conftest's delete
-
-    env = smoke_conftest._subprocess_env(port=1, data_dir=tmp_path, api_key="k")
-
-    assert env["FASTEMBED_CACHE_PATH"] == "/cache/fastembed"
-
-
-def test_subprocess_env_never_forces_fastembed_cache_path_when_unset(
-    tmp_path, monkeypatch
-) -> None:
-    """Unset in the shell, it stays unset: the weights load via `_link_model_cache`."""
-    monkeypatch.setattr(smoke_conftest, "_SHELL_FASTEMBED_CACHE_PATH", None)
-
-    env = smoke_conftest._subprocess_env(port=1, data_dir=tmp_path, api_key="k")
-
-    assert env["ARCHON_SEARCH_DATA_DIR"] == str(tmp_path)  # presence anchor
-    assert "FASTEMBED_CACHE_PATH" not in env
-
-
-# ---------------------------------------------------------------------------
 # Integration test — fixture starts server and seeds corpus (S1)
 # ---------------------------------------------------------------------------
 

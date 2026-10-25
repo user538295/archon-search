@@ -228,12 +228,12 @@ assert c[0].find('skipped') is None, 'test_graph_ner_lane_non_vacuity was skippe
     uv run pytest tests/smoke/ -o addopts= --strict-markers --strict-config --no-cov -n0 \
         || bail "smoke suite failed — fix all failures before releasing"
 
-    echo "[10/12] Live benchmark lane (real fastembed weights)..."
+    echo "[10/12] Live benchmark lane (real PyTorch model weights)..."
     uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 \
         -m live_benchmark tests/eval/live_benchmark/ \
         || bail "live benchmark lane failed — fix all failures before releasing"
 
-    echo "[11/12] Live eval lane (real fastembed + real LLM — Anthropic key, else 'claude -p' CLI)..."
+    echo "[11/12] Live eval lane (real model weights + real LLM — Anthropic key, else 'claude -p' CLI)..."
     uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 \
         -m live_eval tests/eval/live/ \
         || bail "live eval lane failed — fix all failures before releasing"

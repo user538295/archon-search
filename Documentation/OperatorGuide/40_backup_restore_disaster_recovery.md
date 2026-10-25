@@ -186,7 +186,7 @@ A collection restored by import is exempt from maintenance orphan cleanup: every
 | One collection corrupted | Delete and re-import that collection from its latest `.backup.` archive — no need to restore the whole instance. |
 | Telemetry directory full | `[telemetry].retention_days` enforces deletion; the pruner runs every 24h from process start. Restart to force a prune. See [Incident runbook](90_incident_runbook.md). |
 | Backup disk filling up | Ensure `[backup].keep > 0` (rotation on). `keep = 0` with `interval_hours > 0` accumulates archives without limit — the config loader warns about this. |
-| Host loss / migration | Reinstall on the new host (`pip install archon-search`), restore `~/.archon-search/` **or** import `.tar.gz` archives, run `archon-search install` to register the OS service. Re-verify ONNX providers match (CPU vs CUDA vs METAL); ranking is otherwise unchanged. See [Upgrading](100_upgrading.md). |
+| Host loss / migration | Reinstall on the new host (`pip install archon-search`), restore `~/.archon-search/` **or** import `.tar.gz` archives, run `archon-search install` to register the OS service. Re-check `[database].device` suits the new host (`auto` picks CUDA, then Apple MPS, then CPU; an explicit accelerator the host lacks steps down to CPU with a warning); model weights are not in an archive and are downloaded again into `<data dir>/models` on first use; ranking is otherwise unchanged. See [Upgrading](100_upgrading.md). |
 
 ## Related documents
 

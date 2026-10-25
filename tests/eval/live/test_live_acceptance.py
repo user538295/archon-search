@@ -1,6 +1,6 @@
 """Live-backend acceptance tests (brief tests 1, 3, 8, 9, 10).
 
-Requires real fastembed + cross-encoder model weights.
+Requires real PyTorch embedder + cross-encoder model weights.
 Run with: uv run pytest -m live_eval tests/eval/live/test_live_acceptance.py -v --no-cov
 """
 from __future__ import annotations
@@ -26,8 +26,15 @@ from archon_search.eval.runner import (
 )
 
 
-# bge-small-en-v1.5 vectors are L2-normalised; the fastembed stub's are all zeros.
+# bge-small-en-v1.5 vectors are L2-normalised; the stubbed backend's are all zeros.
 _UNIT_NORM_TOLERANCE = 1e-3
+
+
+def _runtime_versions() -> str:
+    """The PyTorch runtime that produced the live numbers, as recorded in baseline artifacts."""
+    torch_version = importlib.metadata.version("torch")
+    transformers_version = importlib.metadata.version("transformers")
+    return f"torch {torch_version} / transformers {transformers_version}"
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +47,7 @@ async def test_live_backend_uses_real_models(
     tmp_path: Path,
     live_corpus_root: Path,
 ) -> None:
-    """Real models produce unit-norm 384-dim embeddings, not the fastembed stub's zeros.
+    """Real models produce unit-norm 384-dim embeddings, not the stubbed backend's zeros.
 
     The stub (``tests/_search_stubs.py``) also yields 384 dims, so only the norm tells them apart.
     """
@@ -69,10 +76,9 @@ async def test_model_versions_recorded_in_baseline(
     live_runtime_cfg_path: Path,
 ) -> None:
     """importlib.metadata APIs are accessible; all 6 model-version fields round-trip."""
-    fastembed_version = importlib.metadata.version("fastembed")
-    assert fastembed_version, "fastembed version must be non-empty"
-    assert re.match(r"^\d+\.\d+", fastembed_version), (
-        f"fastembed version {fastembed_version!r} does not match semver pattern"
+    runtime_versions = _runtime_versions()
+    assert re.match(r"^torch \d+\.\d+\S* / transformers \d+\.\d+\S*$", runtime_versions), (
+        f"runtime versions {runtime_versions!r} do not match the version pattern"
     )
 
     archon_version = importlib.metadata.version("archon-search")
@@ -87,9 +93,9 @@ async def test_model_versions_recorded_in_baseline(
         "runtime_config_hash": "test-runtime-hash",
         "command": "uv run pytest -m live_eval",
         "embedding_model_id": "BAAI/bge-small-en-v1.5",
-        "embedding_model_version": fastembed_version,
+        "embedding_model_version": runtime_versions,
         "reranker_model_id": "Xenova/ms-marco-MiniLM-L-6-v2",
-        "reranker_model_version": fastembed_version,
+        "reranker_model_version": runtime_versions,
         "archon_search_version": archon_version,
         "captured_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
@@ -118,7 +124,7 @@ async def test_calibration_procedure(
     """Full calibration workflow: run eval, build baseline dict, round-trip via load_baseline."""
     report = await run_eval_suite(live_corpus_root, live_runtime_cfg_path, backend="live")
 
-    fastembed_version = importlib.metadata.version("fastembed")
+    runtime_versions = _runtime_versions()
     archon_version = importlib.metadata.version("archon-search")
     captured_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -128,9 +134,9 @@ async def test_calibration_procedure(
         "runtime_config_hash": "calibration-runtime",
         "command": "uv run pytest -m live_eval",
         "embedding_model_id": "BAAI/bge-small-en-v1.5",
-        "embedding_model_version": fastembed_version,
+        "embedding_model_version": runtime_versions,
         "reranker_model_id": "Xenova/ms-marco-MiniLM-L-6-v2",
-        "reranker_model_version": fastembed_version,
+        "reranker_model_version": runtime_versions,
         "archon_search_version": archon_version,
         "captured_at": captured_at,
     }

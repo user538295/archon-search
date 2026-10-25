@@ -1,20 +1,20 @@
 """Two-stage device probe for the graph NER model (Task BE-14).
 
 Stage 1 is a free, pre-download availability check: it reports what torch
-device ``[graph].providers`` *would* resolve to, without loading any model.
+device ``[graph].device`` *would* resolve to, without loading any model.
 Stage 2 is the real validation — it rides the optional pre-warm entry (BE-8)
 rather than a mandatory smoke-load, and reports the ACTUAL resolved device
 that pre-warm landed on (or a neutral "not yet validated" status if pre-warm
 never ran).
 
-FE-5 (the wizard-facing offer built on top of this) is a separate, not-yet-
-implemented task — this module only produces the probe result it will consume.
+The wizard-facing offer built on top of this lives in ``installer.py``; this
+module only produces the probe result it consumes.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from archon_search.torch_device import requests_accelerator, resolve_torch_device
+from archon_search.torch_runtime import resolve_device
 
 from .provisioning import (
     DEVICE_PROBE_NOT_YET_VALIDATED,
@@ -23,12 +23,13 @@ from .provisioning import (
 )
 
 
-def probe_device_availability(providers: list[str] | None) -> str:
-    """Stage 1 — free pre-download check: the torch device providers *would* resolve to.
+def probe_device_availability(device: str) -> str:
+    """Stage 1 — free pre-download check: the torch device *device* would resolve to.
 
-    Never loads a model, never fails.
+    Never loads a model. *device* is a ``[graph].device`` setting
+    (``cpu|auto|mps|cuda``); an accelerator this host lacks resolves to ``cpu``.
     """
-    return resolve_torch_device(providers)
+    return resolve_device(device)
 
 
 @dataclass(frozen=True)
@@ -81,40 +82,40 @@ class DeviceProbeResult:
 
 
 def probe_device_validation(
-    providers: list[str] | None, prewarm_resolved_device: str | None
+    device: str, prewarm_resolved_device: str | None
 ) -> DeviceProbeResult:
     """Stage 2 — real validation riding the optional pre-warm (BE-8).
 
+    ``device`` is the ``[graph].device`` candidate (``cpu|auto|mps|cuda``).
     ``prewarm_resolved_device`` is whatever ``_prewarm_graph_model`` (via
     ``_prewarm_models``) actually returned: the real torch device it landed on,
     or ``None`` if pre-warm did not run at all, was skipped, or failed.
 
     - Pre-warm did not run/was skipped/failed: reports ``not_yet_validated``
-      only if no non-CPU device was configured (nothing to protect against) —
-      but a non-CPU device configured while pre-warm produced nothing is
-      itself treated as an unavailable-device failure (see below), because the
+      only if *device* is ``cpu`` (nothing to protect against) — but an
+      accelerator requested while pre-warm produced nothing is itself treated
+      as an unavailable-device failure (see below), because the
       accelerator-offer principle must never be silently skipped when a
       failure actually happened.
-    - Pre-warm ran and resolved to CPU while a non-CPU device was configured
-      (a step-down), or pre-warm failed outright while a non-CPU device was
-      configured: reports ``ProvisionFailureKind.conflicting_onnx_runtimes``
-      (the repurposed device-unavailable category) — never silently CPU.
+    - Pre-warm ran and resolved to CPU while an accelerator was requested
+      (a step-down), or pre-warm failed outright while one was requested:
+      reports ``ProvisionFailureKind.device_unavailable`` — never silently CPU.
     - Otherwise (pre-warm ran and resolved to whatever was actually requested,
-      including plain CPU with nothing configured): reports the literal
+      including plain CPU with nothing requested): reports the literal
       resolved device.
     """
-    # Config INTENT, not host availability: resolve_torch_device already steps a
-    # configured-but-unavailable accelerator down to CPU, so keying off it would
-    # silently treat "host lacks the device" as "nothing configured" and skip the
-    # failure. requests_accelerator reports what the providers list asked for.
-    configured_non_cpu = requests_accelerator(providers)
+    # Config INTENT, not host availability: resolve_device already steps a
+    # requested-but-unavailable accelerator down to CPU, so keying off it would
+    # silently treat "host lacks the device" as "nothing requested" and skip the
+    # failure. The setting itself reports what was asked for.
+    requested_accelerator = device != TORCH_DEVICE_CPU
 
     if prewarm_resolved_device is None:
-        if configured_non_cpu:
-            return DeviceProbeResult.failed(ProvisionFailureKind.conflicting_onnx_runtimes)
+        if requested_accelerator:
+            return DeviceProbeResult.failed(ProvisionFailureKind.device_unavailable)
         return DeviceProbeResult.not_validated()
 
-    if configured_non_cpu and prewarm_resolved_device == TORCH_DEVICE_CPU:
-        return DeviceProbeResult.failed(ProvisionFailureKind.conflicting_onnx_runtimes)
+    if requested_accelerator and prewarm_resolved_device == TORCH_DEVICE_CPU:
+        return DeviceProbeResult.failed(ProvisionFailureKind.device_unavailable)
 
     return DeviceProbeResult.resolved(prewarm_resolved_device)

@@ -5546,8 +5546,8 @@ class TestTask93PerCollectionEmbedderAtIngestSites:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("path", ["initial_sync", "file_add"])
-    async def test_sync_ingest_forwards_configured_providers(self, tmp_path, path):
-        """[database] providers reach make_embedder — the re-embed path is not CPU-only."""
+    async def test_sync_ingest_forwards_configured_device(self, tmp_path, path):
+        """[database].device reaches make_embedder — the re-embed path honours the configured device."""
         from archon_search.collection_meta import CollectionMeta
         from archon_search.progress import IndexingStateStore
         from archon_search.sync import SearchCollectionSync
@@ -5566,7 +5566,7 @@ class TestTask93PerCollectionEmbedderAtIngestSites:
                 pipeline,
                 state_store=state_store,
                 chunk_size=256,
-                providers=["CoreMLExecutionProvider"],
+                device="mps",
             )
 
             if path == "initial_sync":
@@ -5582,13 +5582,11 @@ class TestTask93PerCollectionEmbedderAtIngestSites:
                     file_mtimes={}, meta=meta,
                 )
 
-        mock_make_embedder.assert_called_once_with(
-            "model-X", providers=["CoreMLExecutionProvider"]
-        )
+        mock_make_embedder.assert_called_once_with("model-X", device="mps")
 
     @pytest.mark.asyncio
-    async def test_sync_ingest_defaults_providers_to_none(self, tmp_path):
-        """No providers configured → make_embedder gets None (CPU), not an empty list."""
+    async def test_sync_ingest_defaults_device_to_auto(self, tmp_path):
+        """No device configured → make_embedder gets the ``auto`` setting."""
         from archon_search.collection_meta import CollectionMeta
         from archon_search.progress import CollectionProgress as CP, IndexingStatus as IS
         from archon_search.progress import IndexingStateStore
@@ -5604,14 +5602,14 @@ class TestTask93PerCollectionEmbedderAtIngestSites:
 
         with patch("archon_search.sync.make_embedder") as mock_make_embedder:
             syncer = SearchCollectionSync(
-                pipeline, state_store=state_store, chunk_size=256, providers=[]
+                pipeline, state_store=state_store, chunk_size=256
             )
             await syncer._ingest_collection(
                 "testcol", col_dir, progress_cb=None,
                 CollectionProgress=CP, IndexingStatus=IS, meta=meta,
             )
 
-        assert mock_make_embedder.call_args.kwargs["providers"] is None
+        mock_make_embedder.assert_called_once_with("model-X", device="auto")
 
     @pytest.mark.asyncio
     async def test_sync_ingest_creates_embedder_once_per_cycle_not_per_event(self, tmp_path):

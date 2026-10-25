@@ -171,7 +171,7 @@ uv run pytest --no-cov tests/eval/ -q
 
 ## Live eval lane
 
-The `live_eval` pytest marker runs the eval corpus through real fastembed and cross-encoder model weights. It is separate from the deterministic `eval` marker — use it for CI quality checks on tag push and for calibrating the live baseline.
+The `live_eval` pytest marker runs the eval corpus through real PyTorch embedder and cross-encoder model weights. It is separate from the deterministic `eval` marker — use it for CI quality checks on tag push and for calibrating the live baseline.
 
 ### Directory structure
 
@@ -215,7 +215,7 @@ Before lowering a live threshold, check:
 
 - Was the run on cold or warm model cache? Cold first-run latency is up to 10× warmer.
 - Are the CI host specs comparable to the baseline host? (Runner CPU count, RAM)
-- Did the fastembed or cross-encoder model version change? Update `embedding_model_version` / `reranker_model_version` in the baseline.
+- Did the pinned embedder/reranker revision (`model_specs`) or the torch/transformers version change? Update `embedding_model_version` / `reranker_model_version` in the baseline.
 - Did the eval fixture corpus change? Regenerate the baseline.
 
 ### `live_thresholds.toml` lifecycle
@@ -228,7 +228,7 @@ Live latency numbers are measured on ephemeral GitHub Actions runners under shar
 
 ## Live benchmark lane (C16)
 
-The `live_benchmark` pytest marker runs two hard-gated latency benchmarks using **real fastembed BAAI/bge-small-en-v1.5 and Xenova/ms-marco-MiniLM-L-6-v2 ONNX models** on every PR. `live_benchmark` and `smoke` are the only two markers excluded from the default `uv run pytest` run — see below.
+The `live_benchmark` pytest marker runs two hard-gated latency benchmarks using **real PyTorch BAAI/bge-small-en-v1.5 and cross-encoder/ms-marco-MiniLM-L-6-v2 (registry name `Xenova/ms-marco-MiniLM-L-6-v2`) models on CPU** on every PR. `live_benchmark` and `smoke` are the only two markers excluded from the default `uv run pytest` run — see below.
 
 ### Directory structure
 
@@ -236,25 +236,25 @@ The `live_benchmark` pytest marker runs two hard-gated latency benchmarks using 
 tests/eval/
   live_benchmark/
     __init__.py
-    conftest.py                         # stub removal, thread reset, model-cache skip hook
+    conftest.py                         # thread reset, model-cache skip hook and pin
     test_real_model_search_benchmark.py # two benchmark tests
   live_thresholds.toml                  # [real_model_search] section for live_benchmark
                                         # [quality_floors] section for live_eval
 ```
 
-### Conftest isolation and stub removal
+### Conftest isolation and real backends
 
-`tests/eval/live_benchmark/conftest.py` performs three actions at module load time (before any test import):
+`tests/eval/live_benchmark/conftest.py` does three things:
 
-1. **Stub removal** — removes `fastembed`, `fastembed.rerank`, and `fastembed.rerank.cross_encoder` from `sys.modules` so that `from fastembed import TextEmbedding` resolves to the real package, not the `_FakeTextEmbedding` installed by `tests/_search_stubs.py`.
-2. **Thread reset** — sets `ORT_NUM_THREADS`, `OMP_NUM_THREADS`, and related env vars to `os.cpu_count()`, overriding the single-threaded values from the root conftest.
+1. **Real backends** — the root `tests/conftest.py` stubs `ModelEmbedder.encode` / `ModelReranker.predict` for every test except those carrying the `live_benchmark` (or `live_eval`, `runtime_parity`, `real_torch_backends`) marker, so marked tests run the real PyTorch code path. `test_real_backends_are_active_in_live_benchmark` fails if a stub ever sneaks in.
+2. **Thread reset** — at module load time (before any test import) sets `OMP_NUM_THREADS` and related env vars to `os.cpu_count()`, overriding the single-threaded values from the root conftest.
 3. **Shadow fixture** — defines `_activate_deterministic_eval_backends` as a function-scoped autouse no-op, shadowing the parent `tests/eval/conftest.py` autouse fixture that would otherwise set `ARCHON_SEARCH_EVAL_BACKENDS=1` and inject deterministic stubs into the pipeline.
 
-Because step 1 runs at module level (unconditionally at conftest import), the `live_benchmark` conftest cannot safely co-exist in the same process as the default test suite. This is why `not live_benchmark` is in `addopts` — it is process-isolation, not mere convenience.
+Because step 2 runs at module level (unconditionally at conftest import), the `live_benchmark` conftest cannot safely co-exist in the same process as the default test suite. This is why `not live_benchmark` is in `addopts` — it is process-isolation, not mere convenience.
 
 ### Model-cache skip hook
 
-A session-scoped autouse fixture `_require_model_cache` skips the entire session if either `*bge-small-en-v1.5*` or `*ms-marco-MiniLM-L-6-v2*` entries (exact model ids, so an L-12 reranker does not count) are absent from the fastembed cache directory — `archon_search.paths.get_fastembed_cache_dir()` resolved from the shell environment at session start: `$FASTEMBED_CACHE_PATH` when set, else `<ARCHON_SEARCH_DATA_DIR>/models` (default `~/.archon-search/models`). The skip message names that directory. A function-scoped autouse fixture re-pins `FASTEMBED_CACHE_PATH` to it after the root `tests/conftest.py` fixture deletes the variable, so the real backends load from the directory the guard checked (S493). On developer machines without a prefetched cache, the session skips rather than fails. CI (`archon-search-pr.yml`) exports `FASTEMBED_CACHE_PATH=$HOME/.cache/fastembed` in the prefetch and benchmark steps, so prefetch, the `actions/cache` path, the guard and the load share one directory; the benchmark step also exports `HF_HUB_OFFLINE=1`, so a cache mismatch fails instead of silently downloading.
+A session-scoped autouse fixture `_require_model_cache` skips the entire session unless both models are cached at their pinned revisions: `archon_search.model_store.model_path` must find a complete snapshot (`model.safetensors`, `config.json`, `tokenizer.json`) under `models--BAAI--bge-small-en-v1.5/snapshots/<revision>/` and `models--cross-encoder--ms-marco-MiniLM-L-6-v2/snapshots/<revision>/` in `archon_search.paths.get_models_dir()` resolved from the shell environment at session start (`<ARCHON_SEARCH_DATA_DIR>/models`, default `~/.archon-search/models`). The skip message names that directory. A function-scoped autouse fixture (`_pin_live_models_dir`, `tests/_live_model_cache.py`) links the models dir of the root conftest's isolated per-test data dir at that directory, so the real backends load from the directory the guard checked. On developer machines without a prefetched cache, the session skips rather than fails. CI (`archon-search-pr.yml`) restores the two snapshot directories with `actions/cache` (key named after the pinned revisions), fills them with `python -m tests._live_model_cache`, and runs the benchmark step with `HF_HUB_OFFLINE=1`, so a cache mismatch fails instead of silently downloading.
 
 This is defense-in-depth. The primary protection is the `not live_benchmark` in `addopts` — a developer running `uv run pytest` never loads this conftest at all.
 
@@ -270,15 +270,9 @@ uv run pytest tests/eval/live_benchmark/test_real_model_search_benchmark.py::tes
 
 To prefetch models locally:
 
-```python
-# Run with the same FASTEMBED_CACHE_PATH / ARCHON_SEARCH_DATA_DIR as pytest: without an explicit
-# cache_dir, fastembed would write to <tempdir>/fastembed_cache, which the guard never checks.
-from fastembed import TextEmbedding
-from fastembed.rerank.cross_encoder import TextCrossEncoder
-from archon_search.paths import get_fastembed_cache_dir
-cache_dir = str(get_fastembed_cache_dir())
-TextEmbedding("BAAI/bge-small-en-v1.5", cache_dir=cache_dir)
-TextCrossEncoder("Xenova/ms-marco-MiniLM-L-6-v2", cache_dir=cache_dir)
+```bash
+# Same ARCHON_SEARCH_DATA_DIR as pytest; downloads the two pinned snapshots into <data dir>/models.
+uv run python -m tests._live_model_cache
 ```
 
 ### Calibration procedure
@@ -296,7 +290,7 @@ The thresholds in `tests/eval/live_thresholds.toml` under `[real_model_search]` 
 
 ### Updating thresholds after a legitimate regression
 
-If a fastembed upgrade or model change legitimately increases latency:
+If a torch/transformers upgrade or model revision change legitimately increases latency:
 
 1. Calibrate new thresholds using the procedure above (10 CI runs, median × multiplier).
 2. Update `[real_model_search]` in `live_thresholds.toml` with new values and updated provenance comment.
@@ -305,17 +299,17 @@ If a fastembed upgrade or model change legitimately increases latency:
 ### What the gate catches vs. what it does not
 
 **Catches**:
-- Regressions in fastembed version upgrades (model download path, API changes)
-- ONNX session configuration regressions (thread count, execution provider)
-- Accidental re-introduction of `sys.modules` stubs in the search path
+- Regressions in torch/transformers upgrades or a model revision bump (download path, API changes, CPU throughput)
+- Runtime configuration regressions (thread count, device selection)
+- Accidental stubbing of the model backends in the search path
 - Large latency regressions (threshold = 2× / 3× CI median, so 2× the measured latency will fail)
 
 **Does not catch**:
 - Isolated embedder-only or reranker-only regressions (the steady-state test measures the full pipeline)
 - Embedding batching regressions (single-query benchmark; batching is an ingest-path concern)
-- GPU-specific regressions (CI uses CPU-only ONNX; GPU path requires a GPU runner)
+- GPU-specific regressions (CI uses the CPU; the `cuda`/`mps` paths require a GPU runner)
 - Memory footprint regressions
-- Fresh-process startup cost (the cold-load test re-constructs backends within one process; ONNX shared libraries persist)
+- Fresh-process startup cost (the cold-load test re-constructs backends within one process; imported torch libraries persist)
 
 ## Routing fixture schema (B4)
 
@@ -367,7 +361,7 @@ Adding routing queries or corpus files changes `eval_hash` and `thresholds_hash`
   calling the generator, confirming the fast-path adds zero overhead.
 
 **Measuring recall *improvement* from HyDE** requires `@pytest.mark.live` with
-real fastembed + real Claude API (set `ANTHROPIC_API_KEY` and use the live eval
+real PyTorch models + real Claude API (set `ANTHROPIC_API_KEY` and use the live eval
 lane). The default deterministic eval gate cannot measure semantic uplift because
 the SHA-256 hash embedder is agnostic to LLM-generated hypothesis text.
 
@@ -403,7 +397,7 @@ HyDE fast-path accidentally adding measurable overhead over an unfiltered search
   This is a regression guard against severe pipeline overhead — not a production SLA.
 
 **Measuring recall *improvement* from RAG Fusion** requires `@pytest.mark.live_eval`
-with real fastembed + real Claude API (set `ANTHROPIC_API_KEY` and use the live eval
+with real PyTorch models + real Claude API (set `ANTHROPIC_API_KEY` and use the live eval
 lane in `tests/eval/live/test_live_rag_fusion.py`).  The default deterministic eval
 gate cannot measure semantic uplift because the SHA-256 hash embedder is agnostic to
 LLM-generated variant text.

@@ -41,8 +41,7 @@ def _mock_installer(tmp_path: Path, **extra_patches: Any):
         "archon_search.install.installer._prewarm_models": MagicMock(),
         "archon_search.install.installer._check_disk_space": MagicMock(),
         "archon_search.install.RealInstaller.detect_gpu": MagicMock(return_value=GpuType.NONE),
-        "archon_search.install.RealInstaller.validate_providers": MagicMock(return_value=False),
-        "archon_search.install.RealInstaller.configure_providers": MagicMock(),
+        "archon_search.install.RealInstaller._probe_and_configure_device": MagicMock(return_value=[]),
         "archon_search.install.RealInstaller.write_service_file": MagicMock(),
         "archon_search.install.RealInstaller.load_service": MagicMock(return_value=0),
         "archon_search.install.RealInstaller._wait_for_service": MagicMock(return_value=True),
@@ -82,8 +81,7 @@ def test_run_non_interactive_minimal_skips_preload(tmp_path: Path) -> None:
         patch("archon_search.install.installer._check_disk_space"),
         patch("builtins.input", input_mock),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -150,8 +148,7 @@ def test_run_reinstall_same_profile_is_idempotent(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prewarm_models"),
         patch("archon_search.install.installer._check_disk_space"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -187,7 +184,7 @@ def test_run_reinstall_different_profile_no_force_returns_1(tmp_path: Path) -> N
         patch("archon_search.install.installer._remove_legacy_service"),
         patch("archon_search.install.installer._check_disk_space"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "load_service", load_service_mock),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
         patch.object(BaseInstaller, "_is_service_running", return_value=False),
@@ -231,7 +228,7 @@ def test_run_interactive_guard_confirm_yes_reindexes(tmp_path: Path) -> None:
     existing_db_path.mkdir(parents=True, exist_ok=True)  # simulate an existing index on disk
 
     rmtree_mock = MagicMock()
-    input_mock = MagicMock(return_value="yes")
+    input_mock = MagicMock(side_effect=lambda p="": "yes" if "Type 'yes'" in p else "y")
     load_service_mock = MagicMock(return_value=0)
     with (
         patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
@@ -245,8 +242,7 @@ def test_run_interactive_guard_confirm_yes_reindexes(tmp_path: Path) -> None:
         patch("archon_search.install.installer.get_search_service", return_value=MagicMock()),
         patch("builtins.input", input_mock),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", load_service_mock),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -285,7 +281,7 @@ def test_run_interactive_guard_decline_keeps_config(tmp_path: Path) -> None:
     config_path.write_text(_profile_toml("minimal", False))
 
     rmtree_mock = MagicMock()
-    input_mock = MagicMock(return_value="no")
+    input_mock = MagicMock(side_effect=lambda p="": "no" if "Type 'yes'" in p else "y")
     load_service_mock = MagicMock(return_value=0)
     with (
         patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
@@ -296,7 +292,7 @@ def test_run_interactive_guard_decline_keeps_config(tmp_path: Path) -> None:
         patch("archon_search.install.shutil.rmtree", rmtree_mock),
         patch("builtins.input", input_mock),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "load_service", load_service_mock),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
         patch.object(BaseInstaller, "_is_service_running", return_value=False),
@@ -337,7 +333,7 @@ def test_run_reinstall_different_profile_dry_run_continues(tmp_path: Path, capsy
         patch("archon_search.install.installer._remove_legacy_service"),
         patch("archon_search.install.installer._check_disk_space"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(DryRunInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(DryRunInstaller, "load_service", load_service_mock),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
         patch.object(BaseInstaller, "_is_service_running", return_value=False),
@@ -399,8 +395,7 @@ def test_run_disk_space_failure_returns_1(tmp_path: Path) -> None:
         patch("archon_search.install.installer._remove_legacy_service"),
         patch("archon_search.install.installer._check_disk_space", side_effect=InstallError("Insufficient disk")),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "load_service", load_service_mock),
         patch.object(BaseInstaller, "_is_service_running", return_value=False),
     ):
@@ -447,8 +442,7 @@ def test_run_prewarm_failure_returns_1(tmp_path: Path) -> None:
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.shutil.copy2", side_effect=spy_copy2),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -490,8 +484,7 @@ def test_run_fresh_install_prewarm_failure_cleans_up_config(tmp_path: Path) -> N
         patch("archon_search.install.installer._prewarm_models", side_effect=InstallError("Download failed")),
         patch("archon_search.install.installer._check_disk_space"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -523,7 +516,7 @@ def test_run_prewarm_failure_does_not_write_the_server_key(
         patch("archon_search.install.installer._prewarm_models", side_effect=InstallError("cannot be loaded")),
         patch("archon_search.install.installer._check_disk_space"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_server_key") as write_server_key,
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
@@ -579,7 +572,7 @@ def _real_prewarm_run_patches(config_path: Path, tmp_path: Path, load_service: M
         patch("archon_search.install.installer._remove_legacy_service"),
         patch("archon_search.install.installer._check_disk_space"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", load_service),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -590,24 +583,23 @@ def _real_prewarm_run_patches(config_path: Path, tmp_path: Path, load_service: M
 def test_run_fresh_install_model_load_failure_exits_1_naming_model_and_cause(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """S671: the embedder's files download but onnxruntime cannot build a session.
+    """S671: the embedder's files download but PyTorch cannot load it.
     The wizard must fail at install time — exit 1, name the model and the cause,
     remove the fresh config — rather than start a service whose every ingest fails."""
-    import sys
     from contextlib import ExitStack
 
     from archon_search.profiles import get_profile
-    from tests.test_install_prewarm import _fastembed_cls, _fastembed_modules
 
     config_path = tmp_path / "archon-search.toml"
-    load_error = "[ONNXRuntimeError] : 1 : FAIL : External data path escapes model directory."
-    fastembed = _fastembed_modules(
-        _fastembed_cls(session_error=RuntimeError(load_error)), _fastembed_cls()
-    )
+    load_error = "External data path escapes model directory."
+    embedder_cls = MagicMock()
+    embedder_cls.return_value.encode.side_effect = RuntimeError(load_error)
     load_service = MagicMock(return_value=0)
 
     with ExitStack() as stack:
-        stack.enter_context(patch.dict(sys.modules, fastembed))
+        stack.enter_context(patch("archon_search.install.prewarm.ensure_model"))
+        stack.enter_context(patch("archon_search.install.prewarm.ModelEmbedder", embedder_cls))
+        stack.enter_context(patch("archon_search.install.prewarm.ModelReranker"))
         for p in _real_prewarm_run_patches(config_path, tmp_path, load_service):
             stack.enter_context(p)
         installer = create_installer(config_file=str(config_path))
@@ -629,21 +621,20 @@ def test_run_reranker_load_failure_warns_and_starts_service(
 ) -> None:
     """S202: a reranker that cannot load does not fail the install — the service starts,
     and the warning names the reranker and the cause."""
-    import sys
     from contextlib import ExitStack
 
     from archon_search.profiles import get_profile
-    from tests.test_install_prewarm import _fastembed_cls, _fastembed_modules
 
     config_path = tmp_path / "archon-search.toml"
-    load_error = "[ONNXRuntimeError] : 7 : INVALID_PROTOBUF : Protobuf parsing failed."
-    fastembed = _fastembed_modules(
-        _fastembed_cls(), _fastembed_cls(inference_error=RuntimeError(load_error))
-    )
+    load_error = "Protobuf parsing failed."
+    reranker_cls = MagicMock()
+    reranker_cls.return_value.predict.side_effect = RuntimeError(load_error)
     load_service = MagicMock(return_value=0)
 
     with ExitStack() as stack, caplog.at_level(logging.WARNING, logger="archon_search.install"):
-        stack.enter_context(patch.dict(sys.modules, fastembed))
+        stack.enter_context(patch("archon_search.install.prewarm.ensure_model"))
+        stack.enter_context(patch("archon_search.install.prewarm.ModelEmbedder"))
+        stack.enter_context(patch("archon_search.install.prewarm.ModelReranker", reranker_cls))
         for p in _real_prewarm_run_patches(config_path, tmp_path, load_service):
             stack.enter_context(p)
         installer = create_installer(config_file=str(config_path))
@@ -681,8 +672,7 @@ def test_run_force_reinstall_prewarm_failure_does_not_restore_old_backup(tmp_pat
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer.get_search_service", return_value=MagicMock()),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -734,8 +724,7 @@ def test_run_force_delete_db_different_profile_succeeds(tmp_path: Path) -> None:
         patch("archon_search.install.shutil.rmtree", rmtree_mock),
         patch("archon_search.install.installer.get_search_service", return_value=MagicMock()),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -777,8 +766,7 @@ def test_run_creates_log_directory(tmp_path: Path) -> None:
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer.get_data_dir", return_value=fake_data_dir),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -818,8 +806,7 @@ def test_run_does_not_call_legacy_service_cleanup(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prewarm_models"),
         patch("archon_search.install.installer._check_disk_space"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -864,7 +851,7 @@ def test_run_guard_abort_does_not_remove_legacy_service(tmp_path: Path) -> None:
         patch("archon_search.install.installer._remove_legacy_service", remove_legacy_mock),
         patch("archon_search.install.installer._check_disk_space"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", load_service_mock),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1039,8 +1026,7 @@ def test_run_prompts_multilingual_question(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
         patch("builtins.input", return_value="y"),  # "Proceed?" prompt
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1073,8 +1059,7 @@ def test_run_multilingual_flag_skips_prompt(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_fasttext_license"),
         patch("archon_search.install.installer._download_fasttext_model"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1107,8 +1092,7 @@ def test_run_optional_features_prompted(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", prompt_features_mock),
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1141,8 +1125,7 @@ def test_run_code_extra_installed_when_requested(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
         patch("archon_search.install.installer._install_code_extra", install_code_mock),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1174,8 +1157,7 @@ def test_run_code_install_failure_is_non_fatal(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
         patch("archon_search.install.installer._install_code_extra", side_effect=InstallError("pip failed")),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1188,7 +1170,7 @@ def test_run_code_install_failure_is_non_fatal(tmp_path: Path) -> None:
 
 
 def test_run_gpu_confirm_decline_writes_cpu(tmp_path: Path) -> None:
-    """disable_gpu=True → providers written as [] in config."""
+    """disable_gpu=True → device = 'cpu' written to [database] in config."""
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
 
@@ -1205,8 +1187,6 @@ def test_run_gpu_confirm_decline_writes_cpu(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", return_value=features),
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=False),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.METAL),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1218,7 +1198,7 @@ def test_run_gpu_confirm_decline_writes_cpu(tmp_path: Path) -> None:
     assert rc == 0
     import tomlkit
     doc = tomlkit.parse(config_path.read_text())
-    assert doc["database"]["providers"] == []
+    assert doc["database"]["device"] == "cpu"
 
 
 def test_run_non_interactive_uses_defaults(tmp_path: Path) -> None:
@@ -1242,8 +1222,7 @@ def test_run_non_interactive_uses_defaults(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", prompt_features_mock),
         patch("archon_search.install.installer._prompt_gpu_confirm", prompt_gpu_mock),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1281,8 +1260,7 @@ def test_run_disable_reranker_writes_empty_string(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", return_value=features),
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1315,8 +1293,7 @@ def test_run_watch_written_to_config(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", return_value=features),
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1352,8 +1329,7 @@ def test_run_force_reinstall_preserves_features(tmp_path: Path) -> None:
         patch("archon_search.install.installer.get_search_service", return_value=MagicMock()),
         patch("archon_search.install.shutil.rmtree", MagicMock()),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1371,7 +1347,7 @@ def test_run_force_reinstall_preserves_features(tmp_path: Path) -> None:
 
 
 def test_run_interactive_gpu_decline_writes_cpu(tmp_path: Path) -> None:
-    """Interactive mode, detect_gpu() returns METAL, user declines → config has database.providers = []."""
+    """Interactive mode, detect_gpu() returns METAL, user declines → config has database.device = 'cpu'."""
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
 
@@ -1389,8 +1365,6 @@ def test_run_interactive_gpu_decline_writes_cpu(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=False),  # user declines GPU
         patch("builtins.input", return_value="y"),  # "Proceed?" prompt
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.METAL),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1402,7 +1376,7 @@ def test_run_interactive_gpu_decline_writes_cpu(tmp_path: Path) -> None:
     assert rc == 0
     import tomlkit as _tomlkit
     doc = _tomlkit.parse(config_path.read_text())
-    assert doc["database"]["providers"] == []
+    assert doc["database"]["device"] == "cpu"
 
 
 # ---------------------------------------------------------------------------
@@ -1414,7 +1388,7 @@ def _make_ordered_installer(tmp_path: Path):
 
     Records the order in which _prompt_gpu_confirm, _prompt_jina_license,
     _prompt_fasttext_license, _prompt_optional_features, _write_profile_config,
-    and configure_providers are called into a shared list.
+    and _probe_and_configure_device are called into a shared list.
     """
     from archon_search.install import WizardFeatures
     config_path = tmp_path / "archon-search.toml"
@@ -1455,8 +1429,7 @@ def _make_ordered_installer(tmp_path: Path):
 
     method_patches = {
         "detect_gpu": MagicMock(return_value=GpuType.NONE),
-        "validate_providers": MagicMock(return_value=False),
-        "configure_providers": MagicMock(side_effect=_log_side_effect("configure_providers")),
+        "_probe_and_configure_device": MagicMock(side_effect=_log_side_effect("probe_device", [])),
         "write_service_file": MagicMock(),
         "load_service": MagicMock(return_value=0),
         "_wait_for_service": MagicMock(return_value=True),
@@ -1544,17 +1517,13 @@ def test_gpu_prompt_before_config_write(tmp_path: Path) -> None:
     )
 
 
-def test_configure_providers_after_config_write(tmp_path: Path) -> None:
-    """configure_providers must be called after _write_profile_config (idempotent branch)."""
+def test_device_probe_after_config_write(tmp_path: Path) -> None:
+    """_probe_and_configure_device must run after _write_profile_config (idempotent branch)."""
     config_path, call_log, patches, method_patches = _make_ordered_installer(tmp_path)
 
     # Write existing config so idempotent (Branch C) path is taken
     from archon_search.install import _profile_toml
     config_path.write_text(_profile_toml("minimal", False))
-
-    # Use CUDA GPU with a passing probe so configure_providers actually fires
-    method_patches["detect_gpu"] = MagicMock(return_value=GpuType.CUDA)
-    method_patches["validate_providers"] = MagicMock(return_value=True)
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
@@ -1569,14 +1538,14 @@ def test_configure_providers_after_config_write(tmp_path: Path) -> None:
 
     assert rc == 0
     assert "write_profile_config" in call_log
-    assert "configure_providers" in call_log
-    assert call_log.index("write_profile_config") < call_log.index("configure_providers"), (
-        f"Expected write_profile_config before configure_providers, got: {call_log}"
+    assert "probe_device" in call_log
+    assert call_log.index("write_profile_config") < call_log.index("probe_device"), (
+        f"Expected write_profile_config before probe_device, got: {call_log}"
     )
 
 
-def test_graph_providers_are_settled_after_the_prewarm(tmp_path: Path) -> None:
-    """FE-5 Step 14b: [graph].providers is settled from the pre-warm's own device,
+def test_graph_device_is_settled_after_the_prewarm(tmp_path: Path) -> None:
+    """FE-5 Step 14b: [graph].device is settled from the pre-warm's own device,
     and only after pre-warm — stage 2 rides it, so the order is load-bearing."""
     from archon_search.install import WizardFeatures
     config_path, call_log, patches, method_patches = _make_ordered_installer(tmp_path)
@@ -1592,8 +1561,8 @@ def test_graph_providers_are_settled_after_the_prewarm(tmp_path: Path) -> None:
     )
     patches["archon_search.install.installer._install_graph_extra"] = MagicMock()
     method_patches["preload_models"] = MagicMock(side_effect=_log("preload_models", "cuda"))
-    graph_mock = MagicMock(side_effect=_log("settle_graph_providers"))
-    method_patches["_configure_graph_providers"] = graph_mock
+    graph_mock = MagicMock(side_effect=_log("settle_graph_device"))
+    method_patches["_configure_graph_device"] = graph_mock
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
@@ -1601,21 +1570,21 @@ def test_graph_providers_are_settled_after_the_prewarm(tmp_path: Path) -> None:
         with patch.multiple(RealInstaller, **method_patches):
             rc = create_installer(config_file=str(config_path)).run(
                 non_interactive=True, profile="minimal",
-                graph_providers=["CUDAExecutionProvider"],
+                graph_device="cuda",
             )
 
     assert rc == 0
-    assert call_log.index("preload_models") < call_log.index("settle_graph_providers"), call_log
-    candidates, _availability, prewarm_device, non_interactive = graph_mock.call_args.args
-    assert candidates == ["CUDAExecutionProvider"], "--graph-providers must reach the probe"
+    assert call_log.index("preload_models") < call_log.index("settle_graph_device"), call_log
+    candidate, _availability, prewarm_device, non_interactive = graph_mock.call_args.args
+    assert candidate == "cuda", "--graph-device must reach the probe"
     assert prewarm_device == "cuda", "the pre-warm's resolved device must be passed"
     assert non_interactive is True
-    # _availability is probe_device_availability(candidates) — host-dependent, so unasserted.
+    # _availability is probe_device_availability(candidate) — host-dependent, so unasserted.
 
 
-def test_graph_extra_and_graph_providers_reach_the_prewarm(tmp_path: Path) -> None:
+def test_graph_extra_and_graph_device_reach_the_prewarm(tmp_path: Path) -> None:
     """With the graph extra installed, run() hands pre-warm the graph flag and the
-    --graph-providers candidates, so the graph model loads where stage 2 probes it."""
+    --graph-device candidate, so the graph model loads where stage 2 probes it."""
     from archon_search.install import WizardFeatures
     config_path, _call_log, patches, method_patches = _make_ordered_installer(tmp_path)
 
@@ -1625,7 +1594,7 @@ def test_graph_extra_and_graph_providers_reach_the_prewarm(tmp_path: Path) -> No
     patches["archon_search.install.installer._install_graph_extra"] = MagicMock()
     prewarm_mock = MagicMock(return_value="cuda")
     patches["archon_search.install.installer._prewarm_models"] = prewarm_mock
-    method_patches["_configure_graph_providers"] = MagicMock()
+    method_patches["_configure_graph_device"] = MagicMock()
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
@@ -1633,18 +1602,18 @@ def test_graph_extra_and_graph_providers_reach_the_prewarm(tmp_path: Path) -> No
         with patch.multiple(RealInstaller, **method_patches):
             rc = create_installer(config_file=str(config_path)).run(
                 non_interactive=True, profile="minimal",
-                graph_providers=["CUDAExecutionProvider"],
+                graph_device="cuda",
             )
 
     assert rc == 0
     prewarm_mock.assert_called_once()
     assert prewarm_mock.call_args.kwargs == {
         "install_graph_extra": True,
-        "graph_providers": ["CUDAExecutionProvider"],
+        "graph_device": "cuda",
     }
 
 
-def test_a_failure_settling_graph_providers_never_fails_the_install(tmp_path: Path) -> None:
+def test_a_failure_settling_graph_device_never_fails_the_install(tmp_path: Path) -> None:
     """Step 14b is an auxiliary write: it logs and continues, it does not abort run()."""
     from archon_search.install import WizardFeatures
     config_path, _call_log, patches, method_patches = _make_ordered_installer(tmp_path)
@@ -1654,7 +1623,7 @@ def test_a_failure_settling_graph_providers_never_fails_the_install(tmp_path: Pa
     )
     patches["archon_search.install.installer._install_graph_extra"] = MagicMock()
     method_patches["preload_models"] = MagicMock(return_value="cuda")
-    method_patches["_configure_graph_providers"] = MagicMock(side_effect=OSError("disk gone"))
+    method_patches["_configure_graph_device"] = MagicMock(side_effect=OSError("disk gone"))
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
@@ -1667,9 +1636,9 @@ def test_a_failure_settling_graph_providers_never_fails_the_install(tmp_path: Pa
     assert rc == 0
 
 
-def test_graph_providers_are_not_settled_when_prewarm_is_skipped(tmp_path: Path) -> None:
+def test_graph_device_is_not_settled_when_prewarm_is_skipped(tmp_path: Path) -> None:
     """--skip-preload leaves no stage-2 evidence, so nothing is settled and an
-    operator's hand-set [graph].providers survives a re-run."""
+    operator's hand-set [graph].device survives a re-run."""
     from archon_search.install import WizardFeatures
     config_path, _call_log, patches, method_patches = _make_ordered_installer(tmp_path)
 
@@ -1678,7 +1647,7 @@ def test_graph_providers_are_not_settled_when_prewarm_is_skipped(tmp_path: Path)
     )
     patches["archon_search.install.installer._install_graph_extra"] = MagicMock()
     graph_mock = MagicMock()
-    method_patches["_configure_graph_providers"] = graph_mock
+    method_patches["_configure_graph_device"] = graph_mock
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
@@ -1692,8 +1661,8 @@ def test_graph_providers_are_not_settled_when_prewarm_is_skipped(tmp_path: Path)
     graph_mock.assert_not_called()
 
 
-def test_graph_providers_are_not_settled_when_the_graph_extra_failed(tmp_path: Path) -> None:
-    """A failed graph install reverts graph.enabled — providers must not be written
+def test_graph_device_is_not_settled_when_the_graph_extra_failed(tmp_path: Path) -> None:
+    """A failed graph install reverts graph.enabled — the device must not be written
     into a config whose graph is now off."""
     from archon_search.install import WizardFeatures
     from archon_search.install.errors import InstallError
@@ -1708,7 +1677,7 @@ def test_graph_providers_are_not_settled_when_the_graph_extra_failed(tmp_path: P
     patches["archon_search.install.installer._revert_graph_enabled_flag"] = MagicMock()
     method_patches["preload_models"] = MagicMock(return_value="cuda")
     graph_mock = MagicMock()
-    method_patches["_configure_graph_providers"] = graph_mock
+    method_patches["_configure_graph_device"] = graph_mock
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
@@ -1740,8 +1709,7 @@ def test_reorder_non_interactive_still_succeeds(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", return_value=features),
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1804,8 +1772,7 @@ def test_overwrite_warning_triggers_on_hand_edit(tmp_path: Path) -> None:
         # input() used for: overwrite prompt ("y") and Proceed? ("y")
         patch("builtins.input", return_value="y"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1841,8 +1808,7 @@ def test_overwrite_warning_aborts_on_n(tmp_path: Path) -> None:
         # "n" causes the overwrite prompt to abort
         patch("builtins.input", return_value="n"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1874,8 +1840,7 @@ def test_overwrite_warning_bak_not_created_on_n(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", return_value=WizardFeatures()),
         patch("builtins.input", return_value="n"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1908,8 +1873,7 @@ def test_overwrite_no_warning_on_clean_config(tmp_path: Path) -> None:
         patch("archon_search.install.installer._detect_config_hand_edits", return_value=False),
         patch("builtins.input", input_mock),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1950,8 +1914,7 @@ def test_overwrite_non_interactive_auto_accepts(tmp_path: Path) -> None:
         patch("archon_search.install.installer._detect_config_hand_edits", return_value=True),
         patch("builtins.input", input_mock),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -1985,8 +1948,7 @@ def test_overwrite_non_interactive_bak_still_created(tmp_path: Path) -> None:
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer._detect_config_hand_edits", return_value=True),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -2020,8 +1982,7 @@ def test_overwrite_dry_run_no_prompt_no_writes(tmp_path: Path) -> None:
         patch("archon_search.install.installer._detect_config_hand_edits", return_value=True),
         patch("builtins.input", input_mock),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(DryRunInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(DryRunInstaller, "write_service_file"),
         patch.object(DryRunInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -2059,8 +2020,7 @@ def test_bak_content_integrity(tmp_path: Path) -> None:
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer._detect_config_hand_edits", return_value=True),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -2096,8 +2056,7 @@ def test_overwrite_eof_on_prompt_aborts(tmp_path: Path, capsys) -> None:
         # EOFError on the overwrite prompt (piped/non-tty stdin)
         patch("builtins.input", side_effect=EOFError),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -2129,8 +2088,7 @@ def test_overwrite_bak_location_printed_on_success(tmp_path: Path, capsys) -> No
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer._detect_config_hand_edits", return_value=True),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -2181,8 +2139,7 @@ def _run_with_key_source(
         patch("archon_search.key_manager.load_or_generate_key", return_value=(key, source)),
         patch("archon_search.install.installer.load_or_generate_key", return_value=(key, source)),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -2264,11 +2221,8 @@ def test_run_success_key_not_printed_in_dry_run(tmp_path: Path, capsys) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 9 GPU provider configuration → the config Step 14 pre-warms (S671)
+# Step 9 device configuration → the config Step 14 pre-warms (S671)
 # ---------------------------------------------------------------------------
-
-_COREML = "CoreMLExecutionProvider"
-_CUDA = "CUDAExecutionProvider"
 
 
 @contextmanager
@@ -2279,7 +2233,11 @@ def _gpu_patches(
     prewarm_mock: MagicMock | None = None,
     gpu: GpuType = GpuType.METAL,
 ):
-    """Patch set for a GPU wizard run; Step 9's provider writes reach the real config."""
+    """Patch set for a GPU wizard run; Step 9's device writes reach the real config.
+
+    *validate_mock* stands in for the accelerator validation (the model probe) — the
+    one seam that would otherwise load real PyTorch models.
+    """
     from contextlib import ExitStack
 
     patches = (
@@ -2290,7 +2248,7 @@ def _gpu_patches(
         patch("archon_search.install.installer._prewarm_models", prewarm_mock or MagicMock()),
         patch("archon_search.install.installer._check_disk_space"),
         patch.object(BaseInstaller, "detect_gpu", return_value=gpu),
-        patch.object(BaseInstaller, "validate_providers", validate_mock),
+        patch.object(BaseInstaller, "_accelerator_validated", validate_mock),
         patch.object(RealInstaller, "write_service_file"),
         patch.object(RealInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -2302,9 +2260,9 @@ def _gpu_patches(
         yield
 
 
-def test_wizard_metal_checks_coreml_once_before_prewarm(tmp_path: Path) -> None:
-    """Metal runs the Step 9 CoreML check exactly once, before pre-warm; pre-warm itself
-    then loads both models under the providers it wrote, so no second validation follows."""
+def test_wizard_metal_validates_once_before_prewarm(tmp_path: Path) -> None:
+    """Metal runs the Step 9 accelerator check exactly once, before pre-warm; pre-warm itself
+    then loads both models on the device it wrote, so no second validation follows."""
     config_path = tmp_path / "archon-search.toml"
     order: list[str] = []
     validate_mock = MagicMock(side_effect=lambda *_args: order.append("validate") or True)
@@ -2315,35 +2273,32 @@ def test_wizard_metal_checks_coreml_once_before_prewarm(tmp_path: Path) -> None:
         rc = installer.run(non_interactive=True, profile="balanced", skip_preload=False)
 
     assert rc == 0
-    validate_mock.assert_called_once_with([_COREML])
+    validate_mock.assert_called_once_with()
     assert order == ["validate", "prewarm"]
 
 
 @pytest.mark.parametrize(
-    ("gpu", "probe_ok", "use_default_path", "expected_providers", "expected_reranker"),
+    ("gpu", "probe_ok", "use_default_path", "expected_device"),
     [
-        (GpuType.METAL, True, False, [_COREML], [_COREML]),
-        (GpuType.METAL, True, True, [_COREML], [_COREML]),
-        (GpuType.METAL, False, False, [_COREML], None),
-        (GpuType.CUDA, True, False, [_CUDA], [_CUDA]),
-        (GpuType.CUDA, False, False, [], None),
+        (GpuType.METAL, True, False, "auto"),
+        (GpuType.METAL, True, True, "auto"),
+        (GpuType.METAL, False, False, "cpu"),
+        (GpuType.CUDA, True, False, "auto"),
+        (GpuType.CUDA, False, False, "cpu"),
     ],
-    ids=["metal-combined", "metal-combined-default-path", "metal-split-coreml", "cuda", "cuda-probe-fails"],
+    ids=["metal", "metal-default-path", "metal-probe-fails", "cuda", "cuda-probe-fails"],
 )
-def test_wizard_prewarms_the_providers_step_9_wrote(
+def test_wizard_prewarms_the_device_step_9_wrote(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     gpu: GpuType,
     probe_ok: bool,
     use_default_path: bool,
-    expected_providers: list[str],
-    expected_reranker: list[str] | None,
+    expected_device: str,
 ) -> None:
-    """Step 9 rewrites [database].providers (and, on the split CoreML path,
-    reranker_providers = []; on a failed CUDA probe, providers = []) after Step 8b loaded
-    the config; pre-warm must load the models under what the service will read, not the
-    stale config."""
-    from archon_search.config import resolve_reranker_providers
+    """Step 9 rewrites [database].device ('auto' when the accelerator validated, 'cpu'
+    otherwise) after Step 8b loaded the config; pre-warm must load the models on what the
+    service will read, not the stale config."""
     from archon_search.install import _prewarm_timeout
     from archon_search.profiles import get_profile
 
@@ -2352,12 +2307,9 @@ def test_wizard_prewarms_the_providers_step_9_wrote(
         monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(config_path))
     prewarm_mock = MagicMock(return_value=None)
 
-    with (
-        _gpu_patches(
-            config_path, tmp_path / "fake.plist", MagicMock(return_value=probe_ok),
-            prewarm_mock, gpu=gpu,
-        ),
-        patch.object(BaseInstaller, "validate_embedder_only", return_value=True),
+    with _gpu_patches(
+        config_path, tmp_path / "fake.plist", MagicMock(return_value=probe_ok),
+        prewarm_mock, gpu=gpu,
     ):
         installer = create_installer(config_file=None if use_default_path else str(config_path))
         rc = installer.run(non_interactive=True, profile="minimal", skip_preload=False)
@@ -2365,15 +2317,28 @@ def test_wizard_prewarms_the_providers_step_9_wrote(
     assert rc == 0
     prewarm_mock.assert_called_once()
     cfg, timeout = prewarm_mock.call_args.args
-    assert cfg.providers == expected_providers
-    assert resolve_reranker_providers(cfg) == expected_reranker
+    assert cfg.device == expected_device
     assert timeout == _prewarm_timeout(get_profile("minimal", False))
     assert installer.cfg is cfg
 
 
-def test_wizard_disable_gpu_prewarms_cpu_over_a_previous_coreml_config(tmp_path: Path) -> None:
-    """--disable-gpu on a re-run rewrites [database].providers to [] at Step 9 after
-    Step 8b loaded the previous CoreML config; pre-warm must load on CPU, as the
+def test_wizard_prints_the_device_label_for_an_accepted_accelerator(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """After the probe, a real run with an accepted METAL GPU prints the resolved label."""
+    config_path = tmp_path / "archon-search.toml"
+
+    with _gpu_patches(config_path, tmp_path / "fake.plist", MagicMock(return_value=True)):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
+
+    assert rc == 0
+    assert "  Device:     Apple GPU (mps)" in capsys.readouterr().out
+
+
+def test_wizard_disable_gpu_prewarms_cpu_over_a_previous_accelerator_config(tmp_path: Path) -> None:
+    """--disable-gpu on a re-run rewrites [database].device to 'cpu' at Step 9 after
+    Step 8b loaded the previous 'auto' config; pre-warm must load on CPU, as the
     service will."""
     import tomlkit
 
@@ -2381,7 +2346,7 @@ def test_wizard_disable_gpu_prewarms_cpu_over_a_previous_coreml_config(tmp_path:
 
     config_path = tmp_path / "archon-search.toml"
     doc = tomlkit.parse(_profile_toml("minimal", False))
-    doc["database"]["providers"] = [_COREML]
+    doc["database"]["device"] = "auto"
     config_path.write_text(tomlkit.dumps(doc))
     validate_mock = MagicMock(return_value=True)
     prewarm_mock = MagicMock(return_value=None)
@@ -2395,58 +2360,52 @@ def test_wizard_disable_gpu_prewarms_cpu_over_a_previous_coreml_config(tmp_path:
     assert rc == 0
     validate_mock.assert_not_called()
     prewarm_mock.assert_called_once()
-    assert prewarm_mock.call_args.args[0].providers == []
+    assert prewarm_mock.call_args.args[0].device == "cpu"
+    assert tomlkit.parse(config_path.read_text())["database"]["device"] == "cpu"
 
 
-def test_wizard_coreml_fallback_writes_cpu_providers(tmp_path: Path) -> None:
-    """Both CoreML checks fail → the wizard falls back to CPU by writing providers = [],
-    overriding the CoreML a previous run wrote (the re-run preserves [database].providers)."""
+def test_wizard_accelerator_failure_writes_cpu_device(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failed accelerator check falls back to CPU by writing device = 'cpu',
+    overriding the 'auto' a previous run wrote, and says so."""
     import tomlkit
 
     from archon_search.install import _profile_toml
 
     config_path = tmp_path / "archon-search.toml"
     doc = tomlkit.parse(_profile_toml("minimal", False))
-    doc["database"]["providers"] = [_COREML]
+    doc["database"]["device"] = "auto"
     config_path.write_text(tomlkit.dumps(doc))
 
     with (
+        caplog.at_level(logging.WARNING, logger="archon_search.install"),
         _gpu_patches(config_path, tmp_path / "fake.plist", MagicMock(return_value=False)),
-        patch.object(BaseInstaller, "validate_embedder_only", return_value=False),
     ):
         installer = create_installer(config_file=str(config_path))
         rc = installer.run(non_interactive=True, profile="minimal", skip_preload=False)
 
     assert rc == 0
-    assert tomlkit.parse(config_path.read_text())["database"]["providers"] == []
+    assert tomlkit.parse(config_path.read_text())["database"]["device"] == "cpu"
+    assert "Warning: Apple GPU validation failed — falling back to CPU." in capsys.readouterr().out
+    assert any("Apple GPU validation failed — falling back to CPU" in r.getMessage() for r in caplog.records)
 
 
-def test_wizard_runs_no_provider_check_without_gpu(tmp_path: Path) -> None:
-    """A CPU install has nothing to check at Step 9 (Metal and CUDA probes are covered
-    by test_wizard_prewarms_the_providers_step_9_wrote)."""
+def test_wizard_runs_no_accelerator_check_without_gpu(tmp_path: Path) -> None:
+    """A CPU install has nothing to validate at Step 9 (Metal and CUDA are covered
+    by test_wizard_prewarms_the_device_step_9_wrote); it writes device = 'cpu'."""
+    import tomlkit
+
     config_path = tmp_path / "archon-search.toml"
     validate_mock = MagicMock(return_value=True)
 
-    with (
-        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
-        patch("archon_search.install.installer._legacy_service_path", return_value=tmp_path / "fake.plist"),
-        patch("archon_search.install.installer._remove_legacy_service"),
-        patch("archon_search.install.installer._install_cuda_torch"),
-        patch("archon_search.install.installer._prewarm_models"),
-        patch("archon_search.install.installer._check_disk_space"),
-        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", validate_mock),
-        patch.object(RealInstaller, "configure_providers"),
-        patch.object(RealInstaller, "write_service_file"),
-        patch.object(RealInstaller, "load_service", return_value=0),
-        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
-        patch.object(BaseInstaller, "_is_service_running", return_value=False),
-    ):
+    with _gpu_patches(config_path, tmp_path / "fake.plist", validate_mock, gpu=GpuType.NONE):
         installer = create_installer(config_file=str(config_path))
         rc = installer.run(non_interactive=True, profile="balanced", skip_preload=False)
 
     assert rc == 0
     validate_mock.assert_not_called()
+    assert tomlkit.parse(config_path.read_text())["database"]["device"] == "cpu"
 
 
 # ---------------------------------------------------------------------------
@@ -2479,8 +2438,7 @@ def _multilingual_run_patches(config_path: Path, fake_legacy: Path, **overrides:
 
 _MULTILINGUAL_METHOD_PATCHES = {
     "detect_gpu": MagicMock(return_value=GpuType.NONE),
-    "validate_providers": MagicMock(return_value=False),
-    "configure_providers": MagicMock(),
+    "_probe_and_configure_device": MagicMock(return_value=[]),
     "write_service_file": MagicMock(),
     "load_service": MagicMock(return_value=0),
     "_wait_for_service": MagicMock(return_value=True),

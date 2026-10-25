@@ -47,8 +47,7 @@ def _base_wizard_patches() -> dict:
 
     return {
         "detect_gpu": MagicMock(return_value=GpuType.NONE),
-        "validate_providers": MagicMock(return_value=False),
-        "configure_providers": MagicMock(),
+        "configure_device": MagicMock(),
         "write_service_file": MagicMock(),
         "load_service": MagicMock(return_value=0),
         "_wait_for_service": MagicMock(return_value=True),

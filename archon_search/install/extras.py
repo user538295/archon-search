@@ -218,6 +218,41 @@ def _install_cuda_torch(dry_run: bool = False) -> None:
     click.echo("CUDA torch/torchvision installed.")
 
 
+# A fresh interpreter importing torch is slow on a cold disk; far above any healthy run.
+_CUDA_PROBE_TIMEOUT_SECONDS = 120
+_CUDA_PROBE_SNIPPET = "import torch; print(torch.cuda.is_available())"
+
+
+def _torch_cuda_available() -> bool:
+    """True when this process's PyTorch sees a CUDA device; False when torch is unusable."""
+    try:
+        import torch  # noqa: PLC0415 — lazy: keeps wizard startup free of PyTorch
+
+        return bool(torch.cuda.is_available())
+    except Exception:  # a broken torch install must not abort the wizard
+        return False
+
+
+def _cuda_visible_in_subprocess() -> bool:
+    """True when a fresh interpreter's PyTorch sees a CUDA device.
+
+    The wizard process keeps the torch it imported before ``_install_cuda_torch`` swapped
+    the build, so only a new process can verify the swap. Never raises: a missing
+    interpreter, a timeout or a crash all read as "no CUDA".
+    """
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", _CUDA_PROBE_SNIPPET],
+            capture_output=True,
+            text=True,
+            timeout=_CUDA_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0 and completed.stdout.strip() == "True"
+
+
 # Ten pip/uv-resolved wheels with no pinned URL and no stable byte count across platforms, so
 # this is a declared estimate rather than a measured total: 16.8 MB installed on macOS/arm64
 # (2026-08-31), rounded up for platform variance.
@@ -225,7 +260,7 @@ CODE_EXTRA_SIZE_ESTIMATE = SizeEstimateSpec(name="archon-search[code]", declared
 
 # The graph NER checkpoint is fetched lazily by ``GLiNER.from_pretrained``, never through the
 # digest-pinned provisioning seam, so it declares an estimate too. 1218 MB is the 1,276,776,490
-# byte ONNX export measured during the graph-NER spike — a ballpark for the display and the disk
+# byte export measured during the graph-NER spike — a ballpark for the display and the disk
 # guard, not a verified download size.
 GRAPH_MODEL_SIZE_ESTIMATE = SizeEstimateSpec(
     name="gliner-relex-multi-v1.0", declared_mb=1218, license="Apache-2.0"

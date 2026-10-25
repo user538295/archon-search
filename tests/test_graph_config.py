@@ -115,7 +115,7 @@ def test_graph_config_snapshot(tmp_path: Path) -> None:
         "naive_max_expansion_terms": 20,
         "ner_confidence": 0.5,
         "relation_confidence": 0.75,
-        "providers": None,
+        "device": "cpu",
     }
 
 

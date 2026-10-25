@@ -10,7 +10,7 @@ transitive deps), so CliRunner cannot reliably prove absence — see plan Q4.
 
 Packages guarded:
 - ``claude_agent_sdk`` — deferred into ``_call_haiku()`` by BE-1 (S1, S6)
-- ``fastembed`` — deferred into ``serve()`` via ``run_server`` by BE-2 (S1)
+- ``torch`` / ``transformers`` — deferred into the model loaders; ``serve()`` defers ``run_server`` (BE-2, S1)
 
 NOT guarded:
 - ``mcp`` — enters only via ``server/mcp.py`` (lazy FastMCP mount at serve
@@ -31,7 +31,7 @@ import pytest
 # xdist_group serialises the two tests in this file onto one worker so the
 # module-scoped ``loaded_modules`` fixture is never split across workers.
 # The subprocess spawned here is intentionally lightweight — ``config show``
-# must NOT load fastembed or claude_agent_sdk (that is what the tests prove),
+# must NOT load torch, transformers or claude_agent_sdk (that is what the tests prove),
 # so this is not the ~2 GB model-loading subprocess that caused the 2026-07-05
 # OOM crash.  A unique group name is therefore correct: there is no genuinely
 # heavy-subprocess family to join, and joining a mock-based in-process group
@@ -108,14 +108,14 @@ def _run_lightweight_cmd() -> set[str]:
     # modules at group-build time except ``graph_cmd`` (lazy via
     # _LazyGraphGroup, brief 200).  ``archon_search.cli.serve`` remains eager,
     # so it is always present — use it as the positive control.  If serve.py
-    # is ever lazy-loaded too, update this guard and the fastembed test comment.
+    # is ever lazy-loaded too, update this guard and the PyTorch test comment.
     assert "archon_search.cli.main" in loaded, (
         "Positive control failed: 'archon_search.cli.main' not in sys.modules "
         f"output — the subprocess output may be malformed.\nmodules_line={modules_line!r}"
     )
     assert "archon_search.cli.serve" in loaded, (
         "Positive control failed: 'archon_search.cli.serve' not in sys.modules "
-        "output — main.py no longer eagerly imports serve.py, so the fastembed "
+        "output — main.py no longer eagerly imports serve.py, so the PyTorch "
         "absence guard below would pass vacuously.  Either restore the eager "
         "import or update this test to reflect the new import structure."
     )
@@ -178,23 +178,21 @@ def test_lightweight_cmd_no_graph_cmd_module(loaded_modules: set[str]) -> None:
     )
 
 
-def test_lightweight_cmd_no_fastembed(loaded_modules: set[str]) -> None:
-    """S1: ``fastembed`` must be absent from sys.modules after
+def test_lightweight_cmd_no_pytorch_runtime(loaded_modules: set[str]) -> None:
+    """``torch`` and ``transformers`` must be absent from sys.modules after
     ``archon-search config show``.
 
-    Before BE-2, cli/serve.py imported ``run_server`` at module level.
-    ``server/app.py`` imports ``model_validation``, which imports ``fastembed``
-    at module level — so every ``serve.py`` consumer paid the fastembed import
-    cost at startup.  After BE-2 the import is deferred into ``serve()``.
-    This test guards that invariant.
+    ``server/app.py`` imports ``embedder``, ``reranker`` and ``model_validation``;
+    each defers its PyTorch imports into the model loaders, so no CLI command pays
+    the PyTorch import cost at startup.  This test guards that invariant.
 
     Note: ``mcp`` is NOT guarded here — it enters only via ``server/mcp.py``
     (a lazy FastMCP mount at serve time), never at CLI import-time; it was
     absent before and after this feature — see plan Q4.
     """
-    assert "fastembed" not in loaded_modules, (
-        "'fastembed' appeared in sys.modules after 'archon-search config show'. "
-        "This means the fastembed import has leaked back to module scope — check "
-        "archon_search/cli/serve.py and ensure 'from archon_search.server.app import "
-        "run_server' stays inside serve()."
+    leaked = sorted({"torch", "transformers"} & loaded_modules)
+    assert not leaked, (
+        f"{leaked} appeared in sys.modules after 'archon-search config show'. "
+        "A PyTorch import has leaked back to module scope — check "
+        "archon_search/torch_runtime.py, embedder.py and reranker_loading.py."
     )

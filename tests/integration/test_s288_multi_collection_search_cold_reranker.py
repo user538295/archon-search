@@ -10,7 +10,7 @@ Root cause. The ``body.collections is not None`` fan-out branch of
 ``server/routes_search.py`` ``search()`` awaited ``pipeline.warmup_models()``
 with **no** ``reranker_timeout``. ``SearchPipeline.warmup_models`` treats
 ``reranker_timeout=None`` as "await ``Reranker.warmup()`` unbounded", and the
-call sits outside every request-side ``wait_for``, so a cold ONNX
+call sits outside every request-side ``wait_for``, so a cold model
 download+build holds the connection open for as long as the build takes. S286
 fixed exactly this hole on the *single*-collection branch (which passes
 ``reranker_timeout=_RERANKER_WARMUP_WAIT_SECONDS`` and degrades to fused
@@ -33,18 +33,18 @@ collections (exercising the cross-collection merge plus the single global
 rerank pass in ``search_many``).
 
 As in ``test_s286_ingest_file_wait_then_search.py`` the build is *simulated*
-(``_ColdLoadTextCrossEncoder``) so the test stays deterministic and weight-free.
+(``install_cold_reranker_build``) so the test stays deterministic and weight-free.
 The ratio is the point, not the absolute numbers: a real cold cross-encoder
 download+ONNX build on a throttled link outruns the ingest-side ceiling exactly
 the way ``_COLD_CROSS_ENCODER_LOAD_SECONDS`` outruns the rebound ceiling here.
 """
 from __future__ import annotations
 
-import importlib
 import time
 
 import pytest
 
+from tests._cold_model_builds import install_cold_reranker_build
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("s288")]
@@ -77,28 +77,6 @@ reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
 """
 
 
-def _install_cold_cross_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make cross-encoder construction cost ``_COLD_CROSS_ENCODER_LOAD_SECONDS``.
-
-    ``ModelReranker.predict`` imports ``TextCrossEncoder`` from
-    ``fastembed.rerank.cross_encoder`` on its first call, so patching the class
-    there puts the cost exactly where the real ONNX build sits. Imported via
-    ``importlib`` rather than read out of ``sys.modules``, so the helper does not
-    depend on some earlier test having imported the module first. Installed
-    before the app starts, so the cost lands in the background startup warm-up —
-    where production puts it.
-    """
-    module = importlib.import_module("fastembed.rerank.cross_encoder")
-    base = module.TextCrossEncoder
-
-    class _ColdLoadTextCrossEncoder(base):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            time.sleep(_COLD_CROSS_ENCODER_LOAD_SECONDS)
-            super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr(module, "TextCrossEncoder", _ColdLoadTextCrossEncoder)
-
-
 def test_s288_multi_collection_search_answers_while_reranker_is_cold(tmp_path, monkeypatch):
     """POST /search with ``collections`` must answer inside a client read budget."""
     data_dir = tmp_path / "app"
@@ -110,7 +88,7 @@ def test_s288_multi_collection_search_answers_while_reranker_is_cold(tmp_path, m
     )
     # Before the app starts: the warm-up that runs at startup is the one that must
     # still be in flight when the fan-out search arrives.
-    _install_cold_cross_encoder(monkeypatch)
+    install_cold_reranker_build(monkeypatch, _COLD_CROSS_ENCODER_LOAD_SECONDS)
 
     with make_real_app(data_dir, monkeypatch, toml_content=_TOML) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}

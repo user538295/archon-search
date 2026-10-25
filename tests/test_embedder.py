@@ -1,20 +1,32 @@
-"""packages/archon-search/tests/test_embedder.py — unit tests for Embedder (fastembed backend)."""
+"""Unit tests for Embedder (async wrapper) and ModelEmbedder (PyTorch backend, tiny synthetic BERT)."""
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import _tiny_encoder as tiny_encoder
+import numpy as np
 import pytest
 
+import archon_search.embedder as embedder_module
 from archon_search.embedder import (
     Embedder,
     EmbedderBackend,
     EmbedderWarmupTimeout,
+    ModelEmbedder,
     make_embedder,
 )
+from archon_search.model_specs import UnsupportedModelError
+from archon_search.model_store import ModelDownloadError
+
+pytestmark = pytest.mark.real_torch_backends
 
 
 # ---------------------------------------------------------------------------
@@ -102,18 +114,6 @@ async def test_embedder_embedding_dim_matches_backend_dim() -> None:
     embedder = Embedder(backend)
     await embedder.embed(["test"])
     assert embedder.embedding_dim == 16
-
-
-def test_make_embedder_returns_embedder() -> None:
-    """make_embedder returns an Embedder without downloading models."""
-    e = make_embedder("BAAI/bge-small-en-v1.5", providers=[])
-    assert isinstance(e, Embedder)
-
-
-def test_make_embedder_with_empty_providers() -> None:
-    """make_embedder(providers=[]) does not raise."""
-    e = make_embedder("BAAI/bge-small-en-v1.5", providers=[])
-    assert e is not None
 
 
 def test_embedder_backend_protocol() -> None:
@@ -216,55 +216,6 @@ async def test_P14_4_embedder_backend_exception_propagates() -> None:
         await embedder.embed(["text"])
 
 
-def test_model_embedder_init_called_once_under_concurrent_encode() -> None:
-    """Double-checked locking: concurrent encode() calls init the model exactly once."""
-    import sys
-    import time
-
-    import numpy as np
-
-    from archon_search.embedder import ModelEmbedder
-
-    init_count = 0
-    barrier = threading.Barrier(2)
-
-    class _SlowTextEmbedding:
-        def __init__(self, model_name: str, **kwargs: Any) -> None:
-            nonlocal init_count
-            init_count += 1
-            time.sleep(0.05)  # slow enough to expose the race
-
-        def embed(self, texts: list[str]):  # type: ignore[return]
-            for _ in texts:
-                yield np.zeros(4, dtype=np.float32)
-
-    original = sys.modules["fastembed"].TextEmbedding
-    sys.modules["fastembed"].TextEmbedding = _SlowTextEmbedding
-    try:
-        embedder = ModelEmbedder("BAAI/bge-small-en-v1.5")
-        results: list[list[list[float]]] = []
-        exceptions: list[Exception] = []
-
-        def run_encode() -> None:
-            barrier.wait()  # force simultaneous entry
-            try:
-                results.append(embedder.encode(["hello"]))
-            except Exception as exc:
-                exceptions.append(exc)
-
-        threads = [threading.Thread(target=run_encode) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert not exceptions, f"Unexpected exceptions: {exceptions}"
-        assert len(results) == 2
-        assert init_count == 1, f"Model __init__ called {init_count} times — lock missing"
-    finally:
-        sys.modules["fastembed"].TextEmbedding = original
-
-
 # ---------------------------------------------------------------------------
 # Stage recording tests — Task 3.1 (B1)
 # ---------------------------------------------------------------------------
@@ -301,22 +252,6 @@ async def test_embed_noop_when_unbound() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_model_embedder_is_warm_false_before_encode() -> None:
-    from archon_search.embedder import ModelEmbedder
-
-    me = ModelEmbedder("some-model")
-    assert me.is_warm is False
-    assert me._model is None  # reading is_warm did not load the model
-
-
-def test_model_embedder_is_warm_true_after_model_set() -> None:
-    from archon_search.embedder import ModelEmbedder
-
-    me = ModelEmbedder("some-model")
-    me._model = object()
-    assert me.is_warm is True
-
-
 def test_embedder_is_warm_delegates_to_backend() -> None:
     backend = _MockBackend()
     backend.is_warm = False
@@ -326,108 +261,8 @@ def test_embedder_is_warm_delegates_to_backend() -> None:
     assert embedder.is_warm is True
 
 
-def test_reading_is_warm_does_not_construct_TextEmbedding() -> None:
-    from unittest.mock import patch
-
-    from archon_search.embedder import ModelEmbedder
-
-    with patch("fastembed.TextEmbedding", side_effect=RuntimeError("should not be called")):
-        me = ModelEmbedder("x")
-        result = me.is_warm  # must not raise
-    assert result is False
-
-
-def test_reading_is_warm_does_not_acquire_lock() -> None:
-    import time
-
-    from archon_search.embedder import ModelEmbedder
-
-    me = ModelEmbedder("x")
-    lock_acquired = threading.Event()
-    test_done = threading.Event()
-
-    def hold_lock():
-        with me._lock:
-            lock_acquired.set()
-            test_done.wait(timeout=5.0)
-
-    t = threading.Thread(target=hold_lock)
-    t.start()
-    lock_acquired.wait(timeout=5.0)
-
-    start = time.monotonic()
-    result = me.is_warm  # must not block waiting for lock
-    elapsed = time.monotonic() - start
-
-    test_done.set()
-    t.join()
-
-    assert result is False
-    assert elapsed < 0.1  # completed without waiting for lock
-
-
 def test_mock_backend_satisfies_protocol_after_is_warm_added() -> None:
     assert isinstance(_MockBackend(), EmbedderBackend)
-
-
-def test_model_embedder_is_warm_true_after_encode() -> None:
-    """is_warm transitions False→True when encode() loads the model."""
-    from unittest.mock import MagicMock, patch
-
-    from archon_search.embedder import ModelEmbedder
-
-    fake_embedding = MagicMock()
-    fake_embedding.tolist.return_value = [0.1, 0.2]
-    fake_model = MagicMock()
-    fake_model.embed.return_value = [fake_embedding]
-
-    me = ModelEmbedder("some-model")
-    assert me.is_warm is False
-
-    with patch("fastembed.TextEmbedding", return_value=fake_model):
-        me.encode(["hello"])
-
-    assert me.is_warm is True
-
-
-def _s493_cache_dir_passed_by_encode() -> str:
-    """The ``cache_dir`` ModelEmbedder.encode() hands to fastembed's TextEmbedding."""
-    from unittest.mock import patch
-
-    from archon_search.embedder import ModelEmbedder
-
-    fake_embedding = MagicMock()
-    fake_embedding.tolist.return_value = [0.1, 0.2]
-    fake_model = MagicMock()
-    fake_model.embed.return_value = [fake_embedding]
-    with patch("fastembed.TextEmbedding", return_value=fake_model) as mock_te:
-        ModelEmbedder("some-model").encode(["hello"])
-    return mock_te.call_args.kwargs["cache_dir"]
-
-
-def test_s493_fastembed_cache_path_relocates_the_embedder_weight_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """S493: FASTEMBED_CACHE_PATH, set to a directory OUTSIDE ARCHON_SEARCH_DATA_DIR, is
-    where the embedder's fastembed weights go (UserManual/30_configuration.md,
-    150_multi_instance_setup.md: "overrides the ARCHON_SEARCH_DATA_DIR-derived default")."""
-    data_dir = tmp_path / "archon-data"
-    fastembed_cache = tmp_path / "fastembed-cache"
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
-    monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(fastembed_cache))
-
-    assert _s493_cache_dir_passed_by_encode() == str(fastembed_cache)
-
-
-def test_embedder_caches_models_under_the_archon_data_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """BE-26 (S493 presence anchor): with FASTEMBED_CACHE_PATH unset, encode() hands
-    TextEmbedding ``$ARCHON_SEARCH_DATA_DIR/models`` as its cache_dir."""
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv("FASTEMBED_CACHE_PATH", raising=False)
-
-    assert _s493_cache_dir_passed_by_encode() == str(tmp_path / "models")
 
 
 # ---------------------------------------------------------------------------
@@ -603,3 +438,340 @@ async def test_embedder_warmup_raises_embedderwarmuptimeout_not_asyncio_timeoute
     assert not issubclass(EmbedderWarmupTimeout, asyncio.TimeoutError)
     assert not issubclass(EmbedderWarmupTimeout, OSError)
     assert embedder._warmup_failed is True
+
+
+# ---------------------------------------------------------------------------
+# ModelEmbedder — PyTorch backend on a tiny synthetic BERT (no weights, no network)
+# ---------------------------------------------------------------------------
+
+_TOLERANCE = 1e-5
+_UNIT_NORM_TOLERANCE = 1e-5
+
+
+@pytest.fixture(scope="module")
+def tiny_snapshot(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tiny_encoder.build_snapshot(tmp_path_factory.mktemp("tiny-bert"))
+
+
+@pytest.fixture
+def use_tiny_model(tiny_snapshot: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., MagicMock]:
+    """Point ``ModelEmbedder`` at the tiny snapshot; returns the ``ensure_model`` mock."""
+    ensure = MagicMock(return_value=tiny_snapshot)
+
+    def install(**spec_options: Any) -> MagicMock:
+        monkeypatch.setattr(embedder_module, "get_embedder_spec", lambda _name: tiny_encoder.tiny_spec(**spec_options))
+        monkeypatch.setattr(embedder_module, "ensure_model", ensure)
+        return ensure
+
+    return install
+
+
+def _reference_vector(snapshot: Path, text: str, pooling: str) -> np.ndarray:
+    """Un-normalized pooled vector of *text* from a plain ``AutoModel`` run on hand-built ids."""
+    import torch
+    from transformers import AutoModel
+
+    model = AutoModel.from_pretrained(snapshot, dtype=torch.float32).eval()
+    with torch.inference_mode():
+        hidden = model(input_ids=torch.tensor([tiny_encoder.token_ids(text)])).last_hidden_state[0]
+    pooled = {"cls": hidden[0], "mean": hidden.mean(dim=0), "last_token": hidden[-1]}[pooling]
+    return pooled.numpy()
+
+
+def _embed(texts: list[str]) -> np.ndarray:
+    return np.array(ModelEmbedder("tiny/bert", device="cpu").encode(texts))
+
+
+def test_make_embedder_returns_an_embedder_without_loading_weights() -> None:
+    embedder = make_embedder("BAAI/bge-small-en-v1.5", device="cpu")
+    assert isinstance(embedder, Embedder)
+    assert embedder.is_warm is False
+
+
+def test_an_unsupported_model_raises_at_construction() -> None:
+    with pytest.raises(UnsupportedModelError, match="no-such-model"):
+        ModelEmbedder("no-such-model")
+
+
+def test_empty_input_returns_empty_list_without_loading(use_tiny_model: Callable[..., MagicMock]) -> None:
+    ensure = use_tiny_model()
+    embedder = ModelEmbedder("tiny/bert", device="cpu")
+
+    assert embedder.encode([]) == []
+    ensure.assert_not_called()
+    assert embedder.is_warm is False
+
+
+def test_lazy_load_and_is_warm(use_tiny_model: Callable[..., MagicMock]) -> None:
+    ensure = use_tiny_model()
+    embedder = ModelEmbedder("tiny/bert", device="cpu")
+    assert embedder.is_warm is False
+    ensure.assert_not_called()
+
+    embedder.encode(["w1 w2"])
+    embedder.encode(["w3"])
+
+    assert embedder.is_warm is True
+    ensure.assert_called_once()
+
+
+def test_load_failure_is_not_latched(tiny_snapshot: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(embedder_module, "get_embedder_spec", lambda _name: tiny_encoder.tiny_spec())
+    ensure = MagicMock(side_effect=[ModelDownloadError("tiny/bert", "offline"), tiny_snapshot])
+    monkeypatch.setattr(embedder_module, "ensure_model", ensure)
+    embedder = ModelEmbedder("tiny/bert", device="cpu")
+
+    with pytest.raises(ModelDownloadError):
+        embedder.encode(["w1"])
+    assert embedder.is_warm is False
+
+    assert len(embedder.encode(["w1"])) == 1
+    assert embedder.is_warm is True
+
+
+def test_concurrent_cold_encodes_load_the_model_once(
+    tiny_snapshot: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loads = 0
+    barrier = threading.Barrier(2)
+
+    def slow_ensure(_spec: object) -> Path:
+        nonlocal loads
+        loads += 1
+        time.sleep(0.05)  # long enough to expose a missing lock
+        return tiny_snapshot
+
+    monkeypatch.setattr(embedder_module, "get_embedder_spec", lambda _name: tiny_encoder.tiny_spec())
+    monkeypatch.setattr(embedder_module, "ensure_model", slow_ensure)
+    embedder = ModelEmbedder("tiny/bert", device="cpu")
+    results: list[list[list[float]]] = []
+
+    def run() -> None:
+        barrier.wait()
+        results.append(embedder.encode(["w1 w2"]))
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert loads == 1
+    assert len(results) == 2
+    assert results[0] == results[1]
+
+
+def test_reading_is_warm_does_not_wait_for_a_load_in_progress(
+    tiny_snapshot: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered, release = threading.Event(), threading.Event()
+
+    def blocking_ensure(_spec: object) -> Path:
+        entered.set()
+        release.wait(timeout=5.0)
+        return tiny_snapshot
+
+    monkeypatch.setattr(embedder_module, "get_embedder_spec", lambda _name: tiny_encoder.tiny_spec())
+    monkeypatch.setattr(embedder_module, "ensure_model", blocking_ensure)
+    embedder = ModelEmbedder("tiny/bert", device="cpu")
+    loader = threading.Thread(target=embedder.encode, args=(["w1"],))
+    loader.start()
+    try:
+        assert entered.wait(timeout=5.0)
+        started = time.monotonic()
+        warm = embedder.is_warm
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        loader.join()
+
+    assert warm is False
+    assert elapsed < 0.1
+    assert embedder.is_warm is True
+
+
+@pytest.mark.parametrize("pooling", ["cls", "mean", "last_token"])
+def test_pooling_matches_a_plain_automodel_run(
+    pooling: str, use_tiny_model: Callable[..., MagicMock], tiny_snapshot: Path
+) -> None:
+    use_tiny_model(pooling=pooling, normalize=False)
+    text = "w1 w2 w3 w4"
+
+    vector = _embed([text])[0]
+
+    np.testing.assert_allclose(vector, _reference_vector(tiny_snapshot, text, pooling), atol=_TOLERANCE)
+
+
+def test_cls_and_mean_pooling_differ(use_tiny_model: Callable[..., MagicMock]) -> None:
+    use_tiny_model(pooling="cls", normalize=False)
+    cls_vector = _embed(["w1 w2 w3 w4"])[0]
+    use_tiny_model(pooling="mean", normalize=False)
+    mean_vector = _embed(["w1 w2 w3 w4"])[0]
+
+    assert not np.allclose(cls_vector, mean_vector, atol=1e-3)
+
+
+def test_last_token_pooling_differs_from_cls_and_mean(use_tiny_model: Callable[..., MagicMock]) -> None:
+    vectors = {}
+    for pooling in ("cls", "mean", "last_token"):
+        use_tiny_model(pooling=pooling, normalize=False)
+        vectors[pooling] = _embed(["w1 w2 w3 w4"])[0]
+
+    assert not np.allclose(vectors["last_token"], vectors["cls"], atol=1e-3)
+    assert not np.allclose(vectors["last_token"], vectors["mean"], atol=1e-3)
+
+
+def test_last_token_pooling_picks_each_rows_last_real_token_in_a_padded_batch(
+    use_tiny_model: Callable[..., MagicMock], tiny_snapshot: Path
+) -> None:
+    use_tiny_model(pooling="last_token", normalize=False)
+    texts = ["w1", "w2 w3 w4 w5 w6 w7", "w8 w9", "w10 w11 w12"]  # one batch: rows padded to 8 tokens
+
+    batched = _embed(texts)
+
+    for text, vector in zip(texts, batched, strict=True):
+        np.testing.assert_allclose(vector, _reference_vector(tiny_snapshot, text, "last_token"), atol=_TOLERANCE)
+
+
+def test_normalize_only_when_spec_says_so(use_tiny_model: Callable[..., MagicMock], tiny_snapshot: Path) -> None:
+    use_tiny_model(normalize=True)
+    normalized = _embed(["w1 w2 w3"])[0]
+    use_tiny_model(normalize=False)
+    raw = _embed(["w1 w2 w3"])[0]
+
+    assert np.linalg.norm(normalized) == pytest.approx(1.0, abs=_UNIT_NORM_TOLERANCE)
+    assert np.linalg.norm(raw) == pytest.approx(np.linalg.norm(_reference_vector(tiny_snapshot, "w1 w2 w3", "cls")), abs=1e-4)
+    assert np.linalg.norm(raw) != pytest.approx(1.0, abs=1e-2)
+    np.testing.assert_allclose(normalized, raw / np.linalg.norm(raw), atol=_TOLERANCE)
+
+
+def test_text_longer_than_max_length_is_truncated(use_tiny_model: Callable[..., MagicMock]) -> None:
+    use_tiny_model(max_length=6)  # [CLS] + 4 words + [SEP]
+    long_text = " ".join(f"w{i}" for i in range(1, 15))
+
+    truncated, four_words = _embed([long_text, "w1 w2 w3 w4"])
+    use_tiny_model(max_length=tiny_encoder.MAX_POSITIONS)
+    untruncated = _embed([long_text])[0]
+
+    np.testing.assert_allclose(truncated, four_words, atol=_TOLERANCE)
+    assert not np.allclose(truncated, untruncated, atol=1e-3)
+
+
+def test_padding_does_not_change_a_vector(use_tiny_model: Callable[..., MagicMock]) -> None:
+    use_tiny_model(pooling="mean")
+    texts = ["w1", "w2 w3 w4 w5 w6 w7", "w8 w9", "w10 w11 w12"]
+
+    batched = _embed(texts)
+    one_by_one = np.array([_embed([text])[0] for text in texts])
+
+    np.testing.assert_allclose(batched, one_by_one, atol=_TOLERANCE)
+
+
+def test_output_order_matches_input_order_across_batches(
+    use_tiny_model: Callable[..., MagicMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_tiny_model()
+    budget = 8
+    monkeypatch.setattr(embedder_module, "DEFAULT_TOKEN_BUDGET", budget)
+    # Word counts 1..7 -> 3..9 tokens, scrambled: the sorted-by-length plan cannot be the identity.
+    word_counts = [5, 1, 7, 3, 6, 2, 4]
+    texts = [" ".join(f"w{i}" for i in range(1, count + 1)) for count in word_counts]
+    plans: list[list[list[int]]] = []
+    real_plan = embedder_module.plan_batches
+    monkeypatch.setattr(
+        embedder_module, "plan_batches", lambda *a, **k: plans.append(real_plan(*a, **k)) or plans[-1]
+    )
+
+    batched = _embed(texts)
+
+    assert len(plans[0]) > 1
+    assert [i for batch in plans[0] for i in batch] != list(range(len(texts)))
+    monkeypatch.setattr(embedder_module, "DEFAULT_TOKEN_BUDGET", 4096)
+    for text, vector in zip(texts, batched, strict=True):
+        np.testing.assert_allclose(vector, _embed([text])[0], atol=_TOLERANCE)
+
+
+def test_accelerator_cache_is_released_only_after_an_oversize_batch(
+    use_tiny_model: Callable[..., MagicMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_tiny_model()
+    monkeypatch.setattr(embedder_module, "DEFAULT_TOKEN_BUDGET", 8)
+    release = MagicMock()
+    monkeypatch.setattr(embedder_module, "release_accelerator_cache", release)
+    embedder = ModelEmbedder("tiny/bert", device="cpu")
+
+    embedder.encode(["w1", "w2", "w3", "w4"])  # 3 tokens each: batches of two, 6 <= 8
+    release.assert_not_called()
+
+    embedder.encode(["w1 w2 w3 w4 w5 w6 w7 w8"])  # 10 tokens alone: padded 10 > 8
+    release.assert_called_once_with("cpu")
+
+
+def test_values_are_python_floats(use_tiny_model: Callable[..., MagicMock]) -> None:
+    use_tiny_model()
+
+    vectors = ModelEmbedder("tiny/bert", device="cpu").encode(["w1 w2"])
+
+    assert len(vectors[0]) == tiny_encoder.HIDDEN_SIZE
+    assert all(type(value) is float for value in vectors[0])
+
+
+_DECODER_INTERMEDIATE_SIZE = 64
+_DECODER_ATTENTION_HEADS = 4
+_DECODER_KEY_VALUE_HEADS = 2
+_DECODER_HEAD_DIM = tiny_encoder.HIDDEN_SIZE // _DECODER_ATTENTION_HEADS
+
+
+@pytest.fixture(scope="module")
+def tiny_decoder_snapshot(tiny_snapshot: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A tiny Qwen3 (causal decoder) with the tiny tokenizer: its config has no ``type_vocab_size`` nor ``pad_token_id``."""
+    import shutil
+
+    import torch
+    from transformers import Qwen3Config, Qwen3Model
+
+    directory = tmp_path_factory.mktemp("tiny-qwen3")
+    torch.manual_seed(tiny_encoder.SEED)
+    config = Qwen3Config(
+        vocab_size=len(tiny_encoder.VOCAB),
+        hidden_size=tiny_encoder.HIDDEN_SIZE,
+        intermediate_size=_DECODER_INTERMEDIATE_SIZE,
+        num_hidden_layers=2,
+        num_attention_heads=_DECODER_ATTENTION_HEADS,
+        num_key_value_heads=_DECODER_KEY_VALUE_HEADS,
+        head_dim=_DECODER_HEAD_DIM,
+        max_position_embeddings=tiny_encoder.MAX_POSITIONS,
+    )
+    Qwen3Model(config).save_pretrained(directory)
+    shutil.copy(tiny_snapshot / "tokenizer.json", directory / "tokenizer.json")
+    return directory
+
+
+def test_a_decoder_config_without_bert_attributes_loads_and_last_token_pools_it(
+    tiny_decoder_snapshot: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(tiny_decoder_snapshot)
+    assert not hasattr(config, "type_vocab_size")
+    assert getattr(config, "pad_token_id", None) is None
+    monkeypatch.setattr(
+        embedder_module, "get_embedder_spec", lambda _name: tiny_encoder.tiny_spec(pooling="last_token", normalize=False)
+    )
+    monkeypatch.setattr(embedder_module, "ensure_model", MagicMock(return_value=tiny_decoder_snapshot))
+    texts = ["w1 w2 w3 w4", "w5", "w6 w7"]  # one padded batch: the short rows must not read pad positions
+
+    vectors = _embed(texts)
+
+    for text, vector in zip(texts, vectors, strict=True):
+        np.testing.assert_allclose(vector, _reference_vector(tiny_decoder_snapshot, text, "last_token"), atol=_TOLERANCE)
+
+
+def test_importing_the_embedder_module_does_not_import_the_ml_stack() -> None:
+    code = (
+        "import sys; import archon_search.embedder; "
+        "loaded = [m for m in ('torch', 'transformers', 'tokenizers', 'onnxruntime') if m in sys.modules]; "
+        "assert not loaded, loaded; print('ok')"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert result.stdout.strip() == "ok", result.stderr

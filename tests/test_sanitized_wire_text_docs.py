@@ -94,13 +94,6 @@ _CASES = [
         id="file-size-unknown",
     ),
     pytest.param(
-        lambda: model_validation.ONNX_PROVIDER_QUERY_FAILED_WARNING,
-        "could not query ONNX providers; see the log for details",
-        (_COMPONENT_CATALOG, _BREAKING_INDEX),
-        True,
-        id="onnx-provider-query",
-    ),
-    pytest.param(
         lambda: model_validation.EMBEDDER_PROBE_FAILED_WARNING,
         "embedder probe failed; see the log for details",
         (_BREAKING_INDEX,),
@@ -120,13 +113,6 @@ _CASES = [
         (_TROUBLESHOOTING, _BREAKING_INDEX),
         True,
         id="validation-failed",
-    ),
-    pytest.param(
-        lambda: model_validation.RERANKER_SPLIT_VALIDATION_FAILED_WARNING,
-        "reranker split-provider validation failed unexpectedly; see the log for details",
-        (_BREAKING_INDEX,),
-        True,
-        id="reranker-split-validation-failed",
     ),
     pytest.param(
         lambda: model_validation.VALIDATION_TASK_FAILED_WARNING,
@@ -179,28 +165,6 @@ _CASES = [
         # The float `validation_timeout_seconds` entry quotes it: whole seconds still render "60s".
         True,
         id="validation-timed-out-default",
-    ),
-    # A ``:.1f`` field cannot take a placeholder, so the docs' placeholder replaces it textually.
-    pytest.param(
-        lambda: model_validation.RERANKER_SPLIT_TIMED_OUT_TEMPLATE.replace("{seconds:.1f}", "<X.X>"),
-        "reranker split-provider validation timed out after <X.X>s",
-        (_INCIDENT_RUNBOOK, _MONITORING),
-        False,
-        id="reranker-split-timed-out",
-    ),
-    pytest.param(
-        lambda: model_validation.RERANKER_SPLIT_TIMED_OUT_TEMPLATE.replace("{seconds:.1f}", "{X.X}"),
-        "reranker split-provider validation timed out after {X.X}s",
-        (_API_REFERENCE,),
-        False,
-        id="reranker-split-timed-out-api-reference",
-    ),
-    pytest.param(
-        lambda: model_validation.RERANKER_SPLIT_BUDGET_EXHAUSTED_WARNING,
-        "reranker split-provider validation skipped: timeout budget exhausted",
-        (_INCIDENT_RUNBOOK, _MONITORING, _API_REFERENCE),
-        False,
-        id="reranker-split-budget-exhausted",
     ),
     pytest.param(
         lambda: defref_extractor.DEFREF_PARSE_FAILED_WARNING.format(file_path="<path>"),

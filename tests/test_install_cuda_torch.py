@@ -13,11 +13,14 @@ from __future__ import annotations
 import importlib.metadata
 import re
 import subprocess
+import sys
+import types
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import tomlkit
 
 from archon_search.install import (
     BaseInstaller,
@@ -25,7 +28,12 @@ from archon_search.install import (
     _install_cuda_torch,
     create_installer,
 )
-from archon_search.install.extras import _CUDA_LOCAL_TAG, _CUDA_TORCH_INDEX_URL
+from archon_search.install.extras import (
+    _CUDA_LOCAL_TAG,
+    _CUDA_TORCH_INDEX_URL,
+    _cuda_visible_in_subprocess,
+    _torch_cuda_available,
+)
 from archon_search.install.installer import _CUDA_GUIDE_DOC, _CUDA_GUIDE_HEADING, _CUDA_GUIDE_URL
 from archon_search.platform.types import GpuType
 
@@ -152,46 +160,112 @@ class TestInstallCudaTorch:
 
 
 # ---------------------------------------------------------------------------
-# Integration tests: run() Step 9 CUDA branch — linux/x86_64 platform gate
+# Unit tests: the CUDA probes the swap relies on
 # ---------------------------------------------------------------------------
+
+_SUBPROCESS_RUN = "archon_search.install.extras.subprocess.run"
+_PROBE_COMMAND = [sys.executable, "-c", "import torch; print(torch.cuda.is_available())"]
+
+
+def _completed(stdout: str, returncode: int = 0) -> MagicMock:
+    return MagicMock(stdout=stdout, returncode=returncode)
+
+
+class TestCudaVisibleInSubprocess:
+    """``_cuda_visible_in_subprocess`` asks a fresh interpreter, never this process."""
+
+    def test_runs_the_torch_probe_in_a_new_interpreter(self) -> None:
+        with patch(_SUBPROCESS_RUN, return_value=_completed("True\n")) as run:
+            assert _cuda_visible_in_subprocess() is True
+
+        assert run.call_args.args[0] == _PROBE_COMMAND
+        assert run.call_args.kwargs["capture_output"] is True
+        assert run.call_args.kwargs["text"] is True
+        assert run.call_args.kwargs["timeout"] == 120
+
+    def test_false_output_means_no_cuda(self) -> None:
+        with patch(_SUBPROCESS_RUN, return_value=_completed("False\n")):
+            assert _cuda_visible_in_subprocess() is False
+
+    def test_a_crashing_interpreter_means_no_cuda(self) -> None:
+        with patch(_SUBPROCESS_RUN, return_value=_completed("True\n", returncode=1)):
+            assert _cuda_visible_in_subprocess() is False
+
+    @pytest.mark.parametrize(
+        "error", [OSError("no interpreter"), subprocess.TimeoutExpired("python", 120)], ids=["os-error", "timeout"]
+    )
+    def test_an_unrunnable_probe_means_no_cuda(self, error: Exception) -> None:
+        with patch(_SUBPROCESS_RUN, side_effect=error):
+            assert _cuda_visible_in_subprocess() is False
+
+
+class TestTorchCudaAvailable:
+    """``_torch_cuda_available`` reads this process's torch and never raises."""
+
+    @pytest.mark.parametrize("available", [True, False])
+    def test_reports_what_torch_says(self, available: bool) -> None:
+        fake_torch = types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: available))
+        with patch.dict(sys.modules, {"torch": fake_torch}):
+            assert _torch_cuda_available() is available
+
+    def test_an_unimportable_torch_reads_as_no_cuda(self) -> None:
+        with patch.dict(sys.modules, {"torch": None}):
+            assert _torch_cuda_available() is False
+
+
+# ---------------------------------------------------------------------------
+# Integration tests: run() Step 9 CUDA branch — the swap is the enabling step
+# ---------------------------------------------------------------------------
+
+
+def _as_mock(outcome: bool | MagicMock) -> MagicMock:
+    """A probe stand-in: *outcome* itself when it is already a mock, else one returning it."""
+    return outcome if isinstance(outcome, MagicMock) else MagicMock(return_value=outcome)
 
 
 def _run_cuda_install(
     tmp_path: Path,
     *,
-    gpu: GpuType,
-    machine: str,
+    gpu: GpuType = GpuType.CUDA,
+    machine: str = "x86_64",
     platform_sys: str = "linux",
     cuda_swap: MagicMock | None = None,
     disable_gpu: bool = False,
     dry_run: bool = False,
     gpu_confirm: bool = True,
-) -> int:
-    """Drive run() with detection/infra mocked; return the exit code.
+    torch_has_cuda: bool = False,
+    cuda_after_swap: bool | MagicMock = True,
+    models_validate: bool | MagicMock = True,
+    seed: str | None = None,
+) -> tuple[int, str | None]:
+    """Drive run() with detection/infra mocked; return ``(exit code, [database].device or None)``.
 
-    ``cuda_swap`` (if given) is patched in at the installer call site so the test
-    can assert whether/how the swap ran. Pass ``None`` to exercise the REAL
-    ``_install_cuda_torch`` (with extras.subprocess.run mocked separately).
+    ``cuda_swap`` (if given) is patched in at the installer call site so the test can
+    assert whether/how the swap ran; ``None`` exercises the REAL ``_install_cuda_torch``
+    (with ``extras.subprocess.run`` mocked separately). ``torch_has_cuda`` is this process's
+    torch, ``cuda_after_swap`` what a fresh interpreter reports after the swap, and
+    ``models_validate`` the in-process model probe used when no swap runs; each of the last
+    two may be a MagicMock to assert on its calls.
     """
     config_path = tmp_path / "archon-search.toml"
-    fake_legacy = tmp_path / "fake.plist"
+    if seed is not None:
+        config_path.write_text(seed)
     target = RealInstaller
 
     patches = [
         patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
-        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._legacy_service_path", return_value=tmp_path / "fake.plist"),
         patch("archon_search.install.installer._remove_legacy_service"),
         patch("archon_search.install.installer._prewarm_models"),
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer.platform.machine", return_value=machine),
         patch("archon_search.install.installer.sys.platform", platform_sys),
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=gpu_confirm),
+        patch("archon_search.install.installer._torch_cuda_available", return_value=torch_has_cuda),
+        patch("archon_search.install.installer._cuda_visible_in_subprocess", _as_mock(cuda_after_swap)),
         patch("builtins.input", MagicMock()),
         patch.object(BaseInstaller, "detect_gpu", return_value=gpu),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(target, "configure_providers"),
-        patch.object(target, "_probe_and_configure_coreml", return_value=[]),
-        patch.object(target, "write_gpu_providers_disabled"),
+        patch.object(BaseInstaller, "_accelerator_validated", _as_mock(models_validate)),
         patch.object(target, "write_service_file"),
         patch.object(target, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
@@ -204,28 +278,38 @@ def _run_cuda_install(
         for cm in patches:
             stack.enter_context(cm)
         installer = create_installer(config_file=str(config_path), dry_run=dry_run)
-        return installer.run(
+        rc = installer.run(
             non_interactive=True,
             profile="minimal",
             skip_preload=True,
             disable_gpu=disable_gpu,
         )
+    if not config_path.exists():
+        return rc, None
+    return rc, tomlkit.parse(config_path.read_text()).unwrap()["database"].get("device")
 
 
-def test_cuda_swap_runs_on_linux_x86_64(tmp_path: Path) -> None:
-    """linux + x86_64 + CUDA + confirm (non-dry-run) → swap runs, dry_run=False."""
+def test_cuda_swap_runs_on_linux_x86_64_when_torch_lacks_cuda(tmp_path: Path) -> None:
+    """linux + x86_64 + CUDA accepted + torch.cuda unavailable (non-dry-run) → swap runs, dry_run=False."""
     swap = MagicMock()
-    rc = _run_cuda_install(tmp_path, gpu=GpuType.CUDA, machine="x86_64", cuda_swap=swap)
+    rc, _ = _run_cuda_install(tmp_path, cuda_swap=swap)
     assert rc == 0
     swap.assert_called_once_with(dry_run=False)
+
+
+def test_swap_runs_only_when_cuda_unavailable_after_accepting_gpu(tmp_path: Path) -> None:
+    """A torch that already sees CUDA keeps its build: no swap, the in-process model probe decides."""
+    swap = MagicMock()
+    rc, device = _run_cuda_install(tmp_path, cuda_swap=swap, torch_has_cuda=True)
+    assert rc == 0
+    swap.assert_not_called()
+    assert device == "auto"
 
 
 def test_cuda_swap_skipped_on_windows_amd64(tmp_path: Path) -> None:
     """Windows (win32/AMD64) is out of scope — the CUDA swap targets linux/x86_64 only."""
     swap = MagicMock()
-    rc = _run_cuda_install(
-        tmp_path, gpu=GpuType.CUDA, machine="AMD64", platform_sys="win32", cuda_swap=swap
-    )
+    rc, _ = _run_cuda_install(tmp_path, machine="AMD64", platform_sys="win32", cuda_swap=swap)
     assert rc == 0
     swap.assert_not_called()
 
@@ -233,7 +317,7 @@ def test_cuda_swap_skipped_on_windows_amd64(tmp_path: Path) -> None:
 def test_cuda_swap_skipped_on_linux_arm(tmp_path: Path) -> None:
     """CUDA on a non-x86_64 (ARM) linux host → no swap (out of scope)."""
     swap = MagicMock()
-    rc = _run_cuda_install(tmp_path, gpu=GpuType.CUDA, machine="aarch64", cuda_swap=swap)
+    rc, _ = _run_cuda_install(tmp_path, machine="aarch64", cuda_swap=swap)
     assert rc == 0
     swap.assert_not_called()
 
@@ -241,9 +325,7 @@ def test_cuda_swap_skipped_on_linux_arm(tmp_path: Path) -> None:
 def test_cuda_swap_skipped_on_macos_x86(tmp_path: Path) -> None:
     """x86_64 but non-linux (macOS) → no swap: the CUDA swap targets linux/x86_64 only."""
     swap = MagicMock()
-    rc = _run_cuda_install(
-        tmp_path, gpu=GpuType.CUDA, machine="x86_64", platform_sys="darwin", cuda_swap=swap
-    )
+    rc, _ = _run_cuda_install(tmp_path, machine="x86_64", platform_sys="darwin", cuda_swap=swap)
     assert rc == 0
     swap.assert_not_called()
 
@@ -251,9 +333,7 @@ def test_cuda_swap_skipped_on_macos_x86(tmp_path: Path) -> None:
 def test_cuda_swap_skipped_on_metal(tmp_path: Path) -> None:
     """Apple Silicon (Metal) → no swap."""
     swap = MagicMock()
-    rc = _run_cuda_install(
-        tmp_path, gpu=GpuType.METAL, machine="arm64", platform_sys="darwin", cuda_swap=swap
-    )
+    rc, _ = _run_cuda_install(tmp_path, gpu=GpuType.METAL, machine="arm64", platform_sys="darwin", cuda_swap=swap)
     assert rc == 0
     swap.assert_not_called()
 
@@ -261,63 +341,88 @@ def test_cuda_swap_skipped_on_metal(tmp_path: Path) -> None:
 def test_cuda_swap_skipped_on_none_gpu(tmp_path: Path) -> None:
     """No GPU → no swap even on linux x86_64."""
     swap = MagicMock()
-    rc = _run_cuda_install(tmp_path, gpu=GpuType.NONE, machine="x86_64", cuda_swap=swap)
+    rc, device = _run_cuda_install(tmp_path, gpu=GpuType.NONE, cuda_swap=swap)
     assert rc == 0
     swap.assert_not_called()
+    assert device == "cpu"
 
 
 def test_cuda_swap_skipped_on_user_decline(tmp_path: Path) -> None:
-    """User declines the GPU prompt → enable_gpu False → no swap."""
+    """User declines the GPU prompt → enable_gpu False → no swap, CPU written."""
     swap = MagicMock()
-    rc = _run_cuda_install(
-        tmp_path, gpu=GpuType.CUDA, machine="x86_64", cuda_swap=swap, gpu_confirm=False
-    )
+    rc, device = _run_cuda_install(tmp_path, cuda_swap=swap, gpu_confirm=False)
     assert rc == 0
     swap.assert_not_called()
+    assert device == "cpu"
 
 
 def test_cuda_swap_skipped_on_disable_gpu_flag(tmp_path: Path) -> None:
-    """--disable-gpu → enable_gpu False → no swap."""
+    """--disable-gpu → enable_gpu False → no swap, CPU written."""
     swap = MagicMock()
-    rc = _run_cuda_install(
-        tmp_path, gpu=GpuType.CUDA, machine="x86_64", cuda_swap=swap, disable_gpu=True
-    )
+    rc, device = _run_cuda_install(tmp_path, cuda_swap=swap, disable_gpu=True)
     assert rc == 0
     swap.assert_not_called()
+    assert device == "cpu"
 
 
 def test_cuda_swap_dry_run_narrates_and_does_not_install(tmp_path: Path) -> None:
     """Dry-run passes dry_run=True to the swap (which narrates, installs nothing)."""
     swap = MagicMock()
-    rc = _run_cuda_install(
-        tmp_path, gpu=GpuType.CUDA, machine="x86_64", cuda_swap=swap, dry_run=True
-    )
+    rc, _ = _run_cuda_install(tmp_path, cuda_swap=swap, dry_run=True)
     assert rc == 0
     swap.assert_called_once_with(dry_run=True)
 
 
-def test_cuda_dry_run_neither_probes_nor_writes_providers(tmp_path: Path) -> None:
-    """Dry-run must not load models to probe CUDA, and must leave the config untouched."""
-    seed = '[database]\nproviders = ["CoreMLExecutionProvider"]\n'
-    probe = MagicMock(return_value=(True, True, []))
-    with patch.object(
-        BaseInstaller, "validate_providers", autospec=True, side_effect=BaseInstaller.validate_providers
-    ) as validate:
-        rc, _ = _run_cuda_install_real_providers(
-            tmp_path, [_CUDA_EP, _CPU_EP], MagicMock(), dry_run=True, seed=seed, probe=probe
-        )
+def test_cuda_dry_run_neither_probes_nor_writes_the_device(tmp_path: Path) -> None:
+    """Dry-run must not load models or spawn the CUDA check, and must leave the config untouched."""
+    seed = '[database]\ndevice = "cpu"\n'
+    models_probe, subprocess_probe = MagicMock(), MagicMock()
+    rc, _ = _run_cuda_install(
+        tmp_path,
+        cuda_swap=MagicMock(),
+        dry_run=True,
+        seed=seed,
+        models_validate=models_probe,
+        cuda_after_swap=subprocess_probe,
+    )
 
     assert rc == 0
-    validate.assert_not_called()
-    probe.assert_not_called()
+    models_probe.assert_not_called()
+    subprocess_probe.assert_not_called()
     assert (tmp_path / "archon-search.toml").read_text() == seed
+
+
+def test_swap_that_gives_a_cuda_torch_writes_auto_and_reports_cuda(tmp_path: Path, capsys) -> None:
+    """The swap is the enabling step: a fresh interpreter that sees CUDA afterwards → ``auto``."""
+    rc, device = _run_cuda_install(tmp_path, cuda_swap=MagicMock(), cuda_after_swap=True)
+
+    assert rc == 0
+    assert device == "auto"
+    out = capsys.readouterr().out
+    assert "  Device:     CUDA" in out.splitlines()
+    assert "validation failed" not in out
+    assert "Keeping the installed PyTorch build" not in out
+
+
+def test_swap_that_leaves_torch_without_cuda_writes_cpu_with_the_guidance(tmp_path: Path, capsys) -> None:
+    """Still no CUDA in the fresh interpreter: CPU replaces a previous run's ``auto`` and the guide is printed."""
+    rc, device = _run_cuda_install(
+        tmp_path, cuda_swap=MagicMock(), cuda_after_swap=False, seed='[database]\ndevice = "auto"\n'
+    )
+
+    assert rc == 0
+    assert device == "cpu"
+    out = capsys.readouterr().out.splitlines()
+    assert "Warning: CUDA validation failed — falling back to CPU." in out
+    assert f"  Commands for each install method: {_CUDA_GUIDE_URL}" in out
+    assert "  Device:     CPU" in out
 
 
 def test_real_swap_failure_keeps_installed_build_and_install_succeeds(tmp_path: Path, capsys) -> None:
     """End-to-end: real gate + real _install_cuda_torch, only subprocess failing.
 
-    Exercises the whole path together (no mock seam): a real install failure must
-    warn, keep the installed build, and let the install finish rc==0.
+    A failed swap warns, keeps the installed build, finds no CUDA afterwards, writes CPU
+    and lets the install finish rc==0.
     """
     uv_err = subprocess.CalledProcessError(1, "uv", stderr=b"uv error")
     pip_err = subprocess.CalledProcessError(1, "pip", stderr=b"cuda wheel download failed")
@@ -325,146 +430,31 @@ def test_real_swap_failure_keeps_installed_build_and_install_succeeds(tmp_path: 
         patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})),
         patch(_RUN, side_effect=[uv_err, pip_err]),
     ):
-        rc = _run_cuda_install(tmp_path, gpu=GpuType.CUDA, machine="x86_64", cuda_swap=None)
+        rc, device = _run_cuda_install(tmp_path, cuda_swap=None, cuda_after_swap=False)
     assert rc == 0  # a failed GPU upgrade never fails the install
+    assert device == "cpu"
     assert "keeping the installed build" in capsys.readouterr().err
 
 
-# ---------------------------------------------------------------------------
-# T21: Step 9 must validate CUDA before writing CUDAExecutionProvider (ADR 15).
-# Real configure_providers / write_gpu_providers_disabled / validate_providers;
-# only onnxruntime's provider list (and the model probe) are faked.
-# ---------------------------------------------------------------------------
-
-_CUDA_EP = "CUDAExecutionProvider"
-_CPU_EP = "CPUExecutionProvider"
-
-
-def _run_cuda_install_real_providers(
-    tmp_path: Path,
-    available: list[str],
-    cuda_swap: MagicMock,
-    *,
-    dry_run: bool = False,
-    seed: str | None = None,
-    probe: MagicMock | None = None,
-    machine: str = "x86_64",
-    platform_sys: str = "linux",
-) -> tuple[int, dict]:
-    """Drive a CUDA-accepted run() (linux/x86_64 by default); return (rc, the config's [database] table).
-
-    *seed* is written as the existing config first; *probe* replaces the model probe
-    (``validate_providers_shared``), which passes by default.
-    """
-    import tomlkit
-
-    config_path = tmp_path / "archon-search.toml"
-    if seed is not None:
-        config_path.write_text(seed)
-    with (
-        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
-        patch("archon_search.install.installer._legacy_service_path", return_value=tmp_path / "fake.plist"),
-        patch("archon_search.install.installer._remove_legacy_service"),
-        patch("archon_search.install.installer._prewarm_models"),
-        patch("archon_search.install.installer._check_disk_space"),
-        patch("archon_search.install.installer._install_cuda_torch", cuda_swap),
-        patch("archon_search.install.installer.platform.machine", return_value=machine),
-        patch("archon_search.install.installer.sys.platform", platform_sys),
-        patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
-        patch("archon_search.onnx_providers._available_providers", return_value=available),
-        patch(
-            "archon_search.model_validation.validate_providers_shared",
-            probe if probe is not None else MagicMock(return_value=(True, True, [])),
-        ),
-        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.CUDA),
-        patch.object(RealInstaller, "write_service_file"),
-        patch.object(RealInstaller, "load_service", return_value=0),
-        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
-        patch.object(BaseInstaller, "_is_service_running", return_value=False),
-    ):
-        installer = create_installer(config_file=str(config_path), dry_run=dry_run)
-        rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
-    database = tomlkit.parse(config_path.read_text())["database"]
-    return rc, database.unwrap()
-
-
-_FALLBACK_GUIDANCE = [
-    "Warning: CUDA validation failed — falling back to CPU.",
-    (
-        "  Text search and result ranking (ONNX Runtime) will run on CPU: "
-        "the installed onnxruntime has no usable CUDAExecutionProvider."
-    ),
-    (
-        "  To run them on the GPU, replace onnxruntime with onnxruntime-gpu "
-        "(its PyPI build needs CUDA 13 and an NVIDIA driver >= 580), then re-run the wizard."
-    ),
-    (
-        "  Commands for each install method: https://github.com/user538295/archon-search/blob/main/"
-        "Documentation/UserManual/10_installation.md#nvidia-gpu-run-embedding-and-reranking-on-cuda"
-    ),
-]
-
-
-def _assert_no_fallback_guidance(out: str) -> None:
-    out_lines = out.splitlines()
-    assert not any(line in out_lines for line in _FALLBACK_GUIDANCE)
-    assert "  Providers:  (CPU default)" not in out_lines
-
-
-def _assert_fallback_guidance(out: str) -> None:
-    out_lines = out.splitlines()
-    start = out_lines.index(_FALLBACK_GUIDANCE[0])
-    assert out_lines[start : start + len(_FALLBACK_GUIDANCE)] == _FALLBACK_GUIDANCE
-    assert "  Providers:  (CPU default)" in out_lines
-
-
-def test_cuda_without_onnxruntime_cuda_ep_falls_back_to_cpu(tmp_path: Path, capsys, caplog) -> None:
-    """CPU-only onnxruntime: the wizard must replace a previous run's CUDA list with CPU
-    (the runtime would silently drop CUDA), must warn with the full guidance, and must
-    still run the independent torch swap."""
-    swap = MagicMock()
-    with caplog.at_level("WARNING", logger="archon_search.install.installer"):
-        rc, database = _run_cuda_install_real_providers(
-            tmp_path, [_CPU_EP], swap, seed=f'[database]\nproviders = ["{_CUDA_EP}"]\n'
-        )
-
-    assert rc == 0
-    assert database["providers"] == []
-    _assert_fallback_guidance(capsys.readouterr().out)
-    assert any(
-        r.levelname == "WARNING" and r.getMessage() == "CUDA validation failed — falling back to CPU"
-        for r in caplog.records
-    )
-    swap.assert_called_once_with(dry_run=False)
-
-
-def test_cuda_ep_with_failing_reranker_falls_back_to_cpu_without_split(tmp_path: Path, capsys) -> None:
-    """CUDA EP present but only the embedder loads on it: CUDA has no embedder-only split,
-    so CPU is written, the fallback warning shows, and the torch swap still runs."""
-    swap = MagicMock()
-    probe = MagicMock(return_value=(True, False, ["reranker failed on CUDA"]))
-    rc, database = _run_cuda_install_real_providers(tmp_path, [_CUDA_EP, _CPU_EP], swap, probe=probe)
-
-    assert rc == 0
-    assert database["providers"] == []
-    assert "reranker_providers" not in database
-    _assert_fallback_guidance(capsys.readouterr().out)
-    swap.assert_called_once_with(dry_run=False)
-
-
 @pytest.mark.parametrize(("platform_sys", "machine"), [("win32", "AMD64"), ("linux", "aarch64")])
-def test_cuda_probe_fail_off_swap_platform_falls_back_to_cpu(
+def test_cuda_off_swap_platform_is_decided_by_the_model_probe(
     tmp_path: Path, capsys, platform_sys: str, machine: str
 ) -> None:
-    """Off linux/x86_64 a failing probe still writes CPU and warns, and there is no torch swap."""
+    """Off linux/x86_64 there is no swap: a passing model probe writes ``auto``, a failing one CPU."""
     swap = MagicMock()
-    rc, database = _run_cuda_install_real_providers(
-        tmp_path, [_CPU_EP], swap, machine=machine, platform_sys=platform_sys
+    rc, passed = _run_cuda_install(
+        tmp_path, cuda_swap=swap, machine=machine, platform_sys=platform_sys, models_validate=True
     )
+    assert (rc, passed) == (0, "auto")
+    assert "validation failed" not in capsys.readouterr().out
 
-    assert rc == 0
-    assert database["providers"] == []
-    _assert_fallback_guidance(capsys.readouterr().out)
+    second = tmp_path / "second"
+    second.mkdir()
+    rc, failed = _run_cuda_install(
+        second, cuda_swap=swap, machine=machine, platform_sys=platform_sys, models_validate=False
+    )
+    assert (rc, failed) == (0, "cpu")
+    assert "Warning: CUDA validation failed — falling back to CPU." in capsys.readouterr().out
     swap.assert_not_called()
 
 
@@ -484,82 +474,3 @@ def test_cuda_fallback_guidance_url_points_at_an_existing_doc_heading() -> None:
     heading = re.compile(rf"#{{1,6}} {re.escape(_CUDA_GUIDE_HEADING)}")
     assert any(heading.fullmatch(line) for line in doc.read_text(encoding="utf-8").splitlines())
     assert anchor == _github_slug(_CUDA_GUIDE_HEADING)
-
-
-def test_write_gpu_providers_disabled_adds_a_missing_database_table(tmp_path: Path) -> None:
-    """A config without [database] still ends with providers = [] (CPU), other tables kept."""
-    import tomlkit
-
-    config_path = tmp_path / "archon-search.toml"
-    config_path.write_text('[server]\nport = 9000\n')
-    create_installer(config_file=str(config_path)).write_gpu_providers_disabled(config_path)
-
-    doc = tomlkit.parse(config_path.read_text()).unwrap()
-    assert doc["database"]["providers"] == []
-    assert doc["server"]["port"] == 9000
-
-
-def test_write_gpu_providers_disabled_without_config_creates_nothing(tmp_path: Path) -> None:
-    config_path = tmp_path / "archon-search.toml"
-    create_installer(config_file=str(config_path)).write_gpu_providers_disabled(config_path)
-
-    assert not config_path.exists()
-
-
-def test_cuda_with_onnxruntime_cuda_ep_writes_cuda(tmp_path: Path, capsys) -> None:
-    """CUDA EP available and the model probe passes → CUDAExecutionProvider is written."""
-    swap = MagicMock()
-    rc, database = _run_cuda_install_real_providers(tmp_path, [_CUDA_EP, _CPU_EP], swap)
-
-    assert rc == 0
-    assert database["providers"] == [_CUDA_EP]
-    out = capsys.readouterr().out
-    assert "  Providers:  CUDA" in out.splitlines()
-    _assert_no_fallback_guidance(out)
-    swap.assert_not_called()
-
-
-@pytest.mark.parametrize(("platform_sys", "machine"), [("win32", "AMD64"), ("linux", "aarch64")])
-def test_cuda_probe_pass_off_swap_platform_writes_cuda_silently(
-    tmp_path: Path, capsys, platform_sys: str, machine: str
-) -> None:
-    """Off linux/x86_64 there is no torch swap to skip, so no 'Keeping…' notice either."""
-    swap = MagicMock()
-    rc, database = _run_cuda_install_real_providers(
-        tmp_path, [_CUDA_EP, _CPU_EP], swap, machine=machine, platform_sys=platform_sys
-    )
-
-    assert rc == 0
-    assert database["providers"] == [_CUDA_EP]
-    swap.assert_not_called()
-    out = capsys.readouterr().out
-    assert "Keeping the installed PyTorch build" not in out
-    _assert_no_fallback_guidance(out)
-
-
-def test_cuda_probe_pass_removes_a_stale_reranker_providers(tmp_path: Path) -> None:
-    """A previous split run left reranker_providers = []; once CUDA validates for both
-    models the reranker must follow [database].providers again."""
-    rc, database = _run_cuda_install_real_providers(
-        tmp_path, [_CUDA_EP, _CPU_EP], MagicMock(), seed="[database]\nreranker_providers = []\n"
-    )
-
-    assert rc == 0
-    assert database["providers"] == [_CUDA_EP]
-    assert "reranker_providers" not in database
-
-
-def test_cuda_probe_pass_keeps_installed_torch_and_says_why(tmp_path: Path, capsys) -> None:
-    """A passing CUDA probe means onnxruntime-gpu is installed; the cu126 torch swap would
-    overwrite its shared cuDNN files, so the swap is skipped with a one-line notice."""
-    swap = MagicMock()
-    rc, _ = _run_cuda_install_real_providers(tmp_path, [_CUDA_EP, _CPU_EP], swap)
-
-    assert rc == 0
-    swap.assert_not_called()
-    out = capsys.readouterr().out
-    assert (
-        "Keeping the installed PyTorch build: onnxruntime-gpu shares its CUDA libraries, "
-        "which the CUDA 12.6 PyTorch build would replace."
-    ) in out
-    _assert_no_fallback_guidance(out)

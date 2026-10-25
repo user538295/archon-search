@@ -31,6 +31,10 @@
 
 This section walks through every prompt in the order they appear.
 
+### Answering the yes/no questions
+
+Every yes/no question takes exactly `y` or `n` (either case). Anything else — Enter on its own, `yes`, `no`, a typo — is refused with `Please answer y or n.` and the same question is asked again; the wizard never aborts, and never picks a default for you, because of a wrong answer. Keys typed while the wizard was busy (for example during a download) are discarded before each question, so they cannot end up in front of your answer. The one exception is a closed stdin (EOF, for example a pipe that ran out): nobody is left to answer, so each question takes its **On EOF** answer, given with the question below. Questions that ask for a name or a number (profile, provider, model, URL) and the typed confirmations (`accept` for a license, `yes` before an index is deleted) are not yes/no questions and are unchanged.
+
 ### Step 0 — Legacy service cleanup
 
 If a previous installation left a legacy service file behind, the wizard removes it as part of installing the new service:
@@ -52,10 +56,10 @@ Under `--dry-run`, the wizard leaves the legacy service untouched (it does not u
 ### Step 1 — Multilingual corpus question
 
 ```
-Will your corpus include non-English documents? [y/N]:
+Will your corpus include non-English documents? [y/n]:
 ```
 
-**Default**: No (English models).
+**On EOF**: No (English models).
 
 **What it means**: If you answer `y`, the wizard selects multilingual model variants for every profile. Multilingual models support documents in many languages and enable the `language=<code>` filter on searches. They are larger and somewhat slower than their English counterparts.
 
@@ -70,11 +74,11 @@ The wizard prints a comparison table. The `balanced` profile is annotated as the
 ```
   Profile      Download    Quality       Speed (CPU / Apple Silicon)
   ─────────    ────────    ───────       ───────────────────────────
-  1) Minimal   ~147 MB     ★★☆☆☆         ~40 ms/query  / ~15 ms
-  2) Balanced  ~330 MB     ★★★☆☆         ~150 ms/query / ~50 ms   ← Recommended
-  3) Max       ~2.3 GB     ★★★★☆         ~400 ms/query / ~130 ms
+  1) Minimal   ~225 MB     ★★☆☆☆         ~40 ms/query  / ~15 ms
+  2) Balanced  ~572 MB     ★★★☆☆         ~150 ms/query / ~50 ms   ← Recommended
+  3) Max       ~2.5 GB     ★★★★☆         ~400 ms/query / ~130 ms
 
-  Models (all sizes from fastembed registry, verified):
+  Models (weights are downloaded from Hugging Face at pinned revisions):
   1) BAAI/bge-small-en-v1.5 + Xenova/ms-marco-MiniLM-L-6-v2
   2) BAAI/bge-base-en-v1.5 + Xenova/ms-marco-MiniLM-L-12-v2
   3) BAAI/bge-large-en-v1.5 + BAAI/bge-reranker-base
@@ -97,9 +101,9 @@ Press Enter to accept the default, or type `1`, `2`, or `3`. After three invalid
 
 | Profile | Best for | RAM | Download |
 |---|---|---|---|
-| Minimal | Personal use, <10k docs, low latency | ~0.5 GB | ~147–220 MB |
-| Balanced | Team use, 10k–200k docs | ~1.0–1.5 GB | ~330 MB – 2.1 GB |
-| Max | Large corpora, 200k+ docs, highest recall | ~2.5–3.0 GB | ~2.3–3.4 GB |
+| Minimal | Personal use, <10k docs, low latency | ~0.5 GB | ~225–471 MB |
+| Balanced | Team use, 10k–200k docs | ~1.0–1.5 GB | ~572 MB – 1.7 GB |
+| Max | Large corpora, 200k+ docs, highest recall | ~2.5–3.0 GB | ~2.5–2.8 GB |
 
 The multilingual Balanced and Max profiles use the Jina reranker (`jinaai/jina-reranker-v2-base-multilingual`), which is **licensed CC-BY-NC-4.0 (non-commercial)**. The Minimal multilingual profile has no reranker.
 
@@ -111,50 +115,44 @@ Immediately after profile selection, the wizard detects your GPU hardware and co
 
 - **Apple Silicon (M-series Mac):**
   ```
-  Apple Silicon detected — enable Metal acceleration? [Y/n]:
+  Apple Silicon detected — enable Metal acceleration? [y/n]:
   ```
-  Default: Yes. Press Enter to enable Metal (CoreML) acceleration. Type `n` to use CPU only.
+  Type `y` to enable Apple GPU (`mps`) acceleration through PyTorch or `n` to use CPU only. On EOF: Yes.
 
 - **NVIDIA GPU (Linux/Windows with CUDA):**
   ```
-  NVIDIA GPU detected — enable CUDA acceleration? [Y/n]:
+  NVIDIA GPU detected — enable CUDA acceleration? [y/n]:
   ```
-  Default: Yes. Press Enter to enable CUDA. Type `n` to use CPU only.
+  Type `y` to enable CUDA or `n` to use CPU only. On EOF: Yes.
 
-  The wizard detects an NVIDIA GPU by running `nvidia-smi`. When you confirm, it first checks that ONNX Runtime can load the embedding and reranking models under `CUDAExecutionProvider` — the same check the Apple Silicon path runs for CoreML (`archon_search/install/installer.py`, `_probe_and_configure_cuda`). The check fails without loading anything when the installed `onnxruntime` has no CUDA provider.
+  The wizard detects an NVIDIA GPU by running `nvidia-smi`. When you confirm — and after the Step 6 summary and its `Proceed?` — it checks that PyTorch can run the embedding and reranking models on the GPU: PyTorch's `auto` device must resolve to an accelerator (`cuda` or `mps`), and the embedder and the reranker must each load and run one inference on it (`archon_search/install/installer.py`, `_probe_and_configure_device`). The Apple Silicon path runs the same check.
 
-  - **Check passes** (the environment has `onnxruntime-gpu` instead of `onnxruntime`): the wizard writes `providers = ["CUDAExecutionProvider"]`, removes `reranker_providers` if it is `[]` (a value you set by hand is kept), and the summary's `Providers:` line shows `CUDA`.
-  - **Check fails** (the normal case: a native `pip`/`uv` install ships the CPU `onnxruntime` that fastembed and gliner depend on, which has no CUDA provider; fastembed 0.9.0 has no `[gpu]` extra): the wizard writes `providers = []`, the summary shows `(CPU default)`, and stdout shows:
+  - **Check passes:** the wizard writes `[database].device = "auto"` and prints the outcome as `Device:     CUDA` (`Device:     Apple GPU (mps)` on Apple Silicon). `auto` picks `cuda`, then `mps`, then `cpu`.
+  - **Check fails** (PyTorch found no usable accelerator — for example a CPU-only PyTorch build, or no compatible NVIDIA driver — or a model failed its check): the wizard writes `[database].device = "cpu"`, prints the outcome as `Device:     CPU`, and stdout shows the warning below. Only the CUDA case adds the two explanation lines and the link; on Apple Silicon only the first line is printed, with `Apple GPU` in place of `CUDA`.
 
     ```
     Warning: CUDA validation failed — falling back to CPU.
-      Text search and result ranking (ONNX Runtime) will run on CPU: the installed onnxruntime has no usable CUDAExecutionProvider.
-      To run them on the GPU, replace onnxruntime with onnxruntime-gpu (its PyPI build needs CUDA 13 and an NVIDIA driver >= 580), then re-run the wizard.
+      Text search and result ranking will run on CPU: PyTorch found no usable CUDA device (a CPU-only PyTorch build, or no compatible NVIDIA driver), or a model failed its check.
+      To run them on the GPU, install a CUDA build of PyTorch and an NVIDIA driver it supports, then re-run the wizard.
       Commands for each install method: https://github.com/user538295/archon-search/blob/main/Documentation/UserManual/10_installation.md#nvidia-gpu-run-embedding-and-reranking-on-cuda
     ```
 
-    Those commands are in [NVIDIA GPU: run embedding and reranking on CUDA](./10_installation.md#nvidia-gpu-run-embedding-and-reranking-on-cuda). Answer `n` here or pass `--disable-gpu` to skip the check; both also write `providers = []`.
+    Those commands are in [NVIDIA GPU: run embedding and reranking on CUDA](./10_installation.md#nvidia-gpu-run-embedding-and-reranking-on-cuda). Answer `n` here or pass `--disable-gpu` to skip the check; both write `[database].device = "cpu"`.
 
-  On a **Linux x86_64** host, a failed check is followed by a PyTorch reinstall: torch and torchvision become the CUDA 12.6 (`+cu126`) build of the installed version, so PDF and image-OCR parsing (docling) and the graph engine run on the GPU — they use PyTorch, not ONNX Runtime. Which build it replaces depends on how you installed (see [`10_installation.md`](./10_installation.md#linux-install-the-cpu-only-pytorch-build)). This step is best-effort: if the CUDA download fails, the wizard keeps the installed build and the install still succeeds. It does not run on other platforms (Windows and ARM are out of scope). In a `uv tool` install, `uv tool upgrade archon-search` can revert this build to PyPI's default (CUDA 13) because the uv tool receipt does not record `--torch-backend`. Upgrade with `uv tool install --upgrade --torch-backend cu126 "archon-search[<your extras>]"` instead.
+  On a **Linux x86_64** host where you accepted CUDA and the PyTorch the wizard runs on does not see a CUDA device, the wizard first swaps PyTorch: torch and torchvision become the CUDA 12.6 (`+cu126`) build of the installed version, printing `Installing CUDA torch/torchvision...` and then `CUDA torch/torchvision installed.`. Which build it replaces depends on how you installed (see [`10_installation.md`](./10_installation.md#linux-install-the-cpu-only-pytorch-build)). The wizard process keeps the PyTorch it already imported, so it verifies the swap in a fresh Python interpreter that asks PyTorch whether it sees a CUDA device; if it does, the check passes and `auto` is written, otherwise the warning above appears and `cpu` is written. This step is best-effort: if the CUDA download fails, the wizard prints `Warning: CUDA torch install failed; keeping the installed build: <reason>` to stderr, keeps the installed build, and the install still succeeds on CPU. When the wizard's PyTorch already sees CUDA, no swap happens and the model check runs. The swap does not run on other platforms (Windows and ARM are out of scope). In a `uv tool` install, `uv tool upgrade archon-search` can revert this build to PyPI's default (CUDA 13) because the uv tool receipt does not record `--torch-backend`. Upgrade with `uv tool install --upgrade --torch-backend cu126 "archon-search[<your extras>]"` instead.
 
-  When the check passes, the wizard skips that reinstall and prints `Keeping the installed PyTorch build: onnxruntime-gpu shares its CUDA libraries, which the CUDA 12.6 PyTorch build would replace.` The cuDNN wheel the `+cu126` torch pulls (`nvidia-cudnn-cu12`) and the one `onnxruntime-gpu[cudnn]` pulls (`nvidia-cudnn-cu13`) install the same file, `nvidia/cudnn/lib/libcudnn.so.9`, so the swap would overwrite the cuDNN that `onnxruntime-gpu` loads. Keep the CUDA 13 torch that the GPU install commands select.
+  With `--dry-run`, the wizard prints `[DRY RUN] Would set [database] device = 'auto'.` and, on Linux x86_64, `[DRY RUN] Would install CUDA torch from https://download.pytorch.org/whl/cu126`; it runs no check, because the check loads the models.
 
-  With `--dry-run`, the wizard prints `[DRY RUN] Would configure [database] execution providers.` and, on Linux x86_64, `[DRY RUN] Would install CUDA torch from https://download.pytorch.org/whl/cu126`; it runs no check, because the check loads the models.
+- **No GPU detected:** No prompt is shown; the wizard writes `[database].device = "cpu"`.
 
-- **No GPU detected:** No prompt is shown; CPU is used automatically.
-
-If Metal is selected but CoreML validation fails (e.g., the installed ONNX Runtime build does not support it), the wizard tries a split-provider probe: it checks whether the **embedder** works under CoreML even if the combined probe failed. If the embedder passes but the reranker does not:
-
-- `providers = ["CoreMLExecutionProvider"]` is written for the embedder.
-- `reranker_providers = []` is also written, forcing the reranker to CPU.
-- The install summary shows `CoreML — text search; CPU — result ranking`.
-
-If both probes fail, the wizard falls back to CPU entirely and writes `providers = []`, replacing a CoreML entry an earlier run wrote:
+If you accept Metal but the check fails, the wizard falls back to CPU entirely and writes `[database].device = "cpu"`, replacing an `auto` an earlier run wrote:
 ```
-Warning: CoreML validation failed — falling back to CPU.
+Warning: Apple GPU validation failed — falling back to CPU.
 ```
 
 To skip GPU detection entirely and force CPU, pass `--disable-gpu`.
+
+**When the check runs.** The accelerator check downloads and loads both models, which is most of the install's download. So it runs only after the Step 6 summary — which shows the total `Download:` size — and your `Proceed? [y/n]`. Until then the summary's `Device:` line says what is about to be checked, for example `Apple GPU (mps) — checked after you confirm; CPU if it fails`; once the check has run, the wizard prints the outcome as `Device:     <what it settled on>`. Answering `n` at `Proceed?` costs nothing: no check, no download, no device written.
 
 ### Step 4 — License gates
 
@@ -187,7 +185,7 @@ Type `accept` to proceed. For non-interactive installs, pass `--accept-fasttext-
 
 ### Step 5 — Optional features
 
-After the license gates, the wizard asks about optional features. Each question is preceded by a short plain-text explanation so you can make an informed choice. Each has a default that is applied if you press Enter without typing anything.
+After the license gates, the wizard asks about optional features. Each question is preceded by a short plain-text explanation so you can make an informed choice. The yes/no questions take only `y` or `n` (see [Answering the yes/no questions](#answering-the-yesno-questions)); the choice questions (routing strategy, log format, providers, models) apply their default if you press Enter without typing anything.
 
 #### 5a. Code enrichment
 
@@ -202,10 +200,10 @@ Code enrichment (tree-sitter) + code graphing:
     - Graph extraction: a prose entity/relation model, an estimated 1218 MB
       (approximate, not a verified size), fetched on first use, licensed under
       Apache-2.0.
-Index code files (installs tree-sitter + graph enrichment, enables graph)? [y/N]:
+Index code files (installs tree-sitter + graph enrichment, enables graph)? [y/n]:
 ```
 
-**Default**: No.
+**On EOF**: No.
 
 **This is one question covering two features, and it discloses their two download costs separately** — the tree-sitter parsers, installed during the wizard run, and the prose extraction model, fetched from Hugging Face. The two are quoted apart rather than as a single combined figure because they differ by two orders of magnitude and are paid at different moments. Both figures come from `archon_search/install/extras.py` (`CODE_EXTRA_SIZE_ESTIMATE`, `GRAPH_MODEL_SIZE_ESTIMATE`); the model figure is an estimate from the graph-NER spike, not a verified download size, and it also feeds the pre-install disk guard and the displayed download total (`_planned_total_bytes` in `archon_search/install/prewarm.py`).
 
@@ -251,10 +249,10 @@ Reranker:
   A second-stage cross-encoder model that re-scores results for better precision.
   Disabling it reduces latency and RAM but lowers recall quality.
   Default: enabled (for profiles that include a reranker).
-Keep reranker enabled? [Y/n]:
+Keep reranker enabled? [y/n]:
 ```
 
-**Default**: Yes (for profiles that include a reranker). Answering `n` disables the reranker, equivalent to passing `--no-reranker` on the command line.
+**On EOF**: Yes (for profiles that include a reranker). Answering `n` disables the reranker, equivalent to passing `--no-reranker` on the command line.
 
 **This question is only shown when your selected profile includes a reranker.** The Minimal multilingual profile has no reranker, so this question is skipped for that combination.
 
@@ -267,12 +265,12 @@ Filesystem watcher:
   Monitors watched directories and automatically re-indexes files when they change.
   Uses watchdog. Increases background CPU usage slightly.
   Default: disabled.
-Auto-watch directories and re-index on file changes? [y/N]:
+Auto-watch directories and re-index on file changes? [y/n]:
 ```
 
-**Default**: No.
+**On EOF**: No.
 
-If you answer `y`, archon-search monitors your collection source directories with a watchdog and automatically re-indexes files when they are created, modified, or deleted. Useful for corpora that change frequently (e.g., a notes folder, a code repository). Either way the answer is recorded — `[collections].watch` is written to the config as `true` or `false`, including when you press Enter to keep the default. Only a `--non-interactive` run without `--watch`/`--no-watch` leaves the key out.
+If you answer `y`, archon-search monitors your collection source directories with a watchdog and automatically re-indexes files when they are created, modified, or deleted. Useful for corpora that change frequently (e.g., a notes folder, a code repository). Either way the answer is recorded — `[collections].watch` is written to the config as `true` or `false`, including when you answer `n`. Only a `--non-interactive` run without `--watch`/`--no-watch` leaves the key out.
 
 #### 5d. Telemetry
 
@@ -281,12 +279,12 @@ Local telemetry:
   Logs per-query metadata (collection, result count, latency) to
   ~/.archon-search/search-logs/. No query text is stored. Opt-in.
   Default: disabled.
-Enable local query telemetry? [y/N]:
+Enable local query telemetry? [y/n]:
 ```
 
-**Default**: No.
+**On EOF**: No.
 
-If you answer `y`, archon-search appends one JSON line per search request to daily files under `~/.archon-search/search-logs/`. Only structural metadata is recorded — collection names, latency, result counts — **raw query text is never written**. Files older than 30 days are pruned automatically (change this with `--telemetry-retention-days`). Telemetry is entirely local; no data is sent anywhere. See [`120_telemetry.md`](./120_telemetry.md) for the full telemetry surface. Either way the answer is recorded — `[telemetry].enabled` is written to the config as `true` or `false`, including when you press Enter to keep the default. Only a `--non-interactive` run without `--telemetry`/`--no-telemetry` leaves the key out.
+If you answer `y`, archon-search appends one JSON line per search request to daily files under `~/.archon-search/search-logs/`. Only structural metadata is recorded — collection names, latency, result counts — **raw query text is never written**. Files older than 30 days are pruned automatically (change this with `--telemetry-retention-days`). Telemetry is entirely local; no data is sent anywhere. See [`120_telemetry.md`](./120_telemetry.md) for the full telemetry surface. Either way the answer is recorded — `[telemetry].enabled` is written to the config as `true` or `false`, including when you answer `n`. Only a `--non-interactive` run without `--telemetry`/`--no-telemetry` leaves the key out.
 
 #### 5e. Eager load
 
@@ -297,12 +295,12 @@ Eager embedder loading:
   (a failed warm-up ends the wait) — after a successful warm-up no query pays the cold-load cost.
   This option widens that warm-up to every per-collection embedding model as well,
   at the cost of a longer startup. Default: disabled.
-Also pre-load every per-collection embedding model at startup? [y/N]:
+Also pre-load every per-collection embedding model at startup? [y/n]:
 ```
 
-**Default**: No.
+**On EOF**: No.
 
-Model warm-up is **not** optional and this answer does not turn it off. On every start the server loads `[database].embedding_model` and the cross-encoder reranker in a background task, and `GET /ready` returns `503` until model warm-up and the background model validation finish (a failed warm-up ends the wait). After a successful warm-up, a client that waits for readiness never pays the ~5–15 s (much longer for the `max` profile's models) cold-load cost on its first search; after a failed one, searches run degraded (FTS-only without the embedder, unreranked without the cross-encoder) while each retries the cold model. Answering `y` only widens the *scope* of that same warm-up to every distinct per-collection `active_embedding_model`, so a collection pinned to a non-default model is warm too; the trade-off is a longer window before the server reports ready, and the models must fit within `[database].embedder_cache_size`. Recommended when collections pin their own models. Either way the answer is recorded — `[database].eager_load_embedders` is written to the config as `true` or `false`, including when you press Enter to keep the default. Only a `--non-interactive` run without `--eager-load`/`--no-eager-load` leaves the key out.
+Model warm-up is **not** optional and this answer does not turn it off. On every start the server loads `[database].embedding_model` and the cross-encoder reranker in a background task, and `GET /ready` returns `503` until model warm-up and the background model validation finish (a failed warm-up ends the wait). After a successful warm-up, a client that waits for readiness never pays the ~5–15 s (much longer for the `max` profile's models) cold-load cost on its first search; after a failed one, searches run degraded (FTS-only without the embedder, unreranked without the cross-encoder) while each retries the cold model. Answering `y` only widens the *scope* of that same warm-up to every distinct per-collection `active_embedding_model`, so a collection pinned to a non-default model is warm too; the trade-off is a longer window before the server reports ready, and the models must fit within `[database].embedder_cache_size`. Recommended when collections pin their own models. Either way the answer is recorded — `[database].eager_load_embedders` is written to the config as `true` or `false`, including when you answer `n`. Only a `--non-interactive` run without `--eager-load`/`--no-eager-load` leaves the key out.
 
 #### 5f. Routing strategy
 
@@ -356,10 +354,10 @@ AI query expansion (HyDE + RAG Fusion):
     claude_cli - uses Claude Code's login, no API key
     llama_cpp  - runs against a local llama-server, no API key
   Default: disabled.
-Enable AI query expansion (HyDE + RAG Fusion)? [y/N]:
+Enable AI query expansion (HyDE + RAG Fusion)? [y/n]:
 ```
 
-**Default**: No. Answering `n` (or pressing Enter, or closing stdin) writes `[hyde].enabled = false` and `[rag_fusion].enabled = false`.
+**On EOF**: No. Answering `n` (or closing stdin) writes `[hyde].enabled = false` and `[rag_fusion].enabled = false`.
 
 If you answer `y`, the wizard prompts for a provider for each feature independently:
 
@@ -421,7 +419,7 @@ After answering, the wizard:
 - Enables both `[hyde].enabled = true` and `[rag_fusion].enabled = true` in your config.
 - Writes `[hyde].provider` / `[rag_fusion].provider` (and `model`, `ollama_base_url`/`llama_cpp_base_url` where applicable) for non-Anthropic providers. For `claude_cli`, `model` is only written when you choose one — a blank leaves it unset so the config default applies.
 - Installs the provider's package so the feature actually works: `anthropic` → `archon-search[hyde]`, `openai` → `archon-search[openai-provider]`, `ollama` → `archon-search[ollama]`. When both features share a provider (the default is `anthropic` for both), the package is installed once. `claude_cli` and `llama_cpp` need no package (the former uses the `claude` command on your PATH, the latter uses `httpx`, a core dependency). If the install fails, the wizard prints a warning and reverts `[hyde].enabled` / `[rag_fusion].enabled` to `false` so the next server start does not hard-fail on the missing package — re-run the wizard or install the package manually to enable it.
-- Creates `<data-dir>/.secrets.env` (mode 600, empty) if it does not already exist, whatever the selected provider. (`ollama`, `claude_cli`, and `llama_cpp` need no key; the file then stays empty unless you add other variables such as `FASTEMBED_CACHE_PATH`.)
+- Creates `<data-dir>/.secrets.env` (mode 600, empty) if it does not already exist, whatever the selected provider. (`ollama`, `claude_cli`, and `llama_cpp` need no key; the file then stays empty unless you add other variables.)
 
 To configure providers manually after the wizard, edit `archon-search.toml` directly: set `[hyde].provider` and `[rag_fusion].provider` to `"anthropic"`, `"openai"`, `"ollama"`, `"claude_cli"`, or `"llama_cpp"`, and set the corresponding `model` and `ollama_base_url`/`llama_cpp_base_url` fields as needed. You can also re-run the wizard with `--enable-hyde --enable-rag-fusion` to reconfigure.
 
@@ -435,12 +433,12 @@ LLM-backed graph enrichment:
   builds. Optional — the graph subsystem (entity extraction, PPR,
   communities) works without it.
   Default: disabled.
-Enable LLM-backed graph enrichment? [y/N]:
+Enable LLM-backed graph enrichment? [y/n]:
 ```
 
 Enabling this buys community summaries and nothing else.
 
-**Default**: No — `[graph].provider` stays `null`.
+**On EOF**: No — `[graph].provider` stays `null`.
 
 If you answer `y`, the wizard prompts for one of the four v1 enrichment providers (`claude_cli` is not offered here — it has no v1 HTTP enrichment client, deferred post-v1):
 
@@ -452,18 +450,18 @@ Which provider for graph enrichment? (anthropic/openai/ollama/llama_cpp) [anthro
 
 ### Step 6 — Summary screen
 
-Before the model download step (Step 8), the wizard prints a summary of what it is about to install. On Apple Silicon with GPU acceleration on, the CoreML check from Step 3 has already run by then, and it downloads and loads the embedder and reranker to test them:
+Before any model is downloaded, the wizard prints a summary of what it is about to install. The Step 3 accelerator check has **not** run yet — it downloads and loads the embedder and reranker, so it waits for your confirmation below — and the `Device:` line says what is about to be checked. On Apple Silicon with the GPU accepted it reads `Device:     Apple GPU (mps) — checked after you confirm; CPU if it fails` (`CUDA — checked after you confirm; CPU if it fails` on NVIDIA); with no GPU, a declined prompt or `--disable-gpu` it reads `Device:     CPU`:
 
 ```
   Installing: Balanced · English
   Embedder:   BAAI/bge-base-en-v1.5
   Reranker:   Xenova/ms-marco-MiniLM-L-12-v2
   Chunk size: 512 tokens
-  Providers:  (CPU default)
+  Device:     CPU
   Database:   /Users/you/.archon-search/search
   Server:     http://127.0.0.1:8765
   API key:    abcdefgh…nopqrstu  (full key: /Users/you/.archon-search/.search.env)
-  Download:   ~330 MB
+  Download:   ~572 MB
 
   Note: Models are downloaded and test-loaded before the service starts (unless
   --skip-preload); an embedder that cannot load stops the install. The server
@@ -479,10 +477,10 @@ Before the model download step (Step 8), the wizard prints a summary of what it 
 Only non-default optional features are listed. When you enable AI query expansion, the summary confirms it with `HyDE: enabled (provider: …)` and `RAG Fusion: enabled (provider: …)` lines so you have visible proof the setting took effect before you exit the wizard. The `API key` line shows a masked preview and the path to the env file that holds the full key. If the key file does not exist yet (first install, server not yet started), `(not yet generated)` is shown instead. The summary also reflects any deployment flags you passed (custom host, port, db path, top-k, etc.). Then:
 
 ```
-Proceed? [Y/n]:
+Proceed? [y/n]:
 ```
 
-Press Enter or type `y` or `yes` to continue. Any other input (including EOF) aborts the installation. On abort, graph-enabled, multilingual, and query-expansion flags are reverted in the config file, but the config file itself was already written to disk before this prompt appeared.
+Type `y` to continue or `n` to abort; anything else is asked again (see [Answering the yes/no questions](#answering-the-yesno-questions)). Only a closed stdin (EOF) aborts without an answer. On abort, graph-enabled, multilingual, and query-expansion flags are reverted in the config file, but the config file itself was already written to disk before this prompt appeared. No GPU check, model download or provider write has happened at that point.
 
 ### Step 7 — Optional extras install (if requested)
 
@@ -509,14 +507,14 @@ If you chose a **multilingual** profile, the wizard also installs the `archon-se
 [4/5] Downloading and loading models...
 ```
 
-The wizard downloads the configured embedding model and (if one is configured) the reranker model weights to the fastembed cache — `$FASTEMBED_CACHE_PATH` when it is set in the wizard's shell, otherwise `<data-dir>/models/` — then **loads each one and runs a single test inference**, exactly as the server will: same model, same `[database].providers` (the reranker uses `[database].reranker_providers` when it is set), same cache directory. The launchd/systemd service the wizard registers does not inherit the wizard's shell, so it does not see that `FASTEMBED_CACHE_PATH`: it loads from `<data-dir>/models/` and downloads the weights again there. To relocate a service's cache, set `FASTEMBED_CACHE_PATH` in the environment the service loads — `<data-dir>/.secrets.env` (sourced by the launchd wrapper script on macOS; the systemd unit's `EnvironmentFile` on Linux). Each model is released before the next one loads, so this step holds one model at a time. On a re-run, a service still running from the earlier install keeps its own models loaded meanwhile — it is replaced only in Step 9 (a `--force --delete-db` reinstall stops it earlier) — so this step's peak memory is that service plus one model. The Step 3 CoreML check on Apple Silicon is different: it loads the embedder and reranker together. A reranker you disabled (`--no-reranker`, or `n` at "Keep reranker enabled?") is neither downloaded nor loaded. For multilingual installs, `lid.176.ftz` is also downloaded to `<data-dir>/models/`.
+The wizard downloads the configured embedding model and (if one is configured) the reranker model weights from Hugging Face, at the revisions pinned in `archon_search/model_specs.py`, into `<data-dir>/models/` (Hugging Face cache layout) — then **loads each one and runs a single test inference**, exactly as the server will: same model, same `[database].device`, same cache directory. A model already in the cache is not downloaded again. With `HF_HUB_OFFLINE=1` set in the wizard's environment, nothing is downloaded: a model missing from the cache fails the pre-warm with `offline mode is on and the model is not in the local cache`. Each model is released before the next one loads, so this step holds one model at a time. On a re-run, a service still running from the earlier install keeps its own models loaded meanwhile — it is replaced only in Step 9 (a `--force --delete-db` reinstall stops it earlier) — so this step's peak memory is that service plus one model. The Step 3 accelerator check also loads the embedder and the reranker one after the other, not together. A reranker you disabled (`--no-reranker`, or `n` at "Keep reranker enabled?") is neither downloaded nor loaded. For multilingual installs, `lid.176.ftz` is also downloaded to `<data-dir>/models/`.
 
-Loading here is what catches a model whose files download but cannot run — a corrupt file, or weights the installed onnxruntime rejects — at install time instead of at your first ingest. The message names the model, the phase that failed (`Could not resolve or download …` or `… was downloaded but cannot be loaded`), and the underlying error; see [Model pre-warm fails](#model-pre-warm-fails-was-downloaded-but-cannot-be-loaded) for the fixes:
+Loading here is what catches a model whose files download but cannot run — a damaged weight file, say — at install time instead of at your first ingest. The message names the model, the phase that failed (`Could not resolve or download …` or `… was downloaded but cannot be loaded`), and the underlying error; see [Model pre-warm fails](#model-pre-warm-fails-was-downloaded-but-cannot-be-loaded) for the fixes:
 
 - **Embedder failure — the install stops.** The server cannot embed without it. The wizard prints the cause, does not start the service, exits `1`, and rolls the config back: a fresh install leaves no config, `.bak` or wizard record, a re-run restores the previous config from its `.bak` and keeps the previous wizard record, and a `--force --delete-db` reinstall keeps the new config and its `.bak` and records the new config:
 
   ```
-  Model pre-warm failed: The embedder model 'BAAI/bge-small-en-v1.5' was downloaded but cannot be loaded: [ONNXRuntimeError] : 7 : INVALID_PROTOBUF : Load model from <data-dir>/models/.../model_optimized.onnx failed:Protobuf parsing failed.
+  Model pre-warm failed: The embedder model 'BAAI/bge-small-en-v1.5' was downloaded but cannot be loaded: <reason>
   ```
 
 - **Reranker failure — a warning, and the install continues.** While the reranker cannot load, `/search` runs without reranking, but `/explain` with reranking on (its default) fails with HTTP 500.
@@ -525,37 +523,36 @@ Loading here is what catches a model whose files download but cannot run — a c
   The reranker model 'Xenova/ms-marco-MiniLM-L-6-v2' was downloaded but cannot be loaded: <reason> — the install continues, but /search skips reranking and /explain with rerank fails until the model loads. See 'Model pre-warm fails' in the wizard troubleshooting.
   ```
 
-A provider in `[database].providers` (or `reranker_providers`) that the installed onnxruntime does not have is not a load failure: like the server, the pre-warm drops it and loads on the remaining providers, or on CPU when none remain, and prints a `configured ONNX providers not available: <names> — loading models on <providers> instead …` warning to stderr, once per distinct provider list (see Step 3 for the NVIDIA case).
+A `mps` or `cuda` in `[database].device` that the host lacks is not a load failure: like the server, the pre-warm steps down to CPU and logs a `device 'cuda' is not available on this host; using cpu` warning once per process. The pre-warm loads only models from the supported registry: any other model name fails with `unsupported model '<name>'; supported: …`.
 
 If the pre-warm runs past its time limit (5 to 30 minutes, scaled to the profile's download size), the models not yet started are skipped once the embedder is ready, and one warning names them — for example `Model pre-warm timed out after <N>s with the embedder ready — skipping the reranker and graph NER models; the service downloads them when it starts or first uses them.` (or `the reranker model` / `the graph NER model` … `it` when only one is left) — so they are not load-checked at install time. The limit is checked between models: a download or load already running is never interrupted, and when no model remains, nothing is logged.
 
 If you enabled the graph (Step 5a), the prose extraction checkpoint is pre-warmed at the end of this step, into `<data-dir>/models/graph/`. This is the ~1218 MB download quoted in Step 5a and it dominates the step's wall time. A failure is non-fatal and logged, not fatal to the install — the model downloads on first graph ingest instead.
 
-Immediately after the pre-warm, and only when the graph extra was installed and `--skip-preload` was not passed, the wizard settles `[graph].providers`. The accelerator is offered only when an accelerator was *requested* (defined below) and both probe stages agreed — stage 1 found the device available on this host, *and* the pre-warm actually resolved the model onto it:
+Immediately after the pre-warm, and only when the graph extra was installed and `--skip-preload` was not passed, the wizard settles `[graph].device`. The accelerator is offered only when an accelerator was *requested* (defined below) and both probe stages agreed — stage 1 found the device available on this host, *and* the pre-warm actually resolved the model onto it:
 
 ```
 Graph extraction validated on cuda — use it? (accelerated but unmeasured;
-guardrails are tuned for CPU) [Y/n]:
+guardrails are tuned for CPU) [y/n]:
 ```
 
-The accelerator is the default here: a bare Enter accepts it, `n` steps down to CPU (`[graph].providers = []`), and a `--non-interactive` install accepts it without asking.
+Type `y` to accept the accelerator or `n` to step down to CPU (`[graph].device = "cpu"`); anything else is asked again, a closed stdin (EOF) accepts it, and a `--non-interactive` install accepts it without asking. Accepting writes the candidate value itself (`cuda`, `mps` or `auto`), not the device the pre-warm landed on.
 
-An accelerator is *requested* when the first entry of the graph's candidate provider list is `CUDAExecutionProvider` or `CoreMLExecutionProvider`. The candidates are the `--graph-providers` value when that flag is passed; otherwise, in an interactive install, the provider of the GPU you accepted in Step 3 (`CUDAExecutionProvider` for NVIDIA, `CoreMLExecutionProvider` for Apple Silicon); otherwise none, so a `--non-interactive` install without `--graph-providers` requests nothing. `--disable-gpu`, or declining the Step 3 prompt, empties the candidates even against an explicit `--graph-providers`.
+An accelerator is *requested* when the graph's candidate device is anything other than `cpu`. The candidate is the `--graph-device` value when that flag is passed; otherwise, in an interactive install, the device of the GPU you accepted in Step 3 (`cuda` for NVIDIA, `mps` for Apple Silicon); otherwise `cpu`, so a `--non-interactive` install without `--graph-device` requests nothing. `--disable-gpu`, or declining the Step 3 prompt, makes the candidate `cpu` even against an explicit `--graph-device`.
 
 Every other outcome settles without a prompt. Here "the pre-warm produced no device" means the graph NER pre-warm failed (download or load), the pre-warm time limit skipped it, or the run is a `--dry-run` (which pre-warms nothing):
 
-- **Accelerator requested, but the pre-warm landed the model on CPU or produced no device** — the wizard logs `Graph accelerator not validated (conflicting_onnx_runtimes) — writing [graph].providers = [] (CPU).` at WARNING and writes `[graph].providers = []` (CPU). Despite its name, `conflicting_onnx_runtimes` here only means the requested device was not usable.
-- **Nothing requested, and the pre-warm placed the model on CPU** — `[graph].providers = []` (CPU) is written, with no warning, replacing any list you set by hand.
-- **Nothing requested, and the pre-warm produced no device** — nothing is written. The wizard logs `Graph accelerator not validated (pre-warm did not run) — leaving CPU.` at WARNING; unset already means CPU, and there is no evidence to justify overwriting a list you may have set by hand — so a hand-set accelerator list survives despite the message.
+- **Accelerator requested, but the pre-warm landed the model on CPU or produced no device** — the wizard logs `Graph accelerator not validated (device_unavailable) — writing [graph].device = 'cpu'.` at WARNING and writes `[graph].device = "cpu"`.
+- **Nothing requested, and the pre-warm placed the model on CPU** — `[graph].device = "cpu"` is written, with no warning, replacing any value you set by hand.
+- **Nothing requested, and the pre-warm produced no device** — nothing is written. The wizard logs `Graph accelerator not validated (pre-warm did not run) — leaving CPU.` at WARNING; unset already means CPU, and there is no evidence to justify overwriting a value you may have set by hand — so a hand-set accelerator value survives despite the message.
 
-With `--skip-preload` the settle step does not run: the stage-1 availability check still runs (and can log a CPU step-down WARNING), but there is no stage-2 validation and `[graph].providers` is left as it was. A non-empty `--graph-providers` is ignored outright, with this note, when the graph extra is not being installed:
+With `--skip-preload` the settle step does not run: the stage-1 availability check still runs (and can log a CPU step-down WARNING), but there is no stage-2 validation and `[graph].device` is left as it was. `--graph-device` is ignored outright, with this note, when the graph extra is not being installed:
 
 ```
-  Note: --graph-providers was ignored — graph extraction is not being installed,
-  so [graph].providers is not written.
+  Note: --graph-device was ignored — graph extraction is not being installed, so [graph].device is not written.
 ```
 
-Depending on your chosen profile and connection speed this can take from a few seconds (Minimal) to several minutes (Max). Progress is printed to the terminal by fastembed. Loading adds each model's session build time on top of the download.
+Depending on your chosen profile and connection speed this can take from a few seconds (Minimal) to several minutes (Max). Download progress is printed to the terminal by the Hugging Face hub downloader. Loading adds each model's load time on top of the download.
 
 To skip this step and download the heavy weights on the first search request instead, pass `--skip-preload`. This also skips the load check above, so a model that cannot load surfaces only when the server tries to use it. Note: for multilingual profiles the small `lid.176.ftz` language-detection model is **always** downloaded, even with `--skip-preload` — it is a required ~1 MB runtime asset without which the server cannot start, so it is never deferred. If that download fails, the wizard reverts to English-only mode so the server still boots.
 
@@ -616,8 +613,8 @@ All flags for the `wizard` command (verified against `archon_search/cli/install_
 | `--no-reranker` | False | Disable the cross-encoder reranker for lower latency. |
 | `--routing-strategy {centroid,hybrid}` | Not set (interactive) | Set the routing strategy directly, skipping the interactive prompt. |
 | `--log-format {text,json}` | Not set (interactive) | Set the log format directly, skipping the interactive prompt. |
-| `--disable-gpu` | False | Force CPU execution: skip the GPU confirmation prompt and write `[database].providers = []`. Also empties the `[graph].providers` candidates, overriding `--graph-providers`, so no graph accelerator is requested. |
-| `--graph-providers TEXT` | Not set | Comma-separated ONNX execution providers for the graph extraction engine (`[graph].providers`), e.g. `CUDAExecutionProvider`. Unknown names are rejected. An empty string requests no accelerator. This supplies *candidates* only: an accelerator value is written just when the install-time two-stage device probe validates it against the pre-warmed model — otherwise `[]` (CPU) is written, except for the no-write cases in [Step 8](#step-8--model-download). Without this flag a `--non-interactive` install never opts into an accelerator, since nobody is there to accept one the guardrails were not tuned for. Ignored (with a note) when graph extraction is not being installed. |
+| `--disable-gpu` | False | Force CPU execution: skip the GPU confirmation prompt and write `[database].device = "cpu"`. Also forces the `[graph].device` candidate to `cpu`, overriding `--graph-device`, so no graph accelerator is requested. |
+| `--graph-device [cpu\|auto\|mps\|cuda]` | Not set | Torch device for the graph extraction engine (`[graph].device`). This supplies the *candidate* for non-interactive installs: an accelerator value is written just when the install-time two-stage device probe validates it against the pre-warmed model — otherwise `cpu` is written, except for the no-write cases in [Step 8](#step-8--model-download). Without this flag a `--non-interactive` install never opts into an accelerator, since nobody is there to accept one the guardrails were not tuned for. Ignored (with a note) when graph extraction is not being installed. |
 | **Tier 1 deployment flags** | | |
 | `--host TEXT` | Not set (uses `127.0.0.1`) | Bind address for the HTTP API. Use `0.0.0.0` for remote or Docker access. Non-loopback values print a security note reminding you to add a firewall or reverse proxy. Cannot be an empty string. |
 | `--port INTEGER` | Not set (uses `8765`) | HTTP port for the installed config (valid range 1–65535). This is an **install-time config flag** — it writes `[server].port`; there is no runtime `--port` flag on `serve`/`start`. Port conflicts are not detected at wizard time; the OS reports an error at service start. |
@@ -763,20 +760,17 @@ The wizard writes to `<data-dir>/archon-search.toml` (`~/.archon-search/archon-s
 | Embedding model (from profile) | `embedding_model` | `"BAAI/bge-base-en-v1.5"` |
 | Reranker model (from profile) | `reranker_model` | `"Xenova/ms-marco-MiniLM-L-12-v2"` |
 | Chunk size (from profile) | `chunk_size` | `512` |
-| GPU (Metal, full CoreML) | `providers` (+ `reranker_providers` removed if it is `[]`) | `["CoreMLExecutionProvider"]` |
-| GPU (Metal, split: embedder CoreML / reranker CPU) | `providers` + `reranker_providers` | `["CoreMLExecutionProvider"]` + `[]` |
-| GPU (CUDA, CUDA check passes: `onnxruntime-gpu` installed) | `providers` (+ `reranker_providers` removed if it is `[]`) | `["CUDAExecutionProvider"]` |
-| GPU (CUDA, CUDA check fails or not in the installed ONNX Runtime — the stock `onnxruntime`) | `providers` | `[]` |
-| GPU (Metal, CoreML check fails or not in the installed ONNX Runtime) | `providers` | `[]` |
-| GPU declined, or `--disable-gpu` | `providers` | `[]` |
-| No GPU detected | nothing written (CPU) | — |
+| GPU accepted (Apple Silicon or NVIDIA) and both models pass the check on it | `device` | `"auto"` |
+| GPU accepted, but the check fails (no usable accelerator, or a model fails on it) | `device` | `"cpu"` |
+| GPU declined, or `--disable-gpu` | `device` | `"cpu"` |
+| No GPU detected | `device` | `"cpu"` |
 | Reranker disabled (`--no-reranker`) | `reranker_model` | `""` |
 | Eager load (interactive answer, or `--eager-load`/`--no-eager-load`) | `eager_load_embedders` | `true` / `false` |
 | `--db-path PATH` | `db_path` | `"~/data/archon-search"` |
 | `--top-k INTEGER` | `top_k_return` | `20` |
 | `--top-k INTEGER` (derived) | `top_k_retrieve` | `60` (= max(15, 3 × top_k)) |
 
-GPU rows: `reranker_providers` is touched only on the paths where a check passes: a full CoreML or CUDA pass removes it when it is `[]` (a value you set by hand is kept), and the Metal split writes `[]`. A `providers` list that already contains the detected provider is left unchanged, so a chain you extended by hand survives a re-run.
+GPU rows: `[database].device` is written on every run, after the Step 6 `Proceed?`; a write that would leave the value unchanged is skipped. `[graph].device` is a separate key: it is written in Step 8, and only when graph extraction is installed.
 
 ### `[collections]` section
 
@@ -816,7 +810,7 @@ GPU rows: `reranker_providers` is touched only on the paths where a check passes
 |---|---|---|
 | AI query expansion (interactive answer, or `--enable-rag-fusion`) | `enabled` | `true` / `false` |
 
-**Only the choices you actually made are written.** A default you never answered — a `--non-interactive` run without the matching flag — is not written to the file, so a fresh install with no optional answers holds only `[server].host`, the profile's `[database]` keys (`embedding_model`, `reranker_model`, `chunk_size`, `profile`, `multilingual`) and `[database].providers` when the GPU step writes it (a detected GPU, or `--disable-gpu`/a declined GPU prompt, which write `[]`) — keys such as `[server].port`, `[database].db_path`, the `[routing]` tuning keys, `[collections].collections`/`pinned_collections` and the `[logging]` keys are left out and resolve to their built-in defaults (`archon-search config show` prints them filled in). The one exception is `[server].host = "127.0.0.1"`, which a fresh install (and `--force --delete-db` without an existing config) always writes unless `--host` is passed: `archon-search serve` defaults the host to `0.0.0.0`, so without the key a wizard-written config would bind all interfaces. The host is written only when the wizard creates the file: a re-run, or `--force --delete-db` over an existing config, keeps whatever `[server].host` the file has (or lacks) unless `--host` is passed, and `archon-search serve` then binds `0.0.0.0` if the key is absent. For `[collections].watch`, `[telemetry].enabled`, `[database].eager_load_embedders`, `[routing].routing_strategy`, `[logging].format`, `[hyde].enabled`, and `[rag_fusion].enabled`, a re-run that leaves the question unanswered also removes the key a prior run wrote. An answer you actually gave *is* written, even when it matches the default: passing an explicit flag (e.g., `--port 8765`, `--routing-strategy centroid`, `--no-watch`) always writes the key, and so does answering the interactive `routing_strategy`, `log_format`, filesystem-watcher, telemetry, eager-load, or AI-query-expansion prompt (the last writes both `[hyde].enabled` and `[rag_fusion].enabled`) — including pressing Enter to accept the shown default, which counts as an answer (a declined y/n prompt is written as `false`). In an interactive run this also applies when stdin closes early (EOF, piped input): the wizard falls back to the shown default and records it as your answer, so `[routing].routing_strategy`, `[logging].format`, `[collections].watch`, `[telemetry].enabled`, `[database].eager_load_embedders`, `[hyde].enabled`, and `[rag_fusion].enabled` are still written. All other keys in `archon-search.toml` remain at their defaults.
+**Only the choices you actually made are written.** A default you never answered — a `--non-interactive` run without the matching flag — is not written to the file, so a fresh install with no optional answers holds only `[server].host`, the profile's `[database]` keys (`embedding_model`, `reranker_model`, `chunk_size`, `profile`, `multilingual`) and `[database].device`, which the GPU step always writes (`auto` for an accepted, validated accelerator; `cpu` for no GPU, a declined prompt, `--disable-gpu` or a failed check) — keys such as `[server].port`, `[database].db_path`, the `[routing]` tuning keys, `[collections].collections`/`pinned_collections` and the `[logging]` keys are left out and resolve to their built-in defaults (`archon-search config show` prints them filled in). The one exception is `[server].host = "127.0.0.1"`, which a fresh install (and `--force --delete-db` without an existing config) always writes unless `--host` is passed: `archon-search serve` defaults the host to `0.0.0.0`, so without the key a wizard-written config would bind all interfaces. The host is written only when the wizard creates the file: a re-run, or `--force --delete-db` over an existing config, keeps whatever `[server].host` the file has (or lacks) unless `--host` is passed, and `archon-search serve` then binds `0.0.0.0` if the key is absent. For `[collections].watch`, `[telemetry].enabled`, `[database].eager_load_embedders`, `[routing].routing_strategy`, `[logging].format`, `[hyde].enabled`, and `[rag_fusion].enabled`, a re-run that leaves the question unanswered also removes the key a prior run wrote. An answer you actually gave *is* written, even when it matches the default: passing an explicit flag (e.g., `--port 8765`, `--routing-strategy centroid`, `--no-watch`) always writes the key, and so does answering the interactive `routing_strategy`, `log_format`, filesystem-watcher, telemetry, eager-load, or AI-query-expansion prompt (the last writes both `[hyde].enabled` and `[rag_fusion].enabled`) — including pressing Enter to accept the shown default of the routing and log-format prompts, which counts as an answer, and an `n` to a y/n prompt, which is written as `false`. In an interactive run this also applies when stdin closes early (EOF, piped input): the wizard falls back to the question's default (a y/n question's **On EOF** answer) and records it as your answer, so `[routing].routing_strategy`, `[logging].format`, `[collections].watch`, `[telemetry].enabled`, `[database].eager_load_embedders`, `[hyde].enabled`, and `[rag_fusion].enabled` are still written. All other keys in `archon-search.toml` remain at their defaults.
 
 The wizard also backs up your existing config to `archon-search.toml.bak` beside it before making any changes, and records the wizard-managed values it left in the config in `archon-search.toml.wizard.json` beside it (used by the next re-run to tell its own values from hand edits — see [Same profile (idempotent re-run)](#same-profile-idempotent-re-run)). If the record cannot be updated, the wizard prints a warning naming the record file and finishes the run as it would otherwise; a later re-run may then misreport hand edits. `--dry-run` writes neither file.
 
@@ -902,9 +896,9 @@ num_queries = 2
 
 Edit these keys in `archon-search.toml` to tune model choice, timeouts, and rate limits. For how these features behave at query time, see [`60_searching.md`](./60_searching.md).
 
-### Custom ONNX providers and language detection
+### Device override and language detection
 
-The wizard auto-detects Metal and CUDA, but if you want a custom provider chain or need to override what was configured, edit `[database].providers` directly. The `language_detection_confidence_threshold` (default: 0.7) controls when a language code is recorded vs. stored as `"unknown"` — adjust in `[database]` if you see too many `"unknown"` tags.
+The wizard writes `[database].device` from the Step 3 answer: `auto` when you accepted a detected GPU and both models passed the check on it, `cpu` otherwise. To override it, edit `[database].device` directly; the accepted values are `auto` (CUDA, then Apple GPU `mps`, then CPU), `cpu`, `mps` and `cuda`. A requested `mps` or `cuda` that the host lacks steps down to CPU with a warning. The graph engine has its own `[graph].device` (default `cpu`). A config that still holds the removed `[database].providers`, `[database].reranker_providers` or `[graph].providers` key fails to load with `<section>.<key> was replaced by <section>.device (auto|cpu|mps|cuda); see BREAKING.md`; delete the key. The `language_detection_confidence_threshold` (default: 0.7) controls when a language code is recorded vs. stored as `"unknown"` — adjust in `[database]` if you see too many `"unknown"` tags.
 
 ---
 
@@ -918,10 +912,10 @@ If you re-run with the same profile and multilingual setting, the wizard:
 
 1. Checks whether you have hand-edited any wizard-managed keys in `archon-search.toml` since the last run. If hand-edits are detected, an overwrite warning is shown:
    ```
-   Existing config has custom values. Overwrite with profile defaults? [y/N]:
+   Existing config has custom values. Overwrite with profile defaults? [y/n]:
    ```
    - Answer `y` to proceed (the wizard continues normally).
-   - Answer `n` (or press Enter, since the default is No) to abort. The config is left unchanged and no `.bak` file is created.
+   - Answer `n` to abort. The config is left unchanged and no `.bak` file is created. Anything else is asked again; a closed stdin (EOF) aborts.
    - In `--non-interactive` mode, the wizard auto-accepts with a logged warning and proceeds.
 2. Backs up your existing config to `archon-search.toml.bak` (only if proceeding past the overwrite check), and after writing the config records its wizard-managed values in `archon-search.toml.wizard.json`.
 3. Overwrites the profile-related keys in `archon-search.toml` with the new values (including any optional feature changes you make in the prompts).
@@ -930,7 +924,7 @@ If you re-run with the same profile and multilingual setting, the wizard:
 
 Your indexed data is **preserved**. Changing optional features (telemetry, watcher, etc.) without changing the profile is safe for your index, but every re-run rewrites the optional-feature keys from that run's answers alone — see [Changing optional features only](#changing-optional-features-only) before re-running with `--non-interactive`.
 
-The overwrite detection compares the wizard-managed keys only — the keys a re-run rewrites or removes even when no flag names them, apart from the GPU provider list: the `[database]` profile fields (`embedding_model`, `reranker_model`, `chunk_size`, `profile`, `multilingual`), `[collections].watch`, `[telemetry].enabled`, `[telemetry].retention_days`, `[database].eager_load_embedders`, `[routing].routing_strategy`, `[logging].format`, `[hyde].enabled` and `[rag_fusion].enabled`. `[server]` and the other deployment keys, `[graph]` and the HyDE/RAG Fusion provider/model keys are never compared, because a re-run writes them only when their flag or answer is given. `[database].providers` is not compared either, although a re-run can rewrite it from the GPU answer without a flag (`--non-interactive` accepts GPU acceleration): it keeps a provider list that already contains the detected accelerator and leaves the list untouched when no GPU is detected, so comparing it would warn on re-runs that do not change it. A hand-edited provider list is therefore replaced without a warning when the re-run enables a detected GPU the list does not contain, and with `[]` when you decline GPU acceleration, pass `--disable-gpu`, or the Metal check fails. The wizard compares these keys against `archon-search.toml.wizard.json`, the record of the values it left in the config on its last run (written at every exit after the config write, including a declined `Proceed?` and a failed install). A key changed, added or removed since then is a hand edit — including an edit back to a default — while a value the wizard wrote itself (e.g. `--watch`, `hybrid` routing, `--no-reranker`) never is. A config without a readable record (written by an older version of the wizard, or with the record deleted or corrupt) is checked once against a fallback baseline: the profile fields against the profile's values and the other keys against the built-in defaults (absent or set to the default does not count). That fallback cannot tell a wizard-written non-default value from a hand edit, so such a config may show the warning once; answer `y` to overwrite safely. The record exists from that run on.
+The overwrite detection compares the wizard-managed keys only — the keys a re-run rewrites or removes even when no flag names them, apart from `[database].device`: the `[database]` profile fields (`embedding_model`, `reranker_model`, `chunk_size`, `profile`, `multilingual`), `[collections].watch`, `[telemetry].enabled`, `[telemetry].retention_days`, `[database].eager_load_embedders`, `[routing].routing_strategy`, `[logging].format`, `[hyde].enabled` and `[rag_fusion].enabled`. `[server]` and the other deployment keys, `[graph]` and the HyDE/RAG Fusion provider/model keys are never compared, because a re-run writes them only when their flag or answer is given. `[database].device` is not compared either, although every run rewrites it from the GPU answer without a flag: `cpu` when no GPU is detected, you decline GPU acceleration, pass `--disable-gpu` or the accelerator check fails, and `auto` when an accepted accelerator passes the check. The write is skipped when the value is unchanged, so comparing it would warn on re-runs that do not change it. A hand-edited `device` is therefore replaced without a warning. The wizard compares these keys against `archon-search.toml.wizard.json`, the record of the values it left in the config on its last run (written at every exit after the config write, including a declined `Proceed?` and a failed install). A key changed, added or removed since then is a hand edit — including an edit back to a default — while a value the wizard wrote itself (e.g. `--watch`, `hybrid` routing, `--no-reranker`) never is. A config without a readable record (written by an older version of the wizard, or with the record deleted or corrupt) is checked once against a fallback baseline: the profile fields against the profile's values and the other keys against the built-in defaults (absent or set to the default does not count). That fallback cannot tell a wizard-written non-default value from a hand edit, so such a config may show the warning once; answer `y` to overwrite safely. The record exists from that run on.
 
 ### Different profile (rebuilds the index)
 
@@ -958,7 +952,7 @@ Switching to BAAI/bge-large-en-v1.5 (chunk_size=1024) requires rebuilding the in
 
 To update optional features without changing the profile, re-run the wizard with the same `--profile`. The interactive prompts ask every question again, or you can pass flags to answer them directly.
 
-A re-run does not merge with the previous optional-feature answers: each optional-feature key is rewritten from this run's answers alone. In a `--non-interactive` re-run, every optional-feature question you do not answer with a flag is reset — `[collections].watch`, `[telemetry].enabled` (and `[telemetry].retention_days`), `[database].eager_load_embedders`, `[routing].routing_strategy`, `[logging].format`, `[hyde].enabled`, and `[rag_fusion].enabled` are removed from the config (HyDE and RAG Fusion stay disabled by default; their provider/model keys from an earlier opt-in are left in place), and a reranker removed with `--no-reranker` is restored to the profile default. The deployment settings are not reset: `--host`, `--port`, `--db-path`, `--log-level`, and `--top-k` write their keys (`[server].host`, `[server].port`, `[database].db_path`, `[logging].level`, `[database].top_k_return`/`top_k_retrieve`) only when you pass the flag, so a re-run without them keeps the previous values. The exceptions keep their previous value: `[graph].enabled = true` from an earlier code-enrichment opt-in is never cleared (declining code enrichment or omitting `--code` does not set it back to `false`); `[graph].provider`, `[graph].extraction_model`, and the graph base URL are written only when you choose a graph-enrichment provider, so a run that does not choose one leaves the previous values in place; and `[telemetry].retention_days` survives any re-run that turns telemetry on (`--telemetry`, or `y` at the interactive prompt) without `--telemetry-retention-days`, and is removed by a re-run that leaves telemetry off or unanswered without the flag. A re-run with `--telemetry-retention-days` writes the new value whatever the telemetry answer. Edit the graph keys by hand to change them. In an interactive re-run, the watcher, telemetry, eager-load, routing, and log-format prompts offer their built-in default (shown in brackets), not your previous answer, so pressing Enter writes that default. To change one feature and keep the rest, either re-run interactively and answer every prompt again, or pass every flag you want to keep alongside the new one:
+A re-run does not merge with the previous optional-feature answers: each optional-feature key is rewritten from this run's answers alone. In a `--non-interactive` re-run, every optional-feature question you do not answer with a flag is reset — `[collections].watch`, `[telemetry].enabled` (and `[telemetry].retention_days`), `[database].eager_load_embedders`, `[routing].routing_strategy`, `[logging].format`, `[hyde].enabled`, and `[rag_fusion].enabled` are removed from the config (HyDE and RAG Fusion stay disabled by default; their provider/model keys from an earlier opt-in are left in place), and a reranker removed with `--no-reranker` is restored to the profile default. The deployment settings are not reset: `--host`, `--port`, `--db-path`, `--log-level`, and `--top-k` write their keys (`[server].host`, `[server].port`, `[database].db_path`, `[logging].level`, `[database].top_k_return`/`top_k_retrieve`) only when you pass the flag, so a re-run without them keeps the previous values. The exceptions keep their previous value: `[graph].enabled = true` from an earlier code-enrichment opt-in is never cleared (declining code enrichment or omitting `--code` does not set it back to `false`); `[graph].provider`, `[graph].extraction_model`, and the graph base URL are written only when you choose a graph-enrichment provider, so a run that does not choose one leaves the previous values in place; and `[telemetry].retention_days` survives any re-run that turns telemetry on (`--telemetry`, or `y` at the interactive prompt) without `--telemetry-retention-days`, and is removed by a re-run that leaves telemetry off or unanswered without the flag. A re-run with `--telemetry-retention-days` writes the new value whatever the telemetry answer. Edit the graph keys by hand to change them. In an interactive re-run, the routing and log-format prompts offer their built-in default (shown in brackets), not your previous answer, so pressing Enter writes that default, and the watcher, telemetry and eager-load questions do not remember your previous answer either — you must answer each `y` or `n` again. To change one feature and keep the rest, either re-run interactively and answer every prompt again, or pass every flag you want to keep alongside the new one:
 
 ```bash
 # Enable the filesystem watcher, keeping telemetry and JSON logs from the previous run
@@ -973,11 +967,11 @@ For service and ingestion failures beyond the wizard-specific cases below, see [
 
 ### GPU detection is wrong or causes errors
 
-If the wizard enables Metal or CUDA but the server fails to start or produces ONNX errors, you can disable GPU acceleration by editing `~/.archon-search/archon-search.toml`:
+If the wizard enables Metal or CUDA but the server fails to start or produces device errors, you can disable GPU acceleration by editing `~/.archon-search/archon-search.toml`:
 
 ```toml
 [database]
-providers = []
+device = "cpu"
 ```
 
 Then restart the service:
@@ -987,7 +981,7 @@ archon-search stop
 archon-search install
 ```
 
-A later wizard re-run without `--disable-gpu` re-enables GPU acceleration on a detected GPU and replaces that list (the GPU question defaults to yes, `--non-interactive` accepts it, and the hand-edited list is not flagged as a hand edit), so keep passing `--disable-gpu` on this machine.
+A later wizard re-run without `--disable-gpu` re-enables GPU acceleration on a detected GPU and replaces that value (`--non-interactive` and a closed stdin accept the GPU question, and the hand-edited value is not flagged as a hand edit), so keep passing `--disable-gpu` on this machine.
 
 Alternatively, re-run the wizard with `--disable-gpu` to force CPU:
 
@@ -1038,16 +1032,16 @@ For large profiles (Max), downloads can take 10–30 minutes on slow connections
 ### Model pre-warm fails: "was downloaded but cannot be loaded"
 
 ```
-Model pre-warm failed: The embedder model '<model>' was downloaded but cannot be loaded: <onnxruntime error>
+Model pre-warm failed: The embedder model '<model>' was downloaded but cannot be loaded: <error>
 ```
 
-The files arrived but onnxruntime cannot build a session from them, so the wizard stopped before starting a service whose every ingest would fail (Step 8). The same text without the `Model pre-warm failed:` prefix, ending in `— the install continues, but /search skips reranking and /explain with rerank fails until the model loads. …`, is the non-fatal reranker variant: the service is already running, and the fixes below apply to it too.
+The files arrived but PyTorch cannot load the model from them, so the wizard stopped before starting a service whose every ingest would fail (Step 8). The same text without the `Model pre-warm failed:` prefix, ending in `— the install continues, but /search skips reranking and /explain with rerank fails until the model loads. …`, is the non-fatal reranker variant: the service is already running, and the fixes below apply to it too.
 
-- **A damaged file** (for example `Protobuf parsing failed`): the onnxruntime error names the file it tried to load, under `<data-dir>/models/models--…/` (`$FASTEMBED_CACHE_PATH/models--…/` when that is set). That path is a link: it can resolve into the cache's shared store `blobs/` beside it (`<data-dir>/models/blobs/`, or `$FASTEMBED_CACHE_PATH/blobs/`), which a re-download re-links rather than replaces — so moving only the `models--…` directory to the trash does not repair it. Resolve the path first with `readlink -f '<path>'` or, where your `readlink` has no `-f`, `python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' '<path>'`; move both the file it prints and the `models--…` directory to the trash, then re-run the wizard; the model is downloaded again. The cache check only compares file sizes, so a same-size corruption is not repaired by re-running alone.
-- **`External data path escapes model directory`**: the model keeps its weights in a separate `model.onnx_data` file that the cache stored in a different directory than `model.onnx` (among the shipped profiles, `intfloat/multilingual-e5-large`). fastembed 0.9.0 or later repairs this on load by hard-linking both files side by side, so check that the wizard runs with fastembed 0.9.0 or later, and that the fastembed cache (`<data-dir>/models`, or `$FASTEMBED_CACHE_PATH` when set) is writable on a filesystem that supports hard links (move it with `ARCHON_SEARCH_DATA_DIR` or `FASTEMBED_CACHE_PATH` if not). Otherwise move the model's `models--<repo>` directory to the trash and re-run the wizard with `HF_HUB_DISABLE_SHARED_BLOBS=1` set, so the pre-warm downloads it again in the flat per-repo layout. Details: [the incident runbook](../OperatorGuide/90_incident_runbook.md#ingest-fails-with-external-data-path-escapes-model-directory).
-- **An execution-provider error** (for example CoreML rejecting the model): the model is fine, but the GPU provider written to `[database].providers` cannot run it. A provider the installed onnxruntime does not have at all is not this case: it is dropped with a `configured ONNX providers not available: …` warning and the model loads on CPU instead of failing. Re-run the wizard with `--disable-gpu` to install on CPU. `--disable-gpu` writes only `[database].providers`: if you set `[database].reranker_providers` by hand and it names the failing provider, remove that line as well.
-- **The model still cannot be loaded on CPU after a fresh download**: the installed onnxruntime cannot run it at all. Pick another profile until it is fixed, and include the full message when you report it.
-- **`Could not resolve or download …` instead of `… cannot be loaded`**: the download phase failed, before any load was tried — see [Model download fails or times out](#model-download-fails-or-times-out).
+- **A damaged or truncated weight file**: the cause names what PyTorch could not read. The weights live in `<data-dir>/models/models--<org>--<name>/snapshots/<revision>/` (Hugging Face cache layout). Move that `models--<org>--<name>` directory to the trash and re-run the wizard; the model is downloaded again.
+- **A device error**: the model is fine, but the accelerator in `[database].device` cannot run it. Set `device = "cpu"` under `[database]` (or re-run the wizard with `--disable-gpu`, which writes it) and re-run. A requested `mps`/`cuda` that the host lacks is not this case: PyTorch steps down to CPU with a `device 'cuda' is not available on this host; using cpu` warning instead of failing.
+- **`unsupported model '<name>'; supported: …`**: the configured model is not one the runtime supports. Only the registry models listed in `archon_search/model_specs.py` load (the same list is in `tests/fixtures/runtime_parity/README.md` in the repository); pick a supported name.
+- **The model still cannot be loaded on CPU after a fresh download**: pick another profile until it is fixed, and include the full message when you report it.
+- **`Could not resolve or download …` instead of `… cannot be loaded`**: the download phase failed, before any load was tried. The text after the model name is `could not fetch model '<repo>': download failed; check the network connection and free disk space` (a network or disk problem), `… offline mode is on and the model is not in the local cache` (`HF_HUB_OFFLINE` is set and the model has not been downloaded yet — unset it or download the model first), or `… the downloaded snapshot is missing required files`. See [Model download fails or times out](#model-download-fails-or-times-out).
 
 ### Service install is not supported (Windows)
 
@@ -1062,7 +1056,7 @@ archon-search uninstall           # stop + unregister the service
 archon-search uninstall --delete-db  # also remove all indexed data
 ```
 
-The config file `~/.archon-search/archon-search.toml` and model weights in the fastembed/HuggingFace cache are not removed by `uninstall`. Delete `~/.archon-search/` manually to remove everything — plus the `FASTEMBED_CACHE_PATH` directory, if you exported one, since the fastembed weights then live there instead of `~/.archon-search/models/`.
+The config file `~/.archon-search/archon-search.toml` and the model weights in `~/.archon-search/models/` (Hugging Face cache layout) are not removed by `uninstall`. Delete `~/.archon-search/` manually to remove everything. If you upgraded from an ONNX-based release, `~/.archon-search/models/` may still hold old `models--Qdrant--*` / `models--Xenova--*` directories; the current release no longer uses them and they can be deleted.
 
 ---
 

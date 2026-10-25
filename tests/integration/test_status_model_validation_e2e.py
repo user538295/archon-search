@@ -11,7 +11,6 @@ end-to-end.
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 import time
 
@@ -19,10 +18,6 @@ import pytest
 
 from archon_search.model_validation import ModelValidationResult
 from tests.integration.conftest import make_real_app
-from tests.test_onnx_provider_fallback import (
-    _UNAVAILABLE_PROVIDER_CASES,
-    _unavailable_provider_list,
-)
 
 pytestmark = pytest.mark.integration
 
@@ -135,45 +130,20 @@ def _models_check_and_validation(client, api_key: str) -> tuple[str | None, dict
     return models, mv
 
 
-@pytest.mark.parametrize(("provider", "then_cpu"), _UNAVAILABLE_PROVIDER_CASES)
-def test_unavailable_provider_reports_models_warn_not_fail(
-    tmp_path, monkeypatch, provider: str, then_cpu: bool
-) -> None:
-    """S635: a configured provider this host's onnxruntime lacks is a fallback, not a failure.
+@pytest.mark.parametrize("device", ["cuda", "mps"])
+def test_unavailable_device_reports_models_warn_not_fail(tmp_path, monkeypatch, device: str) -> None:
+    """A configured accelerator this host lacks is a step-down, not a failure.
 
-    The models still load on the providers the host has, so /ready reports ``models: warn``
-    and /status carries both probes as ok plus the missing-provider warning. Uses the real
-    onnxruntime provider list; the real fastembed load is covered by
-    ``tests/test_onnx_provider_fallback.py``.
+    The models still load on CPU, so /ready reports ``models: warn`` and /status carries
+    both probes as ok plus the fixed ``device unavailable`` warning. Availability is pinned
+    off so the result does not depend on the host's GPU.
     """
-    providers = _unavailable_provider_list(provider, then_cpu)
-    toml = f"[database]\nproviders = {json.dumps(providers)}\n"
+    monkeypatch.setattr("archon_search.torch_runtime._accelerator_available", lambda _device: False)
+    toml = f'[database]\ndevice = "{device}"\n'
     with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
         models, mv = _models_check_and_validation(client, api_key)
 
     assert models == "warn", mv
     assert mv["embedder_ok"] is True, mv
     assert mv["reranker_ok"] is True, mv
-    assert (
-        f"configured ONNX providers not available: {providers[0]}" in mv["provider_warnings"]
-    ), mv
-
-
-@pytest.mark.parametrize(("provider", "then_cpu"), _UNAVAILABLE_PROVIDER_CASES)
-def test_unavailable_reranker_provider_reports_models_warn_not_fail(
-    tmp_path, monkeypatch, provider: str, then_cpu: bool
-) -> None:
-    """S635: only ``[database].reranker_providers`` names a provider the host lacks → the
-    reranker still loads (on CPU), so /ready reports ``models: warn``, not ``fail``."""
-    reranker_providers = _unavailable_provider_list(provider, then_cpu)
-    toml = f"[database]\nproviders = []\nreranker_providers = {json.dumps(reranker_providers)}\n"
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
-        models, mv = _models_check_and_validation(client, api_key)
-
-    assert models == "warn", mv
-    assert mv["embedder_ok"] is True, mv
-    assert mv["reranker_ok"] is True, mv
-    assert (
-        f"configured ONNX providers not available: {reranker_providers[0]}"
-        in mv["provider_warnings"]
-    ), mv
+    assert mv["provider_warnings"] == [f"device unavailable: {device}; models loaded on cpu"], mv

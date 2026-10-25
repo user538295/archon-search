@@ -1,6 +1,6 @@
 """Guard: archon_search must disable ONNX Runtime's 1DS telemetry before onnxruntime initializes.
 
-Official onnxruntime wheels (fastembed, gliner, magika all pull it in) ship Microsoft's 1DS
+Official onnxruntime wheels (gliner, magika and docling's RapidOCR pull it in) ship Microsoft's 1DS
 telemetry uploader ON by default on macOS and Linux (onnxruntime `docs/Privacy.md`). Two
 defects follow:
 

@@ -6,7 +6,7 @@ ONNX Runtime telemetry) before any Arrow-, torch- or onnxruntime-backed module l
 import os
 import sys
 
-# Official onnxruntime wheels (via fastembed, gliner, magika) run Microsoft's 1DS
+# Official onnxruntime wheels (pulled in by gliner, magika and docling's RapidOCR) run Microsoft's 1DS
 # telemetry uploader by default on macOS and Linux (onnxruntime docs/Privacy.md).
 # That is undisclosed egress, and it aborts the process at exit: `~PosixEnv` tears
 # the uploader down while its worker decodes an HTTP response, the worker locks a

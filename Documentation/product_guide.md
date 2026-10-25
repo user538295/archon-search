@@ -83,14 +83,14 @@ The piece that listens for requests over HTTP. Chosen because it produces a self
 ### LanceDB (the database)
 Where your paragraphs, their fingerprints, and metadata are saved. Most "AI search" databases require running a separate server; LanceDB is just a folder of files on your disk. Easier to install, easier to back up (you can literally copy the folder), and it does both meaning-search and keyword-search in one place.
 
-### fastembed (the "meaning fingerprint" model)
-The small AI model that turns text into number-fingerprints. The default model is about 33 MB and runs locally on your CPU — no internet needed, no API key, no cost per query. Picking this over a cloud model is what makes archon-search private and free to run.
+### The embedding model (the "meaning fingerprint" model)
+The small AI model that turns text into number-fingerprints. The default model (`BAAI/bge-small-en-v1.5`) is about 133 MB and runs locally, on a supported GPU when one is available and on your CPU otherwise — no API key and no cost per query. It is downloaded once, the first time it is needed; after that it works without internet. Picking this over a cloud model is what makes archon-search private and free to run.
 
 ### Cross-encoder reranker (the "double-check" model)
 A second, more careful model that takes the top results from the first search and re-ranks them by reading the question and each result together. Slower than the first model, but more accurate. Running it only on the shortlist gives the best of both worlds: speed *and* precision.
 
-### ONNX Runtime (the model runner)
-A small piece of software that actually runs both AI models above. Chosen because it works on any CPU, and can optionally use a GPU if you have one, without changing anything else.
+### PyTorch (the model runner)
+A widely used machine-learning library that actually runs both AI models above. Chosen because it works on any CPU, and uses an Apple GPU or an NVIDIA GPU when you have one (the `device` setting in the `[database]` section of the config; `auto` is the default). Only models from archon-search's built-in list of supported models can be used.
 
 ### Watchdog (the file watcher)
 Watches your folders for changes. When you save a file, it tells archon-search to reindex it. Without this you would have to manually re-import after every change.
@@ -110,7 +110,7 @@ Used to manage dependencies and version numbers automatically. You don't see the
 
 Each piece reinforces the others:
 
-- **Local-first.** LanceDB stores everything on your disk; fastembed runs the AI on your CPU. Together they mean archon-search works without internet and without sending anything anywhere.
+- **Local-first.** LanceDB stores everything on your disk; the AI models run on your own machine. Together they mean that, once the models are downloaded, archon-search works without internet and without sending your documents anywhere.
 - **Hybrid search in one place.** Because LanceDB does both meaning-search and keyword-search natively, archon-search doesn't have to stitch two databases together.
 - **Two-stage search.** The cheap first stage narrows millions of paragraphs to dozens; the careful second stage picks the winners. Fast *and* accurate.
 - **One server, two audiences.** The same content is reachable by humans (through the API and CLI) and AI assistants (through MCP), with the same security rules.

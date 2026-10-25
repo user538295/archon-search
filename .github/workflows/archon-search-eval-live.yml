@@ -32,23 +32,34 @@ jobs:
       - name: Cache model weights
         uses: actions/cache@v6.1.0
         with:
+          # The live-lane snapshot directories of <ARCHON_SEARCH_DATA_DIR>/models (default
+          # ~/.archon-search). The key names the pinned revisions (archon_search/model_specs.py);
+          # tests/test_workflow_model_cache_lint.py enforces it.
           path: |
-            ~/.cache/huggingface/hub/
-            ~/.cache/fastembed/
-          key: fastembed-${{ hashFiles('uv.lock') }}-${{ runner.os }}
-          restore-keys: |
-            fastembed-
+            ~/.archon-search/models/models--BAAI--bge-small-en-v1.5
+            ~/.archon-search/models/models--cross-encoder--ms-marco-MiniLM-L-6-v2
+          key: model-cache-live-bge-small-en-v1.5-5c38ec7c405ec4b44b94cc5a9bb96e735b38267a-ms-marco-MiniLM-L-6-v2-233902d25c440f23af6f7d6e94d2946bac0bee0a
 
       - name: Install dependencies
         run: uv sync --dev
 
+      - name: Prefetch models (3 attempts, exponential backoff)
+        # model_store.ensure_model at the pinned revisions into <ARCHON_SEARCH_DATA_DIR>/models,
+        # the directory the live lane's backends load from (a no-op on a cache hit).
+        run: |
+          prefetch_ok=false
+          for attempt in 1 2 3; do
+            uv run python -m tests._live_model_cache && { prefetch_ok=true; break; }
+            echo "Attempt $attempt failed; retrying in $((attempt * 5))s..."
+            sleep $((attempt * 5))
+          done
+          if [ "$prefetch_ok" != "true" ]; then
+            echo "All prefetch attempts failed"; exit 1
+          fi
+
       - name: Run live eval suite
         continue-on-error: true
-        # Load the weights from the cache restored above (S493): without the export,
-        # get_fastembed_cache_dir() resolves ~/.archon-search/models, which is never cached.
-        run: |
-          export FASTEMBED_CACHE_PATH="$HOME/.cache/fastembed"
-          uv run pytest -o addopts= --strict-markers -m live_eval tests/eval/live/ -v --no-cov
+        run: uv run pytest -o addopts= --strict-markers -m live_eval tests/eval/live/ -v --no-cov
 
       - name: Upload live eval report
         uses: actions/upload-artifact@v7.0.1

@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +24,7 @@ from archon_search.constants import (
     _validate_namespace,
 )
 from archon_search.paths import DEFAULT_DATA_DIR_NAME, get_data_dir
+from archon_search.torch_runtime import DEVICE_SETTINGS
 
 if TYPE_CHECKING:  # pragma: no cover — import cycle guard, typing only
     from archon_search.collection_meta import CollectionMeta
@@ -225,14 +227,10 @@ class GraphConfig:
     """Minimum engine score for a relation to become a typed edge. Only
     relations between spans that already cleared ner_confidence are
     candidates. Must be in the half-open range (0.0, 1.0]."""
-    providers: list[str] | None = None
-    """ONNX Runtime execution provider names for the graph NER/RelEx engine
-    (e.g. "CPUExecutionProvider", "CUDAExecutionProvider", "CoreMLExecutionProvider")
-    — the same vocabulary as [database].providers, matched by prose_extraction_backend.py
-    via a "cuda"/"coreml" substring check on the first entry. Its own [graph] setting —
-    never inherited from [database].providers, unlike resolve_reranker_providers's
-    fallback to [database].providers. None means the field was never written or was
-    written as an empty list, read by the engine as CPU."""
+    device: str = "cpu"
+    """Torch device for the graph NER/RelEx engine: ``auto``, ``cpu``, ``mps`` or ``cuda``.
+    Its own [graph] setting — never inherited from [database].device. Defaults to ``cpu``:
+    the engine's guardrails are tuned for CPU and an accelerator is allowed but unmeasured."""
 
 
 _OPENAI_SHIM_TOP_K_DEFAULT: int = 5
@@ -264,11 +262,11 @@ class SearchConfig:
     reranker_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
     chunk_size: int = 512
     auto_reindex_on_chunk_size_change: bool = True
-    providers: list[str] = field(default_factory=list)
-    reranker_providers: list[str] | None = None
+    device: str = "auto"
+    """Torch device for the embedder and reranker: ``auto`` (cuda > mps > cpu), ``cpu``, ``mps`` or ``cuda``."""
     top_k_retrieve: int = 15
     top_k_return: int = 5
-    # [database] — D6 install-time / background provider validation
+    # [database] — D6 install-time / background model validation
     validation_timeout_seconds: float = 60.0
     # [search] — multi-collection fan-out execution bounds (B3)
     max_fanout: int = 8
@@ -328,11 +326,6 @@ class SearchConfig:
     graph: GraphConfig = field(default_factory=GraphConfig)
     # [openai_shim]
     openai_shim: OpenAIShimConfig = field(default_factory=OpenAIShimConfig)
-
-
-def resolve_reranker_providers(cfg: "SearchConfig") -> list[str] | None:
-    """Return providers to use for the reranker, normalising [] to None (CPU)."""
-    return (cfg.reranker_providers if cfg.reranker_providers is not None else cfg.providers) or None
 
 
 def resolve_active_model(meta: "CollectionMeta | None", cfg: "SearchConfig | None") -> str:
@@ -498,10 +491,19 @@ def _coerce_bool(value: object, field_name: str) -> bool:
     return value
 
 
-def _coerce_provider_list(raw: object, field_name: str) -> list[str]:
-    if not isinstance(raw, list) or not all(isinstance(item, str) and item for item in raw):
-        raise ConfigError(f"{field_name} must be a list of non-empty strings, got {raw!r}")
-    return list(raw)
+def _coerce_device(raw: object, field_name: str) -> str:
+    """Return *raw* if it is one of ``DEVICE_SETTINGS``, else raise ``ConfigError``."""
+    if not isinstance(raw, str) or raw not in DEVICE_SETTINGS:
+        raise ConfigError(f"{field_name} must be one of {list(DEVICE_SETTINGS)}, got {raw!r}")
+    return raw
+
+
+def _reject_removed_key(section: Mapping[str, object], key: str, section_name: str) -> None:
+    """Raise ``ConfigError`` naming ``device`` when *section* still holds a removed ONNX-providers key."""
+    if key in section:
+        raise ConfigError(
+            f"{section_name}.{key} was replaced by {section_name}.device (auto|cpu|mps|cuda); see BREAKING.md"
+        )
 
 
 def _coerce_str(value: object, field_name: str) -> str:
@@ -611,12 +613,10 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         config.auto_reindex_on_chunk_size_change = _coerce_bool(
             database["auto_reindex_on_chunk_size_change"], "auto_reindex_on_chunk_size_change"
         )
-    if "providers" in database:
-        config.providers = _coerce_provider_list(database["providers"], "[database].providers")
-    if "reranker_providers" in database:
-        config.reranker_providers = _coerce_provider_list(
-            database["reranker_providers"], "[database].reranker_providers"
-        )
+    _reject_removed_key(database, "providers", "[database]")
+    _reject_removed_key(database, "reranker_providers", "[database]")
+    if "device" in database:
+        config.device = _coerce_device(database["device"], "[database].device")
     if "top_k_retrieve" in database:
         top_k_retrieve = _coerce_int(database["top_k_retrieve"], "top_k_retrieve")
         if top_k_retrieve <= 0:
@@ -1123,9 +1123,9 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         graph.relation_confidence = _coerce_bounded_float(
             graph_cfg["relation_confidence"], "[graph].relation_confidence", minimum=0.0, maximum=1.0
         )
-    if "providers" in graph_cfg:
-        # Its own [graph] setting — never inherited from [database].providers.
-        graph.providers = _coerce_provider_list(graph_cfg["providers"], "[graph].providers") or None
+    _reject_removed_key(graph_cfg, "providers", "[graph]")
+    if "device" in graph_cfg:
+        graph.device = _coerce_device(graph_cfg["device"], "[graph].device")
     if "provider" in graph_cfg:
         graph.provider = _coerce_str(graph_cfg["provider"], "[graph].provider")
     if "llama_cpp_base_url" in graph_cfg:

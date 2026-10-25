@@ -68,7 +68,7 @@ still does.
 lane loudly: the whole point is to detect a silent no-op, and skipping on absence is how a
 silent no-op stays invisible.
 
-fastembed stays stubbed here (`tests/conftest.py` `install_stubs()`): only the GLiNER path
+The model backends stay stubbed here (`tests/conftest.py` `_stub_model_backends`): only the GLiNER path
 must be real, and a real embedder would add its own resident footprint to an RSS budget
 that is meant to bind the graph engine alone. That stubbing also removes real embedding
 cost from `test_graph_ner_throughput_within_budget`'s timed window, which the pre-change
@@ -281,11 +281,11 @@ _FRENCH_SPANS: frozenset[tuple[str, str, int, int]] = frozenset(
 #             ingested with the `**/*` glob. Pinned below and re-checked before timing.
 #   machine   GitHub Actions Linux runner (archon-search-pr.yml) — the actual target
 #             runner, closing the machine gap the prior engine-era figure only estimated.
-#   provider  fastembed's own default provider selection (`SearchConfig.providers == []`),
+#   provider  the default device selection (`[database].device`),
 #             graph enabled with `graph.provider=None` so no LLM enrichment call ran, and
 #             ANTHROPIC_API_KEY unset so no description-generation call was timed. NER runs
-#             the real GLiNER artifact (`52139f70`, BE-11); fastembed stays STUBBED
-#             (`tests/conftest.py` → `install_stubs()`, module docstring above).
+#             the real GLiNER artifact (`52139f70`, BE-11); the model backends stay STUBBED
+#             (`tests/conftest.py` → `_stub_model_backends`, module docstring above).
 #   date      2026-09-10.
 THROUGHPUT_BASELINE_MS = 25929.6
 

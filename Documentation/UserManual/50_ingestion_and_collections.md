@@ -221,7 +221,7 @@ A collection is reindexed automatically when:
 
 Every collection uses the global `[database].embedding_model` unless overridden — useful for domain-specific vocabularies or trialling a new model without rebuilding everything.
 
-**At creation** — pass `embedding_model` in the `POST /collections/` body (unknown names → `422`):
+**At creation** — pass `embedding_model` in the `POST /collections/` body (a name outside the [supported list](#supported-embedding-models) → `422` with `unsupported model '<name>'; supported: …`):
 
 ```bash
 curl -X POST http://localhost:8765/collections/ \
@@ -240,6 +240,24 @@ The change runs under the collection lock. `PATCH` answers `404` also when a con
 `GET /collections/{name}` reports `active_embedding_model`, `pending_embedding_model`, `needs_reindex`, and `reindex_job_id`; `GET /collections/` and `GET /status` surface `needs_reindex` per collection. Commit the change with `POST /collections/{name}/reindex` — on success `active_embedding_model` is updated and `needs_reindex` cleared. The MCP `update_collection` tool exposes the same state machine.
 
 **Embedder cache.** With mixed models the server keeps an LRU cache of loaded embedders (capacity `[database].embedder_cache_size`, default 3). At startup the server always populates that cache with the default `[database].embedding_model` and warms the reranker cross-encoder. Set `[database].eager_load_embedders = true` to extend that to every per-collection `active_embedding_model` as well.
+
+### Supported embedding models
+
+`embedding_model` accepts only the 19 names below (the registry in `archon_search/model_specs.py`; the `422`/validation error above lists them too). The weights are PyTorch checkpoints from Hugging Face, downloaded on first use into `<data-dir>/models` at a pinned revision. The vector sizes are listed in the same order as the names.
+
+| Family | Model names | Vector size |
+| --- | --- | --- |
+| BGE English v1.5 | `BAAI/bge-small-en-v1.5`, `BAAI/bge-base-en-v1.5`, `BAAI/bge-large-en-v1.5` | 384, 768, 1024 |
+| BGE English v1 | `BAAI/bge-small-en`, `BAAI/bge-base-en` | 384, 768 |
+| BGE Chinese | `BAAI/bge-small-zh-v1.5` | 512 |
+| Multilingual | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, `sentence-transformers/paraphrase-multilingual-mpnet-base-v2`, `intfloat/multilingual-e5-large` | 384, 768, 1024 |
+| Snowflake Arctic | `snowflake/snowflake-arctic-embed-xs`, `snowflake/snowflake-arctic-embed-s`, `snowflake/snowflake-arctic-embed-m`, `snowflake/snowflake-arctic-embed-l` | 384, 384, 768, 1024 |
+| GTE | `thenlper/gte-base`, `thenlper/gte-large` | 768, 1024 |
+| Other | `mixedbread-ai/mxbai-embed-large-v1`, `sentence-transformers/all-MiniLM-L6-v2`, `ibm-granite/granite-embedding-small-english-r2`, `Qwen/Qwen3-Embedding-0.6B` | 1024, 384, 384, 1024 |
+
+The Snowflake names are lower-case (`snowflake/…`) although the Hugging Face repositories are `Snowflake/…`. No query prefix or instruction is added to any text: texts are embedded as given. Quantized variants of a model are not separate names. The earlier fastembed runtime accepted more names (41 embedding models) than this list: a collection or `[database].embedding_model` set to a name that is not listed fails with the error above. To move such a collection to a listed model, use the `PATCH` state machine above; a collection that already holds data needs a reindex.
+
+Vectors an earlier release stored stay usable: the opt-in `runtime_parity` test lane checks every model against frozen outputs of the previous runtime (cosine at least 0.99994). Six models (`bge-small-en-v1.5`, `bge-base-en-v1.5`, `paraphrase-multilingual-MiniLM-L12-v2`, `bge-small-en`, `bge-base-en`, `bge-small-zh-v1.5`) differ slightly from the old vectors because fastembed's optimized graphs used the tanh GELU approximation, not because of quantization — see `tests/fixtures/runtime_parity/README.md`. Rerankers are listed under `reranker_model` in [`30_configuration.md`](./30_configuration.md#database).
 
 ## FTS index maintenance
 

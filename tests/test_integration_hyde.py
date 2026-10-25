@@ -30,7 +30,7 @@ pytestmark = pytest.mark.integration
 # Constants
 # ---------------------------------------------------------------------------
 
-_VECTOR_DIM = 384  # Must match the stub fastembed dimension (zeros(384))
+_VECTOR_DIM = 384  # Must match the stub embedder dimension (zeros(384))
 _FIXED_HYDE_VECTOR: list[float] = [0.1] * _VECTOR_DIM
 _COLLECTION = "hydecol"
 

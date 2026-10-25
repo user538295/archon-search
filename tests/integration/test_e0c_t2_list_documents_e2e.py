@@ -26,7 +26,7 @@ from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 
-# Embedding dimension for the stub fastembed backend (384-dim zeros).
+# Embedding dimension for the stub embedder backend (384-dim zeros).
 _EMBEDDING_DIM = 384
 
 # Maximum time per page for the large-collection performance test (seconds).

@@ -1,4 +1,4 @@
-"""Tests for _write_profile_config, _profile_toml, and configure_providers durable-write fix."""
+"""Tests for _write_profile_config, _profile_toml, and configure_device durable-write."""
 from __future__ import annotations
 
 import sys
@@ -160,54 +160,87 @@ class TestProfileToml:
 
 
 # ---------------------------------------------------------------------------
-# configure_providers durable-write tests
+# configure_device durable-write tests
 # ---------------------------------------------------------------------------
 
 
-class TestConfigureProvidersDurableWrite:
-    def test_configure_providers_uses_durable_write(self, tmp_path: Path) -> None:
-        """configure_providers uses atomic_write_bytes, not write_text."""
-        from archon_search.install import RealInstaller
+def _real_installer(config_file: Path):
+    from archon_search.install import RealInstaller
 
+    installer = RealInstaller.__new__(RealInstaller)
+    installer.dry_run = False
+    installer.config_file = str(config_file)
+    return installer
+
+
+class TestConfigureDeviceDurableWrite:
+    def test_configure_device_uses_durable_write(self, tmp_path: Path) -> None:
+        """configure_device uses atomic_write_bytes, not write_text."""
         config_file = tmp_path / "archon-search.toml"
         config_file.write_text("[database]\n")
-
-        installer = RealInstaller.__new__(RealInstaller)
-        installer.dry_run = False
-        installer.config_file = str(config_file)
-
-        from unittest.mock import MagicMock
-        installer.cfg = MagicMock()
-        installer.cfg.embedding_model = "BAAI/bge-small-en-v1.5"
+        installer = _real_installer(config_file)
 
         with patch("archon_search.install.installer.atomic_write_bytes") as mock_atomic:
-            installer.configure_providers(gpu="cuda")
+            installer.configure_device("auto")
 
         mock_atomic.assert_called_once()
-        call_path = mock_atomic.call_args[0][0]
-        assert call_path == config_file
+        assert mock_atomic.call_args[0][0] == config_file
 
-    def test_configure_providers_atomic_write_receives_encoded_toml(self, tmp_path: Path) -> None:
-        """atomic_write_bytes receives bytes containing the updated provider config."""
-        from archon_search.install import RealInstaller
-        from unittest.mock import MagicMock
-
+    def test_configure_device_atomic_write_receives_encoded_toml(self, tmp_path: Path) -> None:
+        """atomic_write_bytes receives bytes containing [database].device."""
         config_file = tmp_path / "archon-search.toml"
         config_file.write_text("[database]\n")
-
-        installer = RealInstaller.__new__(RealInstaller)
-        installer.dry_run = False
-        installer.config_file = str(config_file)
-        installer.cfg = MagicMock()
-        installer.cfg.embedding_model = "BAAI/bge-small-en-v1.5"
+        installer = _real_installer(config_file)
 
         with patch("archon_search.install.installer.atomic_write_bytes") as mock_atomic:
-            installer.configure_providers(gpu="cuda")
+            installer.configure_device("mps")
 
         written = mock_atomic.call_args[0][1]
         assert isinstance(written, bytes)
-        doc = tomlkit.parse(written.decode())
-        assert "CUDAExecutionProvider" in doc["database"]["providers"]
+        assert tomlkit.parse(written.decode())["database"]["device"] == "mps"
+
+    def test_configure_device_graph_section(self, tmp_path: Path) -> None:
+        """section='graph' writes [graph].device and leaves [database] untouched."""
+        config_file = tmp_path / "archon-search.toml"
+        config_file.write_text("[database]\n")
+        installer = _real_installer(config_file)
+
+        installer.configure_device("cuda", section="graph")
+
+        doc = tomlkit.parse(config_file.read_text())
+        assert doc["graph"]["device"] == "cuda"
+        assert "device" not in doc["database"]
+
+    def test_configure_device_unchanged_value_skips_rewrite(self, tmp_path: Path) -> None:
+        """An already-set device is not rewritten (comment reflow avoided)."""
+        config_file = tmp_path / "archon-search.toml"
+        config_file.write_text('[database]\ndevice = "cpu"\n')
+        installer = _real_installer(config_file)
+
+        with patch("archon_search.install.installer.atomic_write_bytes") as mock_atomic:
+            installer.configure_device("cpu")
+
+        mock_atomic.assert_not_called()
+
+    def test_configure_device_rejects_unknown_device(self, tmp_path: Path) -> None:
+        """A device outside DEVICE_SETTINGS raises ValueError and writes nothing."""
+        config_file = tmp_path / "archon-search.toml"
+        config_file.write_text("[database]\n")
+        installer = _real_installer(config_file)
+
+        with pytest.raises(ValueError):
+            installer.configure_device("tpu")
+
+        assert config_file.read_text() == "[database]\n"
+
+
+class TestDryRunConfigureDevice:
+    def test_dry_run_narrates_and_writes_nothing(self, capsys) -> None:
+        from archon_search.install import DryRunInstaller
+
+        installer = DryRunInstaller.__new__(DryRunInstaller)
+        installer.configure_device("auto")
+        assert capsys.readouterr().out.strip() == "[DRY RUN] Would set [database] device = 'auto'."
 
 
 # ---------------------------------------------------------------------------

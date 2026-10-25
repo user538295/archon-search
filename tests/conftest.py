@@ -170,9 +170,6 @@ def _archon_isolated_data_dir(
         "ARCHON_SEARCH_CONTAINER",
         "ARCHON_SEARCH_KEY_FILE",
         "ARCHON_SEARCH_CONFIG",
-        # fastembed's own cache override (S493): an exported value would relocate
-        # every fastembed cache_dir away from the isolated data dir.
-        "FASTEMBED_CACHE_PATH",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -217,19 +214,44 @@ def _archon_isolated_data_dir(
         monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(_archon_worker_data_dir))
 
 
+_REAL_BACKEND_MARKERS = frozenset({"real_torch_backends", "live_eval", "live_benchmark", "runtime_parity"})
+
+
 @pytest.fixture(autouse=True)
-def _fresh_onnx_fallback_warnings() -> None:
-    """Start every test as a fresh process would: no ONNX provider fallback warned yet
-    and no CUDA DLL preload attempted yet.
+def _stub_model_backends(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the default suite free of PyTorch, transformers and model weights.
 
-    The S635 fallback WARNING and the T21 CUDA DLL preload are latched once per
-    process, so a test that triggers either would otherwise silence it in later tests
-    on the same xdist worker.
+    ``ModelEmbedder.encode`` returns zero vectors of the spec's dimension and
+    ``ModelReranker.predict`` returns uniform 0.5 scores. Both mark the backend warm on
+    first use, as loading the real weights would, so warm-up and the warm/cold search
+    gates behave as in production. Construction is untouched: a model name outside the
+    registry still raises ``UnsupportedModelError``, so tests pick registered models.
+
+    Tests of the real backends opt out with ``pytestmark = pytest.mark.real_torch_backends``;
+    the real-weights lanes (``live_eval``, ``live_benchmark``, ``runtime_parity``) are opted
+    out by their own marker.
     """
-    from archon_search.onnx_providers import reset_cuda_dll_preload, reset_fallback_warnings
+    if _REAL_BACKEND_MARKERS & set(request.keywords):
+        return
+    from archon_search.embedder import ModelEmbedder
+    from archon_search.reranker import ModelReranker
 
-    reset_fallback_warnings()
-    reset_cuda_dll_preload()
+    loaded = object()
+
+    def encode(self: ModelEmbedder, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        self._encoder = loaded  # type: ignore[assignment]
+        return [[0.0] * self._spec.dim for _ in texts]
+
+    def predict(self: ModelReranker, pairs: list[tuple[str, str]]) -> list[float]:
+        if not pairs:
+            return []
+        self._cross_encoder = loaded  # type: ignore[assignment]
+        return [0.5] * len(pairs)
+
+    monkeypatch.setattr(ModelEmbedder, "encode", encode)
+    monkeypatch.setattr(ModelReranker, "predict", predict)
 
 
 @pytest.fixture(autouse=True)

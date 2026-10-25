@@ -62,11 +62,11 @@ reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
 chunk_size = 512
 # If chunk_size changes, automatically reindex affected collections on startup.
 auto_reindex_on_chunk_size_change = true
-# ONNX Runtime execution providers for the embedding/reranker models.
-# providers = []                               # CPU (default)
-# providers = ["CUDAExecutionProvider"]        # NVIDIA GPU
-# providers = ["CoreMLExecutionProvider"]      # Apple Silicon
-# reranker_providers = []  # optional: override providers for the reranker only ([] = CPU)
+# Torch device for the embedding and reranker models:
+#   "auto" (default) = CUDA if available, else Apple MPS if available, else CPU
+#   "cpu" / "mps" / "cuda" = that device; one this host lacks steps down to CPU with a warning.
+# Replaces the removed `providers` / `reranker_providers` keys, which now fail config loading.
+device = "auto"
 
 # Install profile ("minimal" | "balanced" | "max"; empty = legacy install).
 # Set by `archon-search install --profile <name>`; used by config.py to record which
@@ -93,7 +93,7 @@ multilingual = false
 # eager_load_embedders = false
 
 # Timeout (seconds) for the background model-validation task that runs at server startup.
-# Validation probes the configured embedding/reranker models and ONNX providers, then
+# Validation probes the configured embedding/reranker models on [database].device, then
 # surfaces the result in GET /status and GET /ready without blocking startup or queries.
 # /ready answers 503 with checks.models = "pending" until validation finishes. Validation
 # starts with warm-up and runs its startup probes first (3 s llama-server reachability, the
@@ -630,17 +630,12 @@ num_queries = 2
 # candidates. Must be in (0.0, 1.0].
 # relation_confidence = 0.75
 
-# providers (list of str | null, default null): ONNX Runtime execution providers for the
-# graph NER/RelEx engine (same vocabulary as [database].providers, above). Its own [graph]
-# setting — never inherited from [database].providers. An empty list normalizes to null,
-# read by the engine as CPU. Written by the install wizard, which offers an accelerator
-# only after its two-stage device probe validates one against the pre-warmed model and
-# otherwise writes CPU. It leaves this key untouched under --skip-preload, or when no
-# accelerator was requested and the graph pre-warm produced no device.
-# `archon-search wizard --graph-providers` supplies the candidates for non-interactive
-# installs. Guardrails are tuned for CPU; an accelerator is allowed
-# but unmeasured.
-# providers = ["CoreMLExecutionProvider"]
+# device ("auto" | "cpu" | "mps" | "cuda", default "cpu"): torch device for the graph NER/RelEx
+# engine. Its own [graph] setting — never inherited from [database].device. An explicit
+# accelerator this host lacks steps down to CPU with one warning. Written by the install
+# wizard; `archon-search wizard --graph-device` supplies the choice for non-interactive
+# installs. Guardrails are tuned for CPU; an accelerator is allowed but unmeasured.
+# device = "cpu"
 
 [openai_shim]
 # OpenAI-compatible shim endpoint (G9).

@@ -21,12 +21,13 @@ tears the RAM disk down, even on Ctrl-C. `--no-cov` is a CLI-only override — n
 Lanes excluded from the default run (`norecursedirs` primary, `-m` filter secondary):
 
 ```bash
-uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov   # needs fastembed model cache
+uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov   # needs the model cache
 uv run pytest tests/smoke/ --no-cov                                   # spawns a real `archon-search serve`
 uv run pytest tests/smoke/docker/ --no-cov                            # covered by the same tests/smoke exclusion
-uv run pytest tests/eval/live/ --no-cov                               # real fastembed weights; hangs if auto-collected
+uv run pytest tests/eval/live/ --no-cov                               # real model weights; hangs if auto-collected
 uv run pytest -m docling --no-cov                                     # `-m` filter only — not a dedicated directory
 ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m graph_real_artifact  # real GLiNER checkpoint must be pre-downloaded there
+ARCHON_RUNTIME_PARITY_DATA_DIR=/tmp/rt_data uv run pytest -m runtime_parity tests/runtime_parity/ --no-cov -q -p no:cacheprovider -o addopts= -rP  # real PyTorch weights vs frozen fastembed outputs; downloads ~15 GB on first use
 ```
 
 The unlocked-dependency lane re-runs the default suite and the docling/graph lanes in a throwaway venv with the newest dependency versions end users install (`uv.lock` ignored). It fails if a test changes that venv, and a child `uv run` would silently test `uv.lock`'s versions instead — so never let a test run a real package install or `uv run`; spawn a child pytest as `sys.executable -m pytest`:
@@ -40,11 +41,7 @@ The smoke lane's server subprocesses run on a throwaway `ARCHON_SEARCH_DATA_DIR`
 (`_SHARED_MODELS_DIR`, not the shell's `ARCHON_SEARCH_DATA_DIR`) — the server's model caches derive from
 its data dir (`paths.py`), so without the link each run would re-download ~1.3 GB of weights and the
 lane's latency budgets would be network-bound. First run on a cold host pays that download once, into
-the shared cache. Exception: an exported `FASTEMBED_CACHE_PATH` relocates the fastembed weights
-(`get_fastembed_cache_dir()`, S493) and every smoke server inherits it. The root `_archon_isolated_data_dir`
-deletes it for in-process tests; `tests/_live_fastembed_cache.py` re-pins the session-resolved value for
-both real-model lanes — `tests/eval/live/` without a guard, `tests/eval/live_benchmark/` behind
-`_require_model_cache`, which skips the session when that directory lacks the benchmark models.
+the shared cache.
 
 ## PARALLEL TESTS ARE MANDATORY
 
@@ -76,7 +73,7 @@ wall-clock duration (last measured: ~163 s, `--no-cov -n 8`, 8433 tests, 2026-08
 
 ## Suite layout
 
-- `tests/` — unit tests, using the ML stubs from `tests/conftest.py` (`tests/_search_stubs.py`).
+- `tests/` — unit tests. The autouse fixture `_stub_model_backends` (`tests/conftest.py`) patches `ModelEmbedder.encode` (zero vectors of the spec's dimension) and `ModelReranker.predict` (uniform 0.5), so no torch, transformers or weights load; construction is not stubbed, so tests must use model names from the registry (`archon_search/model_specs.py`). `tests/_search_stubs.py` only sets thread env defaults and fakes `chonkie`. A test of the real PyTorch code path opts out with a module-level `pytestmark = pytest.mark.real_torch_backends` and runs on the tiny synthetic snapshots of `tests/_tiny_encoder.py` (no weights, no network); the real-weights lanes (`live_eval`, `live_benchmark`, `runtime_parity`) are opted out by their own marker.
 - `tests/integration/` — real `SearchStore` / `SearchPipeline` / LanceDB in `tmp_path`, `TestClient`
   against a real app. Marked `integration`, run by default. Shared helpers (`make_real_app`, `ingest_doc`,
   `ingest_file_via_path`, `search`, `make_real_pipeline`) live in `tests/integration/conftest.py` —

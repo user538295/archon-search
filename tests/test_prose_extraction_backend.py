@@ -22,10 +22,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from archon_search import torch_runtime
 from archon_search.paths import get_graph_models_dir
 from archon_search.prose_extraction_backend import (
-    _TORCH_INTER_OP_THREADS,
-    _TORCH_INTRA_OP_THREADS,
     _LatchedLoadFailure,
     ProseExtractionBackend,
     ProseExtractionLoadTimeoutError,
@@ -59,52 +58,61 @@ def _model_with_to() -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# test_resolve_device_* — real [graph].providers ONNX vocabulary (finding 4)
+# test_resolve_device_* — [graph].device vocabulary (auto|cpu|mps|cuda)
 # ---------------------------------------------------------------------------
 
-def test_resolve_device_cpu_when_no_providers() -> None:
+def test_resolve_device_cpu_by_default() -> None:
     backend = ProseExtractionBackend()
     assert backend._resolve_device() == "cpu"
 
 
-def test_resolve_device_uses_onnx_provider_vocabulary() -> None:
-    """[graph].providers values are ONNX provider strings (archon-search.toml.example's
-    [database].providers vocabulary), not literal 'cuda'/'mps'."""
-    cuda_backend = ProseExtractionBackend(providers=["CUDAExecutionProvider"])
+def test_resolve_device_uses_torch_device_names() -> None:
+    cuda_backend = ProseExtractionBackend(device="cuda")
     with patch.dict(sys.modules, {"torch": _fake_torch_with_availability(cuda_available=True)}):
         assert cuda_backend._resolve_device() == "cuda"
 
-    mps_backend = ProseExtractionBackend(providers=["CoreMLExecutionProvider"])
+    mps_backend = ProseExtractionBackend(device="mps")
     with patch.dict(sys.modules, {"torch": _fake_torch_with_availability(mps_available=True)}):
         assert mps_backend._resolve_device() == "mps"
 
 
-def test_resolve_device_steps_down_to_cpu_when_device_unavailable(caplog) -> None:
-    """An unavailable device steps down to CPU with a WARNING logged, never raises —
-    a stale/misconfigured providers list must not latch a permanent failure."""
-    cuda_backend = ProseExtractionBackend(providers=["CUDAExecutionProvider"])
+def test_resolve_device_auto_picks_the_available_accelerator() -> None:
+    backend = ProseExtractionBackend(device="auto")
+    with patch.dict(sys.modules, {"torch": _fake_torch_with_availability(mps_available=True)}):
+        assert backend._resolve_device() == "mps"
+    with patch.dict(sys.modules, {"torch": _fake_torch_with_availability()}):
+        assert backend._resolve_device() == "cpu"
+
+
+def test_resolve_device_steps_down_to_cpu_when_device_unavailable(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unavailable accelerator steps down to CPU with a WARNING logged, never raises —
+    a stale/misconfigured device must not latch a permanent failure."""
+    monkeypatch.setattr(torch_runtime, "_warned_settings", set())
+    cuda_backend = ProseExtractionBackend(device="cuda")
     with patch.dict(sys.modules, {"torch": _fake_torch_with_availability(cuda_available=False)}):
-        with caplog.at_level(logging.WARNING, logger="archon_search.prose_extraction_backend"):
+        with caplog.at_level(logging.WARNING, logger="archon_search.torch_runtime"):
             assert cuda_backend._resolve_device() == "cpu"
-    assert any("CUDA" in r.message for r in caplog.records)
+    assert [r.getMessage() for r in caplog.records] == ["device 'cuda' is not available on this host; using cpu"]
 
     caplog.clear()
-    mps_backend = ProseExtractionBackend(providers=["CoreMLExecutionProvider"])
+    mps_backend = ProseExtractionBackend(device="mps")
     with patch.dict(sys.modules, {"torch": _fake_torch_with_availability(mps_available=False)}):
-        with caplog.at_level(logging.WARNING, logger="archon_search.prose_extraction_backend"):
+        with caplog.at_level(logging.WARNING, logger="archon_search.torch_runtime"):
             assert mps_backend._resolve_device() == "cpu"
-    assert any("CoreML" in r.message or "MPS" in r.message for r in caplog.records)
+    assert [r.getMessage() for r in caplog.records] == ["device 'mps' is not available on this host; using cpu"]
 
 
-def test_providers_never_falls_back_to_embedder_or_reranker_config() -> None:
-    """_resolve_device must only ever consult self._providers — never the embedder's
-    or reranker's own provider config (archon_search.config.resolve_reranker_providers)."""
-    mock_resolve = MagicMock(side_effect=AssertionError("must not be called"))
-    with patch("archon_search.config.resolve_reranker_providers", mock_resolve):
-        backend = ProseExtractionBackend()
-        assert backend._resolve_device() == "cpu"
-        assert backend._providers is None
-    mock_resolve.assert_not_called()
+def test_graph_extractor_hands_the_graph_device_to_its_backend() -> None:
+    """[graph].device — never [database].device — reaches the engine."""
+    from archon_search import graph_extractor
+    from archon_search.config import GraphConfig
+
+    with patch.object(graph_extractor, "ProseExtractionBackend") as backend_cls:
+        graph_extractor.GraphExtractor(GraphConfig(device="mps"))
+
+    backend_cls.assert_called_once_with(device="mps")
 
 
 # ---------------------------------------------------------------------------
@@ -273,28 +281,6 @@ async def test_load_failure_logs_warning_before_latching(caplog) -> None:
                 await backend.load()
 
     assert any("boom" in r.message for r in caplog.records)
-
-
-# ---------------------------------------------------------------------------
-# test_interop_thread_runtime_error_does_not_latch (finding 1)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_interop_thread_runtime_error_does_not_latch() -> None:
-    """torch.set_num_interop_threads/set_num_threads may only be called once per
-    process — a RuntimeError from either must not poison the load-exception latch."""
-    from_pretrained = MagicMock(return_value=_model_with_to())
-    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
-    torch_mod.set_num_interop_threads.side_effect = RuntimeError(
-        "Error: cannot set number of interop threads after parallel work has started"
-    )
-    backend = ProseExtractionBackend()
-
-    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
-        await backend.load()  # must not raise
-
-    assert backend.is_loaded is True
-    from_pretrained.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -509,16 +495,19 @@ async def test_load_keeps_unrelated_warnings_raised_by_the_gliner_import(
 
 
 @pytest.mark.asyncio
-async def test_load_pins_torch_thread_counts() -> None:
-    from_pretrained = MagicMock(return_value=_model_with_to())
-    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
+async def test_loading_the_graph_model_does_not_change_torch_thread_count() -> None:
+    """The graph model shares the process with the embedder and reranker: a process-global
+    ``torch.set_num_threads(1)`` pin made PyTorch CPU embedding 3x slower."""
+    torch = pytest.importorskip("torch")
+    _, gliner_mod = fake_torch_and_gliner(MagicMock(return_value=_model_with_to()))
     backend = ProseExtractionBackend()
+    threads_before = (torch.get_num_threads(), torch.get_num_interop_threads())
 
-    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+    with patch.dict(sys.modules, {"gliner": gliner_mod}):
         await backend.load()
 
-    torch_mod.set_num_threads.assert_called_once_with(_TORCH_INTRA_OP_THREADS)
-    torch_mod.set_num_interop_threads.assert_called_once_with(_TORCH_INTER_OP_THREADS)
+    assert backend.is_loaded is True
+    assert (torch.get_num_threads(), torch.get_num_interop_threads()) == threads_before
 
 
 # ---------------------------------------------------------------------------

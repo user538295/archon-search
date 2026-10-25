@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 import time
 
 import pytest
@@ -43,6 +42,7 @@ from archon_search.embedder_cache import EmbedderCache
 from archon_search.profiles import ENGLISH_PROFILES
 from archon_search.server import warmup as warmup_module
 from archon_search.server.schemas import WarmupResult
+from tests._cold_model_builds import install_cold_reranker_build
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("s279")]
@@ -93,25 +93,6 @@ def _install_slow_embedder_preload(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(warmup_module, "_WARMUP_TASK_TIMEOUT_SECONDS", _WARMUP_BUDGET_SECONDS)
 
 
-def _install_cold_cross_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make cross-encoder construction cost ``_COLD_CROSS_ENCODER_LOAD_SECONDS``.
-
-    ``ModelReranker.predict`` imports ``TextCrossEncoder`` from
-    ``fastembed.rerank.cross_encoder`` on its first call (``reranker.py``), so
-    patching the class there puts the cost exactly where the real ONNX build
-    sits: inside the first search request.
-    """
-    module = sys.modules["fastembed.rerank.cross_encoder"]
-    base = module.TextCrossEncoder
-
-    class _ColdLoadTextCrossEncoder(base):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            time.sleep(_COLD_CROSS_ENCODER_LOAD_SECONDS)
-            super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr(module, "TextCrossEncoder", _ColdLoadTextCrossEncoder)
-
-
 def test_s279_ready_200_after_failed_warmup_still_hides_a_cold_reranker(tmp_path, monkeypatch, caplog):
     """A 200 from /ready must mean the next /search is not a cold model build."""
     doc = tmp_path / "doc.md"
@@ -159,7 +140,7 @@ def test_s279_ready_200_after_failed_warmup_still_hides_a_cold_reranker(tmp_path
         assert ready.status_code == 200, ready.text
         assert ready.json()["ready"] is True
 
-        _install_cold_cross_encoder(monkeypatch)
+        install_cold_reranker_build(monkeypatch, _COLD_CROSS_ENCODER_LOAD_SECONDS)
 
         started = time.monotonic()
         resp = client.post(

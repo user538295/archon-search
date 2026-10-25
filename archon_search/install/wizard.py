@@ -26,7 +26,8 @@ from .extras import (
     CODE_EXTRA_SIZE_ESTIMATE,
     GRAPH_MODEL_SIZE_ESTIMATE,
 )
-from .provisioning import GPU_EXECUTION_PROVIDER
+from .prompts import ask_yes_no
+from .provisioning import GPU_DEVICE, TORCH_DEVICE_CPU
 from .render import _render_profile_table
 
 logger = logging.getLogger(__name__)
@@ -500,7 +501,7 @@ def _prompt_graph_provider(
         "  communities) works without it.\n"
         "  Default: disabled."
     )
-    if not ask_yn("Enable LLM-backed graph enrichment? [y/N]: "):
+    if not ask_yn("Enable LLM-backed graph enrichment? [y/n]: "):
         return "", "", "", ""
 
     provider = ask_choice(
@@ -641,22 +642,11 @@ def _prompt_optional_features(
     """
 
     def _ask_yn(prompt_text: str, default: bool = False) -> bool:
-        """Ask a yes/no question; return ``default`` on EOFError or empty input.
+        """Ask a yes/no question; only ``y`` / ``n`` are accepted, anything else re-asks.
 
-        For [Y/n] prompts (``default=True``): any input that is not explicitly
-        ``n`` / ``no`` is treated as yes, matching the bracket convention.
-        For [y/N] prompts (``default=False``): only explicit ``y`` / ``yes``
-        is treated as yes.
+        ``default`` is what a closed stdin (``EOFError``) answers.
         """
-        try:
-            raw = input(prompt_text).strip().lower()
-        except EOFError:
-            return default
-        if not raw:
-            return default
-        if default:
-            return raw not in {"n", "no"}
-        return raw in {"y", "yes"}
+        return ask_yes_no(prompt_text, eof_default=default)
 
     def _ask_choice(prompt_text: str, valid: set[str], default: str) -> str:
         """Ask a choice question with one retry; fall back to default on second invalid."""
@@ -695,7 +685,7 @@ def _prompt_optional_features(
         _install_code_extra_val = False
     else:
         _install_code_extra_val = _ask_yn(
-            "Index code files (installs tree-sitter + graph enrichment, enables graph)? [y/N]: "
+            "Index code files (installs tree-sitter + graph enrichment, enables graph)? [y/n]: "
         )
     # [code] and [graph] are installed as a bundle — opting into code indexing
     # automatically includes graph enrichment, so guided (wizard) users never hit
@@ -718,7 +708,7 @@ def _prompt_optional_features(
     elif non_interactive:
         _disable_reranker_val = False
     else:
-        _disable_reranker_val = not _ask_yn("Keep reranker enabled? [Y/n]: ", default=True)
+        _disable_reranker_val = not _ask_yn("Keep reranker enabled? [y/n]: ", default=True)
 
     # --- enable_watch ---
     print(
@@ -730,7 +720,7 @@ def _prompt_optional_features(
     _enable_watch_val = _resolve_answer(
         enable_watch,
         non_interactive,
-        lambda: _ask_yn("Auto-watch directories and re-index on file changes? [y/N]: "),
+        lambda: _ask_yn("Auto-watch directories and re-index on file changes? [y/n]: "),
     )
 
     # --- enable_telemetry ---
@@ -743,7 +733,7 @@ def _prompt_optional_features(
     _enable_telemetry_val = _resolve_answer(
         enable_telemetry,
         non_interactive,
-        lambda: _ask_yn("Enable local query telemetry? [y/N]: "),
+        lambda: _ask_yn("Enable local query telemetry? [y/n]: "),
     )
 
     # --- eager_load_embedders ---
@@ -758,7 +748,7 @@ def _prompt_optional_features(
     _eager_load_val = _resolve_answer(
         eager_load,
         non_interactive,
-        lambda: _ask_yn("Also pre-load every per-collection embedding model at startup? [y/N]: "),
+        lambda: _ask_yn("Also pre-load every per-collection embedding model at startup? [y/n]: "),
     )
 
     # --- routing_strategy ---
@@ -829,7 +819,7 @@ def _prompt_optional_features(
             "    llama_cpp  - runs against a local llama-server, no API key\n"
             "  Default: disabled."
         )
-        if _ask_yn("Enable AI query expansion (HyDE + RAG Fusion)? [y/N]: "):
+        if _ask_yn("Enable AI query expansion (HyDE + RAG Fusion)? [y/n]: "):
             _enable_hyde_val = True
             _enable_rag_fusion_val = True
 
@@ -906,12 +896,11 @@ def _prompt_multilingual(non_interactive: bool, flag_value: bool | None) -> bool
         return flag_value
     if non_interactive:
         return False
-    try:
-        raw = input("Will your corpus include non-English documents? [y/N]: ").strip().lower()
-    except EOFError:
-        print("No input received (EOF). Using English.")
-        return False
-    return raw in {"y", "yes"}
+    return ask_yes_no(
+        "Will your corpus include non-English documents? [y/n]: ",
+        eof_default=False,
+        eof_message="No input received (EOF). Using English.",
+    )
 
 
 def _prompt_gpu_confirm(non_interactive: bool, gpu: GpuType) -> bool:
@@ -919,7 +908,7 @@ def _prompt_gpu_confirm(non_interactive: bool, gpu: GpuType) -> bool:
 
     Returns True immediately when ``gpu`` is ``GpuType.NONE`` (nothing to confirm).
     Returns True immediately when ``non_interactive`` is True (auto-enable).
-    For Metal or CUDA GPUs, prints a [Y/n] prompt; accepts "n"/"no" as decline.
+    For Metal or CUDA GPUs, asks a [y/n] question; only ``y`` / ``n`` are accepted.
     On EOFError returns True (auto-enable).
     """
     if gpu == GpuType.NONE:
@@ -927,57 +916,49 @@ def _prompt_gpu_confirm(non_interactive: bool, gpu: GpuType) -> bool:
     if non_interactive:
         return True
     if gpu == GpuType.METAL:
-        prompt = "Apple Silicon detected — enable Metal acceleration? [Y/n]: "
+        prompt = "Apple Silicon detected — enable Metal acceleration? [y/n]: "
     else:
-        prompt = "NVIDIA GPU detected — enable CUDA acceleration? [Y/n]: "
-    try:
-        raw = input(prompt).strip().lower()
-    except EOFError:
-        return True
-    return raw not in {"n", "no"}
+        prompt = "NVIDIA GPU detected — enable CUDA acceleration? [y/n]: "
+    return ask_yes_no(prompt, eof_default=True)
 
 
 # ---------------------------------------------------------------------------
-# Graph execution providers ([graph].providers — Task FE-5, S31/S32)
+# Graph device ([graph].device — Task FE-5, S31/S32)
 # ---------------------------------------------------------------------------
 
-def _graph_candidate_providers(
-    gpu: GpuType, enable_gpu: bool, flag_value: list[str] | None, non_interactive: bool
-) -> list[str]:
-    """Return the [graph].providers candidates the two-stage device probe checks.
+def _graph_candidate_device(
+    gpu: GpuType, enable_gpu: bool, flag_value: str | None, non_interactive: bool
+) -> str:
+    """Return the [graph].device candidate the two-stage device probe checks.
 
     ``enable_gpu`` is checked first so ``--disable-gpu`` (and a declined GPU prompt)
-    forces CPU even against an explicit ``--graph-providers``. Otherwise the flag
-    wins. Without the flag a non-interactive install yields no candidates: Q7 makes
+    forces ``cpu`` even against an explicit ``--graph-device``. Otherwise the flag
+    wins. Without the flag a non-interactive install yields ``cpu``: Q7 makes
     the flag the non-interactive answer, and nobody is there to accept an
     accelerator the guardrails were never tuned for.
     """
     if not enable_gpu:
-        return []
+        return TORCH_DEVICE_CPU
     if flag_value is not None:
-        return list(flag_value)
+        return flag_value
     if non_interactive:
-        return []
-    provider = GPU_EXECUTION_PROVIDER.get(gpu)
-    return [provider] if provider else []
+        return TORCH_DEVICE_CPU
+    return GPU_DEVICE.get(gpu, TORCH_DEVICE_CPU)
 
 
 def _prompt_graph_accelerator(non_interactive: bool, device: str) -> bool:
-    """Offer the validated accelerator for graph extraction, accelerator as default.
+    """Offer the validated accelerator for graph extraction; EOF accepts it.
 
-    Only ever called once BOTH probe stages validated *device* (S31), so the
-    default is safe: a bare Enter — and EOF — accepts the accelerator. Accepts
-    "n"/"no" as the step-down to CPU. Never prompts in non-interactive mode, where
-    reaching this at all means ``--graph-providers`` already asked for the device
-    (``_graph_candidate_providers`` yields nothing non-interactively without it).
+    Only ever called once BOTH probe stages validated *device* (S31), so accepting on a
+    closed stdin is safe. Only ``y`` / ``n`` are accepted; ``n`` is the step-down to CPU.
+    Never prompts in non-interactive mode, where reaching this at all means
+    ``--graph-device`` already asked for the device (``_graph_candidate_device``
+    yields ``cpu`` non-interactively without it).
     """
     if non_interactive:
         return True
-    try:
-        raw = input(
-            f"Graph extraction validated on {device} — use it? "
-            "(accelerated but unmeasured; guardrails are tuned for CPU) [Y/n]: "
-        ).strip().lower()
-    except EOFError:
-        return True
-    return raw not in {"n", "no"}
+    return ask_yes_no(
+        f"Graph extraction validated on {device} — use it? "
+        "(accelerated but unmeasured; guardrails are tuned for CPU) [y/n]: ",
+        eof_default=True,
+    )

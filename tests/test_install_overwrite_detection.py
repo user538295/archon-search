@@ -325,6 +325,17 @@ class TestDetectConfigHandEdits:
 
         assert _detect_config_hand_edits(config_path, "balanced", False) is False
 
+    def test_detect_changed_device_alone_is_not_hand_edit(self, tmp_path: Path) -> None:
+        """`[database].device` is rewritten by Step 9 from the GPU answer on every re-run,
+        so a changed value on an otherwise profile-matching config is not a hand edit."""
+        from archon_search.install import _detect_config_hand_edits
+
+        config_path = tmp_path / "archon-search.toml"
+        _write_wizard_config(config_path, "balanced", False)
+        _set_key(config_path, "database", "device", "mps")
+
+        assert _detect_config_hand_edits(config_path, "balanced", False) is False
+
     def test_detect_non_table_section_does_not_crash(self, tmp_path: Path) -> None:
         """A hand-edited `hyde = "oops"` (not a table) holds no managed key: no crash, no hand edit."""
         from archon_search.install import _detect_config_hand_edits

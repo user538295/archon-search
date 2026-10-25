@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project
 
-`archon-search` is a standalone hybrid retrieval + routing server: LanceDB vector store, fastembed dense embeddings, a cross-encoder reranker, a multi-collection router, FastAPI HTTP control plane, and an MCP endpoint sharing the same auth. Runtime state lives under `~/.archon-search/`.
+`archon-search` is a standalone hybrid retrieval + routing server: LanceDB vector store, PyTorch dense embeddings, a cross-encoder reranker, a multi-collection router, FastAPI HTTP control plane, and an MCP endpoint sharing the same auth. Runtime state lives under `~/.archon-search/`.
 
 - Python `>=3.12`, managed with `uv`.
 - Package name: `archon-search` (PyPI), import name: `archon_search`.
@@ -114,7 +114,7 @@ Topic-specific entry points:
 | `release.sh`, CalVer, CI workflows | `Architecture/510_release_and_environment_strategy.md` |
 | OpenAPI as authoritative, MCP/REST relationship | `Architecture/520_api_design_and_contracts.md` |
 | Tech-debt register | `Architecture/530_technical_debt_refactoring_roadmap.md` |
-| ADRs (LanceDB, fastembed, reranker, router, telemetry) | `Documentation/ADRs/` |
+| ADRs (LanceDB, embedder, reranker, router, telemetry) | `Documentation/ADRs/` |
 | Roadmap, planned work | `Documentation/roadmap.md`, `Documentation/Backlog/` |
 | Onboarding (devs) | `Documentation/quick_start.md`, `contributing.md` |
 | End-user / operator guides | `Documentation/UserManual/` |

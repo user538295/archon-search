@@ -49,12 +49,11 @@ deterministic and weight-free; the ratio, not the absolute number, is the point.
 """
 from __future__ import annotations
 
-import os
-import sys
 import time
 
 import pytest
 
+from tests._cold_model_builds import install_cold_reranker_build
 from tests.integration.conftest import make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("s283")]
@@ -107,53 +106,6 @@ class _TransientCrossEncoderFailure(RuntimeError):
     """Stands in for an HF 429 / network blip / unwritable cache during the build."""
 
 
-def _install_transient_then_cold_cross_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
-    """First construction raises; every later one succeeds after a cold-build delay.
-
-    ``ModelReranker.predict`` imports ``TextCrossEncoder`` from
-    ``fastembed.rerank.cross_encoder`` on its first call (``reranker.py:42``), so
-    patching the class there puts both the transient failure and the cost exactly
-    where the real ONNX build sits. Installed *before* the app starts, so the
-    failure lands in the background startup warm-up — which is what latches
-    ``Reranker._warmup_failed`` and disarms every downstream warm-up gate.
-    """
-    module = sys.modules["fastembed.rerank.cross_encoder"]
-    base = module.TextCrossEncoder
-    attempts = {"n": 0}
-
-    def _built_by_the_reranker() -> bool:
-        """True when this construction is the warm-up build, not the startup probe.
-
-        ``model_validation._load_cross_encoder`` imports the same symbol from the
-        same module for its resolvability probe, and it runs as a sibling
-        background task. Counting *its* construction as attempt 1 would hand the
-        transient failure to the probe and leave the warm-up succeeding — the
-        exact opposite of what this test sets up. Which task wins the race is
-        decided by how many awaits precede the reranker build inside
-        ``warmup_models``, so keying off the caller rather than a global counter
-        is what makes this deterministic.
-        """
-        frame = sys._getframe()
-        while frame is not None:
-            if frame.f_code.co_filename.endswith(f"archon_search{os.sep}reranker.py"):
-                return True
-            frame = frame.f_back
-        return False
-
-    class _TransientThenColdTextCrossEncoder(base):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            if not _built_by_the_reranker():
-                super().__init__(*args, **kwargs)
-                return
-            attempts["n"] += 1
-            if attempts["n"] == 1:
-                raise _TransientCrossEncoderFailure("cross-encoder download failed (transient)")
-            time.sleep(_COLD_CROSS_ENCODER_LOAD_SECONDS)
-            super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr(module, "TextCrossEncoder", _TransientThenColdTextCrossEncoder)
-
-
 def _settle_startup_warmup(client) -> None:
     """Drive the event loop until the background startup warm-up has run.
 
@@ -204,7 +156,11 @@ def test_s283_search_answers_with_documented_fields_after_failed_warmup(tmp_path
 
     # Before the app starts: the startup warm-up must be the call that fails, so
     # the latch is already set when the round trip begins.
-    _install_transient_then_cold_cross_encoder(monkeypatch)
+    install_cold_reranker_build(
+        monkeypatch,
+        _COLD_CROSS_ENCODER_LOAD_SECONDS,
+        transient_failure=_TransientCrossEncoderFailure("cross-encoder download failed (transient)"),
+    )
 
     with make_real_app(data_dir, monkeypatch, toml_content=_TOML) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}

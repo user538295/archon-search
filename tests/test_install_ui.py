@@ -67,23 +67,26 @@ def test_render_table_multilingual_minimal_shows_no_reranker():
 def test_render_summary_balanced_english():
     """Balanced English profile summary contains key model name, chunk size, and profile label."""
     profile = get_profile("balanced", multilingual=False)
-    output = _render_summary("balanced", profile, multilingual=False, providers=[], config_path="archon-search.toml")
+    output = _render_summary("balanced", profile, multilingual=False, device_labels=[], config_path="archon-search.toml")
     assert "BAAI/bge-base-en-v1.5" in output
     assert "512" in output
     assert "Balanced" in output
 
 
-def test_render_summary_shows_providers():
-    """Providers list is rendered in the summary."""
+def test_render_summary_shows_device_labels_joined():
+    """Device labels are rendered comma-joined on the Device line."""
     profile = get_profile("minimal", multilingual=False)
-    output = _render_summary("minimal", profile, multilingual=False, providers=["CoreMLExecutionProvider"], config_path="archon-search.toml")
-    assert "CoreML" in output
+    output = _render_summary(
+        "minimal", profile, multilingual=False, device_labels=["Apple GPU (mps)", "CPU"],
+        config_path="archon-search.toml",
+    )
+    assert "  Device:     Apple GPU (mps), CPU" in output
 
 
 def test_render_summary_multilingual_label():
     """multilingual=True: summary contains 'Multilingual'."""
     profile = get_profile("balanced", multilingual=True)
-    output = _render_summary("balanced", profile, multilingual=True, providers=[], config_path="archon-search.toml")
+    output = _render_summary("balanced", profile, multilingual=True, device_labels=[], config_path="archon-search.toml")
     assert "Multilingual" in output
 
 
@@ -91,15 +94,22 @@ def test_render_summary_no_reranker():
     """Profile with reranker=None: summary contains '(none)'."""
     profile = get_profile("minimal", multilingual=True)
     assert profile.reranker is None
-    output = _render_summary("minimal", profile, multilingual=True, providers=[], config_path="archon-search.toml")
+    output = _render_summary("minimal", profile, multilingual=True, device_labels=[], config_path="archon-search.toml")
     assert "(none)" in output
 
 
-def test_render_summary_no_providers():
-    """Empty providers list: summary contains 'CPU default'."""
+def test_render_summary_empty_device_labels_shows_cpu():
+    """Empty device label list: summary reads 'Device:     CPU'."""
     profile = get_profile("minimal", multilingual=False)
-    output = _render_summary("minimal", profile, multilingual=False, providers=[], config_path="archon-search.toml")
-    assert "CPU default" in output
+    output = _render_summary("minimal", profile, multilingual=False, device_labels=[], config_path="archon-search.toml")
+    assert "  Device:     CPU" in output
+    assert "Providers" not in output
+
+
+def test_render_profile_table_models_heading_explains_download():
+    """The models heading says download = embedder + reranker weights from the Hugging Face Hub."""
+    output = _render_profile_table(multilingual=False, width=80)
+    assert "Models (download = embedder + reranker weights from the Hugging Face Hub):" in output
 
 
 # ---------------------------------------------------------------------------
@@ -150,14 +160,14 @@ def test_render_table_narrow_multilingual_minimal_no_reranker_no_plus():
 def test_render_summary_no_features():
     """features=None produces no 'Optional features' section (backward-compatible)."""
     profile = get_profile("minimal", multilingual=False)
-    output = _render_summary("minimal", profile, multilingual=False, providers=[], features=None, config_path="archon-search.toml")
+    output = _render_summary("minimal", profile, multilingual=False, device_labels=[], features=None, config_path="archon-search.toml")
     assert "Optional features" not in output
 
 
 def test_render_summary_all_defaults():
     """WizardFeatures() (all defaults) also produces no optional section."""
     profile = get_profile("minimal", multilingual=False)
-    output = _render_summary("minimal", profile, multilingual=False, providers=[], features=WizardFeatures(), config_path="archon-search.toml")
+    output = _render_summary("minimal", profile, multilingual=False, device_labels=[], features=WizardFeatures(), config_path="archon-search.toml")
     assert "Optional features" not in output
 
 
@@ -165,10 +175,7 @@ def test_render_summary_explicit_false_bools_show_no_bullets():
     """S553/S556/S557: explicit --no-watch / --no-telemetry / --no-eager-load show no bullet."""
     profile = get_profile("minimal", multilingual=False)
     output = _render_summary(
-        "minimal",
-        profile,
-        multilingual=False,
-        providers=[],
+        "minimal", profile, multilingual=False, device_labels=[],
         features=WizardFeatures(enable_watch=False, enable_telemetry=False, eager_load_embedders=False),
         config_path="archon-search.toml",
     )
@@ -182,10 +189,7 @@ def test_render_summary_with_code_and_telemetry():
     """WizardFeatures with install_code_extra and enable_telemetry contains both labels."""
     profile = get_profile("minimal", multilingual=False)
     output = _render_summary(
-        "minimal",
-        profile,
-        multilingual=False,
-        providers=[],
+        "minimal", profile, multilingual=False, device_labels=[],
         features=WizardFeatures(install_code_extra=True, enable_telemetry=True),
         config_path="archon-search.toml",
     )
@@ -198,10 +202,7 @@ def test_render_summary_routing_hybrid():
     """WizardFeatures with routing_strategy='hybrid' mentions 'Routing: hybrid'."""
     profile = get_profile("minimal", multilingual=False)
     output = _render_summary(
-        "minimal",
-        profile,
-        multilingual=False,
-        providers=[],
+        "minimal", profile, multilingual=False, device_labels=[],
         features=WizardFeatures(routing_strategy="hybrid"),
         config_path="archon-search.toml",
     )
@@ -213,10 +214,7 @@ def test_render_summary_disable_reranker():
     """WizardFeatures with disable_reranker=True mentions reranker disabled."""
     profile = get_profile("balanced", multilingual=False)
     output = _render_summary(
-        "balanced",
-        profile,
-        multilingual=False,
-        providers=[],
+        "balanced", profile, multilingual=False, device_labels=[],
         features=WizardFeatures(disable_reranker=True),
         config_path="archon-search.toml",
     )
@@ -228,10 +226,7 @@ def test_render_summary_log_format_json():
     """WizardFeatures with log_format='json' mentions 'Log format: json'."""
     profile = get_profile("minimal", multilingual=False)
     output = _render_summary(
-        "minimal",
-        profile,
-        multilingual=False,
-        providers=[],
+        "minimal", profile, multilingual=False, device_labels=[],
         features=WizardFeatures(log_format="json"),
         config_path="archon-search.toml",
     )
@@ -243,10 +238,7 @@ def test_render_summary_eager_load_and_watch():
     """WizardFeatures with eager_load_embedders and enable_watch mentions both."""
     profile = get_profile("minimal", multilingual=False)
     output = _render_summary(
-        "minimal",
-        profile,
-        multilingual=False,
-        providers=[],
+        "minimal", profile, multilingual=False, device_labels=[],
         features=WizardFeatures(eager_load_embedders=True, enable_watch=True),
         config_path="archon-search.toml",
     )
@@ -259,10 +251,7 @@ def test_render_summary_multilingual_extra():
     """WizardFeatures with install_multilingual_extra=True shows language-detection bullet."""
     profile = get_profile("minimal", multilingual=False)
     output = _render_summary(
-        "minimal",
-        profile,
-        multilingual=False,
-        providers=[],
+        "minimal", profile, multilingual=False, device_labels=[],
         features=WizardFeatures(install_multilingual_extra=True),
         config_path="archon-search.toml",
     )
@@ -274,10 +263,7 @@ def test_render_summary_multilingual_header_and_extra_bullet():
     """multilingual=True + install_multilingual_extra=True: header and bullet both render."""
     profile = get_profile("minimal", multilingual=True)
     output = _render_summary(
-        "minimal",
-        profile,
-        multilingual=True,
-        providers=[],
+        "minimal", profile, multilingual=True, device_labels=[],
         features=WizardFeatures(install_multilingual_extra=True),
         config_path="archon-search.toml",
     )
@@ -290,10 +276,7 @@ def test_render_summary_multilingual_extra_absent_by_default():
     """install_multilingual_extra=False: no language-detection bullet even when section renders."""
     profile = get_profile("minimal", multilingual=False)
     output = _render_summary(
-        "minimal",
-        profile,
-        multilingual=False,
-        providers=[],
+        "minimal", profile, multilingual=False, device_labels=[],
         features=WizardFeatures(enable_telemetry=True),
         config_path="archon-search.toml",
     )
@@ -304,10 +287,7 @@ def test_render_summary_multilingual_extra_absent_by_default():
 def _render_graph_summary(multilingual: bool, install_graph_extra: bool = True) -> str:
     profile = get_profile("minimal", multilingual=multilingual)
     return _render_summary(
-        "minimal",
-        profile,
-        multilingual=multilingual,
-        providers=[],
+        "minimal", profile, multilingual=multilingual, device_labels=[],
         features=WizardFeatures(install_graph_extra=install_graph_extra),
         config_path=str(_CONFIG_PATH),
     )
@@ -344,10 +324,7 @@ def test_render_summary_base_content_preserved_with_features():
     """Base profile content (embedder, chunk size) is still present when features are non-None."""
     profile = get_profile("balanced", multilingual=False)
     output = _render_summary(
-        "balanced",
-        profile,
-        multilingual=False,
-        providers=[],
+        "balanced", profile, multilingual=False, device_labels=[],
         features=WizardFeatures(enable_telemetry=True),
         config_path="archon-search.toml",
     )
@@ -369,10 +346,7 @@ def test_summary_contains_db_path():
     """_render_summary with db_path shows the db path in output."""
     profile = get_profile("balanced", multilingual=False)
     output = _render_summary(
-        "balanced",
-        profile,
-        multilingual=False,
-        providers=[],
+        "balanced", profile, multilingual=False, device_labels=[],
         db_path="/home/user/.archon-search/lancedb",
         config_path="archon-search.toml",
     )
@@ -384,12 +358,8 @@ def test_summary_contains_server_url():
     """_render_summary with host/port shows http://host:port in output."""
     profile = get_profile("balanced", multilingual=False)
     output = _render_summary(
-        "balanced",
-        profile,
-        multilingual=False,
-        providers=[],
-        host="127.0.0.1",
-        port=8765,
+        "balanced", profile, multilingual=False, device_labels=[],
+        host="127.0.0.1", port=8765,
         config_path="archon-search.toml",
     )
     assert "http://127.0.0.1:8765" in output
@@ -400,10 +370,7 @@ def test_summary_contains_download_size():
     """_render_summary with total_bytes shows the size in MB in output."""
     profile = get_profile("balanced", multilingual=False)
     output = _render_summary(
-        "balanced",
-        profile,
-        multilingual=False,
-        providers=[],
+        "balanced", profile, multilingual=False, device_labels=[],
         total_bytes=300_000_000,
         config_path="archon-search.toml",
     )
@@ -417,10 +384,7 @@ def test_summary_api_key_masked(tmp_path):
     key_file.write_text("ARCHON_SEARCH_API_KEY=abcdefghijklmnopqrst\n")
     profile = get_profile("balanced", multilingual=False)
     output = _render_summary(
-        "balanced",
-        profile,
-        multilingual=False,
-        providers=[],
+        "balanced", profile, multilingual=False, device_labels=[],
         api_key_file=str(key_file),
         config_path="archon-search.toml",
     )
@@ -433,10 +397,7 @@ def test_summary_api_key_file_missing():
     """_render_summary with a non-existent key file shows 'not yet generated'."""
     profile = get_profile("balanced", multilingual=False)
     output = _render_summary(
-        "balanced",
-        profile,
-        multilingual=False,
-        providers=[],
+        "balanced", profile, multilingual=False, device_labels=[],
         api_key_file="/nonexistent/path/.search.env",
         config_path="archon-search.toml",
     )
@@ -503,7 +464,7 @@ def test_next_steps_shows_next_steps_header(capsys):
 def test_summary_db_path_absent_when_empty():
     """_render_summary with default db_path='' must NOT emit a Database: line."""
     profile = get_profile("balanced", multilingual=False)
-    output = _render_summary("balanced", profile, multilingual=False, providers=[], config_path="archon-search.toml")
+    output = _render_summary("balanced", profile, multilingual=False, device_labels=[], config_path="archon-search.toml")
     assert "Database:" not in output
 
 
@@ -511,8 +472,7 @@ def test_summary_server_custom_host_port():
     """_render_summary emits the correct Server URL for a non-default host:port."""
     profile = get_profile("minimal", multilingual=False)
     output = _render_summary(
-        "minimal", profile, multilingual=False, providers=[],
-        host="0.0.0.0", port=9999,
+        "minimal", profile, multilingual=False, device_labels=[], host="0.0.0.0", port=9999,
         config_path="archon-search.toml",
     )
     assert "http://0.0.0.0:9999" in output
@@ -554,8 +514,7 @@ def test_next_steps_not_printed_in_dry_run(tmp_path, capsys):
         patch("archon_search.install.installer._prewarm_models"),
         patch("archon_search.install.installer._check_disk_space"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(BaseInstaller, "validate_providers", return_value=False),
-        patch.object(DryRunInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
         patch.object(DryRunInstaller, "write_service_file"),
         patch.object(DryRunInstaller, "load_service", return_value=0),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),

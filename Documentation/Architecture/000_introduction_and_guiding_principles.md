@@ -12,7 +12,7 @@
 
 1. **Local-first, single-process.** The server runs on one host, owns its on-disk state, and does not assume any external infrastructure. All runtime state — vector index, full-text index, configuration, API key, optional telemetry logs — lives under `~/.archon-search/`.
 2. **One contract, two surfaces.** REST and MCP are layered over the same internal pipeline. The OpenAPI document published at `GET /openapi.json` is the authoritative shape; MCP tools mirror the same control-plane verbs.
-3. **Hybrid retrieval, second-stage reranking.** The pipeline composes dense embeddings (fastembed) and full-text search (LanceDB FTS) into a fused candidate set, then applies a cross-encoder reranker. Multi-collection routing (`router.py`) selects which collections to query per prompt.
+3. **Hybrid retrieval, second-stage reranking.** The pipeline composes dense embeddings (PyTorch) and full-text search (LanceDB FTS) into a fused candidate set, then applies a cross-encoder reranker. Multi-collection routing (`router.py`) selects which collections to query per prompt.
 4. **No raw query text leaves the process — ever.** Telemetry is opt-in and disabled by default; when enabled it stays on the local disk and never includes the raw query string. This is enforced structurally, not by review (see `Architecture/010_engineering_principles_and_constraints.md`).
 5. **Time-versioned, contract-versioned.** Releases use CalVer (`YY.M.<rev-count>`) derived from git tags via `hatch-vcs`. CalVer encodes time only; compatibility is documented separately in `BREAKING.md`.
 

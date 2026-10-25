@@ -18,6 +18,7 @@ from archon_search._durable_io import atomic_write_json
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder import make_embedder
 from archon_search.store import StoreBusyError
+from archon_search.torch_runtime import AUTO_DEVICE
 
 if TYPE_CHECKING:
     from archon_search.collection_meta import CollectionMeta
@@ -37,7 +38,7 @@ def collection_sync_failed_detail(name: str) -> str:
     It is both ``SyncResult.errors`` (``POST /sync`` job ``result["errors"]``) and
     ``CollectionProgress.error`` (``GET /status`` ``collections[].error`` and
     ``GET /indexing-state`` ``collections.<name>.error``). The caught
-    exception's message may embed internals (LanceDB / ONNX / OSError paths), so it goes
+    exception's message may embed internals (LanceDB / model / OSError paths), so it goes
     to the server log only; the collection name is already public on ``GET /collections``.
     """
     return f"sync of collection {name!r} failed; see the server log for details"
@@ -130,7 +131,7 @@ class SearchCollectionSync:
         pinned_collections: list[str] | None = None,
         chunk_size: int = 0,
         auto_reindex_on_chunk_size_change: bool = False,
-        providers: list[str] | None = None,
+        device: str = AUTO_DEVICE,
         job_store: JobStore | None = None,
         configured_paths: Callable[[], Iterable[str]] | None = None,
     ) -> None:
@@ -147,9 +148,9 @@ class SearchCollectionSync:
         self._collection_locks: dict[str, asyncio.Lock] = {}
         self._chunk_size = chunk_size
         self._auto_reindex_on_chunk_size_change = auto_reindex_on_chunk_size_change
-        # ONNX Runtime execution providers ([database] providers) for the per-collection
-        # embedders built below — without them the re-embed path would silently run on CPU.
-        self._providers = providers or None
+        # [database].device for the per-collection embedders built below — without it the
+        # re-embed path would silently use the default device instead of the configured one.
+        self._device = device
         self._job_store = job_store
         self._configured_paths = configured_paths
 
@@ -678,7 +679,7 @@ class SearchCollectionSync:
                 embedder = _global
             else:
                 try:
-                    embedder = make_embedder(_active_model, providers=self._providers)
+                    embedder = make_embedder(_active_model, device=self._device)
                 except Exception:  # noqa: BLE001
                     logger.warning(
                         "Could not load stored embedder %r for collection %r; using global embedder",
@@ -788,7 +789,7 @@ class SearchCollectionSync:
             embedder = _global
         else:
             try:
-                embedder = make_embedder(_active_model, providers=self._providers)
+                embedder = make_embedder(_active_model, device=self._device)
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "Could not load stored embedder %r for collection %r; using global embedder",

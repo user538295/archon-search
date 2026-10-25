@@ -604,7 +604,7 @@ async def test_eval_hyde_regression_scenario(tmp_path: Path) -> None:
 
     The deterministic embedder cannot measure semantic improvement; this scenario
     only verifies HyDE does not *break* recall.  Measuring recall *improvement*
-    from HyDE requires ``@pytest.mark.live`` with real fastembed + real Claude
+    from HyDE requires ``@pytest.mark.live`` with real PyTorch models + real Claude
     API — not part of the default eval gate.
     """
     from archon_search.chunker import DocumentChunker
@@ -821,7 +821,7 @@ async def test_eval_rag_fusion_regression_scenario(tmp_path: Path) -> None:
     (all queries including variants produce vectors via SHA-256 token hashing, so the
     variants surface slightly different but overlapping result sets).  This scenario
     only verifies RAG Fusion does not *break* recall.  Measuring recall *improvement*
-    requires ``@pytest.mark.live`` with real fastembed + real Claude API — see
+    requires ``@pytest.mark.live`` with real PyTorch models + real Claude API — see
     ``tests/eval/live/test_live_rag_fusion.py``.
 
     Acceptance: ``recall@5`` with the mocked RAG Fusion path is ≥

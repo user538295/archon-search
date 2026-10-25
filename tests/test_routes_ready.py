@@ -1,14 +1,16 @@
 """Tests for GET /ready endpoint — Task 5.2 (B2)."""
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
+from archon_search.model_validation import validate_models_async
 from archon_search.server.app import create_app
 
 
@@ -176,15 +178,18 @@ def test_ready_models_fail_precedence_over_warn(client_ping_true: TestClient) ->
     assert response.json()["checks"]["models"] == "fail"
 
 
-def test_ready_models_warn_on_provider_warning(client_ping_true: TestClient) -> None:
-    _set_validation(
-        client_ping_true,
-        embedder_ok=True,
-        reranker_ok=True,
-        provider_warnings=["CPU fallback"],
-    )
+def test_ready_reports_warn_when_device_stepped_down(client_ping_true: TestClient) -> None:
+    """Both models loaded, but the configured accelerator is missing: models: warn, still ready."""
+    with patch("archon_search.model_validation.resolve_device", return_value="cpu"):
+        result = asyncio.run(validate_models_async(SearchConfig(device="mps"), timeout_seconds=5))
+    client_ping_true.app.state.model_validation = result
+
     response = client_ping_true.get("/ready")
+
+    assert result.provider_warnings == ["device unavailable: mps; models loaded on cpu"]
+    assert response.status_code == 200
     assert response.json()["checks"]["models"] == "warn"
+    assert response.json()["ready"] is True
 
 
 def test_ready_models_pending_when_probe_flag_unset(client_ping_true: TestClient) -> None:

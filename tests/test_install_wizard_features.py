@@ -272,10 +272,18 @@ class TestPromptMultilingual:
         assert result is True
 
     def test_interactive_no(self) -> None:
-        """Empty input returns False (flag_value=None → interactive)."""
-        with patch("builtins.input", return_value=""):
+        """Input 'n' returns False (flag_value=None → interactive)."""
+        with patch("builtins.input", return_value="n"):
             result = _prompt_multilingual(non_interactive=False, flag_value=None)
         assert result is False
+
+    def test_interactive_rejects_non_yn_and_reasks(self, capsys) -> None:
+        """Enter, 'yes', 'no', 'yep' are all rejected and the question is re-asked until a y/n."""
+        with patch("builtins.input", side_effect=["", "yes", "no", "yep", "y"]) as mock_input:
+            result = _prompt_multilingual(non_interactive=False, flag_value=None)
+        assert result is True
+        assert mock_input.call_count == 5
+        assert capsys.readouterr().out.count("Please answer y or n.") == 4
 
     def test_interactive_eof(self) -> None:
         """EOFError returns False without raising (flag_value=None → interactive)."""
@@ -284,10 +292,11 @@ class TestPromptMultilingual:
         assert result is False
 
     def test_interactive_yes_uppercase(self) -> None:
-        """Input 'YES' (case-insensitive) returns True (flag_value=None → interactive)."""
-        with patch("builtins.input", return_value="YES"):
+        """Input 'Y' (case-insensitive) returns True; 'YES' is rejected and re-asked."""
+        with patch("builtins.input", side_effect=["YES", "Y"]) as mock_input:
             result = _prompt_multilingual(non_interactive=False, flag_value=None)
         assert result is True
+        assert mock_input.call_count == 2
 
     # ------------------------------------------------------------------
     # Task 2.1 — tri-state (bool | None) tests
@@ -558,24 +567,22 @@ class TestPromptOptionalFeatures:
         assert features.log_format == "text"
 
     def test_ask_yn_empty_input_default_true_keeps_reranker(self) -> None:
-        """Pressing Enter at [Y/n] prompt (default=True) keeps the reranker enabled.
+        """Pressing Enter at the reranker prompt is rejected and re-asked (no implicit default).
 
-        Guards the _ask_yn fix: empty input must return default (True), so
-        disable_reranker = not True = False (reranker stays on).
+        The re-ask consumes the next answer: Enter, then 'y' → reranker kept.
         """
-        # code=n, reranker=""(Enter→default=True=keep), watch=n, telemetry=n,
+        # code=n, reranker=""(rejected) then "y"(keep), watch=n, telemetry=n,
         # eager=n, routing="", log=""
-        responses = iter(["n", "", "n", "n", "n", "", ""])
-        with patch("builtins.input", side_effect=responses):
+        responses = iter(["n", "", "y", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile_with_reranker,
                 enable_hyde=False,
                 enable_rag_fusion=False,
             )
-        assert features.disable_reranker is False, (
-            "_ask_yn with default=True returned False for empty input — reranker was disabled"
-        )
+        assert features.disable_reranker is False
+        assert mock_input.call_count == 8  # 7 questions + 1 re-ask
 
     def test_ask_yn_n_input_default_true_disables_reranker(self) -> None:
         """Answering 'n' at [Y/n] prompt (default=True) disables the reranker.
@@ -621,65 +628,55 @@ class TestPromptOptionalFeatures:
         assert features.log_format == "json"
 
     def test_ask_yn_empty_input_default_false_leaves_code_disabled(self) -> None:
-        """Pressing Enter at [y/N] prompt (default=False) keeps the feature disabled.
-
-        Guards that the default=True fix did not break default=False: empty input
-        must return False for code enrichment.
-        """
-        # code=""(Enter→default=False=don't install), reranker=n, watch=n,
+        """Pressing Enter at the code prompt is rejected and re-asked; a following 'n' declines it."""
+        # code=""(rejected) then "n", reranker=n, watch=n,
         # telemetry=n, eager=n, routing="", log=""
-        responses = iter(["", "n", "n", "n", "n", "", ""])
-        with patch("builtins.input", side_effect=responses):
+        responses = iter(["", "n", "n", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile_with_reranker,
                 enable_hyde=False,
                 enable_rag_fusion=False,
             )
-        assert features.install_code_extra is False, (
-            "Empty input at [y/N] prompt must return False (default)"
-        )
+        assert features.install_code_extra is False
+        assert mock_input.call_count == 8  # 7 questions + 1 re-ask
 
     def test_ask_yn_unrecognized_input_default_true_keeps_reranker(self) -> None:
-        """Unrecognized non-empty input at [Y/n] prompt (default=True) keeps the reranker.
-
-        Guards the M1 fix: 'yep' is not in {'n', 'no'}, so _ask_yn returns True
-        and disable_reranker = not True = False.
-        """
-        # code=n, reranker="yep"(not 'n'/'no'→True=keep enabled), watch=n,
+        """Unrecognized input 'yep' at the reranker prompt is rejected, NOT treated as yes."""
+        # code=n, reranker="yep"(rejected) then "n"(disable), watch=n,
         # telemetry=n, eager=n, routing="", log=""
-        responses = iter(["n", "yep", "n", "n", "n", "", ""])
-        with patch("builtins.input", side_effect=responses):
+        responses = iter(["n", "yep", "n", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile_with_reranker,
                 enable_hyde=False,
                 enable_rag_fusion=False,
             )
-        assert features.disable_reranker is False, (
-            "Unrecognized input 'yep' at [Y/n] prompt must be treated as yes (keep enabled)"
-        )
+        assert features.disable_reranker is True, "'yep' must be rejected, not accepted as yes"
+        assert mock_input.call_count == 8
 
     def test_ask_yn_no_variant_default_true_disables_reranker(self) -> None:
-        """'no' (full word) at [Y/n] prompt also disables the reranker."""
-        # code=n, reranker="no" (full word, in {"n","no"}→False=decline keep→disable),
+        """'no' (full word) at the reranker prompt is rejected; the re-ask's 'y' keeps the reranker."""
+        # code=n, reranker="no"(rejected) then "y"(keep),
         # watch=n, telemetry=n, eager=n, routing="", log=""
-        responses = iter(["n", "no", "n", "n", "n", "", ""])
-        with patch("builtins.input", side_effect=responses):
+        responses = iter(["n", "no", "y", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile_with_reranker,
                 enable_hyde=False,
                 enable_rag_fusion=False,
             )
-        assert features.disable_reranker is True
+        assert features.disable_reranker is False, "'no' must be rejected, not accepted as n"
+        assert mock_input.call_count == 8
 
     def test_ask_yn_yes_variant_default_false_enables_code(self) -> None:
-        """'yes' (full word) at [y/N] prompt enables code enrichment."""
-        # code="yes" (full word, in {"y","yes"}→True=install),
-        # reranker=n, watch=n, telemetry=n, eager=n, routing="", log=""
-        responses = iter(["yes", "n", "n", "n", "n", "", ""])
-        with patch("builtins.input", side_effect=responses):
+        """'yes' (full word) at the code prompt is rejected; the re-ask's 'y' enables code enrichment."""
+        # code="yes"(rejected) then "y", reranker=n, watch=n, telemetry=n, eager=n, routing="", log=""
+        responses = iter(["yes", "y", "n", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile_with_reranker,
@@ -687,6 +684,7 @@ class TestPromptOptionalFeatures:
                 enable_rag_fusion=False,
             )
         assert features.install_code_extra is True
+        assert mock_input.call_count == 8
 
     def test_ask_yn_eof_default_true_keeps_reranker(self) -> None:
         """EOFError at [Y/n] prompt (default=True) keeps the reranker enabled.
@@ -896,12 +894,13 @@ class TestPromptOptionalFeaturesBundledDisclosure:
         pre_question: dict[str, str] = {}
         call_no = {"n": 0}
 
-        def _fake_input(_prompt: str) -> str:
+        def _fake_input(prompt: str) -> str:
             call_no["n"] += 1
             if call_no["n"] == 1:  # the code/graph question — the first prompt
                 pre_question["out"] = capsys.readouterr().out
                 return "y"
-            return ""  # decline / accept-default every later prompt so the call completes
+            # decline every later y/n prompt; blank for choice prompts so the call completes
+            return "n" if "[y/n]" in prompt else ""
 
         with patch("builtins.input", _fake_input):
             features = _prompt_optional_features(
@@ -1136,10 +1135,11 @@ class TestPromptGpuConfirm:
         assert result is True
 
     def test_interactive_metal_accept(self) -> None:
-        """Empty input (default) with Metal returns True."""
-        with patch("builtins.input", return_value=""):
+        """Input 'y' with Metal returns True; Enter is rejected and re-asked."""
+        with patch("builtins.input", side_effect=["", "y"]) as mock_input:
             result = _prompt_gpu_confirm(non_interactive=False, gpu=GpuType.METAL)
         assert result is True
+        assert mock_input.call_count == 2
 
     def test_interactive_metal_decline(self) -> None:
         """Input 'n' with Metal returns False."""
@@ -1148,14 +1148,15 @@ class TestPromptGpuConfirm:
         assert result is False
 
     def test_interactive_cuda_decline(self) -> None:
-        """Input 'no' with CUDA returns False."""
-        with patch("builtins.input", return_value="no"):
+        """Input 'no' with CUDA is rejected; the re-asked 'n' returns False."""
+        with patch("builtins.input", side_effect=["no", "n"]) as mock_input:
             result = _prompt_gpu_confirm(non_interactive=False, gpu=GpuType.CUDA)
         assert result is False
+        assert mock_input.call_count == 2
 
     def test_interactive_cuda_accept(self) -> None:
-        """Empty input (default) with CUDA returns True."""
-        with patch("builtins.input", return_value=""):
+        """Input 'Y' with CUDA returns True."""
+        with patch("builtins.input", return_value="Y"):
             result = _prompt_gpu_confirm(non_interactive=False, gpu=GpuType.CUDA)
         assert result is True
 

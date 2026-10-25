@@ -34,7 +34,7 @@ UTC = timezone.utc
 # Named constants — avoid magic numbers
 # ---------------------------------------------------------------------------
 
-_EMBEDDING_DIM: int = 384          # must match the stub fastembed backend
+_EMBEDDING_DIM: int = 384          # must match the stub embedder backend
 _POLL_TIMEOUT_S: float = 10.0      # maximum time to wait for a maintenance pass
 _POLL_INTERVAL_S: float = 0.1      # polling frequency
 _PAST_SECONDS: int = 120           # seed chunks expired 2 min ago

@@ -90,12 +90,12 @@ _DEFAULTED_RERUN_KEYS: tuple[tuple[str, str, str], ...] = (
 )
 
 # The keys hand-edit detection guards: the keys a re-run rewrites or removes from its own answers
-# even when no flag names them, except `[database].providers`. Deployment keys (`[server]`,
+# even when no flag names them, except `[database].device`. Deployment keys (`[server]`,
 # `db_path`, `[logging].level`, top-k), `[graph]` and the HyDE/RAG Fusion provider/model keys are
-# excluded: a re-run writes them only when their flag or answer is given. `[database].providers` is
+# excluded: a re-run writes them only when their flag or answer is given. `[database].device` is
 # excluded although Step 9 rewrites it from the GPU answer: a declined GPU prompt, `--disable-gpu`
-# or a failed CoreML or CUDA check writes `[]` on every such run, and `configure_providers` keeps a chain
-# that already holds the detected provider, so guarding it would warn on re-runs that leave it unchanged.
+# or a failed accelerator check writes `cpu` on every such run, and `configure_device` skips the
+# rewrite when the value is unchanged, so guarding it would warn on re-runs that leave it unchanged.
 _RERUN_MANAGED_KEYS: tuple[tuple[str, str], ...] = (
     *(("database", key) for key in _PROFILE_DATABASE_KEYS),
     *((section, key) for section, key, _ in _DEFAULTED_RERUN_KEYS),
@@ -500,9 +500,9 @@ def _detect_config_hand_edits(
     a wizard-written non-default value from a hand edit. Keys outside
     ``_RERUN_MANAGED_KEYS`` are never compared: ``[server]`` and the other deployment keys,
     ``[graph]`` and the HyDE/RAG Fusion provider/model keys, which a re-run writes only when
-    asked to, and ``[database].providers``, which Step 9 rewrites from the GPU answer (``[]``
-    after a declined GPU prompt, ``--disable-gpu`` or a failed CoreML check) and otherwise
-    leaves unchanged when it already holds the detected provider.
+    asked to, and ``[database].device``, which Step 9 rewrites from the GPU answer (``cpu``
+    after a declined GPU prompt, ``--disable-gpu`` or a failed accelerator check) and otherwise
+    leaves unchanged when it already holds the detected value.
     """
     current = _managed_values(tomlkit.parse(config_path.read_text()))
     record = _read_wizard_record(config_path)

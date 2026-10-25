@@ -28,6 +28,8 @@ sync, then index them, remove the file form the disk but keep the indexes on the
 
 ### Ultra tier
 
+_Note (2026-10-25): written when fastembed was the runtime. Today only the models in `archon_search/model_specs.py` are supported, so "fastembed's registry" below is historical; the ColBERT/SPLADE options need new code paths either way._
+
 Honest answer: no ultra tier within fastembed's registry. The ceiling is ~2.3 GB for embedders and ~1.1 GB for rerankers. An M4 Pro 48 GB won't be RAM-constrained by any of these — the constraint is fastembed's
   ONNX model catalog, not hardware.
 
@@ -50,8 +52,8 @@ Honest answer: no ultra tier within fastembed's registry. The ceiling is ~2.3 GB
 
   For the M4 Pro specifically
 
-  The real advantage on that machine isn't model size — it's CoreML acceleration. The existing max tier models running on the Neural Engine will be significantly faster than the same models on CPU. The current
-  configure_providers() already handles this.
+  The real advantage on that machine isn't model size — it's GPU acceleration. The existing max tier models running on the Apple GPU (`mps`) will be significantly faster than the same models on CPU. The PyTorch
+  runtime already handles this: `[database].device = "auto"` picks cuda, then mps, then cpu. (The CoreML provider this answer first named was removed with fastembed, see ADR 18.)
 
   Summary recommendation:
 

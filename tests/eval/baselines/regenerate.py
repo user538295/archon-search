@@ -7,7 +7,7 @@ Run from the package root:
 
 This is a maintenance utility, not part of the pytest run (per spec).
 
-IMPORTANT: installs the same ML stubs that pytest uses (fake chonkie, fake fastembed)
+IMPORTANT: installs the same ML stubs that pytest uses (fake chonkie)
 so calibrated values are consistent with what the gated CI tests measure.
 """
 from __future__ import annotations

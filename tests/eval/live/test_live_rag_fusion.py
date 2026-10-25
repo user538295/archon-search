@@ -1,7 +1,7 @@
-"""Live E2E tests for RAG Fusion — real fastembed + a real LLM call.
+"""Live E2E tests for RAG Fusion — real PyTorch models + a real LLM call.
 
 Requires:
-  - Real fastembed model weights (BAAI/bge-small-en-v1.5)
+  - Real model weights (BAAI/bge-small-en-v1.5)
   - Either ANTHROPIC_API_KEY set in the environment (+ anthropic package
     installed, archon-search[rag_fusion]) OR the `claude` CLI on PATH and
     logged in — the tests prefer the real Anthropic API when a key is
@@ -31,6 +31,7 @@ from archon_search.eval.runner import (
     load_thresholds,
 )
 from tests._fastmcp_stub import stub_mcp_tool
+from tests._live_model_cache import pin_models_dir
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +148,7 @@ async def _call_until_rag_fusion_applied(call, *, max_attempts: int = _RAG_FUSIO
 
 
 async def _build_live_pipeline(tmp_path: Path):
-    """Return a pipeline with real fastembed and the committed eval corpus ingested."""
+    """Return a pipeline with the real PyTorch backends and the committed eval corpus ingested."""
     pipeline = await _build_pipeline_with_eval_backends(tmp_path, backend="live")
     corpus = load_eval_corpus(_EVAL_CORPUS_ROOT)
     await _ingest_corpus(pipeline, _EVAL_CORPUS_ROOT, corpus)
@@ -396,6 +397,7 @@ async def test_live_rag_fusion_fallback_on_missing_key(
 async def test_live_search_with_context_rag_fusion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    live_models_dir: Path,
 ) -> None:
     """Full HTTP stack: POST /search with rag_fusion=True and real generator returns
     200, rag_fusion_applied=true, and results list present (may be empty on short corpus).
@@ -411,6 +413,7 @@ async def test_live_search_with_context_rag_fusion(
 
     # Ingest one document into the live pipeline's store so results can be returned
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    pin_models_dir(live_models_dir)  # the fresh data dir has no weights; load them from the session cache
     config = SearchConfig()
     config.rag_fusion = RAGFusionConfig(enabled=True, num_queries=2)
     _configure_rag_fusion_provider(config.rag_fusion)
@@ -459,6 +462,7 @@ async def test_live_search_with_context_rag_fusion(
 async def test_live_mcp_search_rag_fusion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    live_models_dir: Path,
 ) -> None:
     """MCP search tool with rag_fusion=True and real generator returns
     expansion_used=True (the "search" MCP tool folds hyde/rag_fusion/graph
@@ -479,6 +483,7 @@ async def test_live_mcp_search_rag_fusion(
     from tests.integration.conftest import ingest_file_via_path
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    pin_models_dir(live_models_dir)  # the fresh data dir has no weights; load them from the session cache
     config = SearchConfig()
     config.rag_fusion = RAGFusionConfig(enabled=True, num_queries=2)
     _configure_rag_fusion_provider(config.rag_fusion)

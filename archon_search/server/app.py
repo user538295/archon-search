@@ -27,7 +27,6 @@ from archon_search.config import (
     SearchConfig,
     get_default_config_path,
     resolve_active_model,
-    resolve_reranker_providers,
     warn_gc_cpu_priority,
     warn_if_legacy_config_ignored,
 )
@@ -569,7 +568,7 @@ def create_app(
                 app.state.graph_store = None
 
         # Startup: create embedder cache and warm the models the first search needs.
-        embedder_cache = EmbedderCache(config.embedder_cache_size, providers=config.providers or None)
+        embedder_cache = EmbedderCache(config.embedder_cache_size, device=config.device)
         app.state.embedder_cache = embedder_cache
         if config.eager_load_embedders:
             metas = await app.state.search_store.get_all_collections_meta()
@@ -588,7 +587,7 @@ def create_app(
             # Warm-up runs for every deployment, not just eager_load_embedders ones
             # (S279): the cross-encoder and the default embedder are built lazily on
             # the first search, so a heavyweight profile (e.g. "max", where the cold
-            # ONNX build of BAAI/bge-reranker-base measured 91 s) blocks that request
+            # model build of BAAI/bge-reranker-base measured 91 s) blocks that request
             # past any client read timeout — the caller sees no response at all.
             # ``eager_load_embedders`` still decides the *scope*: every per-collection
             # model when on, only the global default when off.
@@ -1061,7 +1060,7 @@ def create_app(
     app.state.state_store = IndexingStateStore(config.db_path)
     app.state.search_store = SearchStore(config.db_path)
     app.state.watcher_manager = None
-    app.state.embedder = Embedder(ModelEmbedder(config.embedding_model, providers=config.providers or None))
+    app.state.embedder = Embedder(ModelEmbedder(config.embedding_model, device=config.device))
 
     # C2: instantiate LanguageDetector for production path when multilingual=True.
     # _check_multilingual_deps() has already passed at this point, so imports are safe.
@@ -1105,7 +1104,7 @@ def create_app(
         reranker=(
             Reranker(ModelReranker(
                 config.reranker_model,
-                providers=resolve_reranker_providers(config),
+                device=config.device,
             ))
             if config.reranker_model
             else None
@@ -1141,7 +1140,7 @@ def create_app(
         pinned_collections=config.pinned_collections,
         chunk_size=config.chunk_size,
         auto_reindex_on_chunk_size_change=config.auto_reindex_on_chunk_size_change,
-        providers=config.providers or None,
+        device=config.device,
         job_store=job_store,
         configured_paths=lambda: (*config.pinned_collections, *config.collections),
     )

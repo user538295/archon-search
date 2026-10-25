@@ -10,8 +10,6 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from archon_search.model_validation import EMBEDDER_PROBE_FAILED_WARNING
-from archon_search.paths import get_models_dir
 from archon_search.platform.types import GpuType
 
 pytestmark = pytest.mark.xdist_group("install")
@@ -40,7 +38,7 @@ def _make_search_config(tmp_path: Path) -> object:
         log_file: str = ""
         embedding_model: str = "BAAI/bge-small-en-v1.5"
         reranker_model: str = "BAAI/bge-reranker-v2-m3"
-        providers: list[str] = field(default_factory=list)
+        device: str = "auto"
         top_k_retrieve: int = 20
         top_k_return: int = 5
         chunk_size: int = 512
@@ -201,130 +199,98 @@ class TestDetectGpu:
 
 
 # ---------------------------------------------------------------------------
-# configure_providers
+# configure_device
 # ---------------------------------------------------------------------------
 
 
-class TestConfigureProviders:
-    def test_configure_providers_writes_cuda_when_gpu(self, tmp_path: Path) -> None:
+class TestConfigureDevice:
+    @staticmethod
+    def _installer(tmp_path: Path, content: str | None, dry_run: bool = False) -> tuple[object, Path]:
         config_file = tmp_path / "archon-search.toml"
-        config_file.write_text("[database]\n")
-
-        installer = _make_installer(tmp_path)
+        if content is not None:
+            config_file.write_text(content)
+        installer = _make_installer(tmp_path, dry_run=dry_run)
         installer.config_file = str(config_file)
+        return installer, config_file
 
-        installer.configure_providers(gpu="cuda")
+    def test_writes_device_into_database_section(self, tmp_path: Path) -> None:
+        import tomlkit
 
-        content = config_file.read_text()
-        assert "CUDAExecutionProvider" in content
+        installer, config_file = self._installer(tmp_path, "[database]\n")
 
-    def test_configure_providers_no_op_when_no_gpu(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "config.toml"
-        original = "[database]\n"
-        config_file.write_text(original)
+        installer.configure_device("mps")
 
-        installer = _make_installer(tmp_path)
-        installer.config_file = str(config_file)
+        assert tomlkit.parse(config_file.read_text())["database"]["device"] == "mps"
 
-        installer.configure_providers(gpu="none")
+    def test_replaces_existing_device(self, tmp_path: Path) -> None:
+        import tomlkit
+
+        installer, config_file = self._installer(tmp_path, '[database]\ndevice = "cpu"\n')
+
+        installer.configure_device("auto")
+
+        assert tomlkit.parse(config_file.read_text())["database"]["device"] == "auto"
+
+    def test_creates_missing_section(self, tmp_path: Path) -> None:
+        import tomlkit
+
+        installer, config_file = self._installer(tmp_path, "")
+
+        installer.configure_device("cpu")
+
+        assert tomlkit.parse(config_file.read_text())["database"]["device"] == "cpu"
+
+    def test_graph_section_leaves_database_untouched(self, tmp_path: Path) -> None:
+        import tomlkit
+
+        installer, config_file = self._installer(tmp_path, "[database]\n")
+
+        installer.configure_device("cuda", section="graph")
+
+        doc = tomlkit.parse(config_file.read_text())
+        assert doc["graph"]["device"] == "cuda"
+        assert "device" not in doc["database"]
+
+    def test_unchanged_value_does_not_rewrite_file(self, tmp_path: Path) -> None:
+        original = '[database]\n# keep this comment\ndevice   =   "cpu"\n'
+        installer, config_file = self._installer(tmp_path, original)
+
+        installer.configure_device("cpu")
 
         assert config_file.read_text() == original
 
-    def test_configure_providers_dry_run_no_op(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "config.toml"
-        original = "[database]\n"
-        config_file.write_text(original)
+    def test_unknown_device_raises_and_leaves_file_untouched(self, tmp_path: Path) -> None:
+        installer, config_file = self._installer(tmp_path, "[database]\n")
 
-        installer = _make_installer(tmp_path, dry_run=True)
-        installer.config_file = str(config_file)
+        with pytest.raises(ValueError, match="unknown device 'tpu'"):
+            installer.configure_device("tpu")
 
-        installer.configure_providers(gpu="cuda")
+        assert config_file.read_text() == "[database]\n"
 
-        assert config_file.read_text() == original
+    def test_missing_config_file_is_skipped(self, tmp_path: Path) -> None:
+        installer, config_file = self._installer(tmp_path, None)
 
-    def test_configure_providers_apple_silicon_writes_coreml(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "archon-search.toml"
-        config_file.write_text("[database]\n")
+        installer.configure_device("cpu")
 
-        installer = _make_installer(tmp_path)
-        installer.config_file = str(config_file)
+        assert not config_file.exists()
 
-        installer.configure_providers(gpu=GpuType.METAL)
+    def test_dry_run_narrates_and_writes_nothing(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        installer, config_file = self._installer(tmp_path, "[database]\n", dry_run=True)
 
-        content = config_file.read_text()
-        assert "CoreMLExecutionProvider" in content
-        assert "CUDAExecutionProvider" not in content
+        installer.configure_device("cuda")
+        installer.configure_device("cpu", section="graph")
 
-    def test_configure_providers_cuda_unchanged(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "archon-search.toml"
-        config_file.write_text("[database]\n")
+        assert capsys.readouterr().out.splitlines() == [
+            "[DRY RUN] Would set [database] device = 'cuda'.",
+            "[DRY RUN] Would set [graph] device = 'cpu'.",
+        ]
+        assert config_file.read_text() == "[database]\n"
 
-        installer = _make_installer(tmp_path)
-        installer.config_file = str(config_file)
+    def test_dry_run_rejects_unknown_device(self, tmp_path: Path) -> None:
+        installer, _ = self._installer(tmp_path, "[database]\n", dry_run=True)
 
-        installer.configure_providers(gpu="cuda")
-
-        content = config_file.read_text()
-        assert "CUDAExecutionProvider" in content
-
-    def test_configure_providers_none_is_noop(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "config.toml"
-        original = "[database]\n"
-        config_file.write_text(original)
-
-        installer = _make_installer(tmp_path)
-        installer.config_file = str(config_file)
-
-        installer.configure_providers(gpu="none")
-
-        assert config_file.read_text() == original
-
-    def test_configure_providers_idempotent_if_already_set(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "archon-search.toml"
-        config_file.write_text("[database]\n")
-
-        installer = _make_installer(tmp_path)
-        installer.config_file = str(config_file)
-
-        installer.configure_providers(gpu="cuda")
-        content_after_first = config_file.read_text()
-
-        installer.configure_providers(gpu="cuda")
-        content_after_second = config_file.read_text()
-
-        assert content_after_first == content_after_second
-        assert "CUDAExecutionProvider" in content_after_second
-
-    def test_configure_providers_apple_silicon_idempotent_with_fallback_chain(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "config.toml"
-        # providers already has CoreML + CPU fallback chain
-        config_file.write_text(
-            '[database]\nproviders = ["CoreMLExecutionProvider", "CPUExecutionProvider"]\n'
-        )
-
-        installer = _make_installer(tmp_path)
-        installer.config_file = str(config_file)
-
-        installer.configure_providers(gpu=GpuType.METAL)
-
-        content = config_file.read_text()
-        # must NOT clobber the existing chain
-        assert "CPUExecutionProvider" in content
-        assert "CoreMLExecutionProvider" in content
-
-    def test_configure_providers_replaces_cuda_with_coreml(self, tmp_path: Path) -> None:
-        """Switching from cuda to apple_silicon must fully replace providers list."""
-        config_file = tmp_path / "archon-search.toml"
-        config_file.write_text('[database]\nproviders = ["CUDAExecutionProvider"]\n')
-
-        installer = _make_installer(tmp_path)
-        installer.config_file = str(config_file)
-
-        installer.configure_providers(gpu=GpuType.METAL)
-
-        content = config_file.read_text()
-        assert "CoreMLExecutionProvider" in content
-        assert "CUDAExecutionProvider" not in content
+        with pytest.raises(ValueError, match="unknown device 'tpu'"):
+            installer.configure_device("tpu")
 
 
 # ---------------------------------------------------------------------------
@@ -566,8 +532,7 @@ class TestRun:
              patch("archon_search.install.installer._check_disk_space"), \
              patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
-             patch.object(installer, "validate_providers", return_value=False), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "write_service_file", write_service_mock), \
              patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_wait_for_service", return_value=True), \
@@ -618,8 +583,7 @@ class TestRun:
              patch("archon_search.install.installer._check_disk_space"), \
              patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
-             patch.object(installer, "validate_providers", return_value=False), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -663,8 +627,7 @@ class TestRun:
              patch("archon_search.install.installer._check_disk_space"), \
              patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
-             patch.object(installer, "validate_providers", return_value=False), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -680,8 +643,8 @@ class TestRun:
         assert captured["graph_llama_cpp_base_url_default"] == "http://saved-graph:8080"
         assert captured["graph_ollama_base_url_default"] == "http://saved-graph:11434"
 
-    def test_run_prints_validating_message_for_apple_silicon(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """For METAL GPU with validate_providers=True, CoreML appears in providers summary."""
+    def test_run_prints_apple_gpu_device_when_validation_passes(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """METAL GPU whose models pass on mps: the summary names the Apple GPU as the device."""
         installer = _make_installer(tmp_path)
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
@@ -692,8 +655,8 @@ class TestRun:
              patch("archon_search.install.installer._check_disk_space"), \
              patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "validate_providers", return_value=True), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "_accelerator_validated", return_value=True), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -703,10 +666,10 @@ class TestRun:
 
         captured = capsys.readouterr()
         assert result == 0
-        assert "CoreML" in captured.out
+        assert "  Device:     Apple GPU (mps)\n" in captured.out
 
-    def test_run_prints_coreml_validation_failed_message(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """For METAL GPU where validate_providers returns False, warning message is printed."""
+    def test_run_prints_apple_gpu_validation_failed_message(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """METAL GPU whose validation fails: the warning is printed and CPU is written."""
         installer = _make_installer(tmp_path)
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
@@ -717,9 +680,8 @@ class TestRun:
              patch("archon_search.install.installer._check_disk_space"), \
              patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "validate_providers", return_value=False), \
-             patch.object(installer, "validate_embedder_only", return_value=False), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "_accelerator_validated", return_value=False), \
+             patch.object(installer, "configure_device") as configure_mock, \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -729,10 +691,11 @@ class TestRun:
 
         captured = capsys.readouterr()
         assert result == 0
-        assert "CoreML validation failed" in captured.out
+        assert "Warning: Apple GPU validation failed — falling back to CPU." in captured.out
+        configure_mock.assert_called_once_with("cpu")
 
-    def test_run_prints_providers_configured_for_non_apple_silicon(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """For NONE GPU, configure_providers is called and CPU default appears in summary."""
+    def test_run_writes_cpu_device_and_prints_cpu_for_no_gpu(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """For NONE GPU, cpu is written and the summary names CPU as the device."""
         installer = _make_installer(tmp_path)
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
@@ -744,8 +707,7 @@ class TestRun:
              patch("archon_search.install.installer._check_disk_space"), \
              patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
-             patch.object(installer, "validate_providers", return_value=False), \
-             patch.object(installer, "configure_providers", configure_mock), \
+             patch.object(installer, "configure_device", configure_mock), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -755,8 +717,8 @@ class TestRun:
 
         captured = capsys.readouterr()
         assert result == 0
-        configure_mock.assert_called_once_with(gpu=GpuType.NONE)
-        assert "CPU default" in captured.out
+        configure_mock.assert_called_once_with("cpu")
+        assert "  Device:     CPU\n" in captured.out
 
     def test_run_prints_packages_already_installed_when_no_missing(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """run() succeeds and prints completion message (no longer has package step)."""
@@ -770,8 +732,7 @@ class TestRun:
              patch("archon_search.install.installer._check_disk_space"), \
              patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
-             patch.object(installer, "validate_providers", return_value=False), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -795,8 +756,7 @@ class TestRun:
              patch("archon_search.install.installer._check_disk_space"), \
              patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
-             patch.object(installer, "validate_providers", return_value=False), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -820,8 +780,7 @@ class TestRun:
              patch("archon_search.install.installer._check_disk_space"), \
              patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
-             patch.object(installer, "validate_providers", return_value=False), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -984,327 +943,216 @@ class TestRunUninstall:
 
 
 # ---------------------------------------------------------------------------
-# validate_providers
+# _accelerator_validated / _probe_and_configure_device
 # ---------------------------------------------------------------------------
 
 
-_MV = "archon_search.model_validation"
-_AVAILABLE_PROVIDERS = "archon_search.onnx_providers._available_providers"
+_INSTALLER = "archon_search.install.installer"
+_VALIDATE_DEVICE = "archon_search.model_validation.validate_device"
+_CUDA_GUIDE_LINE = (
+    "  Commands for each install method: https://github.com/user538295/archon-search/blob/main/"
+    "Documentation/UserManual/10_installation.md#nvidia-gpu-run-embedding-and-reranking-on-cuda"
+)
 
 
-def _ok_embedder() -> MagicMock:
-    """A TextEmbedding stub whose embed() yields one vector."""
-    model = MagicMock()
-    model.embed.return_value = iter([[0.1, 0.2]])
-    return MagicMock(return_value=model)
+class TestAcceleratorValidated:
+    """``_accelerator_validated``: auto must resolve to an accelerator and both models must pass on it."""
 
-
-def _ok_cross_encoder() -> MagicMock:
-    """A _load_cross_encoder stub whose rerank() yields one score."""
-    ce = MagicMock()
-    ce.rerank.return_value = iter([0.5])
-    return MagicMock(return_value=ce)
-
-
-class TestValidateProviders:
-    """Body-behaviour tests for the refactored ``validate_providers`` (BE-7).
-
-    The method checks requested accelerators against ``onnx_providers`` and then
-    delegates to ``validate_providers_shared`` in ``model_validation.py``, so these
-    tests patch those modules' seams (``TextEmbedding``, ``_load_cross_encoder``,
-    ``onnx_providers._available_providers``) rather than ``sys.modules`` directly.
-    """
-
-    def test_validate_providers_returns_true_on_empty_list(self, tmp_path: Path) -> None:
-        """Empty providers list → no GPU provider check → both probes pass → True."""
-        installer = _make_installer(tmp_path)
-        te, ce = _ok_embedder(), _ok_cross_encoder()
-
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", ce):
-            result = installer.validate_providers([])
-
-        assert result is True
-        # `providers or None`: empty list coerced to None for fastembed default.
-        te.assert_called_once_with(
-            installer.cfg.embedding_model, providers=None, cache_dir=str(get_models_dir())
-        )
-
-    def test_validate_providers_returns_true_on_success(self, tmp_path: Path) -> None:
-        """All GPU providers available and both probes succeed → True."""
-        installer = _make_installer(tmp_path)
-        te, ce = _ok_embedder(), _ok_cross_encoder()
-
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(_AVAILABLE_PROVIDERS,
-                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
-            result = installer.validate_providers(["CUDAExecutionProvider"])
-
-        assert result is True
-
-    def test_validate_providers_returns_false_on_exception(self, tmp_path: Path) -> None:
-        """TextEmbedding constructor raises → False, no exception propagated."""
-        installer = _make_installer(tmp_path)
-        te = MagicMock(side_effect=RuntimeError("init failed"))
-
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", _ok_cross_encoder()), \
-             patch(_AVAILABLE_PROVIDERS,
-                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
-            result = installer.validate_providers(["CUDAExecutionProvider"])
-
-        assert result is False
-
-    def test_validate_providers_returns_false_on_embed_exception(self, tmp_path: Path) -> None:
-        """embed() call raises → False, no exception propagated."""
-        installer = _make_installer(tmp_path)
-        model = MagicMock()
-        model.embed.side_effect = RuntimeError("embed failed")
-        te = MagicMock(return_value=model)
-
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", _ok_cross_encoder()), \
-             patch(_AVAILABLE_PROVIDERS,
-                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
-            result = installer.validate_providers(["CUDAExecutionProvider"])
-
-        assert result is False
-
-    def test_validate_providers_returns_false_when_provider_not_in_available(self, tmp_path: Path) -> None:
-        """GPU provider not in available providers → False, no model probed.
-
-        S635: the runtime would load on CPU, but an accelerator the host lacks is not a
-        validated accelerator, so the wizard must not write it.
-        """
-        installer = _make_installer(tmp_path)
-        te, ce = _ok_embedder(), _ok_cross_encoder()
-
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]):
-            result = installer.validate_providers(["CUDAExecutionProvider"])
-
-        assert result is False
-        # Unavailable accelerator → nothing to validate → neither model instantiated.
-        te.assert_not_called()
-        ce.assert_not_called()
-
-    def test_validate_providers_returns_false_when_onnxruntime_not_installed(self, tmp_path: Path) -> None:
-        """onnxruntime query raises → availability unknown → False."""
+    def test_cpu_resolution_is_false_without_probing(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
 
-        with patch(_AVAILABLE_PROVIDERS, side_effect=ImportError("no onnxruntime")):
-            result = installer.validate_providers(["CUDAExecutionProvider"])
+        with patch(f"{_INSTALLER}.resolve_device", return_value="cpu"), \
+             patch(_VALIDATE_DEVICE) as validate:
+            assert installer._accelerator_validated() is False
 
-        assert result is False
+        validate.assert_not_called()
 
-    def test_validate_providers_passes_correct_providers_to_text_embedding(self, tmp_path: Path) -> None:
-        """The exact providers list is forwarded to TextEmbedding constructor."""
-        installer = _make_installer(tmp_path)
-        providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
-        te, ce = _ok_embedder(), _ok_cross_encoder()
-
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(_AVAILABLE_PROVIDERS,
-                   return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"]):
-            result = installer.validate_providers(providers)
-
-        assert result is True
-        te.assert_called_once_with(
-            installer.cfg.embedding_model, providers=providers, cache_dir=str(get_models_dir())
-        )
-
-    def test_validate_providers_uses_configured_embedding_model(self, tmp_path: Path) -> None:
-        """validate_providers uses self.cfg.embedding_model, not a hardcoded string."""
-        installer = _make_installer(tmp_path)
-        installer.cfg.embedding_model = "custom/model-v2"
-        te, ce = _ok_embedder(), _ok_cross_encoder()
-
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(_AVAILABLE_PROVIDERS,
-                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
-            result = installer.validate_providers(["CUDAExecutionProvider"])
-
-        assert result is True
-        te.assert_called_once_with(
-            "custom/model-v2",
-            providers=["CUDAExecutionProvider"],
-            cache_dir=str(get_models_dir()),
-        )
-
-    def test_validate_providers_returns_false_when_fastembed_not_installed(self, tmp_path: Path) -> None:
-        """fastembed import failure inside the probe → False, no exception propagated."""
-        installer = _make_installer(tmp_path)
-        te = MagicMock(side_effect=ImportError("no fastembed"))
-
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", _ok_cross_encoder()), \
-             patch(_AVAILABLE_PROVIDERS,
-                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
-            result = installer.validate_providers(["CUDAExecutionProvider"])
-
-        assert result is False
-
-    def test_validate_providers_cpu_only_skips_onnxruntime(self, tmp_path: Path) -> None:
-        """CPU-only list → provider gate skipped → both probes still run."""
-        installer = _make_installer(tmp_path)
-        te, ce = _ok_embedder(), _ok_cross_encoder()
-        avail = MagicMock()
-
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(_AVAILABLE_PROVIDERS, avail):
-            result = installer.validate_providers(["CPUExecutionProvider"])
-
-        assert result is True
-        # non_cpu is empty → provider query must NOT have been called.
-        avail.assert_not_called()
-        # but both model probes still ran
-        te.assert_called_once()
-        ce.assert_called_once()
-
-    # ------------------------------------------------------------------
-    # BE-7: new body-behaviour tests for shared-function delegation
-    # ------------------------------------------------------------------
-
-    def test_validate_providers_calls_shared_function(self, tmp_path: Path) -> None:
-        """validate_providers delegates to validate_providers_shared (C3)."""
+    @pytest.mark.parametrize("resolved", ["mps", "cuda"])
+    def test_both_models_pass_on_accelerator(self, tmp_path: Path, resolved: str) -> None:
         installer = _make_installer(tmp_path)
 
-        with patch(f"{_MV}.validate_providers_shared",
-                   return_value=(True, True, [])) as mock_shared:
-            result = installer.validate_providers(["CPUExecutionProvider"])
+        with patch(f"{_INSTALLER}.resolve_device", return_value=resolved), \
+             patch(_VALIDATE_DEVICE, return_value=(True, True, [])) as validate:
+            assert installer._accelerator_validated() is True
 
-        assert result is True
-        mock_shared.assert_called_once_with(
-            ["CPUExecutionProvider"],
-            installer.cfg.embedding_model,
-            installer.cfg.reranker_model,
-        )
+        validate.assert_called_once_with("auto", "BAAI/bge-small-en-v1.5", "BAAI/bge-reranker-v2-m3")
 
-    def test_validate_providers_reranker_tested(self, tmp_path: Path) -> None:
-        """A configured reranker triggers the reranker probe."""
-        installer = _make_installer(tmp_path)
-        installer.cfg.reranker_model = "BAAI/bge-reranker-v2-m3"
-        te, ce = _ok_embedder(), _ok_cross_encoder()
-
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", ce):
-            result = installer.validate_providers([])
-
-        assert result is True
-        ce.assert_called_once()
-
-    def test_validate_providers_reranker_none_no_probe(self, tmp_path: Path) -> None:
-        """Disabled reranker (reranker_model == '') skips the reranker probe."""
-        installer = _make_installer(tmp_path)
-        installer.cfg.reranker_model = ""
-        te, ce = _ok_embedder(), _ok_cross_encoder()
-
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", ce):
-            result = installer.validate_providers([])
-
-        assert result is True
-        ce.assert_not_called()
-
-    def test_validate_providers_returns_bool_never_raises(self, tmp_path: Path) -> None:
-        """An exception inside the shared function does not propagate → False.
-
-        validate_providers_shared never raises by contract, but if a future
-        change (or a broken lazy import) made it raise, the wizard must still
-        get a clean False instead of an unhandled exception.
-        """
+    @pytest.mark.parametrize("outcome", [(False, True, []), (True, False, ["reranker probe failed"])])
+    def test_either_model_failing_is_false(self, tmp_path: Path, outcome: tuple) -> None:
         installer = _make_installer(tmp_path)
 
-        with patch(f"{_MV}.validate_providers_shared",
-                   side_effect=RuntimeError("contract broken")) as mock_shared, \
-             patch(_AVAILABLE_PROVIDERS,
-                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
-            result = installer.validate_providers(["CUDAExecutionProvider"])
+        with patch(f"{_INSTALLER}.resolve_device", return_value="mps"), \
+             patch(_VALIDATE_DEVICE, return_value=outcome):
+            assert installer._accelerator_validated() is False
 
-        assert result is False
-        mock_shared.assert_called_once()
-
-    def test_validate_providers_reranker_fails_embedder_ok(self, tmp_path: Path) -> None:
-        """Reranker probe fails while embedder passes → False (S6)."""
-        installer = _make_installer(tmp_path)
-
-        with patch(f"{_MV}.validate_providers_shared",
-                   return_value=(True, False, ["reranker probe failed"])):
-            result = installer.validate_providers([])
-
-        assert result is False
-
-    def test_validate_providers_both_ok_with_warnings_returns_true(
+    def test_probe_warnings_are_logged_even_when_passing(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Both probes pass but warnings present (CPU fallback) → True, warning logged (S12)."""
+        import logging
+
         installer = _make_installer(tmp_path)
 
-        with patch(f"{_MV}.validate_providers_shared",
-                   return_value=(True, True, ["fell back to CPU"])):
-            with caplog.at_level("WARNING"):
-                result = installer.validate_providers([])
+        with caplog.at_level(logging.WARNING), \
+             patch(f"{_INSTALLER}.resolve_device", return_value="mps"), \
+             patch(_VALIDATE_DEVICE, return_value=(True, True, ["slow first inference"])):
+            assert installer._accelerator_validated() is True
 
-        assert result is True
-        assert any("fell back to CPU" in r.message for r in caplog.records)
+        assert any("slow first inference" in r.message for r in caplog.records)
 
-    def test_validate_providers_logs_shared_warnings(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    def test_exception_is_false_and_logged(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        installer = _make_installer(tmp_path)
+
+        with caplog.at_level(logging.WARNING), \
+             patch(f"{_INSTALLER}.resolve_device", return_value="cuda"), \
+             patch(_VALIDATE_DEVICE, side_effect=RuntimeError("driver crashed")):
+            assert installer._accelerator_validated() is False
+
+        assert any("driver crashed" in r.message for r in caplog.records)
+
+
+class TestProbeAndConfigureDevice:
+    """``_probe_and_configure_device``: Step 9's write of ``[database].device`` and the summary labels."""
+
+    def test_no_gpu_writes_cpu_without_probing(self, tmp_path: Path) -> None:
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "configure_device") as configure, \
+             patch.object(installer, "_accelerator_validated") as validated:
+            labels = installer._probe_and_configure_device(GpuType.NONE)
+
+        assert labels == ["CPU"]
+        configure.assert_called_once_with("cpu")
+        validated.assert_not_called()
+
+    def test_dry_run_metal_narrates_auto_and_probes_nothing(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
     ) -> None:
-        """Warnings from the shared function are logged at WARNING level."""
+        installer = _make_installer(tmp_path, dry_run=True)
+
+        with patch.object(installer, "_accelerator_validated") as validated, \
+             patch(f"{_INSTALLER}._install_cuda_torch") as swap:
+            labels = installer._probe_and_configure_device(GpuType.METAL)
+
+        assert labels == ["Apple GPU (mps)"]
+        assert capsys.readouterr().out == "[DRY RUN] Would set [database] device = 'auto'.\n"
+        validated.assert_not_called()
+        swap.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("platform_name", "machine", "swaps"),
+        [("linux", "x86_64", True), ("linux", "aarch64", False), ("darwin", "x86_64", False)],
+    )
+    def test_dry_run_cuda_narrates_torch_swap_only_on_linux_x86_64(
+        self, tmp_path: Path, platform_name: str, machine: str, swaps: bool
+    ) -> None:
+        installer = _make_installer(tmp_path, dry_run=True)
+
+        with patch(f"{_INSTALLER}.sys.platform", platform_name), \
+             patch(f"{_INSTALLER}.platform.machine", return_value=machine), \
+             patch.object(installer, "_accelerator_validated") as validated, \
+             patch(f"{_INSTALLER}._install_cuda_torch") as swap:
+            labels = installer._probe_and_configure_device(GpuType.CUDA)
+
+        assert labels == ["CUDA"]
+        assert swap.call_args_list == ([call(dry_run=True)] if swaps else [])
+        validated.assert_not_called()
+
+    def test_real_metal_validated_writes_auto(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
 
-        with patch(f"{_MV}.validate_providers_shared",
-                   return_value=(False, False, [EMBEDDER_PROBE_FAILED_WARNING])) as mock_shared, \
-             patch(_AVAILABLE_PROVIDERS,
-                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
-            with caplog.at_level("WARNING"):
-                result = installer.validate_providers(["CUDAExecutionProvider"])
+        with patch.object(installer, "_accelerator_validated", return_value=True), \
+             patch.object(installer, "configure_device") as configure:
+            labels = installer._probe_and_configure_device(GpuType.METAL)
 
-        assert result is False
-        mock_shared.assert_called_once()
-        assert any(
-            r.levelname == "WARNING" and EMBEDDER_PROBE_FAILED_WARNING in r.message
-            for r in caplog.records
-        )
+        assert labels == ["Apple GPU (mps)"]
+        configure.assert_called_once_with("auto")
 
-    def test_wizard_validate_providers_returns_false_on_bad_provider(self, tmp_path: Path) -> None:
-        """Integration: an unavailable provider → False without raising.
+    def test_real_metal_validation_failure_falls_back_to_cpu(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
 
-        Exercises the real availability check (only the host onnxruntime query is
-        stubbed) so the wizard's end-to-end fallback path is covered, not just the
-        delegation seam.
-        """
         installer = _make_installer(tmp_path)
-        te, ce = _ok_embedder(), _ok_cross_encoder()
 
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]):
-            result = installer.validate_providers(["CUDAExecutionProvider"])
+        with caplog.at_level(logging.WARNING), \
+             patch.object(installer, "_accelerator_validated", return_value=False), \
+             patch.object(installer, "configure_device") as configure:
+            labels = installer._probe_and_configure_device(GpuType.METAL)
 
-        assert result is False
-        te.assert_not_called()
-        ce.assert_not_called()
+        assert labels == ["CPU"]
+        configure.assert_called_once_with("cpu")
+        assert capsys.readouterr().out == "Warning: Apple GPU validation failed — falling back to CPU.\n"
+        assert any(r.message == "Apple GPU validation failed — falling back to CPU" for r in caplog.records)
 
-    def test_validate_embedder_only_returns_false_on_unavailable_provider(
+    def test_real_cuda_validation_failure_prints_guidance(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        installer = _make_installer(tmp_path)
+
+        with patch(f"{_INSTALLER}.sys.platform", "darwin"), \
+             patch.object(installer, "_accelerator_validated", return_value=False), \
+             patch.object(installer, "configure_device") as configure:
+            labels = installer._probe_and_configure_device(GpuType.CUDA)
+
+        lines = capsys.readouterr().out.splitlines()
+        assert labels == ["CPU"]
+        configure.assert_called_once_with("cpu")
+        assert lines[0] == "Warning: CUDA validation failed — falling back to CPU."
+        assert len(lines) == 4
+        assert lines[-1] == _CUDA_GUIDE_LINE
+
+    def test_cuda_on_linux_x86_64_without_cuda_torch_swaps_then_checks_fresh_interpreter(
         self, tmp_path: Path
     ) -> None:
-        """S635: the embedder-only probe rejects an unavailable accelerator too, unprobed."""
         installer = _make_installer(tmp_path)
-        te = _ok_embedder()
 
-        with patch(f"{_MV}.TextEmbedding", te), \
-             patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]):
-            result = installer.validate_embedder_only(["CoreMLExecutionProvider"])
+        with patch(f"{_INSTALLER}.sys.platform", "linux"), \
+             patch(f"{_INSTALLER}.platform.machine", return_value="x86_64"), \
+             patch(f"{_INSTALLER}._torch_cuda_available", return_value=False), \
+             patch(f"{_INSTALLER}._install_cuda_torch") as swap, \
+             patch(f"{_INSTALLER}._cuda_visible_in_subprocess", return_value=True), \
+             patch.object(installer, "_accelerator_validated") as validated, \
+             patch.object(installer, "configure_device") as configure:
+            labels = installer._probe_and_configure_device(GpuType.CUDA)
 
-        assert result is False
-        te.assert_not_called()
+        assert labels == ["CUDA"]
+        swap.assert_called_once_with(dry_run=False)
+        configure.assert_called_once_with("auto")
+        validated.assert_not_called()
+
+    def test_cuda_swap_not_visible_in_fresh_interpreter_falls_back_to_cpu(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        installer = _make_installer(tmp_path)
+
+        with patch(f"{_INSTALLER}.sys.platform", "linux"), \
+             patch(f"{_INSTALLER}.platform.machine", return_value="x86_64"), \
+             patch(f"{_INSTALLER}._torch_cuda_available", return_value=False), \
+             patch(f"{_INSTALLER}._install_cuda_torch"), \
+             patch(f"{_INSTALLER}._cuda_visible_in_subprocess", return_value=False), \
+             patch.object(installer, "configure_device") as configure:
+            labels = installer._probe_and_configure_device(GpuType.CUDA)
+
+        assert labels == ["CPU"]
+        configure.assert_called_once_with("cpu")
+        assert "Warning: CUDA validation failed — falling back to CPU." in capsys.readouterr().out
+
+    def test_cuda_on_linux_x86_64_with_cuda_torch_skips_swap_and_validates(self, tmp_path: Path) -> None:
+        installer = _make_installer(tmp_path)
+
+        with patch(f"{_INSTALLER}.sys.platform", "linux"), \
+             patch(f"{_INSTALLER}.platform.machine", return_value="x86_64"), \
+             patch(f"{_INSTALLER}._torch_cuda_available", return_value=True), \
+             patch(f"{_INSTALLER}._install_cuda_torch") as swap, \
+             patch.object(installer, "_accelerator_validated", return_value=True), \
+             patch.object(installer, "configure_device") as configure:
+            labels = installer._probe_and_configure_device(GpuType.CUDA)
+
+        assert labels == ["CUDA"]
+        swap.assert_not_called()
+        configure.assert_called_once_with("auto")
 
 
 # ---------------------------------------------------------------------------
@@ -1510,8 +1358,7 @@ class TestRunServiceReadiness:
     def _base_run_patches(self, installer: object) -> dict:
         return {
             "detect_gpu": MagicMock(return_value="none"),
-            "configure_providers": MagicMock(),
-            "validate_providers": MagicMock(return_value=True),
+            "configure_device": MagicMock(),
             "create_data_dir": MagicMock(),
             "_bootstrap_collections": AsyncMock(),
             "write_service_file": MagicMock(),
@@ -1524,7 +1371,7 @@ class TestRunServiceReadiness:
 
         with patch.object(installer, "_wait_for_service", return_value=False), \
              patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
@@ -1540,7 +1387,7 @@ class TestRunServiceReadiness:
 
         with patch.object(installer, "_wait_for_service", return_value=False), \
              patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
@@ -1558,7 +1405,7 @@ class TestRunServiceReadiness:
         mock_wait = MagicMock(return_value=True)
         with patch.object(installer, "_wait_for_service", mock_wait), \
              patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
@@ -1588,7 +1435,7 @@ class TestRunServiceReadiness:
         with patch.object(installer, "_wait_for_service", mock_wait), \
              patch("archon_search.install.installer._planned_total_bytes", return_value=planned_bytes), \
              patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
@@ -1605,7 +1452,7 @@ class TestRunServiceReadiness:
         mock_wait = MagicMock(return_value=True)
         with patch.object(installer, "_wait_for_service", mock_wait), \
              patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
@@ -1621,7 +1468,7 @@ class TestRunServiceReadiness:
         installer = _make_installer(tmp_path, dry_run=True)
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -1631,29 +1478,6 @@ class TestRunServiceReadiness:
         captured = capsys.readouterr()
         assert "Waiting for search service" not in captured.out
 
-    def test_validate_providers_returns_false_when_get_available_providers_raises(self, tmp_path: Path) -> None:
-        """Querying available providers raises → provider gate fails → False."""
-        installer = _make_installer(tmp_path)
-
-        with patch(_AVAILABLE_PROVIDERS,
-                   side_effect=RuntimeError("ort internal error")):
-            result = installer.validate_providers(["CUDAExecutionProvider"])
-
-        assert result is False
-
-    def test_validate_providers_logs_warning_on_missing_provider(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        """A warning is logged when a provider is not in the available list."""
-        import logging
-        installer = _make_installer(tmp_path)
-
-        with caplog.at_level(logging.WARNING, logger="archon"), \
-             patch(_AVAILABLE_PROVIDERS,
-                   return_value=["CPUExecutionProvider"]):
-            result = installer.validate_providers(["CUDAExecutionProvider"])
-
-        assert result is False
-        assert any("CUDAExecutionProvider" in r.message for r in caplog.records)
-
 
 # ---------------------------------------------------------------------------
 # run — validation-first flow 
@@ -1661,67 +1485,11 @@ class TestRunServiceReadiness:
 
 
 class TestRunFlow:
-    """Tests for the validation-first flow wired into run()."""
+    """Tests for the device probe wired into run()."""
 
-    def test_run_flow_apple_silicon_validation_passes(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """METAL GPU: validate → success → configure_providers called → CoreML in providers summary."""
-        installer = _make_installer(tmp_path)
-        config_path = Path(installer.config_file)
-        fake_legacy = tmp_path / "fake.plist"
-
-        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install.installer._remove_legacy_service"), \
-             patch("archon_search.install.installer._prewarm_models"), \
-             patch("archon_search.install.installer._check_disk_space"), \
-             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
-             patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "validate_providers", return_value=True) as mock_validate, \
-             patch.object(installer, "configure_providers") as mock_configure, \
-             patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "write_service_file"), \
-             patch.object(installer, "load_service", return_value=0), \
-             patch.object(installer, "_is_service_running", return_value=False), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
-
-        assert result == 0
-        mock_validate.assert_called_once_with(["CoreMLExecutionProvider"])
-        mock_configure.assert_called_once_with(gpu=GpuType.METAL)
-        captured = capsys.readouterr()
-        assert "CoreML" in captured.out
-
-    def test_run_flow_apple_silicon_validation_fails_falls_back(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """apple_silicon: validate → failure → configure_providers NOT called → warning printed."""
-        installer = _make_installer(tmp_path)
-
-        with patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "validate_providers", return_value=False) as mock_validate, \
-             patch.object(installer, "validate_embedder_only", return_value=False), \
-             patch.object(installer, "configure_providers") as mock_configure, \
-             patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \
-             patch.object(installer, "write_service_file"), \
-             patch.object(installer, "load_service", return_value=0), \
-             patch.object(installer, "_is_service_running", return_value=False), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            result = installer.run(non_interactive=True)
-
-        assert result == 0
-        mock_validate.assert_called_once_with(["CoreMLExecutionProvider"])
-        mock_configure.assert_not_called()
-        captured = capsys.readouterr()
-        assert "Warning: CoreML validation failed" in captured.out
-
-    @pytest.mark.parametrize(
-        ("cuda_ok", "configured", "label"),
-        [(True, True, "CUDA"), (False, False, "CUDA validation failed")],
-        ids=["probe-passes", "probe-fails"],
-    )
-    def test_run_flow_cuda_validates_before_writing(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture, cuda_ok: bool, configured: bool, label: str
-    ) -> None:
-        """CUDA: probe CUDAExecutionProvider; write it only when the probe passes, else warn + CPU."""
-        installer = _make_installer(tmp_path)
+    def _run(
+        self, installer: object, tmp_path: Path, gpu: object, *, validated: object | None = None, **run_kwargs: object
+    ) -> int:
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
@@ -1731,81 +1499,98 @@ class TestRunFlow:
              patch("archon_search.install.installer._check_disk_space"), \
              patch("archon_search.install.installer._install_cuda_torch"), \
              patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
-             patch.object(installer, "detect_gpu", return_value=GpuType.CUDA), \
-             patch.object(installer, "validate_providers", return_value=cuda_ok) as mock_validate, \
-             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "detect_gpu", return_value=gpu), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_is_service_running", return_value=False), \
              patch.object(installer, "_wait_for_service", return_value=True):
-            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
+            if validated is None:
+                return installer.run(non_interactive=True, profile="minimal", skip_preload=True, **run_kwargs)
+            with patch.object(installer, "_accelerator_validated", return_value=validated) as probe:
+                self.probe = probe
+                return installer.run(non_interactive=True, profile="minimal", skip_preload=True, **run_kwargs)
+
+    def test_run_flow_apple_silicon_validation_passes(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """METAL GPU: validation passes -> auto is written and the device line names the Apple GPU."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "configure_device") as mock_configure:
+            result = self._run(installer, tmp_path, GpuType.METAL, validated=True)
 
         assert result == 0
-        mock_validate.assert_called_once_with(["CUDAExecutionProvider"])
-        assert mock_configure.call_args_list == ([call(gpu=GpuType.CUDA)] if configured else [])
-        captured = capsys.readouterr()
-        assert label in captured.out
-        assert "CoreML" not in captured.out
+        self.probe.assert_called_once_with()
+        assert mock_configure.call_args_list == [call("auto")]
+        out = capsys.readouterr().out
+        assert "  Device:     Apple GPU (mps)\n" in out
+        assert "validation failed" not in out
+
+    def test_run_flow_apple_silicon_validation_fails_falls_back(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """METAL GPU: validation fails -> cpu is written and the warning is printed."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "configure_device") as mock_configure:
+            result = self._run(installer, tmp_path, GpuType.METAL, validated=False)
+
+        assert result == 0
+        self.probe.assert_called_once_with()
+        assert mock_configure.call_args_list == [call("cpu")]
+        assert "Warning: Apple GPU validation failed — falling back to CPU." in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        ("cuda_ok", "device"), [(True, "auto"), (False, "cpu")], ids=["probe-passes", "probe-fails"]
+    )
+    def test_run_flow_cuda_validates_before_writing(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture, cuda_ok: bool, device: str
+    ) -> None:
+        """CUDA: auto is written only when validation passes, else a warning and cpu."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "configure_device") as mock_configure:
+            result = self._run(installer, tmp_path, GpuType.CUDA, validated=cuda_ok)
+
+        assert result == 0
+        assert mock_configure.call_args_list == [call(device)]
+        out = capsys.readouterr().out
+        assert ("Warning: CUDA validation failed" in out) is (not cuda_ok)
+        assert "Apple GPU" not in out
 
     def test_run_flow_no_gpu_unchanged(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """NONE GPU: validation NOT called → configure_providers called (no-op internally), no CoreML messages."""
+        """NONE GPU: nothing is validated, cpu is written, no accelerator messages."""
         installer = _make_installer(tmp_path)
-        config_path = Path(installer.config_file)
-        fake_legacy = tmp_path / "fake.plist"
 
-        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install.installer._remove_legacy_service"), \
-             patch("archon_search.install.installer._prewarm_models"), \
-             patch("archon_search.install.installer._check_disk_space"), \
-             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
-             patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
-             patch.object(installer, "validate_providers") as mock_validate, \
-             patch.object(installer, "configure_providers") as mock_configure, \
-             patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "write_service_file"), \
-             patch.object(installer, "load_service", return_value=0), \
-             patch.object(installer, "_is_service_running", return_value=False), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
+        with patch.object(installer, "_accelerator_validated") as mock_validate, \
+             patch.object(installer, "configure_device") as mock_configure:
+            result = self._run(installer, tmp_path, GpuType.NONE)
 
         assert result == 0
         mock_validate.assert_not_called()
-        mock_configure.assert_called_once_with(gpu=GpuType.NONE)
-        captured = capsys.readouterr()
-        assert "CoreML" not in captured.out
+        assert mock_configure.call_args_list == [call("cpu")]
+        out = capsys.readouterr().out
+        assert "Apple GPU" not in out
+        assert "  Device:     CPU\n" in out
 
-    def test_run_flow_apple_silicon_fallback_does_not_write_providers_to_config(self, tmp_path: Path) -> None:
-        """Fallback path: providers key must be absent from the real config.toml."""
+    def test_run_flow_apple_silicon_fallback_writes_cpu_to_config(self, tmp_path: Path) -> None:
+        """Fallback path: the real config.toml ends with [database].device = "cpu"."""
         config_file = tmp_path / "archon-search.toml"
         config_file.write_text("[database]\n")
 
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
 
-        with patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "validate_providers", return_value=False), \
-             patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \
-             patch.object(installer, "write_service_file"), \
-             patch.object(installer, "load_service", return_value=0), \
-             patch.object(installer, "_is_service_running", return_value=False), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            result = installer.run(non_interactive=True)
+        result = self._run(installer, tmp_path, GpuType.METAL, validated=False)
 
         assert result == 0
         import tomlkit
         doc = tomlkit.parse(config_file.read_text())
-        search_section = doc.get("search", {})
-        assert "providers" not in search_section
+        assert doc["database"]["device"] == "cpu"
 
-    def test_run_flow_dry_run_skips_validation(self, tmp_path: Path) -> None:
-        """dry_run=True: validate_providers skipped, configure_providers called directly."""
+    def test_run_flow_dry_run_skips_validation(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """dry_run=True: nothing is validated; the auto write is narrated."""
         installer = _make_installer(tmp_path, dry_run=True)
 
         with patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "validate_providers") as mock_validate, \
-             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "_accelerator_validated") as mock_validate, \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -1814,7 +1599,7 @@ class TestRunFlow:
 
         assert result == 0
         mock_validate.assert_not_called()
-        mock_configure.assert_called_once_with(gpu=GpuType.METAL)
+        assert "[DRY RUN] Would set [database] device = 'auto'." in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
@@ -1900,7 +1685,7 @@ class TestRunNonBlocking:
         bootstrap_mock = AsyncMock()
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -1930,7 +1715,7 @@ class TestRunNonBlocking:
         installer = _make_installer(tmp_path)
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -1951,7 +1736,7 @@ class TestRunNonBlocking:
         # Simulate that _wait_for_service returns True immediately
         # If bootstrap was still blocking, this would hang; since it's removed the call succeeds fast.
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -1966,7 +1751,7 @@ class TestRunNonBlocking:
     def test_exact_call_order_service_before_wait_no_bootstrap(self, tmp_path: Path) -> None:
         """run() must call load_service before _wait_for_service, and _bootstrap_collections must never appear.
 
-        The relative ordering of configure_providers/create_data_dir/write_service_file is an
+        The relative ordering of configure_device/create_data_dir/write_service_file is an
         implementation detail — only the load_service→_wait_for_service pair is a strict contract.
         """
         installer = _make_installer(tmp_path)
@@ -1983,7 +1768,7 @@ class TestRunNonBlocking:
             return _side_effect
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "configure_providers", side_effect=record("configure_providers")), \
+             patch.object(installer, "configure_device", side_effect=record("configure_device")), \
              patch.object(installer, "create_data_dir", side_effect=record("create_data_dir")), \
              patch.object(installer, "write_service_file", side_effect=record("write_service_file")), \
              patch.object(installer, "load_service", side_effect=record("load_service")), \
@@ -2018,7 +1803,7 @@ class TestRunNonBlocking:
         installer = _make_installer(tmp_path)
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "configure_device"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
@@ -2050,8 +1835,7 @@ class TestConsoleIntegration:
     def _run_patches() -> dict:
         return {
             "detect_gpu": MagicMock(return_value="none"),
-            "configure_providers": MagicMock(),
-            "validate_providers": MagicMock(return_value=True),
+            "configure_device": MagicMock(),
             "create_data_dir": MagicMock(),
             "_bootstrap_collections": AsyncMock(),
             "write_service_file": MagicMock(),
@@ -2066,8 +1850,7 @@ class TestConsoleIntegration:
 
         patches = self._run_patches()
         with patch.object(installer, "detect_gpu", patches["detect_gpu"]), \
-             patch.object(installer, "configure_providers", patches["configure_providers"]), \
-             patch.object(installer, "validate_providers", patches["validate_providers"]), \
+             patch.object(installer, "configure_device", patches["configure_device"]), \
              patch.object(installer, "create_data_dir", patches["create_data_dir"]), \
              patch.object(installer, "_bootstrap_collections", patches["_bootstrap_collections"]), \
              patch.object(installer, "write_service_file", patches["write_service_file"]), \
@@ -2106,7 +1889,7 @@ class TestConsoleIntegration:
         patches = self._run_patches()
         patches["load_service"] = MagicMock(return_value=42)
         with patch.object(installer, "detect_gpu", patches["detect_gpu"]), \
-             patch.object(installer, "configure_providers", patches["configure_providers"]), \
+             patch.object(installer, "configure_device", patches["configure_device"]), \
              patch.object(installer, "create_data_dir", patches["create_data_dir"]), \
              patch.object(installer, "_bootstrap_collections", patches["_bootstrap_collections"]), \
              patch.object(installer, "write_service_file", patches["write_service_file"]), \
@@ -2127,7 +1910,7 @@ class TestConsoleIntegration:
         patches = self._run_patches()
         patches["_wait_for_service"] = MagicMock(return_value=False)
         with patch.object(installer, "detect_gpu", patches["detect_gpu"]), \
-             patch.object(installer, "configure_providers", patches["configure_providers"]), \
+             patch.object(installer, "configure_device", patches["configure_device"]), \
              patch.object(installer, "create_data_dir", patches["create_data_dir"]), \
              patch.object(installer, "_bootstrap_collections", patches["_bootstrap_collections"]), \
              patch.object(installer, "write_service_file", patches["write_service_file"]), \
@@ -2172,9 +1955,7 @@ class TestInstallerStructure:
         from archon_search.install import BaseInstaller
 
         assert BaseInstaller.__abstractmethods__ == frozenset({
-            "configure_providers",
-            "configure_reranker_providers",
-            "clear_reranker_providers",
+            "configure_device",
             "create_data_dir",
             "write_service_file",
             "load_service",
@@ -2185,7 +1966,6 @@ class TestInstallerStructure:
             "prepare_db_path",
             "persist_fresh_config",
             "persist_reinstall_config",
-            "write_gpu_providers_disabled",
             "record_wizard_values",
             "write_server_key",
             "preload_models",

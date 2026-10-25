@@ -3,7 +3,7 @@
 Bug: an import job reports ``DONE`` without ever building the embedder that serves
 the imported collection. ``_import_task`` (``archon_search/server/routes_export.py``)
 only calls ``embedder_cache.get_or_load`` — which returns a *lazy* embedder whose
-ONNX model is built on the first ``encode`` (``archon_search/embedder.py``
+model is built on the first ``encode`` (``archon_search/embedder.py``
 ``ModelEmbedder``) — and ``recompute_collection_meta``, which embeds nothing unless
 the collection has a description. Ingest, by contrast, embeds every chunk with that
 same cached embedder and then awaits the model warm-up before ``DONE`` (S281).
@@ -15,8 +15,8 @@ finds the embedder cold, ``warmup_for_search`` gives up after
 chunk that shares no term with the query — here ``# Gamma`` — vanishes from the
 results, although the source server returns it via the vector leg.
 
-The cold ONNX build is modelled faithfully: the fake ``TextEmbedding`` constructor
-(the point where ``ModelEmbedder.encode`` builds the real ONNX session) takes
+The cold build is modelled faithfully: the first ``ModelEmbedder.encode`` of a backend
+(the point where the real backend loads its weights) takes
 ``_COLD_BUILD_SECONDS``, i.e. "the build takes longer than the import". The
 scheduler tick is shortened (as in S291's test) so the import starts at once rather
 than up to 5 s later, which keeps the whole import well inside the cold window.
@@ -25,7 +25,7 @@ Nothing else in the stubbed stack changes.
 Accepted timing risk: without the fix the test is red only while the import finishes
 inside the cold window, so an extremely stalled host could let the build complete
 first and turn it falsely green. There is no deterministic gate to close that: holding
-the ONNX build until the import reports ``DONE`` would deadlock the fixed path, whose
+the model build until the import reports ``DONE`` would deadlock the fixed path, whose
 ``DONE`` waits on exactly that build. With the fix the result is deterministic.
 
 Run with:
@@ -34,13 +34,12 @@ Run with:
 from __future__ import annotations
 
 import shutil
-import sys
-import time
 from pathlib import Path
 
 import pytest
 
 import archon_search.jobs.scheduler as _scheduler_module
+from tests._cold_model_builds import install_cold_embedder_build
 from tests.integration.conftest import ingest_doc, make_real_app, search, wait_for_job_done
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("s288")]
@@ -54,33 +53,14 @@ _DOCS: dict[str, str] = {
 }
 _GAMMA_MARKER = "# Gamma"
 _SCHEDULER_TICK_SECONDS: float = 0.1
-# Per-embedder cold ONNX build time. Startup builds the global embedder, then the
+# Per-embedder cold build time. Startup builds the global embedder, then the
 # cached per-collection one (server/warmup.py), so the latter stays cold for about
 # twice this — far longer than a 3-doc import takes — yet the build still finishes.
 _COLD_BUILD_SECONDS: float = 3.0
-_STUB_TEXT_EMBEDDING = "_FakeTextEmbedding"
 
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_slow_onnx_build(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make every embedder ONNX build take ``_COLD_BUILD_SECONDS``.
-
-    ``ModelEmbedder.encode`` resolves ``fastembed.TextEmbedding`` at call time, so
-    patching the module attribute affects every embedder built from here on.
-    """
-    fastembed = sys.modules["fastembed"]
-    instant_text_embedding = fastembed.TextEmbedding
-    # The delay models a real build only on top of the instant test stub (tests/_search_stubs.py).
-    assert instant_text_embedding.__name__ == _STUB_TEXT_EMBEDDING, instant_text_embedding
-
-    def _slow_build(model_name: str, **kwargs: object) -> object:
-        time.sleep(_COLD_BUILD_SECONDS)
-        return instant_text_embedding(model_name, **kwargs)
-
-    monkeypatch.setattr(fastembed, "TextEmbedding", _slow_build)
 
 
 def test_s288_imported_collection_search_matches_source(
@@ -112,7 +92,7 @@ def test_s288_imported_collection_search_matches_source(
     shutil.copy(archive, target_archive)
 
     # --- target: a fresh server whose model build is still running ---
-    _install_slow_onnx_build(monkeypatch)
+    install_cold_embedder_build(monkeypatch, _COLD_BUILD_SECONDS)
     with make_real_app(target_dir, monkeypatch) as (client, cfg, api_key):
         # Presence anchor: the scenario needs the collection's embedder still cold here.
         embedder_cache = client.app.state.embedder_cache

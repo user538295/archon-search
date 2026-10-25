@@ -1,0 +1,68 @@
+name: archon-search runtime bench
+
+# CPU throughput gate of ADR 18 (Documentation/Backlog/pytorch-runtime-plan.md, Task 6.1): the ten
+# profile models through the PyTorch runtime and through fastembed 0.9.0 on the same texts, one job
+# per OS. The job fails when any model's torch throughput is below 0.9x fastembed's. This is the only
+# place fastembed still runs: it is the comparison baseline, installed ad hoc via `uv run --with`.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: bench (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          # setuptools-scm / hatch-vcs need the full history to compute version
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install the project (uv sync)
+        run: uv sync
+
+      - name: Benchmark the PyTorch runtime (CPU)
+        run: uv run python scripts/bench_runtime.py --runtime torch --output torch.json
+
+      - name: Benchmark the fastembed baseline (CPU)
+        run: uv run --with fastembed==0.9.0 python scripts/bench_runtime.py --runtime fastembed --output fastembed.json
+
+      - name: Compare (fails the job when torch < 0.9x fastembed on any model)
+        run: uv run python scripts/bench_runtime.py compare torch.json fastembed.json > table.md
+
+      - name: Write job summary
+        if: always()
+        run: |
+          if [ -f table.md ]; then
+            cat table.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: runtime-bench-${{ matrix.os }}
+          path: |
+            table.md
+            torch.json
+            fastembed.json
+          if-no-files-found: warn

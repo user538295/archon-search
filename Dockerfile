@@ -10,11 +10,9 @@
 #
 # The CPU base ships Python 3.12 already; the NVIDIA CUDA base ships only the
 # CUDA runtime and is Ubuntu-based, so we conditionally install Python 3.12
-# from deadsnakes when the base does not provide it. fastembed 0.9.0 (the version verified on 2026-10-10) does
-# not publish a `[gpu]` extra, so the GPU branch swaps the default CPU
-# `onnxruntime` for `onnxruntime-gpu[cuda,cudnn]` after the base archon-search
-# install. The CUDA 13 / cuDNN 9 libraries come from the pip wheels torch and
-# onnxruntime-gpu share, so the GPU base is the slim CUDA 13 `-base` tag (no
+# from deadsnakes when the base does not provide it. The GPU variant runs on
+# PyPI's CUDA build of PyTorch: its CUDA 13 / cuDNN 9 wheels carry the libraries
+# torch preloads itself, so the GPU base is the slim CUDA 13 `-base` tag (no
 # system cuDNN to clash with the wheels'); CUDA 13 needs an NVIDIA driver >= 580.
 
 ARG BASE_IMAGE=python:3.12-slim
@@ -29,7 +27,7 @@ ARG RELEASE_VERSION=0.0.0
 
 LABEL org.opencontainers.image.source="https://github.com/user538295/archon-search"
 LABEL org.opencontainers.image.title="archon-search"
-LABEL org.opencontainers.image.description="Hybrid retrieval + routing server (LanceDB + fastembed + reranker)"
+LABEL org.opencontainers.image.description="Hybrid retrieval + routing server (LanceDB + PyTorch embedder + reranker)"
 LABEL org.opencontainers.image.revision=$GIT_COMMIT
 LABEL org.opencontainers.image.version=$RELEASE_VERSION
 
@@ -89,8 +87,7 @@ COPY . /app
 # of the packages the extras add to the image (into /pip-packages) resolve
 # `torch==<ver>+cpu` (which declares no nvidia/cuda dependencies). The
 # nvidia/cuda GPU base skips this: its torch is PyPI's Linux wheel, today the
-# CUDA 13 build (`+cu130`, with the CUDA 13 / cuDNN 9 wheels the GPU arm below
-# shares with onnxruntime-gpu).
+# CUDA 13 build (`+cu130`, with the CUDA 13 / cuDNN 9 wheels it depends on).
 RUN set -eux; \
     case "${BASE_IMAGE}" in \
         *nvidia/cuda*) \
@@ -105,39 +102,13 @@ RUN set -eux; \
 # server, not re-resolve dependencies. `pip install --no-cache-dir .` is
 # both smaller and avoids pulling uv into the runtime layer.
 #
-# For the GPU variant the project's CPU `onnxruntime` is swapped for
-# `onnxruntime-gpu` after the base install. fastembed 0.9.0 does not ship
-# a `[gpu]` extra (verified against the package metadata) so this is the
-# documented manual-swap path. PyPI's onnxruntime-gpu is built with CUDA 13.0
-# and cuDNN 9 from 1.27 on, needs CUDA >= 13.0 at run time, and works with
-# PyTorch's CUDA/cuDNN wheels when both use the same CUDA and cuDNN majors
-# (https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html);
-# CUDA 13 needs an NVIDIA driver >= 580 (Table 2 of
-# https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html).
-# Its `[cuda,cudnn]` extras require the same CUDA 13 / cuDNN 9 wheels torch
-# already pulls, so the image holds one shared stack, with one `libcudnn.so.9`.
-# fastembed preloads nothing, so the `nvidia/*/lib` directories of those wheels
-# (beside onnxruntime in the install dir, dist-packages on the Ubuntu base) go
-# into the loader cache (ldconfig) for the CUDA provider to find. That glob
-# relies on the wheels' layout, the one ORT's own `preload_dlls` looks in:
-# `nvidia/cu<major>/lib` for the CUDA 13 toolkit wheels, `nvidia/cudnn/lib`
-# for cuDNN (https://github.com/microsoft/onnxruntime/blob/v1.31.0/onnxruntime/__init__.py
-# lines 211-216 and 261). If no `nvidia/*/lib` directory exists, `ls -d` fails
-# the build; a wheel that moves only some of its libraries elsewhere leaves
-# them unregistered, which the GPU image tests catch
-# (tests/test_docker_gpu_image.py). scripts/check-gpu-cuda-majors.sh then
-# fails the build unless onnxruntime-gpu, torch and the base agree on the CUDA
-# major (rationale in its header).
+# For the GPU variant, scripts/check-gpu-cuda-majors.sh fails the build unless
+# torch and the base agree on the CUDA major (rationale in its header).
 RUN set -eux; \
     SETUPTOOLS_SCM_PRETEND_VERSION="${RELEASE_VERSION}+docker" \
         /usr/local/bin/python3 -m pip install --no-cache-dir .; \
     case "${BASE_IMAGE}" in \
         *nvidia/cuda*) \
-            /usr/local/bin/python3 -m pip uninstall -y onnxruntime; \
-            /usr/local/bin/python3 -m pip install --no-cache-dir "onnxruntime-gpu[cuda,cudnn]>=1.27"; \
-            site_packages="$(/usr/local/bin/python3 -c 'import pathlib, onnxruntime; print(pathlib.Path(onnxruntime.__file__).parents[1])')"; \
-            ls -d "${site_packages}"/nvidia/*/lib > /etc/ld.so.conf.d/archon-search-cuda-wheels.conf; \
-            ldconfig; \
             sh /app/scripts/check-gpu-cuda-majors.sh; \
             ;; \
     esac
@@ -145,25 +116,22 @@ RUN set -eux; \
 # Non-root runtime user. The data directory is pre-created with the
 # correct ownership: anonymous-volume runs (`docker run` without `-v`)
 # rely on this so UID 1000 can write the auto-generated key file. The
-# fastembed cache dir (FASTEMBED_CACHE_PATH below) is pre-created too:
+# model cache (<data dir>/models, get_models_dir()) is pre-created too:
 # Docker seeds a fresh named volume mounted there (the compose
 # `archon-model-cache` opt-in) from this directory, ownership included,
 # and a mountpoint the image lacks would come up root-owned.
 RUN useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin appuser; \
-    mkdir -p /data/fastembed-cache /pip-packages; \
-    chown appuser:appuser /data /data/fastembed-cache /pip-packages
+    mkdir -p /data/models /pip-packages; \
+    chown appuser:appuser /data /data/models /pip-packages
 
 # Runtime configuration. `ARCHON_SEARCH_DATA_DIR` redirects every runtime
-# path (db, logs, telemetry, key file, jobs, fasttext models, ingest
-# history, default `archon-search.toml`) onto the mounted volume. `ARCHON_SEARCH_CONTAINER=1` tells
+# path (db, logs, telemetry, key file, jobs, model weights under `models/`,
+# ingest history, default `archon-search.toml`) onto the mounted volume.
+# `ARCHON_SEARCH_CONTAINER=1` tells
 # `configure_logging()` to attach a StreamHandler(sys.stderr) so
-# `docker logs` captures application logs. `FASTEMBED_CACHE_PATH` gives
-# fastembed's downloaded model weights their own directory on the same
-# persistent volume (`get_fastembed_cache_dir()`; unset, they would land in
-# `/data/models`), so a named volume can share them across containers.
+# `docker logs` captures application logs.
 ENV ARCHON_SEARCH_DATA_DIR=/data \
     ARCHON_SEARCH_CONTAINER=1 \
-    FASTEMBED_CACHE_PATH=/data/fastembed-cache \
     HOME=/data
 
 COPY scripts/docker-entrypoint.sh /entrypoint.sh

@@ -4,13 +4,12 @@ dynamic = ["version"]
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-description = "Standalone hybrid retrieval + routing server: LanceDB, fastembed, cross-encoder reranker, FastAPI"
+description = "Standalone hybrid retrieval + routing server: LanceDB, PyTorch embedder, cross-encoder reranker, FastAPI"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "lancedb>=0.30.0",
-    "fastembed>=0.9.0",
     "tomlkit>=0.12",
     "click>=8.1",
     "claude-agent-sdk>=0.1.46",
@@ -25,14 +24,24 @@ dependencies = [
     # the cap once the `docling` floor above is a release that no longer imports
     # PP_OCRV6_LANGS (the unlocked lane, scripts/test-unlocked-deps.sh, proves it).
     "rapidocr>=3.9.1,<3.10",
-    # torch/torchvision are pulled transitively by docling. They are declared
-    # here as direct dependencies ONLY so the [tool.uv.sources] CPU-index pin
+    # PyTorch runs the embedder and the cross-encoder reranker (torch_runtime.py,
+    # reranker_loading.py). torch/torchvision are also pulled by docling; they are
+    # declared here as direct dependencies so the [tool.uv.sources] CPU-index pin
     # below binds (uv applies sources to declared deps, not transitive-only
     # ones). Bounds mirror docling's own `torch>=2.2.2,<3.0.0` / `torchvision<1`
     # so this never over-constrains the resolution. S269: on linux/amd64 the
     # default PyPI torch drags the ~6 GB CUDA runtime a CPU host cannot run.
     "torch>=2.2.2,<3.0.0",
     "torchvision<1",
+    # transformers builds the encoder and sequence-classification models
+    # (torch_runtime.py, reranker_loading.py). Ceiling matches constraint-dependencies.
+    "transformers>=4.57,<5.14",
+    # Tokenizer.from_file loads each snapshot's tokenizer.json (torch_runtime.py, reranker_loading.py).
+    "tokenizers",
+    # safe_open reads the XLM-R classifier head from model.safetensors (reranker_loading.py).
+    "safetensors",
+    # snapshot_download fetches the pinned model snapshots (model_store.py).
+    "huggingface-hub",
     "markitdown[docx,pptx,xls,xlsx,outlook]>=0.1.6,<0.2",
     "watchdog>=3.0",
     "pydantic>=2.0",
@@ -94,9 +103,6 @@ dev = [
     # FastAPI/Starlette TestClient backend (starlette.testclient imports httpx2 first and
     # warns on the httpx fallback). Runtime code keeps using httpx.
     "httpx2>=2.0.0",
-    # Builds the tiny external-data ONNX model of tests/test_embedder_external_data.py
-    # (S671 regression); onnxruntime has no API to construct a model graph.
-    "onnx>=1.23.2",
 ]
 
 [build-system]
@@ -129,18 +135,18 @@ extend-exclude = ["tests/eval/corpus"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-# live_benchmark conftest removes fastembed stubs at module-level (required so the
-# test file can `import fastembed` and get the real package). Traversing this directory
-# during default collection poisons sys.modules["fastembed"] in every xdist worker,
+# live_benchmark conftest removes the model-backend stubs at module-level (required so the
+# test file gets the real backends). Traversing this directory
+# during default collection poisons sys.modules in every xdist worker,
 # breaking all tests that rely on the stubs.  norecursedirs prevents the auto-traverse;
 # explicit `uv run pytest tests/eval/live_benchmark/` still works (pytest always
 # collects explicitly-passed paths regardless of norecursedirs).
 norecursedirs = [
     # pytest defaults (preserved explicitly because specifying norecursedirs replaces them)
     "*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}",
-    # live_benchmark conftest removes fastembed stubs at module-level (required so the
-    # test file can `import fastembed` and get the real package). Traversing this directory
-    # during default collection poisons sys.modules["fastembed"] in every xdist worker,
+    # live_benchmark conftest removes the model-backend stubs at module-level (required so the
+    # test file gets the real backends). Traversing this directory
+    # during default collection poisons sys.modules in every xdist worker,
     # breaking all tests that rely on the stubs.  norecursedirs prevents the auto-traverse;
     # explicit `uv run pytest tests/eval/live_benchmark/` still works (pytest always
     # collects explicitly-passed paths regardless of norecursedirs).
@@ -154,6 +160,9 @@ norecursedirs = [
     # when ANTHROPIC_API_KEY is set; excluding them prevents the default suite from
     # hanging on real model inference. Explicit `uv run pytest tests/eval/live/ --no-cov` works.
     "tests/eval/live",
+    # runtime parity tests download ~5 GB of real weights (ARCHON_RUNTIME_PARITY_DATA_DIR) and run
+    # full-size models. Explicit `uv run pytest -m runtime_parity tests/runtime_parity/ --no-cov` works.
+    "tests/runtime_parity",
 ]
 # --cov-fail-under=85 is intended for the default single-run invocation.
 # Split / matrix CI runs MUST combine coverage data (coverage combine) before
@@ -162,9 +171,9 @@ norecursedirs = [
 # `--no-cov` is a local-only override developers can pass on the CLI when
 # iterating; it must never be baked into addopts here.
 # -n is capped at 4 — never "auto": auto meant 14 workers on this 14-core machine, and on
-# model-loading paths each worker holds ~2 GB (fastembed/onnxruntime/torch); stacked runs
+# model-loading paths each worker holds ~2 GB (torch/onnxruntime); stacked runs
 # OOM-crashed the 48 GB machine on 2026-07-05 (Jetsam + WindowServer watchdog kill).
-addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 8 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark and not smoke and not live_eval and not docling and not graph_real_artifact\""  # -n 8 (raised from 4, 2026-07-20): default suite stubs fastembed → measured ~0.3GB/worker, memory-safe on 14-core/48GB. NEVER -n auto (=14 → 2GB/worker on real-model lanes OOM'd 2026-07-05). See CLAUDE.md testing policy.
+addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 8 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark and not smoke and not live_eval and not docling and not graph_real_artifact and not runtime_parity\""  # -n 8 (raised from 4, 2026-07-20): default suite stubs the model backends → measured ~0.3GB/worker, memory-safe on 14-core/48GB. NEVER -n auto (=14 → 2GB/worker on real-model lanes OOM'd 2026-07-05). See CLAUDE.md testing policy.
 # Every StarletteDeprecationWarning is an error (warning-free policy, deliberately the whole
 # category: resolve Starlette deprecations, don't accumulate them). Among others this fails
 # collection if the httpx2 dev dependency is missing (starlette.testclient httpx fallback).
@@ -190,14 +199,16 @@ markers = [
     "integration: integration tests requiring live infrastructure",
     "eval: deterministic full-corpus evaluation slice; gated tests skip gracefully without --thresholds-path",
     "live: tests that require live network or external services; skip gracefully when infrastructure is absent",
-    "live_eval: full live-model eval suite (tests/eval/live/, real fastembed weights via backend=live); excluded from default run via norecursedirs + -m filter; run with `uv run pytest tests/eval/live/ --no-cov`",
+    "live_eval: full live-model eval suite (tests/eval/live/, real model weights via backend=live); excluded from default run via norecursedirs + -m filter; run with `uv run pytest tests/eval/live/ --no-cov`",
     "docker: tests that require a running Docker daemon and perform a real image build; excluded from default run, opt in with `-m docker`",
     "archon_unset_data_dir: opt out of the autouse ARCHON_SEARCH_DATA_DIR isolation; the test exercises the Path.home() default-fallback path. Apply to the pinned MARKER_ALLOWLIST in tests/test_no_hardcoded_path_home.py only.",
-    "live_benchmark: real-model latency benchmark; requires fastembed model cache; serialised via xdist_group('live_benchmark'); excluded from default suite",
+    "live_benchmark: real-model latency benchmark; requires the model cache; serialised via xdist_group('live_benchmark'); excluded from default suite",
     "unit: plain unit tests with no infrastructure dependencies",
     "smoke: live subprocess smoke tests; require a real archon-search serve process; excluded from default run via norecursedirs + -m filter; run with `uv run pytest tests/smoke/ --no-cov`",
     "docling: tests that invoke the real docling parser / RapidOCR (PDF & image OCR); a single parse takes minutes on macOS (Metal/RapidOCR), so excluded from the default run via the -m filter; run with `uv run pytest -m docling --no-cov`",
     "graph_real_artifact: tests that load a real graph-NER model artifact (memory / real-artifact determinism); heavyweight, so excluded from the default run via the -m filter and pinned to its own xdist_group; run with `ARCHON_SEARCH_DATA_DIR=\"$HOME/.archon-search\" uv run pytest -m graph_real_artifact --no-cov` (the env var must point at a data dir whose models/graph/ already holds the pinned checkpoint, or the run re-downloads it)",
+    "runtime_parity: real-weights parity of the PyTorch embedder/reranker against the frozen fastembed outputs in tests/fixtures/runtime_parity/; excluded from the default run via norecursedirs + the -m filter; needs ARCHON_RUNTIME_PARITY_DATA_DIR (weights are downloaded there once); see the tests/runtime_parity module docstrings for the exact invocation",
+    "real_torch_backends: opt out of the autouse stub of ModelEmbedder.encode / ModelReranker.predict (tests/conftest.py _stub_model_backends); the test runs the real PyTorch backends or their loader seam. Apply as a module-level `pytestmark`.",
 ]
 
 [tool.uv]

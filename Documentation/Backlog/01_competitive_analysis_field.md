@@ -19,7 +19,7 @@ The systems occupy different parts of the design space:
 
 | System | Primary use case | Language | Core retrieval / memory stack |
 |--------|-----------------|----------|-----------------|
-| **Archon** | Standalone hybrid retrieval + routing server (REST + MCP) over local file collections | Python / asyncio | LanceDB + fastembed + chonkie + docling/markitdown/trafilatura (custom pipeline) |
+| **Archon** | Standalone hybrid retrieval + routing server (REST + MCP) over local file collections | Python / asyncio | LanceDB + PyTorch embedder + chonkie + docling/markitdown/trafilatura (custom pipeline) |
 | **AnythingLLM** | Desktop/self-hosted chat over documents; broad LLM provider matrix | Node.js | LangChain TextSplitter + LanceDB (or 9 alt vector DBs) |
 | **PrivateGPT** | Offline-first, OpenAI-compatible RAG server | Python | LlamaIndex 0.11 |
 | **Kotaemon** | Research-oriented document QA with multi-modal PDF and GraphRAG | Python | LlamaIndex + theflow (custom pipeline) |
@@ -137,7 +137,7 @@ The dimension-specific tables below compare all twelve systems directly. Rows ar
 
 | System | Embedding / reranking posture | Strength | Gap / caveat | Score |
 |---|---|---|---|---:|
-| **Archon** | fastembed local embeddings plus fastembed cross-encoder reranker; model configurable globally and per-collection (C1 fully wired). Tiered install profiles (C0): minimal/balanced/max with disk-space checks and Jina CC-BY-NC-4.0 license gate for multilingual. | Strong local CPU/GPU-friendly default, dimension guard, and now fully wired per-collection model support — ingest, search, and sync all consult `CollectionMeta.active_embedding_model`; mismatch raises `ModelValidationError`. | Only fastembed-supported models are available; no sentence-transformers path. | 9 |
+| **Archon** | local PyTorch embeddings plus a PyTorch cross-encoder reranker (CUDA/MPS/CPU via `[database].device`); model configurable globally and per-collection (C1 fully wired). Tiered install profiles (C0): minimal/balanced/max with disk-space checks and Jina CC-BY-NC-4.0 license gate for multilingual. | Strong local CPU/GPU-friendly default, dimension guard, and now fully wired per-collection model support — ingest, search, and sync all consult `CollectionMeta.active_embedding_model`; mismatch raises `ModelValidationError`. | Only models in the supported registry (`archon_search/model_specs.py`: 19 embedders, 5 rerankers) are accepted. | 9 |
 | **AnythingLLM** | Xenova/Transformers default plus broad provider options. | Strong provider matrix for users. | Node ONNX path is CPU-bound; search quality still lacks hybrid foundation. | 6 |
 | **PrivateGPT** | HuggingFace/LlamaIndex embedding model configuration. | Works well for offline embeddings. | Default dimension/config footguns are noted in earlier table. | 6 |
 | **Kotaemon** | OpenAI/fastembed/Cohere/Voyage/TEI-oriented provider set. | Strongest embedding/reranker provider breadth. | Operational complexity follows from many external options. | 8 |

@@ -1,11 +1,7 @@
 """Isolated conftest for live_benchmark tests.
 
-Module-level operations (before any fixture fires):
-1. Remove fastembed stubs from sys.modules so real package is used.
-2. Reset ML thread-count env vars to production defaults.
-
-These run at module load time so that when pytest imports the test file,
-real fastembed/ONNX code paths are active.
+Module-level operation (before any fixture fires): reset ML thread-count env vars to
+production defaults, so the real PyTorch CPU code path runs as a server would run it.
 
 Exclusion from the default ``uv run pytest`` run is enforced at two levels:
 1. ``norecursedirs = ["tests/eval/live_benchmark"]`` in pyproject.toml prevents
@@ -15,30 +11,21 @@ Exclusion from the default ``uv run pytest`` run is enforced at two levels:
    out any test items that do get collected with the marker.
 
 The ``_require_model_cache`` fixture below is defense-in-depth for the
-explicit-path case (skips gracefully when the fastembed model cache is absent). It
-checks ``get_fastembed_cache_dir()`` as resolved at session start, and
-``_pin_live_fastembed_cache`` (``tests/_live_fastembed_cache.py``) makes every test's
-backends load from that same dir.
+explicit-path case (skips gracefully when the model cache is absent). It checks
+the models dir as resolved at session start, and ``_pin_live_models_dir``
+(``tests/_live_model_cache.py``) makes every test's backends load from that same dir.
 """
 from __future__ import annotations
 
 import os
-import sys
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Module-level: remove fastembed stubs so real package is resolved
-# ---------------------------------------------------------------------------
-for _key in ("fastembed", "fastembed.rerank", "fastembed.rerank.cross_encoder"):
-    sys.modules.pop(_key, None)
 
 # ---------------------------------------------------------------------------
 # Module-level: reset ML thread-count env vars to production defaults
 # ---------------------------------------------------------------------------
 _cpu = str(os.cpu_count() or 4)
 for _var in (
-    "ORT_NUM_THREADS",
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
     "MKL_NUM_THREADS",
@@ -59,26 +46,27 @@ def _activate_deterministic_eval_backends() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fixtures: one fastembed cache for the guard AND the backends (S493)
+# Fixtures: one model cache for the guard AND the backends
 # ---------------------------------------------------------------------------
 
 from pathlib import Path  # noqa: E402
 
-from tests._live_fastembed_cache import (  # noqa: E402, F401 — fixtures, used by name
-    _pin_live_fastembed_cache,
-    live_fastembed_cache_dir,
+from tests._live_model_cache import (  # noqa: E402, F401 — fixtures, used by name
+    _pin_live_models_dir,
+    live_models_dir,
+    missing_live_models,
 )
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _require_model_cache(live_fastembed_cache_dir: Path) -> None:  # noqa: F811 — fixture param
-    missing = []
-    if not any(live_fastembed_cache_dir.glob("*bge-small-en-v1.5*")):
-        missing.append("BAAI/bge-small-en-v1.5")
-    if not any(live_fastembed_cache_dir.glob("*ms-marco-MiniLM-L-6-v2*")):
-        missing.append("Xenova/ms-marco-MiniLM-L-6-v2")
+def _require_model_cache(live_models_dir: Path) -> None:  # noqa: F811 — fixture param
+    """Skip the session unless both models are cached at their pinned revisions.
+
+    The guard runs before the per-test pin, so it checks the session's models dir itself.
+    """
+    missing = missing_live_models()
     if missing:
         pytest.skip(
-            f"fastembed model cache {live_fastembed_cache_dir} lacks {missing!r} — "
-            "run the CI prefetch step first (or export FASTEMBED_CACHE_PATH)"
+            f"model cache {live_models_dir} lacks {missing!r} at the pinned revisions — "
+            "run the CI prefetch step first (python -m tests._live_model_cache)"
         )

@@ -37,7 +37,7 @@ from archon_search.store import SearchStore
 
 pytestmark = pytest.mark.integration
 
-_VECTOR_DIM = 384  # must match the stub fastembed dimension (zeros(384))
+_VECTOR_DIM = 384  # must match the stub embedder dimension (zeros(384))
 _COLLECTION = "s582col"
 
 #: What the operator configured as the HyDE LLM call timeout. Unclamped by config

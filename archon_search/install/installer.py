@@ -31,6 +31,7 @@ from archon_search.platform.runtime import get_runtime, get_search_service
 from archon_search.platform.service import get_secrets_env_file
 from archon_search.platform.types import GpuType
 from archon_search.profiles import InstallProfile, get_profile
+from archon_search.torch_runtime import AUTO_DEVICE, CPU_DEVICE, DEVICE_SETTINGS, resolve_device
 
 from .config_writer import (
     WizardFeatures,
@@ -45,6 +46,7 @@ from .config_writer import (
 from .device_probe import probe_device_availability, probe_device_validation
 from .errors import InstallError, NeedsForceDeleteError
 from .extras import (
+    _cuda_visible_in_subprocess,
     _install_code_extra,
     _install_cuda_torch,
     _install_graph_extra,
@@ -52,6 +54,7 @@ from .extras import (
     _install_query_expansion_extras,
     _revert_graph_enrichment_flags,
     _revert_query_expansion_flags,
+    _torch_cuda_available,
 )
 from .licenses import (
     _download_fasttext_model,
@@ -68,7 +71,8 @@ from .prewarm import (
     _prewarm_models,
     _prewarm_timeout,
 )
-from .provisioning import BYTES_PER_MB, GPU_EXECUTION_PROVIDER, TORCH_DEVICE_CPU
+from .prompts import ask_yes_no
+from .provisioning import BYTES_PER_MB, TORCH_DEVICE_CPU
 from .render import _print_next_steps, _render_provision_failure, _render_summary
 from .service_ops import _create_secrets_env
 # Deliberately unused by run(): these names are the patch seam for the S194/S201/S202
@@ -76,7 +80,7 @@ from .service_ops import _create_secrets_env
 from .service_ops import _legacy_service_path as _legacy_service_path
 from .service_ops import _remove_legacy_service as _remove_legacy_service
 from .wizard import (
-    _graph_candidate_providers,
+    _graph_candidate_device,
     _prompt_graph_accelerator,
     _prompt_gpu_confirm,
     _prompt_multilingual,
@@ -93,9 +97,11 @@ _WAIT_FOR_SERVICE_TIMEOUT = 60
 # Their presence in the service log lets the readiness gate tolerate one
 # supervisor crash-and-restart cycle instead of reporting a bare timeout.
 _STARTUP_CRASH_MARKERS = ("ModuleNotFoundError", "ImportError")
-# TOML sections configure_providers can target.
+# TOML sections configure_device can target.
 _DATABASE_SECTION = "database"
 _GRAPH_SECTION = "graph"
+# The key configure_device writes in either section.
+_DEVICE_KEY = "device"
 # Printed after the config write when an explicit --telemetry-retention-days was written
 # while the run's telemetry answer is not "on": the value is kept but inert until telemetry
 # is enabled. {prefix}/{outcome} narrate a real write or a dry-run rehearsal.
@@ -103,8 +109,8 @@ _RETENTION_INERT_WARNING = (
     "{prefix}Warning: [telemetry].retention_days = {days} {outcome}, but telemetry is not enabled, "
     "so it has no effect until you enable telemetry (--telemetry, or answer y at the telemetry prompt)."
 )
-# The operator guide the failed-CUDA-probe warning points at: replacing onnxruntime with
-# onnxruntime-gpu for each install method. A URL, because pip/uv-tool installs ship no docs.
+# The operator guide the failed-CUDA warning points at: installing a CUDA build of PyTorch
+# for each install method. A URL, because pip/uv-tool installs ship no docs.
 _REPO_BLOB_BASE = "https://github.com/user538295/archon-search/blob/main"
 _CUDA_GUIDE_DOC = "Documentation/UserManual/10_installation.md"
 _CUDA_GUIDE_HEADING = "NVIDIA GPU: run embedding and reranking on CUDA"
@@ -116,8 +122,36 @@ def _github_heading_anchor(heading: str) -> str:
 
 
 _CUDA_GUIDE_URL = f"{_REPO_BLOB_BASE}/{_CUDA_GUIDE_DOC}#{_github_heading_anchor(_CUDA_GUIDE_HEADING)}"
-# The summary's `Providers:` label once [database].providers holds CUDAExecutionProvider.
-_CUDA_PROVIDER_LABEL = "CUDA"
+
+# The summary's `Device:` labels, and the accelerator name the fallback warning uses.
+_CPU_LABEL = "CPU"
+_ACCELERATOR_LABELS: dict[GpuType, str] = {GpuType.METAL: "Apple GPU (mps)", GpuType.CUDA: "CUDA"}
+_ACCELERATOR_NAMES: dict[GpuType, str] = {GpuType.METAL: "Apple GPU", GpuType.CUDA: "CUDA"}
+# The torch devices `auto` may resolve to when an accelerator is usable.
+_ACCELERATOR_DEVICES = frozenset({"mps", "cuda"})
+
+# The summary is shown before Step 9's accelerator check, so its `Device:` line can only
+# name what is about to be checked; Step 9 prints the outcome afterwards.
+_GPU_CHECK_PENDING_NOTE = "— checked after you confirm; CPU if it fails"
+
+
+def _planned_device_labels(gpu: GpuType, enable_gpu: bool, dry_run: bool) -> list[str]:
+    """The summary's `Device:` labels before Step 9 has probed anything.
+
+    A real Metal/CUDA install names the accelerator it will check, flagged as pending.
+    A dry run probes nothing, so it names the accelerator it would write, unflagged.
+    Anything else runs on CPU.
+    """
+    label = _ACCELERATOR_LABELS.get(gpu) if enable_gpu else None
+    if label is None:
+        return [_CPU_LABEL]
+    return [label if dry_run else f"{label} {_GPU_CHECK_PENDING_NOTE}"]
+
+
+def _require_device_setting(device: str) -> None:
+    """Raise ValueError unless *device* is one of ``DEVICE_SETTINGS``."""
+    if device not in DEVICE_SETTINGS:
+        raise ValueError(f"unknown device {device!r}; expected one of: {', '.join(DEVICE_SETTINGS)}")
 
 
 def _compute_svc_timeout(eager_load: bool, total_bytes: int) -> int:
@@ -155,13 +189,7 @@ class InstallerProtocol(Protocol):
     dry_run: bool
 
     def detect_gpu(self) -> GpuType: ...
-    def validate_providers(self, providers: list[str]) -> bool: ...
-    def validate_embedder_only(self, providers: list[str]) -> bool: ...
-    def configure_providers(
-        self, gpu: GpuType | None = ..., *, section: str = ..., providers: list[str] | None = ...
-    ) -> None: ...
-    def configure_reranker_providers(self, providers: list[str]) -> None: ...
-    def clear_reranker_providers(self) -> None: ...
+    def configure_device(self, device: str, *, section: str = ...) -> None: ...
     def create_data_dir(self) -> None: ...
     def write_service_file(self) -> None: ...
     def load_service(self) -> int: ...
@@ -215,132 +243,87 @@ class BaseInstaller(ABC):
         """Return the GPU type detected by the platform runtime."""
         return get_runtime().detect_gpu_type()
 
-    def validate_providers(self, providers: list[str]) -> bool:
-        """Check that all non-CPU providers are available and both models load.
+    def _accelerator_validated(self) -> bool:
+        """True when PyTorch's ``auto`` device is an accelerator and both models pass on it.
 
-        A requested provider the installed onnxruntime lacks returns False without
-        probing: the runtime would load on CPU instead (S635), but an unavailable
-        accelerator is not a validated one, so the wizard must not write it. Otherwise
-        delegates to :func:`validate_providers_shared` (C3) so the wizard and the
-        background startup check probe identically. Returns True only if BOTH the
-        embedder and the reranker pass under *providers*; a disabled reranker
-        (``reranker_model == ""``) reports ``reranker_ok = True`` with no probe.
+        ``auto`` resolving to ``cpu`` means this PyTorch build lacks the accelerator, so
+        nothing is probed. Otherwise delegates to :func:`validate_device` so the wizard and
+        the background startup check probe identically: the embedder and the reranker must
+        both pass (a disabled reranker, ``reranker_model == ""``, passes with no probe).
 
-        Never raises — caller handles fallback. The whole body is guarded so that
-        a failed onnxruntime query, a broken lazy import (``model_validation``
-        imports ``fastembed`` at module scope) or a future contract breach in
-        ``validate_providers_shared`` yields ``False`` rather than crashing the
-        install wizard.
-        """
-        probed = self._probe_providers("validate_providers", providers, self.cfg.reranker_model)
-        return probed is not None and all(probed)
-
-    def validate_embedder_only(self, providers: list[str]) -> bool:
-        """Like validate_providers but only probes the embedder (reranker_model="")."""
-        probed = self._probe_providers("validate_embedder_only", providers, "")
-        return probed is not None and probed[0]
-
-    def _probe_providers(
-        self, caller: str, providers: list[str], reranker_model: str
-    ) -> tuple[bool, bool] | None:
-        """``(embedder_ok, reranker_ok)`` under *providers*, or None when unvalidated.
-
-        None — logged as a WARNING prefixed with *caller* — when a requested provider
-        is missing from onnxruntime, or when anything fails before a probe result
-        exists. Probe warnings are logged the same way.
+        Never raises — the caller falls back to CPU. Failures and probe warnings are logged.
         """
         try:
-            # Lazy imports — model_validation imports fastembed/onnxruntime at
-            # module scope; importing it here keeps that cost off CLI startup.
-            from archon_search.model_validation import validate_providers_shared
-            from archon_search.onnx_providers import (
-                missing_providers_message,
-                unavailable_onnx_providers,
-            )
+            # Lazy: model_validation pulls in the model backends; keep that off CLI startup.
+            from archon_search.model_validation import validate_device
 
-            unavailable = unavailable_onnx_providers(providers)
-            if unavailable:
-                logger.warning("%s: %s", caller, missing_providers_message(unavailable))
-                return None
-            embedder_ok, reranker_ok, warnings = validate_providers_shared(
-                providers,
-                self.cfg.embedding_model,
-                reranker_model,
+            if resolve_device(AUTO_DEVICE) not in _ACCELERATOR_DEVICES:
+                logger.warning("device validation: PyTorch found no usable accelerator")
+                return False
+            embedder_ok, reranker_ok, warnings = validate_device(
+                AUTO_DEVICE, self.cfg.embedding_model, self.cfg.reranker_model
             )
         except Exception as exc:
-            logger.warning("%s: provider validation failed: %s", caller, exc)
-            return None
+            logger.warning("device validation failed: %s", exc)
+            return False
         for warning in warnings:
-            logger.warning("%s: %s", caller, warning)
-        return embedder_ok, reranker_ok
+            logger.warning("device validation: %s", warning)
+        return embedder_ok and reranker_ok
 
-    def _probe_and_configure_coreml(self, gpu: "GpuType", config_path: Path) -> list[str]:
-        """Probe CoreML, write the providers it settles on, return the summary's provider labels."""
-        if self.validate_providers(["CoreMLExecutionProvider"]):
-            self.configure_providers(gpu=gpu)
-            self.clear_reranker_providers()  # self-heal: clear stale split config
-            return ["CoreML (Apple Silicon)"]
-        elif self.validate_embedder_only(["CoreMLExecutionProvider"]):
-            # Split: embedder on CoreML, reranker on CPU
-            self.configure_providers(gpu=gpu)
-            self.configure_reranker_providers([])
-            return ["CoreML — text search; CPU — result ranking"]
-        else:
-            logger.warning("CoreML validation failed — falling back to CPU")
-            print("Warning: CoreML validation failed — falling back to CPU.")
-            # A re-run keeps the previous [database].providers, so CPU must be written.
-            self.write_gpu_providers_disabled(config_path)
-            return []
+    def _probe_and_configure_device(self, gpu: "GpuType") -> list[str]:
+        """Step 9: write ``[database].device`` for the GPU the user accepted; return the summary labels.
 
-    def _configure_cuda(self, gpu: "GpuType", config_path: Path) -> list[str]:
-        """Step 9 for an accepted CUDA GPU: settle the ONNX providers and the torch build.
+        *gpu* is the accepted accelerator — ``GpuType.NONE`` when none was detected, the
+        prompt was declined or ``--disable-gpu`` was given — and then ``cpu`` is written.
+        A dry run probes nothing: it narrates the ``auto`` write and, for CUDA on
+        linux/x86_64, the torch swap. Otherwise ``auto`` is written only when both models
+        pass on an accelerator; any other outcome writes ``cpu`` with the fallback warning,
+        because a re-run keeps the previous ``[database].device``.
 
-        Returns the summary's provider labels. Dry-run narrates the CUDA write and the
-        torch swap without probing (the probe loads models). On linux/x86_64 the
-        best-effort +cu126 torch swap runs unless the real CUDA probe passed. Rationale:
-        Documentation/ADRs/16_wizard_validates_cuda_before_writing.md.
+        On linux/x86_64 with CUDA accepted and ``torch.cuda.is_available()`` false, the
+        ``+cu126`` torch swap is the enabling step. This process keeps the torch it
+        already imported, so the swap is verified in a fresh interpreter instead.
         """
-        swap_platform = sys.platform.startswith("linux") and platform.machine() == "x86_64"
+        label = _ACCELERATOR_LABELS.get(gpu)
+        if label is None:
+            self.configure_device(CPU_DEVICE)
+            return [_CPU_LABEL]
+        swap_platform = (
+            gpu == GpuType.CUDA and sys.platform.startswith("linux") and platform.machine() == "x86_64"
+        )
         if self.dry_run:
-            self.configure_providers(gpu=gpu)
+            self.configure_device(AUTO_DEVICE)
             if swap_platform:
                 _install_cuda_torch(dry_run=True)
-            return [_CUDA_PROVIDER_LABEL]
-        cuda_written = self._probe_and_configure_cuda(gpu, config_path)
-        if swap_platform:
-            if cuda_written:
-                print(
-                    "Keeping the installed PyTorch build: onnxruntime-gpu shares its "
-                    "CUDA libraries, which the CUDA 12.6 PyTorch build would replace."
-                )
-            else:
-                _install_cuda_torch(dry_run=False)
-        return [_CUDA_PROVIDER_LABEL] if cuda_written else []
+            return [label]
+        if swap_platform and not _torch_cuda_available():
+            _install_cuda_torch(dry_run=False)
+            validated = _cuda_visible_in_subprocess()
+        else:
+            validated = self._accelerator_validated()
+        if validated:
+            self.configure_device(AUTO_DEVICE)
+            return [label]
+        self._print_accelerator_fallback(gpu)
+        self.configure_device(CPU_DEVICE)
+        return [_CPU_LABEL]
 
-    def _probe_and_configure_cuda(self, gpu: "GpuType", config_path: Path) -> bool:
-        """Probe CUDA and write the providers it settles on; True when CUDA was written.
-
-        Nothing installs ``onnxruntime-gpu`` (it conflicts with fastembed's CPU
-        ``onnxruntime``), so without a manual swap the probe fails and CPU is written.
-        """
-        if self.validate_providers(["CUDAExecutionProvider"]):
-            self.configure_providers(gpu=gpu)
-            self.clear_reranker_providers()  # self-heal: clear stale split config
-            return True
-        logger.warning("CUDA validation failed — falling back to CPU")
-        print("Warning: CUDA validation failed — falling back to CPU.")
-        print(
-            "  Text search and result ranking (ONNX Runtime) will run on CPU: "
-            "the installed onnxruntime has no usable CUDAExecutionProvider."
-        )
-        print(
-            "  To run them on the GPU, replace onnxruntime with onnxruntime-gpu "
-            "(its PyPI build needs CUDA 13 and an NVIDIA driver >= 580), then re-run the wizard."
-        )
-        print(f"  Commands for each install method: {_CUDA_GUIDE_URL}")
-        # A re-run keeps the previous [database].providers, so CPU must be written.
-        self.write_gpu_providers_disabled(config_path)
-        return False
+    @staticmethod
+    def _print_accelerator_fallback(gpu: "GpuType") -> None:
+        """Warn that the accepted accelerator failed validation; CUDA adds why and where to fix it."""
+        name = _ACCELERATOR_NAMES[gpu]
+        logger.warning("%s validation failed — falling back to CPU", name)
+        print(f"Warning: {name} validation failed — falling back to CPU.")
+        if gpu == GpuType.CUDA:
+            print(
+                "  Text search and result ranking will run on CPU: PyTorch found no usable CUDA "
+                "device (a CPU-only PyTorch build, or no compatible NVIDIA driver), or a model failed its check."
+            )
+            print(
+                "  To run them on the GPU, install a CUDA build of PyTorch and an NVIDIA driver "
+                "it supports, then re-run the wizard."
+            )
+            print(f"  Commands for each install method: {_CUDA_GUIDE_URL}")
 
     def _warn_if_retention_inert(self, features: "WizardFeatures") -> None:
         """After the config write, warn on stderr that an explicit retention_days is inert
@@ -369,7 +352,7 @@ class BaseInstaller(ABC):
                 pinned_collections=self.cfg.pinned_collections,
                 chunk_size=self.cfg.chunk_size,
                 auto_reindex_on_chunk_size_change=self.cfg.auto_reindex_on_chunk_size_change,
-                providers=self.cfg.providers or None,
+                device=self.cfg.device,
             )
             await sync.sync(self.cfg.pinned_collections)
         finally:
@@ -469,19 +452,7 @@ class BaseInstaller(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def configure_providers(
-        self,
-        gpu: GpuType | None = None,
-        *,
-        section: str = _DATABASE_SECTION,
-        providers: list[str] | None = None,
-    ) -> None: ...
-
-    @abstractmethod
-    def configure_reranker_providers(self, providers: list[str]) -> None: ...
-
-    @abstractmethod
-    def clear_reranker_providers(self) -> None: ...
+    def configure_device(self, device: str, *, section: str = _DATABASE_SECTION) -> None: ...
 
     @abstractmethod
     def create_data_dir(self) -> None: ...
@@ -522,9 +493,6 @@ class BaseInstaller(ABC):
     ) -> None: ...
 
     @abstractmethod
-    def write_gpu_providers_disabled(self, config_path: Path) -> None: ...
-
-    @abstractmethod
     def record_wizard_values(self, config_path: Path) -> None: ...
 
     @abstractmethod
@@ -532,7 +500,7 @@ class BaseInstaller(ABC):
 
     @abstractmethod
     def preload_models(
-        self, prof: InstallProfile, install_graph_extra: bool = False, graph_providers: list[str] | None = None,
+        self, prof: InstallProfile, install_graph_extra: bool = False, graph_device: str = CPU_DEVICE,
     ) -> str | None: ...
 
     @abstractmethod
@@ -545,14 +513,14 @@ class BaseInstaller(ABC):
     # Orchestration (shared; mutation is delegated to the abstract methods)
     # ------------------------------------------------------------------
 
-    def _configure_graph_providers(
+    def _configure_graph_device(
         self,
-        candidates: list[str],
+        candidate: str,
         availability: str,
         prewarm_device: str | None,
         non_interactive: bool,
     ) -> None:
-        """Settle ``[graph].providers`` from the two-stage device probe (S31/S32).
+        """Settle ``[graph].device`` from the two-stage device probe (S31/S32).
 
         The accelerator is offered — with itself as the default — only when
         stage 1 said it was available AND stage 2 (riding the pre-warm) resolved
@@ -563,21 +531,21 @@ class BaseInstaller(ABC):
         WARNING reaches the operator's stderr via ``logging.lastResort``, which is what
         makes S33's category reach them at all. A proven failure — which
         includes an accelerator that was asked for and that the pre-warm never landed
-        on — writes ``[]`` outright. Only the genuinely empty answer (nothing was asked
+        on — writes ``cpu`` outright. Only the genuinely empty answer (nothing was asked
         for and nothing came back) writes nothing at all, since unset already reads as
-        CPU and there is no evidence to justify overwriting an operator's own list.
+        CPU and there is no evidence to justify overwriting an operator's own value.
         """
-        result = probe_device_validation(candidates, prewarm_device)
+        result = probe_device_validation(candidate, prewarm_device)
         if result.not_yet_validated:
-            # No evidence either way. Unset already means CPU (config.py normalises
-            # an absent/empty list to None), so writing nothing gives a fresh install
-            # the same CPU outcome without clobbering a value an operator set by hand.
+            # No evidence either way. Unset already means CPU (GraphConfig.device defaults
+            # to cpu), so writing nothing gives a fresh install the same CPU outcome
+            # without clobbering a value an operator set by hand.
             logger.warning("Graph accelerator not validated (pre-warm did not run) — leaving CPU.")
             return
-        chosen: list[str] = []
+        chosen = CPU_DEVICE
         if result.failure is not None:
             logger.warning(
-                "Graph accelerator not validated (%s) — writing [graph].providers = [] (CPU).",
+                "Graph accelerator not validated (%s) — writing [graph].device = 'cpu'.",
                 result.failure,
             )
         elif (
@@ -585,8 +553,8 @@ class BaseInstaller(ABC):
             and result.device != TORCH_DEVICE_CPU
             and _prompt_graph_accelerator(non_interactive, result.device)
         ):
-            chosen = list(candidates)
-        self.configure_providers(section=_GRAPH_SECTION, providers=chosen)
+            chosen = candidate
+        self.configure_device(chosen, section=_GRAPH_SECTION)
 
     def run(
         self,
@@ -619,8 +587,8 @@ class BaseInstaller(ABC):
         enable_rag_fusion: bool = False,
         # C15 Tier 2 custom server key
         server_key: str | None = None,
-        # FE-5: [graph].providers for non-interactive installs
-        graph_providers: list[str] | None = None,
+        # FE-5: [graph].device for non-interactive installs
+        graph_device: str | None = None,
     ) -> int:
         """Execute the full install flow. Returns 0 on success."""
         print(self._MODE_BANNER)
@@ -850,16 +818,12 @@ class BaseInstaller(ABC):
                         print(
                             "[warn] Existing config has custom values; overwriting with profile defaults."
                         )
-                    else:
-                        try:
-                            answer = input(
-                                "Existing config has custom values. Overwrite with profile defaults? [y/N]: "
-                            ).strip().lower()
-                        except EOFError:
-                            answer = ""
-                        if answer not in ("y", "yes"):
-                            print("Installation aborted.")
-                            return 1
+                    elif not ask_yes_no(
+                        "Existing config has custom values. Overwrite with profile defaults? [y/n]: ",
+                        eof_default=False,
+                    ):
+                        print("Installation aborted.")
+                        return 1
 
                 self.persist_reinstall_config(
                     config_path, prof, profile_name, is_multilingual, features, has_edits
@@ -899,40 +863,9 @@ class BaseInstaller(ABC):
                     _revert_query_expansion_flags(config_path, self.dry_run)
                     return 1
 
-            # Step 9: GPU provider configuration (detection + user confirm already done in Step 2b)
-            provider_labels: list[str] = []
-            if not enable_gpu:
-                # User declined GPU — write providers = [] explicitly to override any previous setting
-                self.write_gpu_providers_disabled(config_path)
-            elif not self.dry_run and gpu == GpuType.METAL:
-                provider_labels = self._probe_and_configure_coreml(gpu, config_path)
-            elif gpu == GpuType.CUDA:
-                provider_labels = self._configure_cuda(gpu, config_path)
-            else:
-                self.configure_providers(gpu=gpu)
-            if not self.dry_run:
-                # Step 9 rewrote [database].providers / reranker_providers after Step 8b
-                # loaded the config. Step 14's pre-warm reads self.cfg, and no step before
-                # it rewrites the [database] model or provider keys again (the flag
-                # reverts below touch [graph], [hyde], [rag_fusion] and
-                # [database].multilingual only).
-                self.cfg = cfg = load_config(config_path)
-
-            # Step 9b: graph execution-provider candidates + the free stage-1
-            # availability pre-check (FE-5 / S31). Runs before any bytes move and
-            # never loads a model; stage 2 rides the Step 14 pre-warm.
-            graph_candidates = _graph_candidate_providers(
-                gpu, enable_gpu, graph_providers, non_interactive
-            )
-            graph_availability = probe_device_availability(graph_candidates)
-            if graph_providers and not features.install_graph_extra:
-                print(
-                    "  Note: --graph-providers was ignored — graph extraction is not "
-                    "being installed, so [graph].providers is not written."
-                )
-
-            # Step 10: create data directory
-            self.create_data_dir()
+            # Steps 11-13 (disk check, summary, confirmation) come BEFORE Step 9: its
+            # accelerator check downloads and loads both models, so the download size must
+            # be shown and a "no" must cost nothing — no probe, no download, no device write.
 
             # Step 11: disk space check
             try:
@@ -952,7 +885,8 @@ class BaseInstaller(ABC):
             # Step 12: summary display
             from archon_search import key_manager as _key_manager
             print(_render_summary(
-                profile_name, prof, is_multilingual, provider_labels, features,
+                profile_name, prof, is_multilingual,
+                _planned_device_labels(gpu, enable_gpu, self.dry_run), features,
                 db_path=str(Path(cfg.db_path).expanduser()),
                 host=features.host if features.host is not None else cfg.host,
                 port=features.port if features.port is not None else cfg.port,
@@ -963,11 +897,7 @@ class BaseInstaller(ABC):
 
             # Step 13: confirmation
             if not non_interactive:
-                try:
-                    answer = input("Proceed? [Y/n]: ").strip().lower()
-                except EOFError:
-                    answer = "n"
-                if answer not in ("y", "yes", ""):
+                if not ask_yes_no("Proceed? [y/n]: ", eof_default=False):
                     print("Installation aborted.")
                     if features.install_graph_extra:
                         _revert_graph_enabled_flag(config_path, self.dry_run)
@@ -978,6 +908,32 @@ class BaseInstaller(ABC):
                     if features.graph_provider:
                         _revert_graph_enrichment_flags(config_path, self.dry_run)
                     return 1
+
+            # Step 9: device configuration (detection + user confirm already done in Step 2b)
+            device_labels = self._probe_and_configure_device(gpu if enable_gpu else GpuType.NONE)
+            if not self.dry_run:
+                if enable_gpu and gpu in _ACCELERATOR_LABELS:
+                    # The summary above could only name what was about to be checked.
+                    print(f"  Device:     {', '.join(device_labels)}")
+                # Step 9 rewrote [database].device after Step 8b loaded the config.
+                # Step 14's pre-warm reads self.cfg, and no step before it rewrites the
+                # [database] model or device keys again (the flag reverts below touch
+                # [graph], [hyde], [rag_fusion] and [database].multilingual only).
+                self.cfg = cfg = load_config(config_path)
+
+            # Step 9b: graph device candidate + the free stage-1 availability
+            # pre-check (FE-5 / S31). Runs before the model pre-warm and never loads
+            # a model; stage 2 rides the Step 14 pre-warm.
+            graph_candidate = _graph_candidate_device(gpu, enable_gpu, graph_device, non_interactive)
+            graph_availability = probe_device_availability(graph_candidate)
+            if graph_device and not features.install_graph_extra:
+                print(
+                    "  Note: --graph-device was ignored — graph extraction is not "
+                    "being installed, so [graph].device is not written."
+                )
+
+            # Step 10: create data directory
+            self.create_data_dir()
 
             # Before Step 14: install code enrichment packages if requested
             if features.install_code_extra:
@@ -1043,7 +999,7 @@ class BaseInstaller(ABC):
                     graph_prewarm_device = self.preload_models(
                         prof,
                         install_graph_extra=features.install_graph_extra,
-                        graph_providers=graph_candidates,
+                        graph_device=graph_candidate,
                     )
                 except InstallError as exc:
                     # Real-only: dry never raises, so this rollback runs only when
@@ -1068,22 +1024,22 @@ class BaseInstaller(ABC):
             if server_key is not None:
                 self.write_server_key(server_key)
 
-            # Step 14b: settle [graph].providers from the two-stage probe (FE-5).
+            # Step 14b: settle [graph].device from the two-stage probe (FE-5).
             # After pre-warm because stage 2 rides it. Auxiliary — a failure here
             # must never fail the install, so CPU is written and the reason logged.
             # skip_preload is absence of evidence, not evidence of failure: without a
             # pre-warm there is no stage 2 at all, and the probe cannot tell that apart
-            # from a real failure — so settle nothing rather than clobber a hand-set list.
+            # from a real failure — so settle nothing rather than clobber a hand-set value.
             if graph_extra_ready and not skip_preload:
                 try:
-                    self._configure_graph_providers(
-                        graph_candidates, graph_availability,
+                    self._configure_graph_device(
+                        graph_candidate, graph_availability,
                         graph_prewarm_device, non_interactive,
                     )
                 except Exception:
                     # Sanitized on purpose: exc_info here would reach the operator's
                     # stderr through logging.lastResort in an unconfigured CLI process.
-                    logger.warning("Could not settle [graph].providers — leaving it unchanged (CPU).")
+                    logger.warning("Could not settle [graph].device — leaving it unchanged (CPU).")
 
             # Step 15: register and start service. Snapshot the log size first so
             # the readiness gate only reads crashes from this launch.
@@ -1214,20 +1170,9 @@ class DryRunInstaller(BaseInstaller):
     dry_run = True
     _MODE_BANNER = "=== DRY-RUN MODE: No changes will be made ==="
 
-    def configure_providers(
-        self,
-        gpu: GpuType | None = None,
-        *,
-        section: str = _DATABASE_SECTION,
-        providers: list[str] | None = None,
-    ) -> None:
-        print(f"[DRY RUN] Would configure [{section}] execution providers.")
-
-    def configure_reranker_providers(self, providers: list[str]) -> None:
-        print("[DRY RUN] Would configure reranker execution providers.")
-
-    def clear_reranker_providers(self) -> None:
-        print("[DRY RUN] Would clear reranker execution providers.")
+    def configure_device(self, device: str, *, section: str = _DATABASE_SECTION) -> None:
+        _require_device_setting(device)
+        print(f"[DRY RUN] Would set [{section}] device = {device!r}.")
 
     def create_data_dir(self) -> None:
         print("[DRY RUN] Would create the search data directory.")
@@ -1287,9 +1232,6 @@ class DryRunInstaller(BaseInstaller):
         print(f"[DRY RUN] Would write .bak: {config_path.with_suffix('.toml.bak')}")
         print(f"[DRY RUN] Would overwrite config: {config_path}")
 
-    def write_gpu_providers_disabled(self, config_path: Path) -> None:
-        pass
-
     def record_wizard_values(self, config_path: Path) -> None:
         pass
 
@@ -1297,7 +1239,7 @@ class DryRunInstaller(BaseInstaller):
         print(f"[dry-run] Would write server key to {get_key_file()}.")
 
     def preload_models(
-        self, prof: InstallProfile, install_graph_extra: bool = False, graph_providers: list[str] | None = None,
+        self, prof: InstallProfile, install_graph_extra: bool = False, graph_device: str = CPU_DEVICE,
     ) -> str | None:
         print(f"[DRY RUN] Would download and load models (~{prof.download_mb} MB).")
         if install_graph_extra:
@@ -1319,88 +1261,32 @@ class RealInstaller(BaseInstaller):
     dry_run = False
     _MODE_BANNER = "=== REAL MODE: System will be modified ==="
 
-    def configure_providers(
-        self,
-        gpu: GpuType | None = None,
-        *,
-        section: str = _DATABASE_SECTION,
-        providers: list[str] | None = None,
-    ) -> None:
-        """Write a providers list into *section* via tomlkit.
+    def configure_device(self, device: str, *, section: str = _DATABASE_SECTION) -> None:
+        """Write ``[section].device`` via tomlkit; an unchanged value skips the rewrite.
 
-        With ``providers`` supplied (FE-5's ``[graph]`` path) the list is written
-        verbatim — including the empty list, which is the explicit CPU write —
-        and *gpu* is ignored.
+        The skip avoids comment reflow. A missing config file or a non-table *section*
+        is logged and skipped.
 
-        With ``providers`` left None the legacy ``[database]`` mapping applies:
-
-        - GpuType.CUDA: write ["CUDAExecutionProvider"] (Step 9 calls this only after
-          ``_probe_and_configure_cuda`` validated it)
-        - GpuType.METAL: write ["CoreMLExecutionProvider"]
-        - GpuType.NONE: no-op
+        Raises:
+            ValueError: if *device* is not one of ``DEVICE_SETTINGS``.
         """
-        if providers is None:
-            target_provider = GPU_EXECUTION_PROVIDER.get(gpu)
-            if target_provider is None:
-                return
-            providers = [target_provider]
-            skip_if_present = True
-        else:
-            skip_if_present = False
-
+        _require_device_setting(device)
         config_path = self.config_path
         if not config_path.exists():
-            logger.warning("Config file %s not found — skipping provider config", config_path)
+            logger.warning("Config file %s not found — skipping device config", config_path)
             return
 
         doc = tomlkit.parse(config_path.read_text())
         existing = doc.get(section, {})
         if not isinstance(existing, dict):
-            logger.warning("[%s] in %s is not a table — skipping provider config", section, config_path)
+            logger.warning("[%s] in %s is not a table — skipping device config", section, config_path)
             return
-        if skip_if_present and providers[0] in existing.get("providers", []):
-            return  # already set — skip to preserve user-extended chains
-        if not skip_if_present and existing.get("providers") == providers:
-            return  # unchanged — skip the rewrite (comment reflow risk)
+        if existing.get(_DEVICE_KEY) == device:
+            return
         if section not in doc:
             doc[section] = tomlkit.table()
-        arr = tomlkit.array()
-        arr.extend(providers)
-        doc[section]["providers"] = arr
-
+        doc[section][_DEVICE_KEY] = device
         atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
-
-    def configure_reranker_providers(self, providers: list[str]) -> None:
-        """Write reranker_providers to [database] section (empty list = CPU)."""
-        config_path = self.config_path
-        if not config_path.exists():
-            logger.warning(
-                "Config file %s not found — skipping reranker_providers config",
-                config_path,
-            )
-            return
-        doc = tomlkit.parse(config_path.read_text())
-        # Check existing value first to avoid unnecessary TOML rewrites (comment reflow risk)
-        db = doc.get("database", {})
-        if isinstance(db, dict) and db.get("reranker_providers") == providers:
-            return
-        if "database" not in doc:
-            doc["database"] = tomlkit.table()
-        arr = tomlkit.array()
-        arr.extend(providers)
-        doc["database"]["reranker_providers"] = arr
-        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
-
-    def clear_reranker_providers(self) -> None:
-        """Remove reranker_providers from [database] if present (self-heal on upgrade)."""
-        config_path = self.config_path
-        if not config_path.exists():
-            return
-        doc = tomlkit.parse(config_path.read_text(encoding="utf-8"))
-        # Only clear the stale auto-written split marker ([]); preserve user-set values.
-        if "database" in doc and doc["database"].get("reranker_providers") == []:
-            del doc["database"]["reranker_providers"]
-            atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
 
     def create_data_dir(self) -> None:
         """Create the search database directory."""
@@ -1468,15 +1354,6 @@ class RealInstaller(BaseInstaller):
         _write_profile_config(config_path, prof, profile_name, is_multilingual, features=features)
         print(f"  Backup:     {config_path.with_suffix('.toml.bak')}")
 
-    def write_gpu_providers_disabled(self, config_path: Path) -> None:
-        if not config_path.exists():
-            return
-        gpu_doc = tomlkit.parse(config_path.read_text())
-        if "database" not in gpu_doc:
-            gpu_doc.add("database", tomlkit.table())
-        gpu_doc["database"]["providers"] = tomlkit.array()
-        atomic_write_bytes(config_path, tomlkit.dumps(gpu_doc).encode())
-
     def record_wizard_values(self, config_path: Path) -> None:
         _record_wizard_values(config_path)
 
@@ -1497,14 +1374,14 @@ class RealInstaller(BaseInstaller):
         print("Server key updated. Restart the service to apply: archon-search restart.")
 
     def preload_models(
-        self, prof: InstallProfile, install_graph_extra: bool = False, graph_providers: list[str] | None = None,
+        self, prof: InstallProfile, install_graph_extra: bool = False, graph_device: str = CPU_DEVICE,
     ) -> str | None:
         print("[4/5] Downloading and loading models...")
-        # self.cfg carries the [database] model and provider keys the service starts
-        # with: run() reloads it after Step 9 rewrites the providers.
+        # self.cfg carries the [database] model and device keys the service starts
+        # with: run() reloads it after Step 9 rewrites the device.
         return _prewarm_models(
             self.cfg, _prewarm_timeout(prof),
-            install_graph_extra=install_graph_extra, graph_providers=graph_providers,
+            install_graph_extra=install_graph_extra, graph_device=graph_device,
         )
 
     def register_and_start(self) -> int:

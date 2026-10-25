@@ -1,17 +1,31 @@
-"""Reranking layer for RAG — wraps fastembed.TextCrossEncoder with async support."""
+"""Reranking layer for RAG — a PyTorch cross-encoder backend with async support."""
 from __future__ import annotations
 
 import asyncio
 import dataclasses
 import threading
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, NamedTuple, Protocol, runtime_checkable
 
 from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import SearchResult
+from archon_search.model_specs import get_reranker_spec
+from archon_search.model_store import ensure_model
 from archon_search.observability import record_stage
-from archon_search.onnx_providers import select_onnx_providers
-from archon_search.paths import get_fastembed_cache_dir
+from archon_search.reranker_loading import load_cross_encoder
+from archon_search.text_batching import DEFAULT_TOKEN_BUDGET, plan_batches
+from archon_search.torch_runtime import (
+    AUTO_DEVICE,
+    accelerator_lock,
+    pad_encodings,
+    release_accelerator_cache,
+    resolve_device,
+)
 
+if TYPE_CHECKING:
+    import torch
+    from tokenizers import Encoding, Tokenizer
+
+_DEFAULT_PAD_TOKEN_ID = 0
 # Trivial (query, document) pair used only to force a cold backend to load.
 _WARMUP_PAIR = ("warmup", "warmup")
 _WARMUP_TIMEOUT_SECONDS = 300.0
@@ -29,42 +43,84 @@ class RerankerBackend(Protocol):
     def is_warm(self) -> bool: ...
 
 
-class ModelReranker:
-    """Lazy-loading fastembed TextCrossEncoder backend.
+class _CrossEncoder(NamedTuple):
+    """A loaded model with everything ``predict`` needs to drive it."""
 
-    *providers* is the configured ONNX provider list; at load time it is narrowed to
-    the providers the installed onnxruntime has (``onnx_providers.select_onnx_providers``:
-    falls back to CPU with a WARNING instead of failing the load).
+    tokenizer: Tokenizer
+    model: torch.nn.Module
+    device: str
+    pad_token_id: int
+
+
+class ModelReranker:
+    """Lazy-loading PyTorch cross-encoder backend.
+
+    The spec is resolved eagerly, so an unsupported *model_name* fails at
+    construction. The weights are fetched (``ensure_model``) and loaded onto the
+    device resolved from *device* (``torch_runtime.resolve_device``) on the first
+    non-empty ``predict``; a failed load is not latched, the next call retries.
+    ``predict`` is safe to call from several threads.
+
+    Raises:
+        UnsupportedModelError: from the constructor, for a model outside the registry.
     """
 
-    def __init__(self, model_name: str, providers: list[str] | None = None) -> None:
-        self._model_name = model_name
-        self._providers = providers or None  # None = fastembed's default device
-        self._model: Any = None  # loaded on first predict()
+    def __init__(self, model_name: str, device: str = AUTO_DEVICE) -> None:
+        self.model_name = model_name
+        self._spec = get_reranker_spec(model_name)
+        self._device_setting = device
+        self._cross_encoder: _CrossEncoder | None = None  # loaded on first predict()
         self._lock = threading.Lock()
-
-    def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
-        if not pairs:
-            return []
-        if self._model is None:
-            with self._lock:
-                if self._model is None:
-                    from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
-
-                    self._model = TextCrossEncoder(
-                        self._model_name,
-                        providers=select_onnx_providers(self._providers).providers,
-                        cache_dir=str(get_fastembed_cache_dir()),
-                    )
-        # TextCrossEncoder.rerank(query, documents) → Iterable[float]
-        # All pairs share the same query (pairs[0][0])
-        query = pairs[0][0]
-        documents = [p[1] for p in pairs]
-        return list(self._model.rerank(query, documents))
 
     @property
     def is_warm(self) -> bool:
-        return self._model is not None
+        return self._cross_encoder is not None
+
+    def _load(self) -> _CrossEncoder:
+        """Return the cross-encoder, loading it once; concurrent callers wait on the lock."""
+        if self._cross_encoder is None:
+            with self._lock:
+                if self._cross_encoder is None:
+                    path = ensure_model(self._spec)
+                    device = resolve_device(self._device_setting)
+                    tokenizer, model = load_cross_encoder(self._spec, path, device)
+                    pad_token_id = getattr(model.config, "pad_token_id", None) or _DEFAULT_PAD_TOKEN_ID
+                    self._cross_encoder = _CrossEncoder(tokenizer, model, device, pad_token_id)
+        return self._cross_encoder
+
+    def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+        """Score each ``(query, document)`` pair; the result is raw logits in input order.
+
+        Each pair is encoded as a text pair truncated to ``spec.max_length`` tokens
+        (``longest_first``); the pairs need not share a query.
+        """
+        if not pairs:
+            return []
+        cross_encoder = self._load()
+        encodings = [cross_encoder.tokenizer.encode(query, document) for query, document in pairs]
+        scores = [0.0] * len(pairs)
+        for batch in plan_batches([len(e.ids) for e in encodings], token_budget=DEFAULT_TOKEN_BUDGET):
+            batch_encodings = [encodings[i] for i in batch]
+            for index, score in zip(batch, self._score_batch(cross_encoder, batch_encodings), strict=True):
+                scores[index] = score
+            if len(batch) * max(len(e.ids) for e in batch_encodings) > DEFAULT_TOKEN_BUDGET:
+                release_accelerator_cache(cross_encoder.device)
+        return scores
+
+    def _score_batch(self, cross_encoder: _CrossEncoder, encodings: list[Encoding]) -> list[float]:
+        import torch  # noqa: PLC0415 — lazy: keeps ``import archon_search.reranker`` free of PyTorch
+
+        with accelerator_lock(cross_encoder.device):
+            inputs = pad_encodings(
+                torch,
+                encodings,
+                pad_token_id=cross_encoder.pad_token_id,
+                device=cross_encoder.device,
+                with_token_types=self._spec.uses_token_type_ids,
+            )
+            with torch.inference_mode():
+                logits = cross_encoder.model(**inputs).logits
+            return logits[:, 0].float().cpu().tolist()  # type: ignore[no-any-return]
 
 
 class Reranker:
@@ -118,7 +174,7 @@ class Reranker:
     async def warmup(self) -> None:
         """Build the backend's model now, off the request path.
 
-        ``ModelReranker`` constructs its ONNX cross-encoder on the *first*
+        ``ModelReranker`` constructs its cross-encoder on the *first*
         ``predict`` call, so callers must run this outside any request timeout
         budget (S184). Contract:
 
@@ -127,7 +183,7 @@ class Reranker:
           ``await asyncio.shield`` it, so a caller that bounds its own wait and
           gives up cancels nothing but that wait. The build keeps running, warms
           the backend for later requests, and later callers join it instead of
-          starting a second ONNX build (S288 fan-out thundering herd).
+          starting a second model build (S288 fan-out thundering herd).
         - Not latched on failure (S283): ``_warmup_failed`` records only the most
           recent attempt and is diagnostic; the next caller retries with a fresh
           task, since a settled task is never re-awaited.
@@ -238,6 +294,6 @@ class Reranker:
         return await self.rerank_candidates(query, candidates, top_k)
 
 
-def make_reranker(model_name: str, providers: list[str] | None = None) -> Reranker:
-    """Factory: create a ModelReranker-backed Reranker."""
-    return Reranker(ModelReranker(model_name, providers=providers))
+def make_reranker(model_name: str, device: str = AUTO_DEVICE) -> Reranker:
+    """Factory: create a ModelReranker-backed Reranker (no weights are loaded yet)."""
+    return Reranker(ModelReranker(model_name, device=device))

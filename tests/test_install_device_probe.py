@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from archon_search import torch_runtime
 from archon_search.install.device_probe import (
     DeviceProbeResult,
     probe_device_availability,
@@ -27,7 +28,6 @@ from archon_search.install.provisioning import (
     TORCH_DEVICE_MPS,
     ProvisionFailureKind,
 )
-from archon_search.torch_device import resolve_torch_device
 
 
 def _fake_torch(cuda_available: bool = False, mps_available: bool = False) -> types.ModuleType:
@@ -42,6 +42,12 @@ def _fake_torch(cuda_available: bool = False, mps_available: bool = False) -> ty
     return torch_mod
 
 
+@pytest.fixture(autouse=True)
+def _fresh_step_down_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """resolve_device warns once per process per setting; each test starts un-warned."""
+    monkeypatch.setattr(torch_runtime, "_warned_settings", set())
+
+
 # ---------------------------------------------------------------------------
 # #unit_test — a configured device torch cannot actually use is never silently
 # downgraded: stage 2 reports its own failure category, not a CPU pretending
@@ -49,50 +55,81 @@ def _fake_torch(cuda_available: bool = False, mps_available: bool = False) -> ty
 # ---------------------------------------------------------------------------
 
 
+def test_device_unavailable_failure_kind_value() -> None:
+    assert ProvisionFailureKind.device_unavailable.value == "device_unavailable"
+
+
 @pytest.mark.unit
-def test_unavailable_torch_device_reports_its_own_category() -> None:
-    # The REAL unavailable path: CUDA is configured and pre-warm produced
-    # nothing (None). The probe keys off configured INTENT (requests_accelerator),
-    # not host availability, so it must NOT read a missing device as "nothing
-    # configured" and return a benign not_validated — it must report a failure.
-    unavailable = probe_device_validation(["CUDAExecutionProvider"], None)
-    assert unavailable.failure is ProvisionFailureKind.conflicting_onnx_runtimes
-    assert unavailable.device is None  # never a silent "cpu"
-    assert unavailable.not_yet_validated is False
-
-    # Pre-warm ran but stepped the CUDA request down to CPU — a real
-    # unavailable-device outcome, reported as its own category.
-    stepped_down = probe_device_validation(["CUDAExecutionProvider"], TORCH_DEVICE_CPU)
-    assert stepped_down.failure is ProvisionFailureKind.conflicting_onnx_runtimes
-    assert stepped_down.device is None  # never a silent "cpu"
-    assert stepped_down.not_yet_validated is False
-
-    # A configured accelerator with nothing to show from pre-warm (None)
-    # is a failure, not a benign "not yet validated".
-    nothing = probe_device_validation(["CoreMLExecutionProvider"], None)
-    assert nothing.failure is ProvisionFailureKind.conflicting_onnx_runtimes
-    assert nothing.device is None
+@pytest.mark.parametrize(
+    ("device", "prewarm_device"),
+    [
+        # The REAL unavailable path: an accelerator is configured and pre-warm produced
+        # nothing (None). The probe keys off configured INTENT, not host availability,
+        # so it must NOT read a missing device as "nothing configured".
+        ("cuda", None),
+        ("mps", None),
+        ("auto", None),
+        # Pre-warm ran but stepped the accelerator request down to CPU.
+        ("cuda", TORCH_DEVICE_CPU),
+        ("mps", TORCH_DEVICE_CPU),
+    ],
+)
+def test_unavailable_torch_device_reports_its_own_category(
+    device: str, prewarm_device: str | None
+) -> None:
+    result = probe_device_validation(device, prewarm_device)
+    assert result.failure is ProvisionFailureKind.device_unavailable
+    assert result.device is None  # never a silent "cpu"
+    assert result.not_yet_validated is False
 
 
 # ---------------------------------------------------------------------------
 # #unit_test — the resolved device carries the real answer: a step-down to CPU
-# is what `resolve_torch_device` returns, not the configured intent inferred
-# back.
+# is what `resolve_device` returns, not the configured intent inferred back.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-def test_step_down_to_cpu_is_reported_not_inferred(caplog) -> None:
+def test_step_down_to_cpu_is_reported_not_inferred(caplog: pytest.LogCaptureFixture) -> None:
     with patch.dict(sys.modules, {"torch": _fake_torch(cuda_available=False)}):
         with caplog.at_level("WARNING"):
-            resolved = resolve_torch_device(["CUDAExecutionProvider"])
+            resolved = probe_device_availability("cuda")
     assert resolved == TORCH_DEVICE_CPU  # the real runtime answer, not "cuda"
-    assert any("CUDA" in r.message for r in caplog.records)
+    assert any("'cuda' is not available" in r.getMessage() for r in caplog.records)
 
     with patch.dict(sys.modules, {"torch": _fake_torch(cuda_available=True)}):
-        assert resolve_torch_device(["CUDAExecutionProvider"]) == TORCH_DEVICE_CUDA
+        assert probe_device_availability("cuda") == TORCH_DEVICE_CUDA
     with patch.dict(sys.modules, {"torch": _fake_torch(mps_available=True)}):
-        assert resolve_torch_device(["CoreMLExecutionProvider"]) == TORCH_DEVICE_MPS
+        assert probe_device_availability("mps") == TORCH_DEVICE_MPS
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("torch_kwargs", "expected"),
+    [
+        ({"cuda_available": True, "mps_available": True}, TORCH_DEVICE_CUDA),
+        ({"mps_available": True}, TORCH_DEVICE_MPS),
+        ({}, TORCH_DEVICE_CPU),
+    ],
+    ids=["cuda-wins", "mps", "cpu-only"],
+)
+def test_auto_resolves_to_the_best_available_device(
+    torch_kwargs: dict[str, bool], expected: str
+) -> None:
+    with patch.dict(sys.modules, {"torch": _fake_torch(**torch_kwargs)}):
+        assert probe_device_availability("auto") == expected
+
+
+@pytest.mark.unit
+def test_cpu_never_touches_torch() -> None:
+    with patch.dict(sys.modules, {"torch": None}):
+        assert probe_device_availability("cpu") == TORCH_DEVICE_CPU
+
+
+@pytest.mark.unit
+def test_unknown_device_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown device 'tpu'"):
+        probe_device_availability("tpu")
 
 
 # ---------------------------------------------------------------------------
@@ -103,14 +140,14 @@ def test_step_down_to_cpu_is_reported_not_inferred(caplog) -> None:
 
 @pytest.mark.unit
 def test_prewarm_not_run_reports_not_yet_validated_not_a_failure() -> None:
-    # No non-CPU device configured (providers=None) and pre-warm never ran:
-    # nothing to validate, nothing to protect — neutral, not a failure.
-    result = probe_device_validation(None, None)
+    # Plain CPU configured and pre-warm never ran: nothing to validate, nothing to
+    # protect — neutral, not a failure.
+    result = probe_device_validation("cpu", None)
     assert result.not_yet_validated is True
     assert result.failure is None
     assert result.device == DEVICE_PROBE_NOT_YET_VALIDATED
     # Stage 1 agrees the request was plain CPU.
-    assert probe_device_availability(None) == TORCH_DEVICE_CPU
+    assert probe_device_availability("cpu") == TORCH_DEVICE_CPU
 
 
 # ---------------------------------------------------------------------------
@@ -121,28 +158,14 @@ def test_prewarm_not_run_reports_not_yet_validated_not_a_failure() -> None:
 
 @pytest.mark.unit
 def test_configured_and_validated_accelerator_reports_resolved() -> None:
-    cuda = probe_device_validation(["CUDAExecutionProvider"], TORCH_DEVICE_CUDA)
+    cuda = probe_device_validation("cuda", TORCH_DEVICE_CUDA)
     assert cuda == DeviceProbeResult.resolved(TORCH_DEVICE_CUDA)
 
-    mps = probe_device_validation(["CoreMLExecutionProvider"], TORCH_DEVICE_MPS)
+    mps = probe_device_validation("mps", TORCH_DEVICE_MPS)
     assert mps == DeviceProbeResult.resolved(TORCH_DEVICE_MPS)
 
-
-# ---------------------------------------------------------------------------
-# #unit_test — resolve_torch_device honors its "never fails" contract: a CUDA
-# provider configured while torch is unimportable steps down to CPU, not raise.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-def test_resolve_torch_device_returns_cpu_when_torch_absent(caplog) -> None:
-    # sys.modules["torch"] = None makes `import torch` raise ImportError — the
-    # real graph-extra-absent condition reachable from the stage-1 probe.
-    with patch.dict(sys.modules, {"torch": None}):
-        with caplog.at_level("WARNING"):
-            resolved = resolve_torch_device(["CUDAExecutionProvider"])
-    assert resolved == TORCH_DEVICE_CPU
-    assert any("torch is not installed" in r.getMessage() for r in caplog.records)
+    auto = probe_device_validation("auto", TORCH_DEVICE_MPS)
+    assert auto == DeviceProbeResult.resolved(TORCH_DEVICE_MPS)
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +178,7 @@ def test_contradictory_device_probe_result_raises() -> None:
     with pytest.raises(ValueError):
         DeviceProbeResult(
             device=TORCH_DEVICE_CUDA,
-            failure=ProvisionFailureKind.conflicting_onnx_runtimes,
+            failure=ProvisionFailureKind.device_unavailable,
             not_yet_validated=True,
         )
 
@@ -183,7 +206,7 @@ def test_stage_two_validates_against_a_real_pre_warmed_load() -> None:
     with patch.dict(sys.modules, {"gliner": gliner_mod}):
         prewarmed_device = _prewarm_graph_model()
 
-    assert placements == [TORCH_DEVICE_CPU], "no providers must place the model on CPU"
+    assert placements == [TORCH_DEVICE_CPU], "the default device must place the model on CPU"
     assert prewarmed_device == TORCH_DEVICE_CUDA
-    result = probe_device_validation(None, prewarmed_device)
+    result = probe_device_validation("cpu", prewarmed_device)
     assert result == DeviceProbeResult.resolved(TORCH_DEVICE_CUDA)

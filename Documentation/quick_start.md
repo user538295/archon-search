@@ -135,7 +135,7 @@ The default test command:
 uv run pytest
 ```
 
-This run excludes only the `live_benchmark` and `smoke` markers; `live`, `eval`, `benchmark`, and `integration` markers run in the default suite and skip gracefully when their infrastructure is absent. It enforces `--cov-fail-under=85` and runs tests in parallel via `pytest-xdist` (`-n 8 --dist=loadgroup`; raised from 4 on 2026-07-20 — the default suite stubs fastembed so each worker is only ~0.3 GB; never `-n auto`, see the testing policy in `CLAUDE.md`). For an even faster local run on macOS, `bash scripts/test-fast.sh` runs the suite on a RAM disk. To skip coverage while iterating locally:
+This run excludes the `live_benchmark`, `smoke`, `live_eval`, `docling`, `graph_real_artifact`, and `runtime_parity` markers (the `addopts` `-m` filter in `pyproject.toml`); `live`, `eval`, `benchmark`, and `integration` markers run in the default suite and skip gracefully when their infrastructure is absent. It enforces `--cov-fail-under=85` and runs tests in parallel via `pytest-xdist` (`-n 8 --dist=loadgroup`; raised from 4 on 2026-07-20 — the default suite stubs the model backends so each worker is only ~0.3 GB; never `-n auto`, see the testing policy in `CLAUDE.md`). For an even faster local run on macOS, `bash scripts/test-fast.sh` runs the suite on a RAM disk. To skip coverage while iterating locally:
 
 ```bash
 uv run pytest --no-cov
@@ -158,12 +158,14 @@ uv run pytest -m live
 uv run pytest -m benchmark   # needs a running server; auto-skips if unreachable
 ```
 
-`live_benchmark` and `smoke` are excluded from the default run and must be run separately:
+`live_benchmark` and `smoke` are excluded from the default run and must be run separately (`live_benchmark` needs the two benchmark models in `~/.archon-search/models`; `python -m tests._live_model_cache` downloads them):
 
 ```bash
 uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
 uv run pytest tests/smoke/ --no-cov
 ```
+
+The other excluded markers, including `runtime_parity` (real PyTorch weights against frozen reference outputs), are described in `Architecture/200_testing_strategy.md`.
 
 ## Common Pitfalls
 

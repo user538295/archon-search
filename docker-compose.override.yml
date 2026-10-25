@@ -17,13 +17,11 @@ services:
       ARCHON_SEARCH_CONFIG: /config/archon-search.toml
       CLAUDE_PROXY_URL: "http://host.docker.internal:18766"
       ARCHON_EXTRAS: "graph,code,multilingual"
-      FASTEMBED_CACHE_PATH: "/data/fastembed-cache"
     volumes:
       - archon-dev-data:/data
       - archon-dev-packages:/pip-packages
       - ./archon-search.docker-dev.toml:/config/archon-search.toml:ro
       - ./scripts/claude-container-wrapper:/usr/local/bin/claude:ro
-      - ~/.cache/fastembed:/data/fastembed-cache
       - ~/.archon-search/models:/data/models
 
   # Test runner — mounts source from host, runs full suite + smoke tests.
@@ -38,9 +36,7 @@ services:
       - .:/workspace
       - archon-uv-cache:/cache/uv
       - archon-docker-venv:/venv
-      - ~/.cache/fastembed:/cache/fastembed
-    environment:
-      FASTEMBED_CACHE_PATH: /cache/fastembed
+      - ~/.archon-search/models:/tmp/archon-test/models
     # ponytail: sh -c to run two suites in sequence without a wrapper script
     command:
       - sh
@@ -64,12 +60,11 @@ services:
       - .:/workspace
       - archon-uv-cache:/cache/uv
       - archon-docker-venv:/venv
-      - ~/.cache/fastembed:/cache/fastembed
+      - ~/.archon-search/models:/tmp/archon-test/models
     environment:
       ARCHON_SEARCH_CONTAINER: "1"
       UV_PROJECT_ENVIRONMENT: /venv
       UV_CACHE_DIR: /cache/uv
-      FASTEMBED_CACHE_PATH: /cache/fastembed
     command:
       - sh
       - -c

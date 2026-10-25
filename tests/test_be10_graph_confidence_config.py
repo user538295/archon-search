@@ -1,4 +1,4 @@
-"""Tests for BE-10: ner_confidence, relation_confidence, providers in GraphConfig (C5, S43, S47)."""
+"""Tests for BE-10: ner_confidence, relation_confidence, device in GraphConfig (C5, S43, S47)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,8 +21,8 @@ def test_graphConfig_relationConfidence_default() -> None:
     assert GraphConfig().relation_confidence == 0.75
 
 
-def test_graphConfig_providers_default_is_none() -> None:
-    assert GraphConfig().providers is None
+def test_graphConfig_device_default_is_cpu() -> None:
+    assert GraphConfig().device == "cpu"
 
 
 # ---------------------------------------------------------------------------
@@ -96,28 +96,16 @@ def test_adjacency_threshold_is_not_a_recognised_key(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# providers — no inheritance from [database].providers
+# device — no inheritance from [database].device
 # ---------------------------------------------------------------------------
 
 
-def test_unset_graph_providers_reads_as_cpu(tmp_path: Path) -> None:
-    """Unlike resolve_reranker_providers, [graph].providers is never inherited from
-    [database].providers — an unset [graph].providers reads as CPU (None) even when
-    [database].providers is set."""
+def test_unset_graph_device_reads_as_cpu_even_when_database_device_is_set(tmp_path: Path) -> None:
     toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text(
-        '[database]\nproviders = ["CoreMLExecutionProvider"]\n', encoding="utf-8"
-    )
+    toml_file.write_text('[database]\ndevice = "mps"\n', encoding="utf-8")
     cfg = load_config(path=toml_file, serve=False)
-    assert cfg.graph.providers is None
-    assert cfg.providers == ["CoreMLExecutionProvider"]
-
-
-def test_graph_providers_parsed_from_toml(tmp_path: Path) -> None:
-    toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text('[graph]\nproviders = ["CPUExecutionProvider"]\n', encoding="utf-8")
-    cfg = load_config(path=toml_file, serve=False)
-    assert cfg.graph.providers == ["CPUExecutionProvider"]
+    assert cfg.graph.device == "cpu"
+    assert cfg.device == "mps"
 
 
 def test_confidence_fields_loaded_from_toml(tmp_path: Path) -> None:
@@ -131,43 +119,32 @@ def test_confidence_fields_loaded_from_toml(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Malformed [graph].providers — must raise ConfigError, not TypeError (C1-I-1/23/41)
+# [graph].device — replaces [graph].providers
 # ---------------------------------------------------------------------------
 
 
-def test_graph_providers_bare_string_raises_config_error(tmp_path: Path) -> None:
-    """A bare string must not be silently iterated into one-character elements."""
+@pytest.mark.parametrize("value", ["auto", "cpu", "mps", "cuda"])
+def test_graph_device_parsed_from_toml(tmp_path: Path, value: str) -> None:
     toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text('[graph]\nproviders = "CPUExecutionProvider"\n', encoding="utf-8")
-    with pytest.raises(ConfigError, match="providers"):
-        load_config(path=toml_file, serve=False)
-
-
-def test_graph_providers_non_list_raises_config_error(tmp_path: Path) -> None:
-    toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text("[graph]\nproviders = 1\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="providers"):
-        load_config(path=toml_file, serve=False)
-
-
-def test_graph_providers_non_string_element_raises_config_error(tmp_path: Path) -> None:
-    toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text("[graph]\nproviders = [1]\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="providers"):
-        load_config(path=toml_file, serve=False)
-
-
-def test_graph_providers_empty_string_element_raises_config_error(tmp_path: Path) -> None:
-    """An empty-string element is falsy and must be rejected like any other malformed entry."""
-    toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text('[graph]\nproviders = [""]\n', encoding="utf-8")
-    with pytest.raises(ConfigError, match="providers"):
-        load_config(path=toml_file, serve=False)
-
-
-def test_graph_providers_empty_list_normalizes_to_none(tmp_path: Path) -> None:
-    """Mirrors resolve_reranker_providers's [] -> None normalization."""
-    toml_file = tmp_path / "archon-search.toml"
-    toml_file.write_text("[graph]\nproviders = []\n", encoding="utf-8")
+    toml_file.write_text(f'[graph]\ndevice = "{value}"\n', encoding="utf-8")
     cfg = load_config(path=toml_file, serve=False)
-    assert cfg.graph.providers is None
+    assert cfg.graph.device == value
+
+
+@pytest.mark.parametrize("bad_value", ['"gpu"', '"CPU"', '""', "1", "true"])
+def test_graph_device_invalid_value_raises_config_error(tmp_path: Path, bad_value: str) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(f"[graph]\ndevice = {bad_value}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=r"\[graph\]\.device must be one of"):
+        load_config(path=toml_file, serve=False)
+
+
+@pytest.mark.parametrize("value", ['["CPUExecutionProvider"]', '"CPUExecutionProvider"', "[]"])
+def test_removed_graph_providers_key_names_its_replacement(tmp_path: Path, value: str) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(f"[graph]\nproviders = {value}\n", encoding="utf-8")
+    with pytest.raises(
+        ConfigError,
+        match=r"\[graph\]\.providers was replaced by \[graph\]\.device \(auto\|cpu\|mps\|cuda\); see BREAKING\.md",
+    ):
+        load_config(path=toml_file, serve=False)

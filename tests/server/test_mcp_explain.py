@@ -37,7 +37,7 @@ def _make_mcp_app(pipeline: Any, *, config: SearchConfig | None = None, writer: 
 
 
 class MockEmbedderBackend:
-    model_name: str = "mock-embedder"
+    model_name: str = "BAAI/bge-small-en-v1.5"
     is_warm: bool = False
 
     def encode(self, texts: list[str]) -> list[list[float]]:
@@ -201,7 +201,7 @@ async def test_mcp_explain_rest_parity(tmp_path: Path) -> None:
     """REST /explain and MCP explain return deep-equal payloads for the same inputs."""
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.observability.stage_timings_enabled = False  # timings are non-deterministic; exclude from parity check
     pipeline = await _build_real_pipeline(tmp_path, config)
 
@@ -233,7 +233,7 @@ async def test_mcp_explain_collectionless_rest_parity(tmp_path: Path) -> None:
     """Collectionless: routing block is populated AND REST<->MCP stay deep-equal."""
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.routing_confidence_threshold = 0.0
     config.observability.stage_timings_enabled = False  # timings are non-deterministic; exclude from parity check
     pipeline = await _build_real_pipeline(tmp_path, config)
@@ -283,7 +283,7 @@ async def test_mcp_explain_telemetry_no_query(tmp_path: Path) -> None:
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     pipeline = await _build_real_pipeline(tmp_path, config)
 
     logs_dir = tmp_path / "telemetry-logs"
@@ -321,7 +321,7 @@ async def test_mcp_explain_partial_unknown_collection_is_excluded_not_fatal(tmp_
     """Partial-unknown collections list → 200 with excluded_collections, not an error (S340)."""
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
-    config.embedding_model = "mock-embedder"
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
     config.observability.stage_timings_enabled = False
     pipeline = await _build_real_pipeline(tmp_path, config)
 

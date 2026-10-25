@@ -5,9 +5,10 @@ Marked ``live_benchmark`` — excluded from default ``uv run pytest`` run via
 
     uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
 
-Requires the fastembed model cache to be populated (see conftest._require_model_cache).
-The conftest removes fastembed stubs and resets ML thread-count env vars before any
-test imports, ensuring the real ONNX code path is exercised.
+Requires the model cache to be populated (see conftest._require_model_cache).
+The conftest resets ML thread-count env vars before any test imports, and the
+``live_benchmark`` marker opts out of the root conftest's stubs of the model
+backends, so the real PyTorch code path is exercised.
 """
 from __future__ import annotations
 
@@ -16,13 +17,14 @@ import math
 import time
 from pathlib import Path
 
-import fastembed
 import pytest
 
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder import make_embedder
 from archon_search.eval.runner import BenchmarkThresholds, load_benchmark_thresholds
 from archon_search.reranker import make_reranker
+from tests._live_model_cache import LIVE_EMBEDDER as _EMBEDDER_MODEL
+from tests._live_model_cache import LIVE_RERANKER as _RERANKER_MODEL
 
 # ---------------------------------------------------------------------------
 # Module-level constants
@@ -41,28 +43,32 @@ _LIVE_THRESHOLDS_PATH = Path("tests/eval/live_thresholds.toml")
 
 
 # ---------------------------------------------------------------------------
-# Unit: verify fastembed stub is NOT active in live_benchmark context
+# Unit: verify the real backends (not the root conftest's stubs) are active
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.live_benchmark
 @pytest.mark.xdist_group("live_benchmark")
-def test_stub_not_active_in_live_benchmark() -> None:
-    """The conftest should have removed fastembed stubs from sys.modules."""
-    assert "_search_stubs" not in fastembed.TextEmbedding.__module__, (
-        f"fastembed.TextEmbedding resolved to stub class: "
-        f"{fastembed.TextEmbedding!r} from module {fastembed.TextEmbedding.__module__!r}"
-    )
+def test_real_backends_are_active_in_live_benchmark() -> None:
+    """The stubs return zero vectors and a constant 0.5 score; the real backends do not."""
+    embedder = make_embedder(_EMBEDDER_MODEL)
+    reranker = make_reranker(_RERANKER_MODEL)
+
+    vector = asyncio.run(embedder.embed(["real backend probe"]))[0]
+    scores = reranker._backend.predict([("kind of pet", "a dog is a pet"), ("kind of pet", "tax law in 1987")])
+
+    assert math.isclose(math.sqrt(sum(x * x for x in vector)), 1.0, rel_tol=1e-3)
+    assert scores[0] > scores[1]
 
 
 @pytest.mark.live_benchmark
 @pytest.mark.xdist_group("live_benchmark")
-def test_fastembed_cache_dir_is_pinned_to_the_guarded_cache(live_fastembed_cache_dir: Path) -> None:
-    """S493: the backends resolve the cache ``_require_model_cache`` checked, not the
+def test_models_dir_is_pinned_to_the_guarded_cache(live_models_dir: Path) -> None:
+    """The backends resolve the cache ``_require_model_cache`` checked, not the
     root conftest's empty per-worker ``<data>/models`` (which would re-download)."""
-    from archon_search.paths import get_fastembed_cache_dir
+    from archon_search.paths import get_models_dir
 
-    assert get_fastembed_cache_dir() == live_fastembed_cache_dir
+    assert get_models_dir().resolve() == live_models_dir.resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +136,8 @@ async def _run_steady_state_benchmark(
     from archon_search.pipeline import SearchPipeline
     from archon_search.store import SearchStore
 
-    embedder = make_embedder("BAAI/bge-small-en-v1.5")
-    reranker = make_reranker("Xenova/ms-marco-MiniLM-L-6-v2")
+    embedder = make_embedder(_EMBEDDER_MODEL)
+    reranker = make_reranker(_RERANKER_MODEL)
     store = SearchStore(tmp_path)
     await store.connect()
     try:
@@ -175,7 +181,7 @@ async def _run_steady_state_benchmark(
                 )
             except Exception as exc:
                 raise RuntimeError(
-                    f"Warm-up iteration {i} failed: {exc}; check ONNX session initialization"
+                    f"Warm-up iteration {i} failed: {exc}; check the model load (weights, device)"
                 ) from exc
 
         # Measured iterations
@@ -213,11 +219,6 @@ def test_real_model_search_steady_state_p95(
     """Steady-state search latency: p95 of 100 iterations must be within threshold."""
     thresholds: BenchmarkThresholds = load_benchmark_thresholds(_LIVE_THRESHOLDS_PATH)
 
-    # Verify stubs are not active
-    assert "_search_stubs" not in fastembed.TextEmbedding.__module__, (
-        "fastembed stub still active in live_benchmark test"
-    )
-
     tmp_path = tmp_path_factory.mktemp("live_bench_steady")
     # Single asyncio.run() call: all LanceDB operations share one event loop.
     p95 = asyncio.run(_run_steady_state_benchmark(tmp_path))
@@ -242,11 +243,11 @@ def test_real_model_search_cold_load_p90() -> None:
     times: list[float] = []
     for _ in range(_COLD_LOAD_ITERS):
         start = time.perf_counter()
-        embedder = make_embedder("BAAI/bge-small-en-v1.5")
-        reranker = make_reranker("Xenova/ms-marco-MiniLM-L-6-v2")
-        # Trigger ONNX session creation for embedder
+        embedder = make_embedder(_EMBEDDER_MODEL)
+        reranker = make_reranker(_RERANKER_MODEL)
+        # Trigger the model load for the embedder
         asyncio.run(embedder.embed(["warm"]))
-        # Trigger ONNX session creation for reranker (synchronous predict)
+        # Trigger the model load for the reranker (synchronous predict)
         reranker._backend.predict([("warm", "warm")])
         elapsed_ms = (time.perf_counter() - start) * 1000
         times.append(elapsed_ms)

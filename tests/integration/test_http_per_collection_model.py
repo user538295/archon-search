@@ -24,10 +24,11 @@ from tests.integration.conftest import ingest_file_via_path, make_real_app, sear
 
 pytestmark = pytest.mark.integration
 
-# Model names are arbitrary strings — the stubs always produce 384-dim vectors.
-# validate_embedding_model is patched so it does not attempt a real model probe.
+# Both models are registered 384-dim models, matching the 384-dim vectors the stubbed
+# ``ModelEmbedder.encode`` (tests/conftest.py) returns for them.
+# validate_embedding_model is patched so the tests control the dimension it reports.
 _MODEL_A = "BAAI/bge-small-en-v1.5"  # matches SearchConfig.embedding_model default
-_MODEL_B = "BAAI/bge-base-en-v1.5"
+_MODEL_B = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 _STUB_DIM = 384
 
 

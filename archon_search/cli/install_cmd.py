@@ -10,8 +10,8 @@ import click
 
 from archon_search.cli._helpers import _CONTAINER_MSG, _exit_on_config_error, _get_service
 from archon_search.install import create_installer
-from archon_search.install.provisioning import CPU_EXECUTION_PROVIDER, GPU_EXECUTION_PROVIDER
 from archon_search.key_manager import _HEX_RE
+from archon_search.torch_runtime import DEVICE_SETTINGS
 
 _TOP_K_MAX = 100
 _TOP_K_MIN = 1
@@ -75,35 +75,6 @@ def _validate_top_k(ctx: click.Context, param: click.Parameter, value: int | Non
     return value
 
 
-#: ONNX-style execution providers `[graph].providers` accepts (config.py GraphConfig.providers) —
-#: derived from the one accelerator map so the CLI cannot drift from what the wizard writes.
-_GRAPH_PROVIDER_CHOICES = (CPU_EXECUTION_PROVIDER, *GPU_EXECUTION_PROVIDER.values())
-
-
-def _validate_graph_providers(
-    ctx: click.Context | None, param: click.Parameter | None, value: str | None
-) -> list[str] | None:
-    """Parse --graph-providers into a validated ONNX provider list.
-
-    Trust boundary: the value lands verbatim in archon-search.toml, so unknown
-    names are rejected here rather than written and failed at engine load. An
-    empty value is the explicit CPU answer (``[]``); omitting the flag is None,
-    which leaves the choice to the wizard's device probe.
-    """
-    if value is None:
-        return None
-    items = [p.strip() for p in value.split(",") if p.strip()]
-    unknown = [p for p in items if p not in _GRAPH_PROVIDER_CHOICES]
-    if unknown:
-        raise click.BadParameter(
-            f"unknown execution provider(s): {', '.join(unknown)}. "
-            f"Valid values: {', '.join(_GRAPH_PROVIDER_CHOICES)}.",
-            param=param,
-            ctx=ctx,
-        )
-    return items
-
-
 def _install_options(f: click.decorators.FC) -> click.decorators.FC:
     for decorator in reversed([
         click.option("--profile", type=click.Choice(["minimal", "balanced", "max"]), default=None, help="Install profile"),
@@ -152,12 +123,10 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
               help="Enable RAG Fusion query expansion")
 @click.option("--server-key", type=_HexKeyParamType(), default=None,
               help="Custom server API key (lowercase hex, min 32 chars). Sets the archon-search Bearer token.")
-@click.option("--graph-providers", "graph_providers", default=None,
-              callback=_validate_graph_providers, is_eager=False,
-              help="Comma-separated ONNX execution providers for graph extraction "
-                   "([graph].providers); empty string forces CPU. Supplies the candidates for "
-                   "non-interactive installs; written only if the install-time device probe "
-                   "validates them, otherwise CPU.")
+@click.option("--graph-device", "graph_device", type=click.Choice(DEVICE_SETTINGS), default=None,
+              help="Torch device for graph extraction ([graph].device): cpu, auto, mps or cuda. "
+                   "Supplies the candidate for non-interactive installs; written only if the "
+                   "install-time device probe validates it, otherwise cpu.")
 def wizard(
     profile: str | None,
     multilingual: bool | None,
@@ -186,7 +155,7 @@ def wizard(
     enable_hyde: bool,
     enable_rag_fusion: bool,
     server_key: str | None,
-    graph_providers: list[str] | None,
+    graph_device: str | None,
 ) -> None:
     """Interactive setup wizard: choose a profile, download models, start service."""
     with _exit_on_config_error():
@@ -221,7 +190,7 @@ def wizard(
             enable_hyde=enable_hyde,
             enable_rag_fusion=enable_rag_fusion,
             server_key=server_key,
-            graph_providers=graph_providers,
+            graph_device=graph_device,
         )
     )
 

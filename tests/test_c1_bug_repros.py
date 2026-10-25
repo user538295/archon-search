@@ -470,7 +470,7 @@ async def test_waiter_timeout_does_not_spawn_duplicate_loader(
     call_count = 0
     call_lock = threading.Lock()
 
-    def counting_make_embedder(model_name: str, providers=None):
+    def counting_make_embedder(model_name: str, device: str = "auto"):
         nonlocal call_count
         with call_lock:
             call_count += 1
@@ -558,7 +558,7 @@ async def test_cancelled_loader_leaves_cache_loadable_for_next_caller(
     release = threading.Event()
     loader_entered = threading.Event()
 
-    def stalled_make_embedder(model_name: str, providers=None):
+    def stalled_make_embedder(model_name: str, device: str = "auto"):
         loader_entered.set()
         release.wait()
         return MagicMock()
@@ -634,7 +634,7 @@ async def test_loader_cancelled_while_acquiring_lock_on_success_path_leaves_cach
 
     release_make_embedder = threading.Event()
 
-    def controlled_make_embedder(model_name: str, providers=None):
+    def controlled_make_embedder(model_name: str, device: str = "auto"):
         release_make_embedder.wait()
         return MagicMock()
 
@@ -731,7 +731,7 @@ async def test_waiter_timeout_does_not_wake_concurrent_waiter_into_duplicate_loa
     call_count = 0
     call_lock = threading.Lock()
 
-    def counting_make_embedder(model_name: str, providers=None):
+    def counting_make_embedder(model_name: str, device: str = "auto"):
         nonlocal call_count
         with call_lock:
             call_count += 1

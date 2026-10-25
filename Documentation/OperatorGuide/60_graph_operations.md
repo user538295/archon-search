@@ -76,7 +76,7 @@ archon-search wizard
 
 Enabling code indexing installs `[code]` and `[graph]` as one bundle and pre-warms the checkpoint (`_prewarm_graph_model`, `install/prewarm.py`) into the same `get_graph_models_dir()` cache the runtime uses, so the pre-warm and the first ingest share one copy rather than two. The wizard discloses the two download costs separately before fetching anything — about 18 MB for the tree-sitter parsers and an estimated 1218 MB for the prose model, licensed Apache-2.0 — and that same estimate feeds the install-time disk guard. The figure is a declared estimate, not a verified byte count: the checkpoint is fetched by `GLiNER.from_pretrained`, never through the digest-pinned provisioning seam, so it is neither digest- nor size-verified on arrival.
 
-A failed pre-warm is **non-fatal**: it logs a WARNING and the wizard continues, leaving the model to download on first use instead. After the pre-warm the wizard runs its two-stage device probe and settles `[graph].providers` — it offers an accelerator only when one was requested *and* the pre-warmed model actually landed on it, and otherwise settles without prompting. A failed graph pre-warm writes `[]` (CPU) when an accelerator was requested, and writes nothing when none was — leaving any existing `[graph].providers` value in place (see [Step 8 of the wizard guide](../UserManual/20_wizard.md#step-8--model-download)).
+A failed pre-warm is **non-fatal**: it logs a WARNING and the wizard continues, leaving the model to download on first use instead. After the pre-warm the wizard runs its two-stage device probe and settles `[graph].device` — it offers an accelerator only when one was requested *and* the pre-warmed model actually landed on it, and otherwise settles without prompting. A failed graph pre-warm writes `device = "cpu"` when an accelerator was requested, and writes nothing when none was — leaving any existing `[graph].device` value in place (see [Step 8 of the wizard guide](../UserManual/20_wizard.md#step-8--model-download)).
 
 ### Remedy: seed the cache by hand
 
@@ -99,7 +99,7 @@ rsync -a ~/.archon-search/models/graph/ target-host:~/.archon-search/models/grap
 
 Run that with the same interpreter the server uses (the one that has the `[graph]` extra installed) — for a `uv tool install`, that is the tool's managed venv, not your system `python`. Copy the **whole** `models/graph/` tree, not a hand-picked subset: the layout inside it is `huggingface_hub`'s own cache layout, and the loader reads it through `huggingface_hub`, not by globbing. Re-running the same snippet on the air-gapped host is the verification — a clean exit means the server will load it too.
 
-Do **not** set `HF_HUB_OFFLINE=1` process-wide on the server to force this: it is global to the process and blocks fastembed's embedder and reranker downloads as well, which turns a cold cache into a *failed* ingest instead of a degraded one. Scope it to the verification command if you want it at all.
+Do **not** set `HF_HUB_OFFLINE=1` process-wide on the server to force this: it is global to the process and blocks the embedder and reranker weight downloads as well, which turns a cold cache into a *failed* ingest instead of a degraded one. Scope it to the verification command if you want it at all.
 
 ### Checking from the outside
 

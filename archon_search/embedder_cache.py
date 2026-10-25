@@ -6,17 +6,16 @@ import logging
 from collections import OrderedDict
 
 from archon_search.embedder import Embedder, make_embedder
+from archon_search.torch_runtime import AUTO_DEVICE
 
 logger = logging.getLogger(__name__)
 
-# Unknown model validation: make_embedder() builds a LAZY backend, so it returns
-# an Embedder for ANY name — the name is only checked when fastembed is reached by
-# the first encode(), i.e. by preload()'s warm-up embed() or the first real query.
-# validate_embedding_model() (Task 4.2) is the up-front check at PATCH time, and
-# resolves known names from fastembed's registry without loading the model at all.
+# Unknown model validation: make_embedder() resolves the model spec eagerly, so it
+# raises UnsupportedModelError for a name outside the registry — before any weights
+# are touched. validate_embedding_model() is the up-front check at PATCH time.
 
 # Upper bound on how long a deduplicated waiter blocks on the active loader. A
-# stalled loader (slow disk, wedged ONNX init) must not hang every concurrent
+# stalled loader (slow disk, wedged weight load) must not hang every concurrent
 # search for that model forever with no diagnostic.
 _LOAD_WAIT_TIMEOUT_SECONDS: float = 120.0
 
@@ -47,14 +46,20 @@ class EmbedderCache:
     a new loader and two threads briefly run make_embedder for the same model —
     see the ``finally`` block in ``get_or_load``.
 
-    ``providers`` is the ONNX Runtime execution-provider list (``[database]
-    providers``) forwarded to every ``make_embedder`` call, so cached embedders
-    — which serve every search — use the same accelerator as the global one.
+    ``device`` is the torch device setting (``[database].device``) forwarded to every
+    ``make_embedder`` call, so cached embedders — which serve every search — run on
+    the same device as the global one.
+
+    A model name outside the registry fails fast: ``make_embedder`` raises
+    ``UnsupportedModelError`` in the loader thread, ``get_or_load`` propagates it, and
+    nothing is cached — the registration is cleared like for any failed load, so a
+    waiter or a later call re-attempts (and fails) immediately rather than hanging or
+    reading a poisoned entry. ``preload`` logs and skips such a model.
     """
 
-    def __init__(self, max_size: int, providers: list[str] | None = None) -> None:
+    def __init__(self, max_size: int, device: str = AUTO_DEVICE) -> None:
         self._max_size = max_size
-        self._providers = providers
+        self._device = device
         self._cache: OrderedDict[str, Embedder] = OrderedDict()
         self._lock = asyncio.Lock()
         self._loading: dict[str, asyncio.Event] = {}
@@ -103,7 +108,7 @@ class EmbedderCache:
                 # (even with an identity guard) only empties _loading while the
                 # original loader is still running, turning the very next caller
                 # into a second concurrent loader — a duplicate multi-hundred-MB
-                # ONNX load for the same model.
+                # weight load for the same model.
                 raise EmbedderNotReadyError(
                     f"EmbedderCache: timed out after {_LOAD_WAIT_TIMEOUT_SECONDS}s waiting for "
                     f"model {model_name!r} to load"
@@ -124,7 +129,7 @@ class EmbedderCache:
         # deliberately never touches _loading) — permanently poisoning the
         # model for the process lifetime.
         try:
-            embedder = await asyncio.to_thread(make_embedder, model_name, providers=self._providers)
+            embedder = await asyncio.to_thread(make_embedder, model_name, device=self._device)
             # Load succeeded — store in cache under lock. Only the cache
             # mutation and LRU eviction need the lock; _loading is cleared
             # below, outside it.
@@ -161,13 +166,13 @@ class EmbedderCache:
         raised can still be cached warm. Never raises for a failing model.
 
         Caching an Embedder is not enough: make_embedder builds a lazy backend
-        whose ONNX weights are only constructed on the first encode(). The
+        whose weights are only loaded on the first encode(). The
         warm-up embed() call pays that cost at startup so the first real query
         does not.
 
         A model whose warm-up fails is evicted only when its backend never loaded:
         leaving a cold embedder cached would make cached_models() report it as
-        preloaded when no ONNX weights were ever built. A warm embedder whose
+        preloaded when no weights were ever loaded. A warm embedder whose
         warm-up embed() nevertheless raised is kept — the load cost is already paid
         and evicting it would only throw that work away.
         """

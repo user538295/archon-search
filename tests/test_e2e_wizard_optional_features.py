@@ -119,8 +119,6 @@ def _patched_wizard(**extra_module_patches: Any) -> Generator[None, None, None]:
     # Build fresh mocks for installer methods to avoid state leak between tests
     installer_patches: dict[str, Any] = {
         "detect_gpu": MagicMock(return_value=GpuType.NONE),
-        "validate_providers": MagicMock(return_value=False),
-        "configure_providers": MagicMock(),
         "write_service_file": MagicMock(),
         "load_service": MagicMock(return_value=0),
         "_wait_for_service": MagicMock(return_value=True),
@@ -185,7 +183,7 @@ def test_e2e_all_feature_flags(runner: CliRunner, tmp_path: Path) -> None:
 
 @pytest.mark.integration
 def test_e2e_disable_gpu(runner: CliRunner, tmp_path: Path) -> None:
-    """wizard --non-interactive --disable-gpu writes database.providers = []."""
+    """wizard --non-interactive --disable-gpu writes database.device = 'cpu'."""
     config_path = tmp_path / "archon-search.toml"
 
     with _patched_wizard():
@@ -201,8 +199,7 @@ def test_e2e_disable_gpu(runner: CliRunner, tmp_path: Path) -> None:
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     assert config_path.exists()
     doc = tomlkit.parse(config_path.read_text())
-    providers = list(doc["database"]["providers"])
-    assert providers == [], f"Expected empty providers list, got {providers}"
+    assert doc["database"]["device"] == "cpu"
 
 
 # ---------------------------------------------------------------------------
@@ -286,15 +283,18 @@ def test_e2e_interactive_watch_and_telemetry(runner: CliRunner, tmp_path: Path) 
 
 
 @pytest.mark.integration
-def test_e2e_interactive_enter_at_bool_prompts_writes_false(runner: CliRunner, tmp_path: Path) -> None:
-    """Interactive mode: pressing Enter (default N) at watch / telemetry / eager-load is an
-    answer, so each key is written as false (S553/S556/S557, 20_wizard.md §"Only the choices
-    you actually made are written")."""
+def test_e2e_interactive_enter_at_bool_prompts_is_refused_and_reasked(runner: CliRunner, tmp_path: Path) -> None:
+    """Interactive mode: pressing Enter at watch / telemetry / eager-load is NOT an answer —
+    each y/n question is refused with `Please answer y or n.` and asked again, and the `n`
+    that follows is what gets written as false (S553/S556/S557, 20_wizard.md §"Only the
+    choices you actually made are written")."""
     config_path = tmp_path / "archon-search.toml"
 
-    # Same prompt order as test_e2e_interactive_watch_and_telemetry, with Enter at
-    # prompts 4 (watch), 5 (telemetry) and 6 (eager load).
-    stdin_responses = "\n".join(["n", "n", "n", "", "", "", "", "", "n", "n", "y"]) + "\n"
+    # Same prompt order as test_e2e_interactive_watch_and_telemetry, with Enter (refused) then
+    # `n` at prompts 4 (watch), 5 (telemetry) and 6 (eager load).
+    stdin_responses = "\n".join(
+        ["n", "n", "n", "", "n", "", "n", "", "n", "", "", "n", "n", "y"]
+    ) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard():
@@ -311,11 +311,12 @@ def test_e2e_interactive_enter_at_bool_prompts_writes_false(runner: CliRunner, t
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     for prompt in (
-        "Auto-watch directories and re-index on file changes? [y/N]: ",
-        "Enable local query telemetry? [y/N]: ",
-        "Also pre-load every per-collection embedding model at startup? [y/N]: ",
+        "Auto-watch directories and re-index on file changes? [y/n]: ",
+        "Enable local query telemetry? [y/n]: ",
+        "Also pre-load every per-collection embedding model at startup? [y/n]: ",
     ):
-        assert prompt in result.output, f"prompt not asked: {prompt!r}"
+        assert result.output.count(prompt) == 2, f"prompt not re-asked once after Enter: {prompt!r}"
+    assert result.output.count("Please answer y or n.") == 3
     doc = tomlkit.parse(config_path.read_text())
     # Queue-alignment anchor: answer 3 ("n" to "Keep reranker enabled?") disabled the reranker.
     assert doc["database"]["reranker_model"] == ""
@@ -362,13 +363,13 @@ def test_e2e_interactive_force_delete_db_exits_zero(runner: CliRunner, tmp_path:
 # --profile is omitted so the Step 2 profile prompt fires; GPU is NONE so
 # Step 3 shows no prompt.
 _DOCUMENTED_PROMPT_ORDER = [
-    "Will your corpus include non-English documents? [y/N]: ",
+    "Will your corpus include non-English documents? [y/n]: ",
     "Choice [1-3, default 1]: ",
-    "Index code files (installs tree-sitter + graph enrichment, enables graph)? [y/N]: ",
-    "Keep reranker enabled? [Y/n]: ",
-    "Auto-watch directories and re-index on file changes? [y/N]: ",
-    "Enable local query telemetry? [y/N]: ",
-    "Also pre-load every per-collection embedding model at startup? [y/N]: ",
+    "Index code files (installs tree-sitter + graph enrichment, enables graph)? [y/n]: ",
+    "Keep reranker enabled? [y/n]: ",
+    "Auto-watch directories and re-index on file changes? [y/n]: ",
+    "Enable local query telemetry? [y/n]: ",
+    "Also pre-load every per-collection embedding model at startup? [y/n]: ",
     "Routing strategy (centroid/hybrid) [centroid]: ",
     "Log format (text/json) [text]: ",
     "    anthropic  - Anthropic API (needs ANTHROPIC_API_KEY)",
@@ -376,9 +377,9 @@ _DOCUMENTED_PROMPT_ORDER = [
     "    ollama     - runs locally, no API key",
     "    claude_cli - uses Claude Code's login, no API key",
     "    llama_cpp  - runs against a local llama-server, no API key",
-    "Enable AI query expansion (HyDE + RAG Fusion)? [y/N]: ",
-    "Enable LLM-backed graph enrichment? [y/N]: ",
-    "Proceed? [Y/n]: ",
+    "Enable AI query expansion (HyDE + RAG Fusion)? [y/n]: ",
+    "Enable LLM-backed graph enrichment? [y/n]: ",
+    "Proceed? [y/n]: ",
 ]
 
 
@@ -470,19 +471,19 @@ def test_step5e_eager_load_prompt_wording(runner: CliRunner, tmp_path: Path) -> 
 
 
 @pytest.mark.integration
-def test_proceed_prompt_accepts_yes_exits_zero(runner: CliRunner, tmp_path: Path) -> None:
-    """Proceed? prompt accepts 'yes' (full word) as confirmation — exits 0.
+def test_proceed_prompt_rejects_yes_and_reasks_exits_zero(runner: CliRunner, tmp_path: Path) -> None:
+    """Proceed? prompt refuses the full word 'yes' (only y/n are answers), asks again, and a
+    following 'y' confirms — exits 0.
 
-    Guards the EOFError + 'yes' acceptance fix in installer.py:769-773.
-    Same input sequence as test_e2e_interactive_force_delete_db_exits_zero
-    but 'yes' replaces 'y' at the final Proceed? prompt.
+    Same input sequence as test_e2e_interactive_force_delete_db_exits_zero but 'yes' is
+    typed first at the final Proceed? prompt. The delete-db confirm still takes 'yes'.
     """
     config_path = tmp_path / "archon-search.toml"
 
     # 1 multilingual n / 2 code n / 3 reranker n / 4 watch n / 5 telemetry n /
     # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n /
-    # 11 delete-db confirm "yes" / 12 "Proceed?" yes
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "", "n", "n", "yes", "yes"]) + "\n"
+    # 11 delete-db confirm "yes" / 12 "Proceed?" yes (refused) then y
+    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "", "n", "n", "yes", "yes", "y"]) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard():
@@ -500,6 +501,8 @@ def test_proceed_prompt_accepts_yes_exits_zero(runner: CliRunner, tmp_path: Path
             )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    assert result.output.count("Proceed? [y/n]: ") == 2
+    assert "Please answer y or n." in result.output
 
 
 @pytest.mark.integration
@@ -552,12 +555,12 @@ def test_e2e_interactive_no_profile_flag_metal_gpu_force_delete_exits_zero(
     """
     config_path = tmp_path / "archon-search.toml"
 
-    # 1 multilingual n / 2 profile "" (→ minimal) / 3 GPU "" (accept Metal) /
+    # 1 multilingual n / 2 profile "" (→ minimal) / 3 GPU y (accept Metal) /
     # 4 code n / 5 reranker n / 6 watch n / 7 telemetry n / 8 eager n /
     # 9 routing "" / 10 log "" / 11 HyDE n / 12 graph enrichment n /
     # 13 delete-db confirm "yes" / 14 "Proceed?" y
     stdin_responses = "\n".join(
-        ["n", "", "", "n", "n", "n", "n", "n", "", "", "n", "n", "yes", "y"]
+        ["n", "", "y", "n", "n", "n", "n", "n", "", "", "n", "n", "yes", "y"]
     ) + "\n"
 
     with _no_anthropic_key():
@@ -565,7 +568,7 @@ def test_e2e_interactive_no_profile_flag_metal_gpu_force_delete_exits_zero(
             with patch.multiple(
                 RealInstaller,
                 detect_gpu=MagicMock(return_value=GpuType.METAL),
-                validate_embedder_only=MagicMock(return_value=False),
+                _accelerator_validated=MagicMock(return_value=False),
             ):
                 result = runner.invoke(
                     main,
@@ -1724,6 +1727,7 @@ _PROFILE_DATABASE_KEYS = {
     "chunk_size": 512,
     "profile": "minimal",
     "multilingual": False,
+    "device": "cpu",
 }
 # Fresh installs keep the loopback bind: without it `serve` (load_config(serve=True),
 # config.py ``load_config``) would default to 0.0.0.0 — the one documented non-answer that is written.
@@ -1750,7 +1754,7 @@ def _wizard_args(config_path: Path, *extra: str) -> list[str]:
 def test_wizard_host_writes_toml(runner: CliRunner, tmp_path: Path) -> None:
     """--host 0.0.0.0 writes [server].host = '0.0.0.0' to TOML — and, as a fresh install,
     nothing else beyond the profile's [database] keys (no leaked defaults; the GPU stub
-    detects no GPU, so no providers are written)."""
+    detects no GPU, so the device is written as cpu)."""
     config_path = tmp_path / "archon-search.toml"
     with _patched_wizard():
         result = runner.invoke(main, _wizard_args(config_path, "--host", "0.0.0.0"))
@@ -1909,7 +1913,7 @@ def test_wizard_top_k_101_rejects(runner: CliRunner, tmp_path: Path) -> None:
 _RETENTION_DAYS = 30
 _PRIOR_RETENTION_DAYS = 7
 _RETENTION_INERT_WARNING = "telemetry is not enabled"
-_TELEMETRY_PROMPT = "Enable local query telemetry? [y/N]: "
+_TELEMETRY_PROMPT = "Enable local query telemetry? [y/n]: "
 
 
 def _assert_retention_inert_warning(result: Result) -> None:
@@ -2535,9 +2539,12 @@ def test_explicit_no_flag_then_rerun_without_flag_removes_key(
 # ---------------------------------------------------------------------------
 
 # installer.py's interactive overwrite confirm, asked when a re-run detects hand edits.
-_OVERWRITE_PROMPT = "Existing config has custom values. Overwrite with profile defaults? [y/N]: "
-# More newlines than the interactive flow has prompts: Enter answers each with its default.
+_OVERWRITE_PROMPT = "Existing config has custom values. Overwrite with profile defaults? [y/n]: "
+# More newlines than the interactive flow has prompts: Enter answers each non-y/n prompt with its default.
 _ENTER_AT_EVERY_PROMPT = "\n" * 30
+_YES_NO_SUFFIX = "[y/n]: "
+# y/n questions whose old default was yes; every other y/n question defaulted to no.
+_YES_BY_DEFAULT_PROMPTS = ("Proceed?", "Keep reranker enabled?")
 
 # Every wizard flag that writes a re-run-managed key with a non-default value.
 _WIZARD_WRITTEN_VALUE_FLAGS = [
@@ -2562,19 +2569,28 @@ _HAND_ADDED_MANAGED_KEYS = [
 
 
 def _run_minimal_wizard_interactive(
-    runner: CliRunner, config_path: Path, *extra: str, answers: dict[str, str] | None = None
+    runner: CliRunner, config_path: Path, *extra: str, answers: dict[str, str | tuple[str, ...]] | None = None
 ) -> Result:
-    """Interactive minimal-profile re-run: Enter at every prompt, except that a prompt
-    listed in *answers* (exact prompt text → typed answer) gets that answer. Fails the
+    """Interactive minimal-profile re-run: Enter at every non-y/n prompt, `y` at the
+    questions that default to yes (Proceed, Keep reranker) and `n` at every other y/n
+    question, except that a prompt listed in *answers* (exact prompt text → typed answer, or
+    a tuple of answers typed at successive asks of that prompt) gets that answer. Fails the
     test if a scripted prompt was never asked."""
-    scripted = answers or {}
+    scripted = {
+        prompt: iter((typed,) if isinstance(typed, str) else typed)
+        for prompt, typed in (answers or {}).items()
+    }
     asked: set[str] = set()
     real_input = builtins.input
 
     def _answer(prompt: str = "") -> str:
         typed = real_input(prompt)  # echoes the prompt and consumes one Enter
         asked.add(prompt)
-        return scripted.get(prompt, typed)
+        if prompt in scripted:
+            return next(scripted[prompt])
+        if prompt.endswith(_YES_NO_SUFFIX):
+            return "y" if prompt.startswith(_YES_BY_DEFAULT_PROMPTS) else "n"
+        return typed
 
     with _no_anthropic_key(), _patched_wizard(), patch("builtins.input", _answer):
         result = runner.invoke(
@@ -2652,21 +2668,27 @@ def test_interactive_telemetry_yes_with_retention_writes_retention_days(
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("answer", [pytest.param("", id="enter"), pytest.param("n", id="n")])
+@pytest.mark.parametrize(
+    "answers",
+    [pytest.param(("n",), id="n"), pytest.param(("", "n"), id="enter-refused-then-n")],
+)
 def test_interactive_telemetry_declined_with_retention_writes_retention_days_and_warns(
-    runner: CliRunner, tmp_path: Path, answer: str
+    runner: CliRunner, tmp_path: Path, answers: tuple[str, ...]
 ) -> None:
-    """Interactive Enter/`n` at the telemetry prompt + --telemetry-retention-days N writes
-    enabled = false and retention_days = N (20_wizard.md "Only the choices you actually
-    made are written"), and warns on stderr that the retention has no effect yet."""
+    """Interactive `n` (after a refused Enter, in one leg) at the telemetry prompt +
+    --telemetry-retention-days N writes enabled = false and retention_days = N (20_wizard.md
+    "Only the choices you actually made are written"), and warns on stderr that the
+    retention has no effect yet."""
     config_path = tmp_path / "archon-search.toml"
 
     result = _run_minimal_wizard_interactive(
         runner, config_path, "--telemetry-retention-days", str(_RETENTION_DAYS),
-        answers={_TELEMETRY_PROMPT: answer},
+        answers={_TELEMETRY_PROMPT: answers},
     )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    assert result.output.count(_TELEMETRY_PROMPT) == len(answers), result.output
+    assert ("Please answer y or n." in result.output) == (len(answers) > 1), result.output
     telemetry = _written(config_path).get("telemetry", {})
     assert telemetry.get("enabled") is False, f"[telemetry] written: {telemetry!r}"
     assert telemetry.get("retention_days") == _RETENTION_DAYS, f"[telemetry] written: {telemetry!r}"
@@ -2790,7 +2812,7 @@ def test_rerun_interactive_yes_at_overwrite_confirm_overwrites_and_refreshes_rec
     _set_key(config_path, "collections", "watch", True)
 
     overwrite = _run_minimal_wizard_interactive(
-        runner, config_path, answers={_OVERWRITE_PROMPT: "y", "Enable local query telemetry? [y/N]: ": "y"}
+        runner, config_path, answers={_OVERWRITE_PROMPT: "y", "Enable local query telemetry? [y/n]: ": "y"}
     )
 
     assert _OVERWRITE_PROMPT in overwrite.output, overwrite.output
@@ -2806,20 +2828,22 @@ def test_rerun_interactive_yes_at_overwrite_confirm_overwrites_and_refreshes_rec
 
 @pytest.mark.integration
 @pytest.mark.parametrize(("section", "key", "value"), _HAND_ADDED_MANAGED_KEYS)
-def test_rerun_interactive_enter_at_overwrite_confirm_keeps_hand_added_managed_key(
+def test_rerun_interactive_enter_at_overwrite_confirm_is_refused_then_n_keeps_hand_added_managed_key(
     runner: CliRunner, tmp_path: Path, section: str, key: str, value: Any
 ) -> None:
-    """Interactive re-run over a hand-added managed key asks the overwrite confirm;
-    Enter (default N) aborts with exit 1 and leaves the hand edit on disk."""
+    """Interactive re-run over a hand-added managed key asks the overwrite confirm; Enter is
+    refused (`Please answer y or n.`) and the question is asked again, and the `n` that
+    follows aborts with exit 1 and leaves the hand edit on disk."""
     config_path = tmp_path / "archon-search.toml"
     _run_minimal_wizard(runner, config_path, "--no-multilingual")
     _set_key(config_path, section, key, value)
 
-    rerun = _run_minimal_wizard_interactive(runner, config_path)
+    rerun = _run_minimal_wizard_interactive(runner, config_path, answers={_OVERWRITE_PROMPT: ("", "n")})
 
-    assert _OVERWRITE_PROMPT in rerun.output, (
-        f"hand-added [{section}].{key} = {value!r} did not trigger the overwrite confirm:\n{rerun.output}"
+    assert rerun.output.count(_OVERWRITE_PROMPT) == 2, (
+        f"hand-added [{section}].{key} = {value!r} did not trigger the overwrite confirm twice:\n{rerun.output}"
     )
+    assert "Please answer y or n." in rerun.output, rerun.output
     assert "Installation aborted." in rerun.output, rerun.output
     assert rerun.exit_code == 1, f"Exit {rerun.exit_code}:\nOUT: {rerun.output}"
     assert tomlkit.parse(config_path.read_text()).get(section, {}).get(key) == value, (
@@ -2925,7 +2949,7 @@ def test_rerun_after_declined_proceed_does_not_flag_values_it_wrote(
     config_path = tmp_path / "archon-search.toml"
     _run_minimal_wizard(runner, config_path, "--no-multilingual")
 
-    declined = _run_minimal_wizard_interactive(runner, config_path, "--watch", answers={"Proceed? [Y/n]: ": "n"})
+    declined = _run_minimal_wizard_interactive(runner, config_path, "--watch", answers={"Proceed? [y/n]: ": "n"})
 
     assert "Installation aborted." in declined.output, declined.output
     assert declined.exit_code == 1, f"Exit {declined.exit_code}:\nOUT: {declined.output}"
@@ -3280,7 +3304,6 @@ _BUNDLED_QUESTION_PREFIX = "Index code files"
 # spelling those out here — not the current engine's name — is what would trip it, and
 # would make this very file an offender.
 _ENGINE_NAME = GRAPH_MODEL_SIZE_ESTIMATE.name.lower()
-_RUNTIME_NAME = "onnx"
 
 
 @contextmanager
@@ -3323,7 +3346,7 @@ def _answers(*, multilingual: str, graph: str) -> str:
     return "\n".join([
         multilingual,  # Will your corpus include non-English documents?
         graph,         # the one bundled code-indexing + graph-extraction question
-        "",            # Keep reranker enabled? (minimal ships one)
+        "y",           # Keep reranker enabled? (minimal ships one)
         "n",           # Auto-watch directories?
         "n",           # Enable local query telemetry?
         "n",           # Eager-load models at startup?
@@ -3403,7 +3426,6 @@ def test_e2e_size_and_license_shown_before_any_bytes_move(
     assert "not a verified" in step, f"estimate disclosed as a fact: {step}"
     lowered = step.lower()
     assert _ENGINE_NAME not in lowered, f"disclosure names the engine: {step}"
-    assert _RUNTIME_NAME not in lowered, f"disclosure names the runtime: {step}"
 
     # From the recorded event log. S9's proof is the second assertion below: the
     # disclosure is on stdout before the operator is asked. The `bundled < first_bytes`
@@ -3614,12 +3636,7 @@ def test_e2e_two_fasttext_failure_categories_render_differently(
 
 # wizard.py:962 — the accelerator offer's one wording, so it can be pinned.
 _ACCELERATOR_OFFER = "Graph extraction validated on"
-_CUDA_PROVIDER = "CUDAExecutionProvider"
-_COREML_PROVIDER = "CoreMLExecutionProvider"
-
-# Captured before any test replaces it: `_patched_wizard` mocks `configure_providers`
-# out, and every leg below asserts on the [graph].providers it really writes.
-_REAL_CONFIGURE_PROVIDERS = RealInstaller.configure_providers
+_CUDA_DEVICE = "cuda"
 
 
 @contextmanager
@@ -3659,14 +3676,14 @@ def _run_graph_provider_wizard(
     *,
     availability: str,
     prewarm_device: str | None,
-    offer_answer: str = "",
+    offer_answer: str = "y",
 ) -> tuple[Result, Path]:
     """Drive one interactive graph-enabled run with both probe stages pinned.
 
-    `--graph-providers` supplies the candidate list (so no real GPU is needed), stage 1
+    `--graph-device cuda` supplies the candidate (so no real GPU is needed), stage 1
     is pinned through `probe_device_availability` and stage 2 through what the pre-warm
-    returns — the two inputs `_configure_graph_providers` gates the offer on. Pre-load is
-    NOT skipped: stage 2 rides it. The real `configure_providers` is restored so the
+    returns — the two inputs `_configure_graph_device` gates the offer on. Pre-load is
+    NOT skipped: stage 2 rides it. The real `configure_device` runs, so the
     written TOML, not a mock call, is what the assertions read.
     """
     config_path = tmp_path / "archon-search.toml"
@@ -3675,22 +3692,21 @@ def _run_graph_provider_wizard(
             _prewarm_models=MagicMock(return_value=prewarm_device),
             probe_device_availability=MagicMock(return_value=availability),
         ):
-            with patch.object(RealInstaller, "configure_providers", _REAL_CONFIGURE_PROVIDERS):
-                with _unconfigured_cli_logging():
-                    result = runner.invoke(
-                        main,
-                        [
-                            "wizard",
-                            "--profile", "minimal",
-                            "--config", str(config_path),
-                            "--enable-hyde",
-                            "--graph-providers", _CUDA_PROVIDER,
-                        ],
-                        # One extra line answers the accelerator offer when it is shown
-                        # (empty = a bare Enter, which accepts the accelerator default);
-                        # it is left unread on every leg where no offer appears.
-                        input=_answers(multilingual="n", graph="y") + offer_answer + "\n",
-                    )
+            with _unconfigured_cli_logging():
+                result = runner.invoke(
+                    main,
+                    [
+                        "wizard",
+                        "--profile", "minimal",
+                        "--config", str(config_path),
+                        "--enable-hyde",
+                        "--graph-device", _CUDA_DEVICE,
+                    ],
+                    # One extra line answers the accelerator offer when it is shown
+                    # (`y` accepts, `n` declines; any other input is re-asked);
+                    # it is left unread on every leg where no offer appears.
+                    input=_answers(multilingual="n", graph="y") + offer_answer + "\n",
+                )
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     return result, config_path
 
@@ -3709,7 +3725,7 @@ def test_e2e_conflicting_runtimes_reaches_the_operator(
         runner, tmp_path, availability=TORCH_DEVICE_CUDA, prewarm_device=TORCH_DEVICE_CPU
     )
 
-    assert ProvisionFailureKind.conflicting_onnx_runtimes.value in result.output, (
+    assert ProvisionFailureKind.device_unavailable.value in result.output, (
         f"the probe's category never reached the operator:\n{result.output}"
     )
     # Sanitized: a category name, not an exception message. `"Traceback" not in output`
@@ -3719,7 +3735,7 @@ def test_e2e_conflicting_runtimes_reaches_the_operator(
     # Never "picks a runtime": CPU is settled, and the operator is not asked to choose.
     assert _ACCELERATOR_OFFER not in result.output, f"prompted despite the failure: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
-    assert list(doc["graph"]["providers"]) == []
+    assert doc["graph"]["device"] == "cpu"
 
 
 @pytest.mark.integration
@@ -3734,7 +3750,7 @@ def test_e2e_conflicting_runtimes_reaches_the_operator(
         # `probe_device_validation` routes this leg to the same proven-failure branch —
         # an accelerator was requested and the pre-warm landed nothing — NOT to
         # `not_yet_validated`, which needs no candidates at all and is unreachable
-        # behind `--graph-providers` (covered at unit level, test_install_graph_
+        # behind `--graph-device` (covered at unit level, test_install_graph_
         # accelerator.py::test_nothing_requested_and_no_answer_never_overwrites_a_hand_set_list).
         (TORCH_DEVICE_CUDA, None, False, "an accelerator was requested, pre-warm landed nothing"),
     ],
@@ -3749,15 +3765,15 @@ def test_e2e_accelerator_offered_only_after_both_stages(
 ) -> None:
     """S31/S32 at the CLI: the offer appears on the operator's transcript only after
     BOTH probe stages passed, and either stage failing shows no prompt at all and
-    writes CPU silently — with the accelerator itself as the default when it is offered
-    (a bare Enter accepts, and that is what lands in `[graph].providers`)."""
+    writes CPU silently — when it is offered, an explicit `y` accepts and that is what
+    lands in `[graph].device`."""
     result, config_path = _run_graph_provider_wizard(
         runner, tmp_path, availability=availability, prewarm_device=prewarm_device
     )
 
     assert (_ACCELERATOR_OFFER in result.output) is offered, f"{why}\nOUT: {result.output}"
-    written = list(tomlkit.parse(config_path.read_text())["graph"]["providers"])
-    assert written == ([_CUDA_PROVIDER] if offered else []), why
+    written = tomlkit.parse(config_path.read_text())["graph"]["device"]
+    assert written == (_CUDA_DEVICE if offered else "cpu"), why
     # A failure is never rendered as an exception message (S32).
     _assert_sanitized(result.output)
 
@@ -3767,12 +3783,12 @@ def test_e2e_declining_the_offer_is_what_the_operator_typed(
     runner: CliRunner, tmp_path: Path
 ) -> None:
     """Negative control for the accept leg above, which on its own proves nothing about
-    the default: `_prompt_graph_accelerator` returns True on EOFError too, so a bare
-    Enter that never reached the prompt would land CUDA just the same.
+    the answer: `_prompt_graph_accelerator` returns True on EOFError too, so an answer
+    that never reached the prompt would land CUDA just the same.
 
     "n" is the one answer EOF cannot produce. It landing CPU proves the prompt really
-    reads the operator's stream — and therefore that the accept leg's Enter was read as
-    the accelerator default rather than defaulted past.
+    reads the operator's stream — and therefore that the accept leg's `y` was read as
+    the operator's answer rather than defaulted past.
     """
     result, config_path = _run_graph_provider_wizard(
         runner,
@@ -3783,8 +3799,8 @@ def test_e2e_declining_the_offer_is_what_the_operator_typed(
     )
 
     assert _ACCELERATOR_OFFER in result.output, f"the offer never appeared: {result.output}"
-    written = list(tomlkit.parse(config_path.read_text())["graph"]["providers"])
-    assert written == [], f"declining still wrote the accelerator: {written!r}"
+    written = tomlkit.parse(config_path.read_text())["graph"]["device"]
+    assert written == "cpu", f"declining still wrote the accelerator: {written!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -3794,22 +3810,14 @@ def test_e2e_declining_the_offer_is_what_the_operator_typed(
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    ("extra", "detected_gpu", "provider_probe", "gpu_keys"),
+    ("extra", "detected_gpu", "accelerator_ok", "device"),
     [
-        pytest.param((), GpuType.NONE, (False, False), {}, id="gpu-detected-none"),
-        pytest.param(("--disable-gpu",), GpuType.NONE, (False, False), {"providers": []}, id="disable-gpu"),
-        pytest.param((), GpuType.CUDA, (True, False), {"providers": [_CUDA_PROVIDER]}, id="gpu-detected-cuda"),
-        pytest.param((), GpuType.CUDA, (False, False), {"providers": []}, id="gpu-detected-cuda-probe-fails"),
-        pytest.param(
-            (), GpuType.METAL, (True, False), {"providers": [_COREML_PROVIDER]}, id="gpu-detected-metal"
-        ),
-        pytest.param(
-            (),
-            GpuType.METAL,
-            (False, True),
-            {"providers": [_COREML_PROVIDER], "reranker_providers": []},
-            id="gpu-detected-metal-reranker-on-cpu",
-        ),
+        pytest.param((), GpuType.NONE, False, "cpu", id="gpu-detected-none"),
+        pytest.param(("--disable-gpu",), GpuType.NONE, False, "cpu", id="disable-gpu"),
+        pytest.param((), GpuType.CUDA, True, "auto", id="gpu-detected-cuda"),
+        pytest.param((), GpuType.CUDA, False, "cpu", id="gpu-detected-cuda-validation-fails"),
+        pytest.param((), GpuType.METAL, True, "auto", id="gpu-detected-metal"),
+        pytest.param((), GpuType.METAL, False, "cpu", id="gpu-detected-metal-validation-fails"),
     ],
 )
 def test_fresh_install_writes_only_answered_keys(
@@ -3817,36 +3825,32 @@ def test_fresh_install_writes_only_answered_keys(
     tmp_path: Path,
     extra: tuple[str, ...],
     detected_gpu: GpuType,
-    provider_probe: tuple[bool, bool],
-    gpu_keys: dict[str, Any],
+    accelerator_ok: bool,
+    device: str,
 ) -> None:
     """A fresh `--non-interactive --profile minimal` run with no optional flags writes the
-    profile's [database] answers, the GPU step's providers and the loopback host — and
+    profile's [database] answers, the GPU step's `device` and the loopback host — and
     nothing else: no never-answered [server].port, [database].db_path, [routing], [collections],
     [logging], [telemetry], [hyde] or [rag_fusion] (20_wizard.md §"Only the choices you actually
     made are written").
-    The real `configure_providers`/`configure_reranker_providers`/`clear_reranker_providers`
-    run, so a detected GPU's providers are what the GPU step actually writes. Only the
-    model-loading provider probes (`provider_probe` = validate_providers, validate_embedder_only
-    results; CoreML uses both, CUDA only the first) and the CUDA torch swap are stubbed, so
-    nothing loads a model or pip-installs."""
+    The real `configure_device` runs, so the device the GPU step settled on is what is written
+    (`auto` only when the accelerator validated, `cpu` otherwise). Only the model-loading
+    accelerator validation and the CUDA torch swap are stubbed, so nothing loads a model or
+    pip-installs."""
     config_path = tmp_path / "archon-search.toml"
-    full_probe_ok, embedder_only_probe_ok = provider_probe
 
     with _patched_wizard(_install_cuda_torch=MagicMock()):
         with patch.multiple(
             RealInstaller,
             detect_gpu=MagicMock(return_value=detected_gpu),
-            configure_providers=_REAL_CONFIGURE_PROVIDERS,
-            validate_providers=MagicMock(return_value=full_probe_ok),
-            validate_embedder_only=MagicMock(return_value=embedder_only_probe_ok),
+            _accelerator_validated=MagicMock(return_value=accelerator_ok),
         ):
             result = runner.invoke(main, _wizard_args(config_path, *extra))
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
 
     assert _written(config_path) == {
         "server": _FRESH_SERVER,
-        "database": {**_PROFILE_DATABASE_KEYS, **gpu_keys},
+        "database": {**_PROFILE_DATABASE_KEYS, "device": device},
     }
 
 

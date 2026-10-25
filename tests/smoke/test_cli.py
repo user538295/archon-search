@@ -137,7 +137,7 @@ def test_serve_exits_nonzero_on_malformed_config(tmp_path) -> None:
 )
 def test_help_completes_within_2s() -> None:
     """``archon-search --help`` is a pure CLI invocation (no server, no
-    LanceDB, no fastembed model load) and must complete within 2 seconds.
+    LanceDB, no model load) and must complete within 2 seconds.
 
     Also asserts the output is human-readable: no ``CollectionMeta(`` repr
     and no raw embedding-vector reprs (heuristic ``"[0."`` guard, S16 partial).

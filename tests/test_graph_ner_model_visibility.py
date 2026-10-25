@@ -117,7 +117,7 @@ async def test_status_missing_gliner_warning_never_carries_install_receipt(
     config = _config_with_graph(tmp_path, enabled=True, multilingual=False)
 
     with _gliner_absent(), patch(
-        "archon_search.model_validation.validate_providers_shared",
+        "archon_search.model_validation.validate_device",
         return_value=(True, True, []),
     ):
         result = await validate_models_async(config)
@@ -234,15 +234,15 @@ def test_graph_ner_status_never_raises_on_unexpected_failure(
 
 
 # ---------------------------------------------------------------------------
-# T4: `graph_warnings` are PREPENDED on ALL FOUR `validate_models_async`
-# return paths — success, timeout, unexpected failure, split-provider
-# failure — not just the success path that was the only one tested before.
+# T4: `graph_warnings` are PREPENDED on ALL THREE `validate_models_async`
+# return paths — success, timeout, unexpected failure — not just the success
+# path that was the only one tested before.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "scenario", ["success", "timeout", "unexpected_failure", "split_provider_failure"]
+    "scenario", ["success", "timeout", "unexpected_failure"]
 )
 async def test_graph_warnings_prepended_on_every_return_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str
@@ -262,7 +262,7 @@ async def test_graph_warnings_prepended_on_every_return_path(
         # with an empty list, prepend and append produce the same
         # single-element result and the assertion proves nothing (C2-T-2).
         with patch(
-            "archon_search.model_validation.validate_providers_shared",
+            "archon_search.model_validation.validate_device",
             return_value=(True, True, ["provider test warning"]),
         ):
             result = await validate_models_async(config)
@@ -274,28 +274,13 @@ async def test_graph_warnings_prepended_on_every_return_path(
             return True, True, []
 
         with patch(
-            "archon_search.model_validation.validate_providers_shared", side_effect=_slow
+            "archon_search.model_validation.validate_device", side_effect=_slow
         ):
             result = await validate_models_async(config, timeout_seconds=0.01)
     elif scenario == "unexpected_failure":
         with patch(
-            "archon_search.model_validation.validate_providers_shared",
+            "archon_search.model_validation.validate_device",
             side_effect=RuntimeError("boom"),
-        ):
-            result = await validate_models_async(config)
-    else:  # split_provider_failure
-        config.reranker_providers = ["CPUExecutionProvider"]
-        config.reranker_model = "some-reranker"
-        call_count = {"n": 0}
-
-        def _split(*args, **kwargs):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                return True, True, []
-            raise RuntimeError("split boom")
-
-        with patch(
-            "archon_search.model_validation.validate_providers_shared", side_effect=_split
         ):
             result = await validate_models_async(config)
 
@@ -313,7 +298,7 @@ def test_wizard_summary_no_english_only_note_when_graph_disabled() -> None:
 
     profile = get_profile("balanced", multilingual=True)
     features = WizardFeatures(install_graph_extra=False)
-    output = _render_summary("balanced", profile, multilingual=True, providers=[], features=features, config_path="archon-search.toml")
+    output = _render_summary("balanced", profile, multilingual=True, device_labels=["CPU"], features=features, config_path="archon-search.toml")
 
     assert "English-only" not in output, (
         "multilingual=True with graph disabled must not carry the graph-specific "

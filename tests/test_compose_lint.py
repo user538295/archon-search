@@ -276,43 +276,27 @@ def test_compose_documents_key_regeneration_caveat(compose_text: str) -> None:
     )
 
 
-def test_compose_mentions_fastembed_cache_volume(compose_text: str) -> None:
+def test_compose_documents_model_cache_volume(compose_text: str) -> None:
     # The plan asks for a commented-out `archon-model-cache` volume with
     # an explanation. We only verify the marker word; the comment body is
     # operator-facing prose.
-    assert "fastembed" in compose_text.lower(), (
-        "docker-compose.yml must document the optional fastembed model "
-        "cache volume (commented-out template)"
+    assert "model cache" in compose_text.lower(), (
+        "docker-compose.yml must document the optional model cache volume (commented-out template)"
     )
 
 
-def test_compose_fastembed_cache_path_is_commented_out(compose_doc: dict) -> None:
-    # The plan specifies `FASTEMBED_CACHE_PATH` as an *optional* opt-in,
-    # not an always-on env var. If a future edit silently activates it
-    # without also wiring up the `archon-model-cache` volume, every
-    # service would fail at startup ("undefined volume" or a writable
-    # path inside an ephemeral layer). Guard against that drift.
-    services = compose_doc["services"]
-    for svc_name in EXPECTED_SERVICES:
-        env = services[svc_name].get("environment", {})
-        if isinstance(env, list):
-            env_map = {}
-            for entry in env:
-                key, _, value = entry.partition("=")
-                env_map[key] = value
-        else:
-            env_map = dict(env)
-        assert "FASTEMBED_CACHE_PATH" not in env_map, (
-            f"service `{svc_name}` must NOT activate FASTEMBED_CACHE_PATH "
-            "by default — the cache wiring is an opt-in template only "
-            "(uncomment the env line AND the archon-model-cache volume)"
-        )
+def test_compose_services_do_not_set_the_removed_fastembed_cache_env(compose_text: str) -> None:
+    # PyTorch runtime (ADR 18): weights live in `<data dir>/models`, there is no
+    # separate cache env var any more; a leftover would silently do nothing.
+    override_text = COMPOSE_OVERRIDE_FILE.read_text()
+    for text in (compose_text, override_text):
+        assert "FASTEMBED_CACHE_PATH" not in text
 
 
 def test_compose_archon_model_cache_volume_commented_out(
     compose_doc: dict, compose_text: str
 ) -> None:
-    # Parallel guard to `test_compose_fastembed_cache_path_is_commented_out`:
+    # Parallel guard to the active-volumes contract:
     # the parsed YAML must NOT declare `archon-model-cache` as an active
     # top-level volume, but the raw text MUST mention it (as a commented
     # template). This locks in the "opt-in only" contract on both sides.
@@ -320,7 +304,7 @@ def test_compose_archon_model_cache_volume_commented_out(
     assert "archon-model-cache" not in top_level_volumes, (
         "Top-level `volumes:` must NOT declare `archon-model-cache` as "
         "active — it ships as a commented-out template that operators "
-        "uncomment alongside FASTEMBED_CACHE_PATH"
+        "uncomment alongside the `archon-model-cache` mounts"
     )
     assert "archon-model-cache" in compose_text, (
         "docker-compose.yml must mention `archon-model-cache` in a "
@@ -329,13 +313,13 @@ def test_compose_archon_model_cache_volume_commented_out(
 
 
 # ---------------------------------------------------------------------------
-# fastembed cache wiring (S493: the app honours FASTEMBED_CACHE_PATH via
-# `get_fastembed_cache_dir()`, so every cache mount must target that path)
+# model cache wiring (the app downloads weights into `get_models_dir()`, i.e.
+# `<ARCHON_SEARCH_DATA_DIR>/models`, so every cache mount must target that path)
 # ---------------------------------------------------------------------------
 
 COMPOSE_OVERRIDE_FILE = REPO_ROOT / "docker-compose.override.yml"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
-FASTEMBED_CACHE_ENV = "FASTEMBED_CACHE_PATH"
+MODELS_SUBDIR = "models"
 DATA_DIR_ENV = "ARCHON_SEARCH_DATA_DIR"
 # Directories the Dockerfile.test `runner` user can create its data dir under.
 RUNNER_WRITABLE_ROOTS = ("/tmp/", "/home/runner/")
@@ -357,28 +341,25 @@ def _effective_env(service: dict) -> dict[str, str]:
     return {**_image_env(dockerfile), **{k: str(v) for k, v in service.get("environment", {}).items()}}
 
 
-def test_compose_opt_in_cache_lines_target_image_fastembed_cache_path(compose_text: str) -> None:
-    # The commented opt-in must mount (and name) the directory the image's server
-    # actually downloads fastembed weights into, one line of each per service.
-    image_cache = _image_env(DOCKERFILE)[FASTEMBED_CACHE_ENV]
+def test_compose_opt_in_cache_lines_target_image_models_dir(compose_text: str) -> None:
+    # The commented opt-in must mount the directory the image's server
+    # actually downloads model weights into, one line per service.
+    image_models_dir = f"{_image_env(DOCKERFILE)[DATA_DIR_ENV]}/{MODELS_SUBDIR}"
     mounts = re.findall(r"^\s*#\s*-\s*archon-model-cache:(\S+)\s*$", compose_text, re.MULTILINE)
-    envs = re.findall(rf"^\s*#\s*{FASTEMBED_CACHE_ENV}:\s*(\S+)\s*$", compose_text, re.MULTILINE)
     assert len(mounts) == len(EXPECTED_SERVICES), f"one opt-in mount per service, got {mounts!r}"
-    assert len(envs) == len(EXPECTED_SERVICES), f"one opt-in env line per service, got {envs!r}"
-    wrong = [p for p in [*mounts, *envs] if p != image_cache]
-    assert not wrong, f"opt-in cache lines point at {wrong!r}, not the image's {image_cache}"
+    wrong = [p for p in mounts if p != image_models_dir]
+    assert not wrong, f"opt-in cache lines point at {wrong!r}, not the image's {image_models_dir}"
 
 
 @pytest.mark.parametrize("service_name", sorted(_override_services()))
-def test_override_service_mounts_its_fastembed_cache_path(service_name: str) -> None:
+def test_override_service_mounts_its_models_dir(service_name: str) -> None:
     # Unmounted, the weights would land in the container layer and be re-downloaded
     # on every container recreate.
     service = _override_services()[service_name]
-    cache_path = _effective_env(service)[FASTEMBED_CACHE_ENV]
+    models_dir = f"{_effective_env(service)[DATA_DIR_ENV]}/{MODELS_SUBDIR}"
     targets = [v.split(":")[1] for v in service.get("volumes", []) if ":" in v]
-    assert cache_path in targets, (
-        f"`{service_name}` loads fastembed weights from {FASTEMBED_CACHE_ENV}={cache_path} "
-        f"but mounts nothing there (targets: {targets!r})"
+    assert models_dir in targets, (
+        f"`{service_name}` loads model weights from {models_dir} but mounts nothing there (targets: {targets!r})"
     )
 
 

@@ -22,17 +22,17 @@ only by ``eager_load_embedders``, which defaults to ``False``
 (``SearchConfig.eager_load_embedders``) and is never set by ``archon-search install --profile max``
 (``install/config_writer.py:31``, which writes only embedder/reranker/chunk_size).
 
-The cold load is simulated here (``_ColdLoadTextCrossEncoder``) so the test stays
+The cold load is simulated here (a stand-in whose load sleeps) so the test stays
 deterministic and weight-free; the ratio, not the absolute number, is the point.
 """
 from __future__ import annotations
 
-import sys
 import time
 
 import pytest
 
 from archon_search.profiles import ENGLISH_PROFILES
+from tests._cold_model_builds import install_cold_reranker_build
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("s279")]
@@ -58,25 +58,6 @@ chunk_size = {_MAX_PROFILE.chunk_size}
 profile = "max"
 multilingual = false
 """
-
-
-def _install_cold_cross_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make cross-encoder construction cost ``_COLD_CROSS_ENCODER_LOAD_SECONDS``.
-
-    ``ModelReranker.predict`` imports ``TextCrossEncoder`` from
-    ``fastembed.rerank.cross_encoder`` on its first call (``reranker.py``), so
-    patching the class there puts the cost exactly where the real ONNX build sits:
-    inside the first search request.
-    """
-    module = sys.modules["fastembed.rerank.cross_encoder"]
-    base = module.TextCrossEncoder
-
-    class _ColdLoadTextCrossEncoder(base):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            time.sleep(_COLD_CROSS_ENCODER_LOAD_SECONDS)
-            super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr(module, "TextCrossEncoder", _ColdLoadTextCrossEncoder)
 
 
 def test_s279_first_search_after_ready_does_not_pay_cold_reranker_load(tmp_path, monkeypatch):
@@ -112,7 +93,7 @@ def test_s279_first_search_after_ready_does_not_pay_cold_reranker_load(tmp_path,
         assert ready.status_code == 200, ready.text
         assert ready.json()["ready"] is True
 
-        _install_cold_cross_encoder(monkeypatch)
+        install_cold_reranker_build(monkeypatch, _COLD_CROSS_ENCODER_LOAD_SECONDS)
 
         started = time.monotonic()
         resp = client.post(

@@ -202,6 +202,8 @@ _ALLOWLIST: frozenset[tuple[str, str, str, int]] = frozenset({
     (f"{_SERVER}/mcp.py", "update_collection", "ModelValidationError", 1),
     (f"{_SERVER}/routes_collections.py", "add_collection", "ModelValidationError", 1),
     (f"{_SERVER}/routes_collections.py", "patch_collection", "ModelValidationError", 1),
+    # `unsupported model '<name>'; supported: ...` — the registry's own text (model_specs.UnsupportedModelError).
+    ("archon_search/model_validation.py", "validate_embedding_model", "UnsupportedModelError", 1),
     # _validate_namespace's rule text (1); datetime.fromisoformat echoes only the caller's expires_at (2).
     (f"{_SERVER}/mcp.py", "create_key", "ValueError", 1),
     (f"{_SERVER}/mcp.py", "create_key", "ValueError", 2),

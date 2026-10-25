@@ -5,7 +5,7 @@
 #                        load_live_thresholds() returns None when this section is absent,
 #                        enabling report-only mode until calibrated values are committed.
 #   [real_model_search] — used by tests/eval/live_benchmark/ (live_benchmark marker);
-#                         real-model latency thresholds for fastembed ONNX pipeline.
+#                         real-model latency thresholds for the PyTorch pipeline.
 #                         load_benchmark_thresholds() raises ValueError if this section
 #                         is absent (the benchmark gate always requires explicit thresholds).
 #
@@ -19,7 +19,7 @@
 #   latency_p50_ms = XXX.0
 #   latency_p95_ms = XXX.0
 
-# [real_model_search] — real-model (fastembed BAAI/bge-small-en-v1.5 + Xenova/ms-marco-MiniLM-L-6-v2)
+# [real_model_search] — real-model (PyTorch BAAI/bge-small-en-v1.5 + Xenova/ms-marco-MiniLM-L-6-v2)
 # latency thresholds for tests/eval/live_benchmark/test_real_model_search_benchmark.py.
 #
 # Calibration procedure:
@@ -30,7 +30,7 @@
 #   3. Add a provenance comment: date, runner type, 10 raw samples.
 #   4. Replace the values below.
 #
-# Calibration MUST be done on ubuntu-latest; darwin/aarch64 ONNX is 2-5× faster.
+# Calibration MUST be done on ubuntu-latest; darwin/aarch64 is several times faster.
 #
 # Current provenance: 2026-06-13, darwin/aarch64 (Apple Silicon), 10 runs.
 # These are DARWIN estimates extrapolated to ubuntu-latest using a 5× slowdown factor

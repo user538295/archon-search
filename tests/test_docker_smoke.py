@@ -70,7 +70,7 @@ SMOKE_API_KEY = "5c0e5ea11eb5"
 # ``_wait_for_ready`` returns as soon as the endpoint answers.
 READY_TIMEOUT_S = 600
 # Budget for one ingest job to reach a terminal status. The first ingest in a
-# fresh container downloads the fastembed embedder and the reranker onto the
+# fresh container downloads the embedder and the reranker snapshots onto the
 # mounted volume before any chunk is written.
 INGEST_TIMEOUT_S = 900
 # The startup model-validation task is itself bounded by
@@ -249,7 +249,7 @@ def cpu_image() -> Iterator[str]:
     if not docker_available():
         pytest.skip("docker not available")
     # Build budget: 25 min. The Task 4.3 spec suggested 300s, but a cold
-    # `pip install .` pulls torch + onnxruntime + fastembed model deps,
+    # `pip install .` pulls torch + onnxruntime + transformers model deps,
     # which on a clean BuildKit cache exceeds five minutes on both
     # GitHub-hosted runners and developer laptops. We still fail if the
     # build truly stalls, just with a budget that accommodates a fresh
@@ -558,9 +558,9 @@ def test_graph_enabled_image_degrades_to_code_symbols_only(
     sanitized warning.
 
     ``HF_HUB_OFFLINE=1`` deliberately NOT set. It looks like the tidy way to prove
-    nothing is downloaded, but it is container-global: it also blocks fastembed's
-    own embedder and reranker fetches, so the ingest dies with "Could not load
-    model BAAI/bge-small-en-v1.5 from any source" and the job is FAILED, not the
+    nothing is downloaded, but it is container-global: it also blocks the embedder
+    and reranker snapshot downloads, so the ingest dies with a ``ModelDownloadError``
+    and the job is FAILED, not the
     DONE-with-a-degrade this leg exists to prove. The occupied cache path below
     already fails the checkpoint load on its own, and ``cache_dir.is_file()``
     proves no artifact landed, so the flag buys nothing and breaks the leg.

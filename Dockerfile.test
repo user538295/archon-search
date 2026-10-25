@@ -4,8 +4,8 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 1000 --create-home --shell /bin/sh runner && \
-    mkdir -p /cache/uv /cache/fastembed /venv && \
-    chown runner:runner /cache/uv /cache/fastembed /venv
+    mkdir -p /cache/uv /venv /tmp/archon-test/models && \
+    chown -R runner:runner /cache/uv /venv /tmp/archon-test
 USER runner
 WORKDIR /workspace
 ENV PATH="/venv/bin:$PATH" \
@@ -15,6 +15,5 @@ ENV PATH="/venv/bin:$PATH" \
     # Persistent named volume so uv sync survives container restarts.
     UV_PROJECT_ENVIRONMENT=/venv \
     UV_CACHE_DIR=/cache/uv \
-    FASTEMBED_CACHE_PATH=/cache/fastembed \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

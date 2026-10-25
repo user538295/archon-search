@@ -26,7 +26,7 @@ ingest job is therefore no signal whatsoever that search is usable — which is
 precisely the signal the documented round trip tells a client to act on.
 
 Reproduced against a real ``uv run archon-search serve`` (default embedder with a
-warm ``FASTEMBED_CACHE_PATH``, ``reranker_model = "BAAI/bge-reranker-base"``, fresh
+warm model cache, ``reranker_model = "BAAI/bge-reranker-base"``, fresh
 ``ARCHON_SEARCH_DATA_DIR`` so only the cross-encoder cache is cold)::
 
     [  2.11s] GET  /health                       200
@@ -43,16 +43,16 @@ no readiness step. ``collection add --wait`` returning success is itself a
 completion signal the server hands the client, and it is emitted while the
 cross-encoder is still cold.
 
-The cold build is simulated (``_ColdLoadTextCrossEncoder``) so the test stays
+The cold build is simulated (a stand-in whose load sleeps) so the test stays
 deterministic and weight-free; the ratio, not the absolute number, is the point.
 """
 from __future__ import annotations
 
-import sys
 import time
 
 import pytest
 
+from tests._cold_model_builds import install_cold_reranker_build
 from tests.integration.conftest import make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("s281")]
@@ -84,27 +84,6 @@ _DOCS = {
         "each collection's centroid vector before fanning out."
     ),
 }
-
-
-def _install_cold_cross_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make cross-encoder construction cost ``_COLD_CROSS_ENCODER_LOAD_SECONDS``.
-
-    ``ModelReranker.predict`` imports ``TextCrossEncoder`` from
-    ``fastembed.rerank.cross_encoder`` on its first call (``reranker.py``), so
-    patching the class there puts the cost exactly where the real ONNX build sits.
-    Installed *before* the app starts, so the cost lands in the background startup
-    warm-up — which is where it lands in production, and which is what makes the
-    warm-up lock still held when the round trip reaches its search.
-    """
-    module = sys.modules["fastembed.rerank.cross_encoder"]
-    base = module.TextCrossEncoder
-
-    class _ColdLoadTextCrossEncoder(base):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            time.sleep(_COLD_CROSS_ENCODER_LOAD_SECONDS)
-            super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr(module, "TextCrossEncoder", _ColdLoadTextCrossEncoder)
 
 
 def _add_collection_and_wait(client, corpus_dir, headers) -> str:
@@ -141,7 +120,7 @@ def test_s281_search_answers_after_collection_add_wait_reports_success(tmp_path,
 
     # Before the app starts: the warm-up that runs at startup is the one that must
     # still be in flight when step 3 arrives.
-    _install_cold_cross_encoder(monkeypatch)
+    install_cold_reranker_build(monkeypatch, _COLD_CROSS_ENCODER_LOAD_SECONDS)
 
     with make_real_app(data_dir, monkeypatch, toml_content=_TOML) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}

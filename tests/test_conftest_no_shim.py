@@ -14,14 +14,6 @@ def test_no_shim_import() -> None:
     assert "_search_stubs_shim" not in _src(), "conftest.py must not import _search_stubs_shim"
 
 
-def test_no_fake_text_embedding_class() -> None:
-    assert "_FakeTextEmbedding" not in _src(), "conftest.py must not define _FakeTextEmbedding"
-
-
-def test_no_fake_text_cross_encoder_class() -> None:
-    assert "_FakeTextCrossEncoder" not in _src(), "conftest.py must not define _FakeTextCrossEncoder"
-
-
 def test_uses_search_stubs_import() -> None:
     assert "from _search_stubs import install_stubs" in _src(), (
         "conftest.py must import install_stubs from _search_stubs"

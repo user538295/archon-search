@@ -99,7 +99,7 @@ def _mcp_call_tool(client, token: str, session_id: str, tool_name: str, argument
 # Store injection helper — bypasses HTTP to set namespace on injected data
 # ---------------------------------------------------------------------------
 
-_EMBEDDING_DIM = 384  # must match the stub fastembed TextEmbedding (384-dim zeros)
+_EMBEDDING_DIM = 384  # must match the stub embedder (384-dim zeros)
 
 
 def _inject_namespace_data(client, col: str, namespace: str, doc_text: str) -> None:

@@ -1,37 +1,76 @@
-"""packages/archon-search/tests/test_conftest.py — verify that ML model stubs in conftest.py work correctly."""
+"""packages/archon-search/tests/test_conftest.py — verify that the model-backend stub in conftest.py works correctly."""
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
 
-def test_fastembed_is_patched() -> None:
-    """fastembed.TextEmbedding() must complete without network access."""
-    import fastembed  # noqa: PLC0415
+import pytest
 
-    emb = fastembed.TextEmbedding("any-model")
-    vectors = list(emb.embed(["hello"]))
-    assert len(vectors) == 1
-    assert hasattr(vectors[0], "shape")  # numpy array
+from archon_search.embedder import ModelEmbedder
+from archon_search.model_specs import UnsupportedModelError
+from archon_search.reranker import ModelReranker
 
-
-def test_textcrossencoder_is_patched() -> None:
-    """fastembed.TextCrossEncoder().rerank() must return plain floats."""
-    import sys  # noqa: PLC0415
-
-    import fastembed  # noqa: PLC0415
-
-    enc = fastembed.TextCrossEncoder("any-model")
-    scores = enc.rerank("query", ["doc1", "doc2"])
-    assert scores == [0.5, 0.5]
-
-    # Also verify the submodule path required by the new import is patched
-    submod = sys.modules["fastembed.rerank.cross_encoder"]
-    assert hasattr(submod, "TextCrossEncoder")
-    enc2 = submod.TextCrossEncoder("any-model")
-    assert enc2.rerank("query", ["doc1", "doc2"]) == [0.5, 0.5]
+_BGE_SMALL = "BAAI/bge-small-en-v1.5"
+_BGE_SMALL_DIM = 384
+_E5_LARGE = "intfloat/multilingual-e5-large"
+_E5_LARGE_DIM = 1024
+_RERANKER = "Xenova/ms-marco-MiniLM-L-6-v2"
+_PROBE_FILE = Path(__file__).parent / "_torch_free_probe.py"
+_PROBE_TIMEOUT_SECONDS = 120
 
 
-def test_sentence_transformers_is_blocked() -> None:
-    """sentence_transformers must be a stub — not the real package."""
-    import sentence_transformers  # noqa: PLC0415
+def test_model_embedder_returns_zero_vectors_of_the_spec_dimension() -> None:
+    assert ModelEmbedder(_BGE_SMALL).encode(["a", "b"]) == [[0.0] * _BGE_SMALL_DIM] * 2
+    assert ModelEmbedder(_E5_LARGE).encode(["a"]) == [[0.0] * _E5_LARGE_DIM]
 
-    # Real package has SentenceTransformer class; our stub does not
-    assert not hasattr(sentence_transformers, "SentenceTransformer")
+
+def test_model_embedder_encodes_empty_input_to_nothing() -> None:
+    assert ModelEmbedder(_BGE_SMALL).encode([]) == []
+
+
+def test_model_embedder_is_warm_only_after_its_first_encode() -> None:
+    embedder = ModelEmbedder(_BGE_SMALL)
+    assert embedder.is_warm is False
+
+    embedder.encode(["a"])
+
+    assert embedder.is_warm is True
+
+
+def test_model_reranker_scores_every_pair_0_5() -> None:
+    assert ModelReranker(_RERANKER).predict([("q", "d1"), ("q", "d2")]) == [0.5, 0.5]
+
+
+def test_model_reranker_scores_empty_input_to_nothing() -> None:
+    assert ModelReranker(_RERANKER).predict([]) == []
+
+
+def test_model_reranker_is_warm_only_after_its_first_predict() -> None:
+    reranker = ModelReranker(_RERANKER)
+    assert reranker.is_warm is False
+
+    reranker.predict([("q", "d")])
+
+    assert reranker.is_warm is True
+
+
+def test_the_stub_still_rejects_a_model_outside_the_registry() -> None:
+    with pytest.raises(UnsupportedModelError):
+        ModelEmbedder("custom/unknown-model")
+    with pytest.raises(UnsupportedModelError):
+        ModelReranker("custom/unknown-model")
+
+
+def test_warming_stubbed_backends_keeps_torch_unimported() -> None:
+    """A fresh interpreter: the stub must hold before any test of the worker could import torch."""
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", str(_PROBE_FILE), "-o", "addopts=", "-p", "no:cacheprovider", "-q"],
+        capture_output=True,
+        text=True,
+        timeout=_PROBE_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "1 passed" in completed.stdout

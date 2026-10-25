@@ -216,7 +216,7 @@ class GraphExtractor:
         config: "GraphConfig",
     ) -> None:
         self._config = config
-        self._backend = ProseExtractionBackend(providers=config.providers)
+        self._backend = ProseExtractionBackend(device=config.device)
         # The load failure last logged at WARNING. The backend re-raises ONE
         # instance for a latched failure, so keying on identity logs it once
         # per process; a fresh (non-latched) failure is a new load attempt and

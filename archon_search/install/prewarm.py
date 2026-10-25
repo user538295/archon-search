@@ -8,19 +8,20 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from archon_search.config import SearchConfig, resolve_reranker_providers
+from archon_search.config import SearchConfig
 from archon_search.embedder import ModelEmbedder
+from archon_search.model_specs import get_embedder_spec, get_reranker_spec
+from archon_search.model_store import ensure_model
 from archon_search.paths import (
     GRAPH_NER_MODEL_NAME,
     GRAPH_NER_MODEL_REVISION,
     get_data_dir,
-    get_fastembed_cache_dir,
 )
 from archon_search.platform.runtime import get_search_service
 from archon_search.profiles import InstallProfile
 from archon_search.prose_extraction_backend import load_gliner_model
 from archon_search.reranker import ModelReranker
-from archon_search.torch_device import resolve_torch_device
+from archon_search.torch_runtime import CPU_DEVICE, resolve_device
 
 from .config_writer import WizardFeatures, _write_profile_config
 from .errors import InstallError, NeedsForceDeleteError
@@ -82,7 +83,7 @@ def _check_disk_space(
 # Model pre-warm: download, then load (Task C0-2.3, S671)
 # ---------------------------------------------------------------------------
 
-# Fixed, trivial probe input: one inference proves the ONNX session runs, not just builds.
+# Fixed, trivial probe input: one inference proves the model runs, not just loads.
 _PROBE_TEXT = "archon search pre-warm probe"
 
 
@@ -100,12 +101,11 @@ def _prewarm_model(
 ) -> None:
     """Run *download*, then *load*; raise _PrewarmFailure naming the phase that failed.
 
-    *download* constructs the fastembed class with ``lazy_load=True``: the registry
-    lookup and the file download, but no ONNX session (fastembed 0.9.0
-    ``text/onnx_embedding.py:310-318``). *load* runs the service's own backend
-    (``ModelEmbedder.encode`` / ``ModelReranker.predict``), so the session is built
-    exactly as the server builds it, and one inference runs on it. Both models are
-    locals of the callables, so they are released when this returns.
+    *download* fetches the pinned snapshot (``ensure_model``): the repo lookup and the
+    file download, but no model in memory. *load* runs the service's own backend
+    (``ModelEmbedder.encode`` / ``ModelReranker.predict``), so the weights load exactly
+    as the server loads them, and one inference runs. Both models are locals of the
+    callables, so they are released when this returns.
     """
     try:
         download()
@@ -127,14 +127,13 @@ def _prewarm_models(
     cfg: SearchConfig,
     timeout: float,
     install_graph_extra: bool = False,
-    graph_providers: list[str] | None = None,
+    graph_device: str = CPU_DEVICE,
 ) -> str | None:
     """Download and load the configured embedder (and reranker, and optionally the
     graph NER model) so a model that cannot load fails the install, not the first ingest.
 
     The embedder and reranker come from *cfg* — the config the service starts with —
-    and load through the service's own backends under its providers
-    (``[database].providers``, and ``resolve_reranker_providers`` for the reranker).
+    and load through the service's own backends on its device (``[database].device``).
     Each is loaded, probed with one inference and released before the next, so peak
     memory is one model.
 
@@ -145,28 +144,22 @@ def _prewarm_models(
     *timeout* (seconds; the caller passes ``_prewarm_timeout(profile)``) sets a
     deadline that is checked between models: it cannot interrupt a running download
     or load, but once it has passed, the models not yet started are skipped.
-    fastembed/HF progress is printed to stderr — not suppressed. When
+    Hub download progress is printed to stderr — not suppressed. When
     ``install_graph_extra`` is set, the graph NER model (Task BE-8) is pre-warmed
     inside the same deadline as the embedder/reranker, placed on the device
-    ``graph_providers`` resolves to (Task FE-5).
+    ``graph_device`` resolves to (Task FE-5).
 
     Returns the graph NER pre-warm's resolved torch device (Task BE-14's stage-2
     device probe rides this), or ``None`` if the graph pre-warm did not run (not
     requested, or skipped after the deadline) or ran and failed.
     """
-    # Lazy: fastembed is not installed at import time. Same import paths as the
-    # runtime backends (embedder.py, reranker.py).
-    from fastembed import TextEmbedding  # noqa: PLC0415
-    from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
-
-    cache_dir = str(get_fastembed_cache_dir())
     deadline = time.monotonic() + timeout
     try:
         _prewarm_model(
             "embedder",
             cfg.embedding_model,
-            download=lambda: TextEmbedding(cfg.embedding_model, cache_dir=cache_dir, lazy_load=True),
-            load=lambda: ModelEmbedder(cfg.embedding_model, providers=cfg.providers).encode(
+            download=lambda: ensure_model(get_embedder_spec(cfg.embedding_model)),
+            load=lambda: ModelEmbedder(cfg.embedding_model, device=cfg.device).encode(
                 [_PROBE_TEXT]
             ),
         )
@@ -178,13 +171,13 @@ def _prewarm_models(
             _prewarm_model(
                 "reranker",
                 cfg.reranker_model,
-                download=lambda: TextCrossEncoder(cfg.reranker_model, cache_dir=cache_dir, lazy_load=True),
-                load=lambda: ModelReranker(
-                    cfg.reranker_model, providers=resolve_reranker_providers(cfg)
-                ).predict([(_PROBE_TEXT, _PROBE_TEXT)]),
+                download=lambda: ensure_model(get_reranker_spec(cfg.reranker_model)),
+                load=lambda: ModelReranker(cfg.reranker_model, device=cfg.device).predict(
+                    [(_PROBE_TEXT, _PROBE_TEXT)]
+                ),
             )
         except _PrewarmFailure as exc:
-            # Non-fatal (S202): a CoreML ONNX error or transient download hiccup
+            # Non-fatal (S202): a model load error or transient download hiccup
             # must not abort the wizard; the service still searches. str(exc), not
             # exc: a LogRecord holding the exception would keep the failed model's
             # frames — and the model — alive.
@@ -200,7 +193,7 @@ def _prewarm_models(
     if cfg.reranker_model:
         steps.append(("reranker", _prewarm_reranker))
     if install_graph_extra:
-        steps.append(("graph NER", lambda: _prewarm_graph_model(graph_providers)))
+        steps.append(("graph NER", lambda: _prewarm_graph_model(graph_device)))
 
     device: str | None = None
     for index, (_name, step) in enumerate(steps):
@@ -225,7 +218,7 @@ def _prewarm_models(
 # Graph NER model pre-warm (Task BE-8 — optional, non-fatal)
 # ---------------------------------------------------------------------------
 
-def _prewarm_graph_model(providers: list[str] | None = None) -> str | None:
+def _prewarm_graph_model(device: str = CPU_DEVICE) -> str | None:
     """Pre-warm the graph NER/RelEx model (gliner.GLiNER).
 
     Mirrors the reranker's non-fatal branch in ``_prewarm_models``: a failure
@@ -243,7 +236,7 @@ def _prewarm_graph_model(providers: list[str] | None = None) -> str | None:
         # Place the model exactly where the runtime will (mirrors _load_sync in
         # prose_extraction_backend.py) rather than reporting gliner's auto
         # placement, so the device stage 2 probes is the device ingest gets.
-        model = model.to(resolve_torch_device(providers))
+        model = model.to(resolve_device(device))
         return model.device.type
     except Exception as exc:
         # Non-fatal: the [graph] extra may not be installed, or this may be a

@@ -522,9 +522,10 @@ async def test_eager_load_embedders_preloads_default_model(tmp_path: Path, job_s
     default model. Eager loading must therefore warm that default model too, otherwise
     such collections still pay the first-query load penalty.
 
-    ``EmbedderCache.preload`` runs for real here (fastembed is stubbed by the shared
-    test stubs, so no ONNX weights are loaded): merely caching an ``Embedder`` is not
-    enough — the backend model must actually be constructed, i.e. ``is_warm`` is True.
+    ``EmbedderCache.preload`` runs for real here (the model backends are stubbed by the
+    autouse ``_stub_model_backends`` fixture, so no weights are loaded): merely caching an
+    ``Embedder`` is not enough — the backend model must actually be constructed, i.e.
+    ``is_warm`` is True.
     """
     from unittest.mock import AsyncMock, patch
     from starlette.testclient import TestClient
@@ -821,15 +822,15 @@ def test_warmup_task_attribute_exists_when_eager_load_disabled(
     assert app.state._warmup_task is None
 
 
-def test_embedder_cache_receives_configured_providers(tmp_path: Path, job_store: JobStore) -> None:
-    """[database] providers must reach the cache — every search embeds through it, not app.state.embedder."""
+def test_embedder_cache_receives_configured_device(tmp_path: Path, job_store: JobStore) -> None:
+    """[database].device must reach the cache — every search embeds through it, not app.state.embedder."""
     from unittest.mock import AsyncMock, patch, MagicMock
     from starlette.testclient import TestClient
     from archon_search.store import SearchStore
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
-    cfg.providers = ["CoreMLExecutionProvider"]
+    cfg.device = "mps"
     cfg.eager_load_embedders = True
 
     stub = MagicMock()
@@ -846,18 +847,18 @@ def test_embedder_cache_receives_configured_providers(tmp_path: Path, job_store:
         with TestClient(app):
             wait_for_warmup(app)
 
-    assert mock_make.call_args.kwargs["providers"] == ["CoreMLExecutionProvider"]
+    assert mock_make.call_args.kwargs["device"] == "mps"
 
 
-def test_collection_sync_receives_configured_providers(tmp_path: Path, job_store: JobStore) -> None:
-    """[database] providers must reach SearchCollectionSync — sync/reindex re-embeds too."""
+def test_collection_sync_receives_configured_device(tmp_path: Path, job_store: JobStore) -> None:
+    """[database].device must reach SearchCollectionSync — sync/reindex re-embeds too."""
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
-    cfg.providers = ["CoreMLExecutionProvider"]
+    cfg.device = "mps"
 
     app = create_app(cfg, job_store)
 
-    assert app.state.collection_sync._providers == ["CoreMLExecutionProvider"]
+    assert app.state.collection_sync._device == "mps"
 
 
 def test_inbound_id_echoed(tmp_path: Path, job_store: JobStore) -> None:

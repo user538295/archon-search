@@ -54,7 +54,7 @@ def _stub_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> None:
 # Constants
 # ---------------------------------------------------------------------------
 
-_VECTOR_DIM = 384  # Must match the stub fastembed dimension (zeros(384))
+_VECTOR_DIM = 384  # Must match the stub embedder dimension (zeros(384))
 _FIXED_VARIANTS = ["documentation alternative query", "hello world related search"]
 _COLLECTION = "ragfusioncol"
 

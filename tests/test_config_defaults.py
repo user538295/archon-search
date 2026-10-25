@@ -103,8 +103,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "reranker_model": "Xenova/ms-marco-MiniLM-L-6-v2",
         "chunk_size": 512,
         "auto_reindex_on_chunk_size_change": True,
-        "providers": [],
-        "reranker_providers": None,
+        "device": "auto",
         "top_k_retrieve": 15,
         "top_k_return": 5,
         # [database] — D6 install-time / background provider validation
@@ -241,7 +240,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "naive_max_expansion_terms": 20,
             "ner_confidence": 0.5,
             "relation_confidence": 0.75,
-            "providers": None,
+            "device": "cpu",
         },
         # [openai_shim]
         "openai_shim": {

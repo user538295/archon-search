@@ -19,7 +19,6 @@ from archon_search.paths import (
     GRAPH_NER_MODEL_NAME,
     GRAPH_NER_MODEL_REVISION,
     get_data_dir,
-    get_fastembed_cache_dir,
     get_fasttext_models_dir,
     get_graph_models_dir,
     get_models_dir,
@@ -150,35 +149,6 @@ def test_get_fasttext_models_dir_equals_get_models_dir(
     install's on-disk ``lid.176.ftz``."""
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
     assert get_fasttext_models_dir() == get_models_dir() == Path("/data/models")
-
-
-def test_fastembed_cache_dir_honours_fastembed_cache_path(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """S493: a set ``FASTEMBED_CACHE_PATH`` wins over ``<data>/models`` — even when
-    it lies outside ``ARCHON_SEARCH_DATA_DIR``."""
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
-    monkeypatch.setenv("FASTEMBED_CACHE_PATH", "/cache/fastembed")
-    assert get_fastembed_cache_dir() == Path("/cache/fastembed")
-
-
-def test_fastembed_cache_dir_defaults_to_models_dir_when_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """BE-26: with ``FASTEMBED_CACHE_PATH`` unset the weights live in ``<data>/models``."""
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
-    monkeypatch.delenv("FASTEMBED_CACHE_PATH", raising=False)
-    assert get_fastembed_cache_dir() == get_models_dir() == Path("/data/models")
-
-
-def test_fastembed_cache_dir_treats_empty_fastembed_cache_path_as_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An empty ``FASTEMBED_CACHE_PATH`` falls back to ``<data>/models`` instead of
-    resolving to ``Path("")`` (the process CWD)."""
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
-    monkeypatch.setenv("FASTEMBED_CACHE_PATH", "")
-    assert get_fastembed_cache_dir() == Path("/data/models")
 
 
 def test_graph_models_dir_follows_data_dir_env(monkeypatch: pytest.MonkeyPatch) -> None:
