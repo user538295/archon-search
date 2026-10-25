@@ -145,19 +145,28 @@ def test_binary_acl_and_symlinked_files_are_skipped(tmp_path: Path) -> None:
     assert [p.name for p in _discover(tmp_path)] == ["real.md"]
 
 
+_TREE = (
+    "a.md", "b.md", "c.txt", "ab.md", "x.py",
+    "docs/one.md", "docs/two.txt", "docs/deep/three.txt", "docs/deep/four.md",
+    "src/m.py", "src/pkg/n.py", "pkg/src/o.py", "pkg/src/deep/p.py",
+    "other/q.md",
+)
+
+
 @pytest.mark.parametrize(
     "pattern",
-    ["**/*", "*", "*.md", "**/*.md", "docs/*", "docs/**/*.txt", "**/src/**/*.py", "*/*.md", "?.md", "[ab].md", "**"],
+    ["**/*", "*", "*.md", "**/*.md", "docs/*", "docs/**/*.txt", "**/src/**/*.py", "*/*.md", "?.md", "[ab].md"],
 )
 def test_the_walk_matches_what_path_glob_matched(tmp_path: Path, pattern: str) -> None:
-    _touch(
-        tmp_path,
-        "a.md", "b.md", "c.txt", "ab.md", "x.py",
-        "docs/one.md", "docs/two.txt", "docs/deep/three.txt", "docs/deep/four.md",
-        "src/m.py", "src/pkg/n.py", "pkg/src/o.py", "pkg/src/deep/p.py",
-        "other/q.md",
-    )
+    _touch(tmp_path, *_TREE)
 
     expected = _reference(tmp_path, pattern)
 
     assert _discover(tmp_path, pattern) == expected
+
+
+def test_a_bare_recursive_pattern_matches_every_file_below_the_root(tmp_path: Path) -> None:
+    """``Path.glob("**")`` yields directories only on Python 3.12 and files too from 3.13, so it cannot be the oracle here."""
+    expected = sorted(_touch(tmp_path, *_TREE))
+
+    assert _discover(tmp_path, "**") == expected
