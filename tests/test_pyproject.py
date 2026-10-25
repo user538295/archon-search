@@ -3,6 +3,9 @@
 import tomllib
 from pathlib import Path
 
+import pytest
+from packaging.markers import Marker
+from packaging.requirements import Requirement
 
 PYPROJECT_PATH = Path(__file__).parent.parent / "pyproject.toml"
 UV_LOCK_PATH = Path(__file__).parent.parent / "uv.lock"
@@ -126,6 +129,10 @@ def test_olefile_covered_via_markitdown_outlook_extra():
     )
 
 
+# First release that clears pip-audit PYSEC-2026-3929 (5.8.1 carried it; PYSEC-2026-4174 has no listed fix).
+_TRANSFORMERS_ADVISORY_FIXED = (5, 10, 0)
+
+
 def test_lock_matches_the_chosen_transformers_strategy():
     """uv.lock must resolve transformers to one converged version within the ceiling."""
     with open(UV_LOCK_PATH, "rb") as f:
@@ -140,9 +147,60 @@ def test_lock_matches_the_chosen_transformers_strategy():
     assert len(versions) == 1, (
         f"transformers must converge to a single version across all platforms, got: {versions}"
     )
-    assert versions == {"5.8.1"}, (
-        f"transformers must resolve to the K2 spike's converged version 5.8.1, got: {versions}"
+    (locked,) = versions
+    assert tuple(int(x) for x in locked.split(".")[:3]) >= _TRANSFORMERS_ADVISORY_FIXED, (
+        f"transformers {locked} carries PYSEC-2026-3929/-4174; the lock must resolve to "
+        f">= {'.'.join(map(str, _TRANSFORMERS_ADVISORY_FIXED))}"
     )
+
+
+_TORCH_FLOOR = "2.4.0"
+_TORCH_BELOW_FLOOR = "2.3.1"
+_TORCH_LOCKED = "2.13.0"
+
+
+def test_torch_floor_is_the_oldest_torch_the_runtime_works_on():
+    """The project needs Python >= 3.12, where torch < 2.4 cannot ``torch.compile``: ModernBERT
+    (``granite-embedding-small-english-r2``) raises 'Dynamo is not supported on Python 3.12+' when
+    it loads (torch 2.2.2 and 2.3.1 measured), and transformers 5.13 treats torch < 2.4 as absent.
+    The declared range must not admit them (docling alone would allow torch >= 2.2.2)."""
+    core_deps = _load_pyproject()["project"]["dependencies"]
+    torch_specs = [Requirement(dep) for dep in core_deps if _pep508_package_name(dep) == "torch"]
+
+    assert len(torch_specs) == 1
+    specifier = torch_specs[0].specifier
+    assert _TORCH_BELOW_FLOOR not in specifier
+    assert _TORCH_FLOOR in specifier
+    assert _TORCH_LOCKED in specifier
+
+
+# (sys_platform, platform_machine) -> whether uv must take torch from the PyTorch CPU index.
+# The CPU index serves `+cpu` wheels for linux x86_64 AND aarch64; PyPI's linux wheels (both
+# archs) are the CUDA build. macOS and Windows PyPI wheels are already CPU-only.
+_TORCH_CPU_INDEX_BY_PLATFORM = {
+    ("linux", "x86_64"): True,
+    ("linux", "aarch64"): True,
+    ("darwin", "arm64"): False,
+    ("darwin", "x86_64"): False,
+    ("win32", "AMD64"): False,
+}
+
+
+@pytest.mark.parametrize("package", ["torch", "torchvision"])
+@pytest.mark.parametrize(("platform", "machine"), list(_TORCH_CPU_INDEX_BY_PLATFORM))
+def test_uv_torch_sources_pin_cpu_index_on_every_linux_arch(package, platform, machine):
+    """`uv sync` on linux/arm64 (test-runner, dev-shell images) must not resolve CUDA torch."""
+    source = _load_pyproject()["tool"]["uv"]["sources"][package]
+
+    assert source["index"] == "pytorch-cpu"
+    environment = {
+        "sys_platform": platform,
+        "platform_machine": machine,
+        "platform_system": {"linux": "Linux", "darwin": "Darwin", "win32": "Windows"}[platform],
+    }
+    assert Marker(source["marker"]).evaluate(environment) is _TORCH_CPU_INDEX_BY_PLATFORM[
+        (platform, machine)
+    ]
 
 
 def test_gliner_present():

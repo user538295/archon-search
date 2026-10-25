@@ -28,10 +28,14 @@ dependencies = [
     # reranker_loading.py). torch/torchvision are also pulled by docling; they are
     # declared here as direct dependencies so the [tool.uv.sources] CPU-index pin
     # below binds (uv applies sources to declared deps, not transitive-only
-    # ones). Bounds mirror docling's own `torch>=2.2.2,<3.0.0` / `torchvision<1`
-    # so this never over-constrains the resolution. S269: on linux/amd64 the
-    # default PyPI torch drags the ~6 GB CUDA runtime a CPU host cannot run.
-    "torch>=2.2.2,<3.0.0",
+    # ones). The ceiling and torchvision mirror docling's own `torch<3.0.0` /
+    # `torchvision<1`. The floor is 2.4, above docling's `torch>=2.2.2`: with Python
+    # >= 3.12, torch 2.2.2 and 2.3.1 cannot load ModernBERT (a registry embedder; its
+    # `torch.compile` raises "Dynamo is not supported on Python 3.12+") and transformers
+    # 5.13 treats torch < 2.4 as absent; 2.4.1 passed the unit and parity lanes on
+    # transformers 4.57.1 and 5.13.1. S269: on linux/amd64 the default PyPI torch drags
+    # the ~6 GB CUDA runtime a CPU host cannot run.
+    "torch>=2.4,<3.0.0",
     "torchvision<1",
     # transformers builds the encoder and sequence-classification models
     # (torch_runtime.py, reranker_loading.py). Ceiling matches constraint-dependencies.
@@ -131,6 +135,43 @@ packages = ["archon_search"]
 # changes the indexed text and shifts the eval metrics against the baselines.
 extend-exclude = ["tests/eval/corpus"]
 
+[tool.ruff.lint]
+# Pinned copy of ruff 0.17.2's default rule set (`ruff check --show-settings --isolated`), so every
+# contributor and CI get the same result regardless of the ruff version that is installed. CI runs
+# `uvx ruff@0.17.2 check .`. Rules outside this set (E402, PLC0415, ANN, ARG, SLF, ...) are NOT
+# enforced; do not add `# noqa` codes for them (RUF100 flags those as unused).
+select = [
+    "YTT101", "YTT102", "YTT103", "YTT201", "YTT202", "YTT203", "YTT204", "YTT301", "YTT302", "YTT303", "ASYNC100", "ASYNC105",
+    "ASYNC115", "ASYNC116", "ASYNC210", "ASYNC220", "ASYNC221", "ASYNC222", "ASYNC230", "ASYNC251", "S102", "S110", "S112", "BLE001",
+    "B002", "B003", "B004", "B005", "B006", "B008", "B009", "B010", "B012", "B013", "B014", "B015", "B016", "B017", "B018", "B019", "B020", "B021", "B022",
+    "B023", "B025", "B026", "B029", "B030", "B031", "B032", "B033", "B035", "B039", "C400", "C401", "C402", "C403", "C404", "C405", "C406", "C408", "C409",
+    "C410", "C411", "C413", "C414", "C415", "C417", "C418", "C419", "DTZ002", "DTZ003", "DTZ004", "T100", "EXE001", "EXE002", "EXE004", "EXE005",
+    "FA100", "FA102", "INT001", "INT002", "INT003", "ISC004", "LOG001", "LOG002", "LOG009", "LOG014", "LOG015", "G010", "G101", "G201", "G202",
+    "PIE790", "PIE794", "PIE796", "PIE800", "PIE804", "PIE807", "PIE808", "PIE810", "PYI001", "PYI002", "PYI003", "PYI004", "PYI005",
+    "PYI006", "PYI007", "PYI008", "PYI009", "PYI010", "PYI012", "PYI013", "PYI015", "PYI016", "PYI017", "PYI018", "PYI019", "PYI020",
+    "PYI025", "PYI026", "PYI029", "PYI030", "PYI032", "PYI033", "PYI034", "PYI035", "PYI036", "PYI041", "PYI042", "PYI043", "PYI044",
+    "PYI045", "PYI046", "PYI047", "PYI048", "PYI049", "PYI050", "PYI052", "PYI055", "PYI057", "PYI058", "PYI059", "PYI061", "PYI062",
+    "PYI063", "PYI064", "PYI066", "PT010", "PT014", "PT020", "PT025", "PT026", "PT031", "RET501", "SIM101", "SIM102", "SIM103", "SIM107",
+    "SIM113", "SIM114", "SIM115", "SIM117", "SIM118", "SIM201", "SIM202", "SIM208", "SIM210", "SIM211", "SIM220", "SIM221", "SIM222",
+    "SIM223", "SIM401", "SIM905", "SIM911", "TC004", "TC005", "TC007", "TC010", "PTH124", "PTH210", "FLY002", "I001", "N999", "PERF101",
+    "PERF102", "PERF402", "E722", "E902", "W605", "D419", "F401", "F402", "F404", "F406", "F407", "F501", "F502", "F503", "F504", "F505", "F506", "F507",
+    "F508", "F509", "F521", "F522", "F523", "F524", "F525", "F541", "F601", "F602", "F621", "F622", "F631", "F632", "F633", "F634", "F701", "F702", "F704",
+    "F706", "F707", "F811", "F821", "F822", "F823", "F841", "F842", "F901", "PGH005", "PLC0105", "PLC0131", "PLC0132", "PLC0205", "PLC0206",
+    "PLC0208", "PLC0414", "PLC3002", "PLE0100", "PLE0101", "PLE0115", "PLE0116", "PLE0117", "PLE0118", "PLE0303", "PLE0304", "PLE0305",
+    "PLE0307", "PLE0308", "PLE0309", "PLE0604", "PLE0605", "PLE0643", "PLE0704", "PLE1132", "PLE1142", "PLE1205", "PLE1206", "PLE1300",
+    "PLE1307", "PLE1310", "PLE1507", "PLE1519", "PLE1520", "PLE1700", "PLE2502", "PLE2510", "PLE2512", "PLE2513", "PLE2514", "PLE2515",
+    "PLR0124", "PLR0133", "PLR0206", "PLR0402", "PLR1704", "PLR1708", "PLR1711", "PLR1716", "PLR1722", "PLR1730", "PLR1733", "PLR1736",
+    "PLR2044", "PLW0120", "PLW0127", "PLW0128", "PLW0129", "PLW0131", "PLW0133", "PLW0177", "PLW0211", "PLW0245", "PLW0406", "PLW0602",
+    "PLW0604", "PLW0642", "PLW0711", "PLW1501", "PLW1507", "PLW1508", "PLW1509", "PLW1510", "PLW2101", "UP001", "UP003", "UP004", "UP005",
+    "UP006", "UP007", "UP008", "UP009", "UP010", "UP011", "UP012", "UP014", "UP017", "UP018", "UP019", "UP020", "UP021", "UP022", "UP023", "UP024",
+    "UP025", "UP026", "UP028", "UP029", "UP030", "UP031", "UP032", "UP033", "UP034", "UP035", "UP036", "UP037", "UP039", "UP040", "UP041", "UP043",
+    "UP044", "UP045", "UP046", "UP047", "UP049", "UP050", "FURB105", "FURB122", "FURB129", "FURB132", "FURB136", "FURB157", "FURB161",
+    "FURB162", "FURB163", "FURB166", "FURB167", "FURB168", "FURB169", "FURB177", "FURB181", "FURB188", "FURB192", "RUF007", "RUF008",
+    "RUF009", "RUF010", "RUF012", "RUF013", "RUF015", "RUF016", "RUF017", "RUF018", "RUF019", "RUF020", "RUF022", "RUF023", "RUF024",
+    "RUF026", "RUF028", "RUF030", "RUF032", "RUF033", "RUF034", "RUF040", "RUF041", "RUF046", "RUF048", "RUF049", "RUF051", "RUF053",
+    "RUF057", "RUF058", "RUF059", "RUF063", "RUF068", "RUF100", "RUF101", "RUF200", "TRY002", "TRY004", "TRY201", "TRY203", "TRY401",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -171,7 +212,7 @@ norecursedirs = [
 # `--no-cov` is a local-only override developers can pass on the CLI when
 # iterating; it must never be baked into addopts here.
 # -n is capped at 4 — never "auto": auto meant 14 workers on this 14-core machine, and on
-# model-loading paths each worker holds ~2 GB (torch/onnxruntime); stacked runs
+# model-loading paths each worker holds ~2 GB (torch); stacked runs
 # OOM-crashed the 48 GB machine on 2026-07-05 (Jetsam + WindowServer watchdog kill).
 addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 8 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark and not smoke and not live_eval and not docling and not graph_real_artifact and not runtime_parity\""  # -n 8 (raised from 4, 2026-07-20): default suite stubs the model backends → measured ~0.3GB/worker, memory-safe on 14-core/48GB. NEVER -n auto (=14 → 2GB/worker on real-model lanes OOM'd 2026-07-05). See CLAUDE.md testing policy.
 # Every StarletteDeprecationWarning is an error (warning-free policy, deliberately the whole
@@ -236,9 +277,10 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.uv.sources]
-# Scope the CPU-index pin to linux/amd64 only. PyPI's linux/arm64 torch pulls
-# nvidia/cuda too (see the uv.lock markers) but keeps PyPI here (narrowest
-# scope). macOS (arm64) and Windows torch on PyPI are already CPU-only, so
-# pinning them gains nothing.
-torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
-torchvision = { index = "pytorch-cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
+# Scope the CPU-index pin to linux, both amd64 and arm64: PyPI's linux torch wheel is the
+# CUDA build on either arch (it pulls nvidia/cuda; the lock held them before this pin), and
+# the CPU index serves `+cpu` wheels for x86_64 and aarch64. Without arm64 here, `uv sync` on linux/arm64
+# (Apple Silicon Docker: test runner, dev shell) resolved a ~5.8 GB CUDA venv. macOS and
+# Windows torch on PyPI are already CPU-only, so pinning them gains nothing.
+torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+torchvision = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
