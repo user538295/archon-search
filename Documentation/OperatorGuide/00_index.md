@@ -1,7 +1,7 @@
 **Purpose**: Table of contents and reading order for the Operator Guide.
 **Audience**: SREs and sysadmins running `archon-search` in production.
 **Status**: Draft
-**Last reviewed**: 2026-07-29
+**Last reviewed**: 2026-10-25
 **Next review**: 2027-07-29
 
 # Operator Guide
@@ -21,14 +21,14 @@ rather than duplicating them.
 
 | Doc | What it covers |
 |---|---|
-| [10_deployment_topologies.md](10_deployment_topologies.md) | Supported single-host topologies — bind address, supervision (launchd/systemd), reverse-proxy and TLS termination. |
+| [10_deployment_topologies.md](10_deployment_topologies.md) | Supported single-host topologies — bind address, supervision (launchd/systemd), shutdown signals and exit codes, the container image (size, read-only writable set, health check), reverse-proxy and TLS termination. |
 | [20_monitoring_and_alerts.md](20_monitoring_and_alerts.md) | What each endpoint (`/health`, `/ready`, `/status`, `/indexing-state`, `/telemetry/*`) tells you, operator thresholds, and known signal gaps. |
 | [30_logging.md](30_logging.md) | The `[logging]` section — file rotation, log level, text vs JSON output, and shipping structured logs to an aggregator. |
 | [40_backup_restore_disaster_recovery.md](40_backup_restore_disaster_recovery.md) | What to back up, the file-system snapshot vs scheduled `.tar.gz` backup loop, restore steps, and which DR scenarios are (and are not) supported. |
 | [50_maintenance_and_jobs.md](50_maintenance_and_jobs.md) | The in-process `MaintenanceLoop` — its `[maintenance]` policies, the manual trigger, and where per-collection health surfaces. |
 | [60_graph_operations.md](60_graph_operations.md) | Enabling the graph subsystem, required extras, rebuilding Leiden communities, inspection, GC, and optional LLM enrichment. |
 | [70_key_management_and_rotation.md](70_key_management_and_rotation.md) | Issuing, listing, revoking, and rotating API keys against a running server with no restart, via the `KeyStore`. |
-| [80_capacity_and_performance.md](80_capacity_and_performance.md) | The single-process capacity envelope, the cost surfaces that bend it, and sizing heuristics that work today. |
+| [80_capacity_and_performance.md](80_capacity_and_performance.md) | The single-process capacity envelope, the cost surfaces that bend it, startup and steady-state memory, thread counts, the `mps` accelerator lock, and sizing heuristics that work today. |
 | [90_incident_runbook.md](90_incident_runbook.md) | Triage steps for the failure modes the codebase produces today, using only the existing endpoints, logs, and CLI. |
 | [100_upgrading.md](100_upgrading.md) | Upgrade and rollback — reading CalVer, running startup vs job-based schema migrations, and where breaking changes and release notes live. |
 

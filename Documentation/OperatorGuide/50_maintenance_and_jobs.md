@@ -1,7 +1,7 @@
 **Purpose**: Explain the in-process maintenance loop, its policies and config, how to force a pass, and how per-collection maintenance health surfaces to operators.
 **Audience**: DevOps engineers and SREs running `archon-search` as a persistent service.
 **Status**: Draft
-**Last reviewed**: 2026-10-21
+**Last reviewed**: 2026-10-25
 **Next review**: 2027-07-29
 
 # Maintenance and Jobs
@@ -12,7 +12,7 @@ This guide covers the loop, its `[maintenance]` config, the manual trigger, and 
 
 ## What the loop remediates
 
-Each pass runs the enabled policies below. Four run **per non-excluded collection**; failed-ingest retry runs **once per pass** across all namespaces and collections.
+Each pass runs the enabled policies below. Four run **per non-excluded collection**; failed-ingest retry and table-version cleanup run **once per pass** (retry across all namespaces and collections, version cleanup across the whole search store and the graph store).
 
 | Policy | Config toggle | What it does |
 |---|---|---|
@@ -21,8 +21,9 @@ Each pass runs the enabled policies below. Four run **per non-excluded collectio
 | Expired-chunk pruning | `prune_expired_chunks` | Removes chunks whose `expires_at` is in the past (TTL). Requires the E2a schema migration (`POST /collections/{name}/migrate`) before TTL chunks are stored. See [TTL and scoping](../UserManual/130_ttl_and_scoping.md). |
 | Graph GC + async community rebuild | `graph_gc` | Prunes stale mention rows, removes orphaned graph nodes (and their edges) and sweeps mention-derived edges whose entities no longer co-occur in any chunk, then (when `[graph].gc_rebuild_communities = true`) enqueues an async per-collection community rebuild. Skipped entirely when `graph_gc = false` or `[graph].enabled = false`. See [Graph operations](60_graph_operations.md). |
 | Failed-ingest retry | `failed_ingest_retry` | Re-enqueues eligible FAILED ingest jobs as fresh jobs with `source="maintenance"` and runs them through the same ingest task as `POST /ingest`, with the original request's options; ages out or exhausts the rest to terminal `FAILED_EXPIRED` (see below). |
+| Table-version cleanup | always on; window `version_retention_hours` | Deletes superseded LanceDB table versions (manifest, transaction and data files) older than `[maintenance].version_retention_hours` (default 24, minimum 1) from the collection-meta table, each collection table (under its collection lock; a busy collection is skipped until the next pass) and the graph tables. The newest version is never removed, so a concurrent reader is unaffected, and one failing table does not stop the rest. FTS optimize uses the same window (LanceDB's own default is 7 days). See [Disk growth and version retention](#disk-growth-and-version-retention). |
 
-Maintenance is lower priority than all user work: it takes the same per-collection lock ingest uses, and skips (until the next interval) any collection currently locked by a live ingest. Auxiliary graph writes never fail a pass — they log a WARNING and continue.
+Maintenance is lower priority than all user work: it takes the same per-collection lock ingest uses (graph GC holds it across its snapshot, prune and orphan delete, so it cannot interleave with an ingest's graph write), and skips (until the next interval) any collection currently locked by a live ingest. Auxiliary graph writes never fail a pass — they log a WARNING and continue.
 
 ## Orphan cleanup rules
 
@@ -51,6 +52,7 @@ orphan_cleanup = true
 failed_ingest_retry = true
 prune_expired_chunks = true
 graph_gc = true
+version_retention_hours = 24 # superseded Lance table versions older than this are deleted by a pass (>= 1)
 retry_max_attempts = 3      # retries per submission of a source file, per collection, across restarts
 retry_max_age_hours = 72    # retry only while the request the retries descend from is this recent
 exclude = []                # e.g. ["scratch", "tenants/staging"]
@@ -58,10 +60,22 @@ exclude = []                # e.g. ["scratch", "tenants/staging"]
 
 Notes:
 
-- **`interval_hours = 0` disables the scheduled loop entirely** — but `POST /maintenance/trigger` still runs a one-off pass on demand.
+- **`interval_hours = 0` disables the scheduled loop entirely** — but `POST /maintenance/trigger` (admin key) still runs a one-off pass on demand. Table-version cleanup is part of a pass (a document delete also cleans its own table, with the same window), so **with the default `interval_hours = 0` the meta table and the graph tables are only cleaned when you trigger passes yourself** (cron on `archon-search maintenance run`) or set `interval_hours > 0`.
 - **`exclude`** matches the backup exclude pattern: a bare name (`scratch`) excludes that collection across all namespaces; a qualified `namespace/collection` (`tenants/staging`) excludes exactly one.
 - Passes never overlap. The single-loop design sleeps only after a full pass completes; a long pass simply delays the next scheduled run.
 - A missing or corrupt `.maintenance-state.json` on startup is not an error — the loop initializes fresh state and the first pass runs on schedule.
+
+## Disk growth and version retention
+
+Every ingest batch and every collection-meta write commits a new LanceDB table version, and LanceDB keeps the old versions' files until something deletes them. Without cleanup, disk use grows with ingest volume, not with corpus size. Measured with real LanceDB over 40 ingest-and-delete cycles of 300 chunks each (a pass every 10 cycles):
+
+| Case | Files | Size |
+|---|---|---|
+| No cleanup | 26,406 | 91.7 MiB |
+| Pass with 0 h retention (test only; the setting's minimum is 1) | 7 | ~0 MiB |
+| Pass with 24 h retention (the default) | 26,406 | 91.7 MiB |
+
+Nothing inside the window is removed, so with the default the growth only levels off once the oldest versions are 24 h old and a pass has run. Lower `version_retention_hours` to reclaim sooner; keep it long enough that an operator can still roll a table back, or a long-running reader keeps its version. A meta-table write now commits one version instead of two, which also halves that growth.
 
 ## Failed-ingest retry and `FAILED_EXPIRED`
 
@@ -94,7 +108,7 @@ curl -s -X POST http://localhost:8765/maintenance/trigger \
   -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY"
 ```
 
-Returns `202` with `{"status": "triggered"}`, or `{"status": "already_triggered"}` when a trigger is already pending or a pass is running. The trigger is non-blocking and never interrupts an in-progress pass — results appear in `GET /status`. This works even when `interval_hours = 0`.
+Returns `202` with `{"status": "triggered"}`, or `{"status": "already_triggered"}` when a trigger is already pending or a pass is running. The trigger needs an **admin** key (a namespace key gets `403`), is non-blocking and never interrupts an in-progress pass — results appear in `GET /status`. This works even when `interval_hours = 0`.
 
 ### CLI
 

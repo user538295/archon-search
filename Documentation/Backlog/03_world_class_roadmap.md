@@ -114,7 +114,7 @@ Goal: support real operational workflows — backup, migration, key rotation, ma
 - [x] **D5. Maintenance jobs and policies (item 26)** — stale-collection detection, compaction/vacuum where the backend needs it, orphan cleanup, failed-ingest retry, periodic integrity checks.
 - [x] **D6. Install-time / background provider validation (item 23)** — validate reranker provider config at install or warm-up while preserving the lazy-load startup contract.
 - [x] **D7. Hardening: multi-key auth with rotation (`SEC-1`)** — build on the existing `namespaces` map; key file format with expiry and revocation.
-- [x] **D8. Hardening: hashed `doc_id` mode for telemetry (`SEC-2`)** — `[telemetry] hash_doc_ids = true` applies HMAC-SHA256 to `result_doc_ids`; salt at `get_data_dir()/.telemetry-salt` (mode 0600); `doc_ids_hashed` field in every entry; `GET /status` exposes `telemetry.hash_doc_ids_enabled`. See `archon_search/telemetry/hasher.py` and ADR-05 Amendment. [[brief](../Backlog/D8-hashed-doc-id-telemetry-brief.md), [plan](../Backlog/D8-hashed-doc-id-telemetry-team-plan.md)]
+- [x] **D8. Hardening: hashed `doc_id` mode for telemetry (`SEC-2`)** — `[telemetry] hash_doc_ids = true` applies HMAC-SHA256 to `result_doc_ids`; salt at `get_data_dir()/.telemetry-salt` (mode 0600); `doc_ids_hashed` field in every entry; `GET /status` exposes `telemetry.hash_doc_ids_enabled`. See `archon_search/telemetry/hasher.py` and ADR-05 Amendment. [[brief](../Completed/D8-hashed-doc-id-telemetry-brief.md), [plan](../Completed/D8-hashed-doc-id-telemetry-team-plan.md)]
 - [x] **D9. MCP HTTP server wiring** — mount the fully-implemented FastMCP HTTP app at `/mcp` on the existing REST port (8765) inside `create_app()`'s lifespan; single uvicorn, shared `APIKeyMiddleware`, gated by `[mcp].enabled` (default `true`). 17 tools register (13 always + 4 key-management when `key_store` present); the authenticated namespace propagates per-request into every tool closure (`_get_request_namespace()`); telemetry writer + `key_store` are wired from the lifespan; `GET /status` and `GET /health` gain an `mcp: McpStatusDetail | null` field. Mount/namespace mechanism anchored by [ADR-09](../ADRs/09_mcp_http_mount_and_namespace_propagation.md). [[brief](../Completed/mcp-wiring-brief.md), [plan](../Completed/mcp-wiring-team-plan.md)]
 
 ## Phase E — Surface and integrations
@@ -311,7 +311,6 @@ quadrantChart
 
 - [`01_competitive_analysis_field.md`](./01_competitive_analysis_field.md) — feature-gap comparison versus R2R / Kotaemon / others.
 - [`02_competitive_analysis_marveen.md`](./02_competitive_analysis_marveen.md) — UX and memory-tier comparison.
-- [`04_graph_competitive_matrix.md`](./04_graph_competitive_matrix.md) — graph-track feature matrix vs. the 2026 field with before/after capability scores per E2b–E2j item (2026-07-03 review).
+- [`04_graph_competitive_matrix.md`](../Completed/04_graph_competitive_matrix.md) — graph-track feature matrix vs. the 2026 field with before/after capability scores per E2b–E2j item (2026-07-03 review).
 - [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) — debt register cross-referenced from items above (`SEC-1`, `EVL-1`, `CON-2`, `CON-4`, `ARCH-3`).
 - [`../../BREAKING.md`](../../BREAKING.md) — already-queued contract changes that interact with items 6, 7, 12.
-- [`../roadmap.md`](../roadmap.md) — active near-term roadmap.

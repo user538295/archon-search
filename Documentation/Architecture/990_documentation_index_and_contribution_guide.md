@@ -154,12 +154,12 @@ Security-focused documentation for security engineers, IT admins, and reviewers 
 | [`Backlog/01_competitive_analysis_field.md`](../Backlog/01_competitive_analysis_field.md) | Competitive analysis (field-level). |
 | [`Backlog/02_competitive_analysis_marveen.md`](../Backlog/02_competitive_analysis_marveen.md) | Competitive analysis (Marveen). |
 | [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) | Long-form roadmap for reaching world-class retrieval quality. Graph track E2b–E2j complete as of 2026-07-12. |
-| [`Backlog/e0-ux-limitations-and-file-type-gaps-brief.md`](../Backlog/e0-ux-limitations-and-file-type-gaps-brief.md) | E0 audit index: 14 user-facing limitations and 8 file-type gaps vs R2R. |
-| [`Backlog/e0a-file-type-completeness-brief.md`](../Backlog/e0a-file-type-completeness-brief.md) | E0a: markitdown core dep + 8 missing file extensions. |
-| [`Backlog/e0b-silent-failure-transparency-brief.md`](../Backlog/e0b-silent-failure-transparency-brief.md) | E0b: HyDE fallback signal, ANTHROPIC_API_KEY env, FAILED_EXPIRED state, telemetry truncation. |
-| [`Backlog/e0c-api-surface-fixes-brief.md`](../Backlog/e0c-api-surface-fixes-brief.md) | E0c: list_documents pagination, max_fanout config, top_k operator cap. |
-| [`Backlog/e0d-pdf-large-file-support-brief.md`](../Backlog/e0d-pdf-large-file-support-brief.md) | E0d: PDF streaming ingest + configurable size guard. |
-| [`Backlog/e0e-multi-collection-filters-brief.md`](../Backlog/e0e-multi-collection-filters-brief.md) | E0e: lift multi-collection filter v1 restriction. |
+| [`Completed/e0-ux-limitations-and-file-type-gaps-brief.md`](../Completed/e0-ux-limitations-and-file-type-gaps-brief.md) | E0 audit index: 14 user-facing limitations and 8 file-type gaps vs R2R. |
+| [`Completed/e0a-file-type-completeness-brief.md`](../Completed/e0a-file-type-completeness-brief.md) | E0a: markitdown core dep + 8 missing file extensions. |
+| [`Completed/e0b-silent-failure-transparency-brief.md`](../Completed/e0b-silent-failure-transparency-brief.md) | E0b: HyDE fallback signal, ANTHROPIC_API_KEY env, FAILED_EXPIRED state, telemetry truncation. |
+| [`Completed/e0c-api-surface-fixes-brief.md`](../Completed/e0c-api-surface-fixes-brief.md) | E0c: list_documents pagination, max_fanout config, top_k operator cap. |
+| [`Completed/e0d-pdf-large-file-support-brief.md`](../Completed/e0d-pdf-large-file-support-brief.md) | E0d: PDF streaming ingest + configurable size guard. |
+| [`Completed/e0e-multi-collection-filters-brief.md`](../Completed/e0e-multi-collection-filters-brief.md) | E0e: lift multi-collection filter v1 restriction. |
 | [`Backlog/store_cleanup_plan.md`](../Backlog/store_cleanup_plan.md) | `store.py` clean-code remediation: work slices with a proposed dependency order and a per-slice doc checklist. Unowned, unscheduled. |
 | [`Backlog/pytorch-runtime-plan.md`](../Backlog/pytorch-runtime-plan.md) | RT1: replace fastembed/ONNX Runtime with PyTorch for the embedder and reranker, phase by phase, with its implementation status. |
 
@@ -171,7 +171,6 @@ Security-focused documentation for security engineers, IT admins, and reviewers 
 
 | File | Purpose |
 | --- | --- |
-| [`roadmap.md`](../roadmap.md) | Active roadmap and milestones. |
 | [`quick_start.md`](../quick_start.md) | 5-minute onboarding for new contributors. |
 | [`docker-test-runner.md`](../docker-test-runner.md) | Docker test runner and dev-shell — running the full test suite (including smoke + graph extras) in a container; `archon-test-runner` and `archon-dev-shell` services. |
 | [`../../BREAKING.md`](../../BREAKING.md) | BREAKING.md — compatibility contract; every release that changes an existing API contract adds an entry here. |

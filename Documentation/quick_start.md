@@ -12,7 +12,7 @@ This guide covers a developer install from source. For the PyPI install path, se
 
 1. **`uv` is the only supported workflow.** Run everything through `uv sync` and `uv run`. Mixing `pip` against the same checkout will drift.
 2. **State lives under `~/.archon-search/`.** Config, API key, indexes, and logs all live there. Nothing in the repo gets mutated at runtime.
-3. **Only `GET /health`, `GET /ready`, `GET /docs`, `GET /openapi.json` and `GET /redoc` are unauthenticated.** Everything else requires a bearer token.
+3. **Only `GET /health` and `GET /ready` are unauthenticated.** Everything else requires a bearer token (`/docs`, `/redoc` and `/openapi.json` too, unless `[server].docs_enabled = true`).
 4. **The OpenAPI document is the contract.** When in doubt, read `GET /openapi.json` (or browse `GET /docs`).
 5. **Don't bake `--no-cov` or hardcoded versions into the project.** Both are forbidden by the engineering constraints (see `Architecture/010_engineering_principles_and_constraints.md`).
 
@@ -56,7 +56,7 @@ On first start the server:
 
 The key bootstrap is handled by `archon_search/key_manager.py`. Resolution order:
 
-1. **`ARCHON_SEARCH_API_KEY` environment variable** (highest priority — useful for Docker / CI / multi-host).
+1. **`ARCHON_SEARCH_API_KEY` environment variable** (highest priority — useful for Docker / CI / multi-host). It must be lowercase hex of at least 32 characters; any other value makes the server refuse to start.
 2. **`ARCHON_SEARCH_KEY_FILE` environment variable** redirects which file the server reads.
 3. **Default file**: `~/.archon-search/.search.env` (mode `600` on POSIX).
 
@@ -69,7 +69,7 @@ cat ~/.archon-search/.search.env
 To inject a key for the current shell session:
 
 ```bash
-export ARCHON_SEARCH_API_KEY="your-key-here"
+export ARCHON_SEARCH_API_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"   # >= 32 lowercase hex characters
 ```
 
 ## 4. Locate the Config File
@@ -90,7 +90,7 @@ uv run archon-search install --profile minimal --non-interactive --skip-preload
 curl http://127.0.0.1:8765/health
 ```
 
-`GET /health`, `GET /ready`, `GET /docs`, `GET /openapi.json` and `GET /redoc` are unauthenticated. Every other endpoint requires `Authorization: Bearer <key>`.
+`GET /health` (it returns only `{"status": "running"}`) and `GET /ready` are unauthenticated. Every other endpoint requires `Authorization: Bearer <key>`; `/docs` and `/redoc` do not exist unless `[server].docs_enabled = true`. The default key is the admin key (`/keys/rotate`, `/sync`, `/telemetry/*` and the other admin routes answer `403` to a namespace key); the key must be at least 32 lowercase hex characters.
 
 `/health` answers `200` as soon as the process is up, but `/ready` answers `503` until storage is connected, the startup model warm-up and the background model validation finished and the startup sync finished — poll `/ready` until it answers `200` before sending traffic.
 
@@ -179,6 +179,6 @@ The other excluded markers, including `runtime_parity` (real PyTorch weights aga
 - **Component map and module seams**: `Architecture/100_system_architecture_overview.md` is the canonical next read.
 - **Vision and non-goals**: `Architecture/000_introduction_and_guiding_principles.md`.
 - **Engineering constraints** (versioning, coverage, structural invariants): `Architecture/010_engineering_principles_and_constraints.md`.
-- **Forward plan**: `roadmap.md`.
+- **Forward plan**: `Backlog/03_world_class_roadmap.md`.
 - **Compatibility log**: `../BREAKING.md`.
 - **Evaluation harness maintenance** (fixtures, thresholds, waivers): `../tests/eval/README.md`.

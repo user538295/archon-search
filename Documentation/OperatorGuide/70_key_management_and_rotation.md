@@ -1,7 +1,7 @@
 **Purpose**: Operational runbook for issuing, listing, revoking, and rotating API keys against a running server — no restart required.
 **Audience**: Operators running `archon-search` in production.
 **Status**: Draft
-**Last reviewed**: 2026-10-17
+**Last reviewed**: 2026-10-25
 **Next review**: 2027-07-29
 
 # Key Management and Rotation
@@ -16,15 +16,14 @@ For the full auth model — key resolution order, the legacy env-var / TOML
 authoritative reference: [`../SecurityGuide/02_authentication_and_keys.md`](../SecurityGuide/02_authentication_and_keys.md).
 This page does not repeat it.
 
-## Two things to know first
+## Things to know first
 
 - **Raw tokens are never stored.** `keys.json` persists only the SHA-256 digest
   (`token_hash`) of each key. The raw bearer token is printed **once** at
   creation/rotation and is unrecoverable afterwards — capture it immediately.
   (`KeyRecord` in `key_manager.py`.)
-- **Every write is live.** `KeyStore` re-reads `keys.json` on every auth check,
-  so `create` / `revoke` / `rotate` take effect on the next request. No
-  `archon-search stop` / `start` cycle is needed.
+- **Every write is live.** `KeyStore` checks the `(mtime, size, inode)` of `keys.json` on every auth check and re-parses it only when that changed, so `create` / `revoke` / `rotate` (even one written by another process) take effect on the next request. No `archon-search stop` / `start` cycle is needed.
+- **Rotation and server-wide operations need an admin key; key formats are enforced.** `key rotate` / `POST /keys/rotate` / MCP `rotate_key` need the default key or a managed key created with `admin` (a namespace key gets `403`). A non-admin key can create, list and revoke only non-admin keys of its own namespace. The default key (`ARCHON_SEARCH_API_KEY` or `.search.env`) must be lowercase hex of at least 32 characters and a TOML `[namespaces]` token at least 32 printable ASCII characters, or the server refuses to start. See [`../SecurityGuide/02_authentication_and_keys.md`](../SecurityGuide/02_authentication_and_keys.md#admin-scope).
 
 ## Surfaces
 
@@ -197,7 +196,7 @@ If `keys.json` exists but cannot be read or parsed (unreadable, empty, not valid
 - **authenticates as if `keys.json` were empty**: managed keys stop working, while the default key and the TOML `[namespaces]` tokens still authenticate. `GET /keys` lists no keys at all, since the TOML records are stored in `keys.json` too.
 - **at startup** logs `keys.json is unreadable — TOML namespace keys not persisted; keys.json left unchanged` and starts anyway.
 
-Restore `keys.json` from a backup or repair it by hand, then retry; no restart is needed, since every request re-reads the file. One exception: if `keys.json` was already unreadable at startup, the TOML `[namespaces]` records were not written to it, so they stay out of `GET /keys` / `list_keys` until the next restart (the server writes them only at startup, `create_app` lifespan in `server/app.py`). Those tokens still authenticate in the meantime.
+Restore `keys.json` from a backup or repair it by hand, then retry; no restart is needed, since the next request notices the changed file. One exception: if `keys.json` was already unreadable at startup, the TOML `[namespaces]` records were not written to it, so they stay out of `GET /keys` / `list_keys` until the next restart (the server writes them only at startup, `create_app` lifespan in `server/app.py`). Those tokens still authenticate in the meantime.
 
 ### Leftover temp files
 

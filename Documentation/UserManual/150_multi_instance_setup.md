@@ -27,7 +27,7 @@ Host machine
 │   └── API key: ~/.archon-search/.search.env
 │
 └── Docker dev-UAT (docker compose up archon-dev)
-    ├── Port: 0.0.0.0:18765 → container 0.0.0.0:8765
+    ├── Port: 127.0.0.1:18765 → container 0.0.0.0:8765
     ├── Data dir: /data inside archon-dev-data named volume
     └── API key: /data/.search.env inside the volume
 ```
@@ -78,7 +78,7 @@ Verify the service is running:
 ```bash
 archon-search status       # should show: running (PID <n>, uptime <s>s)
 curl http://127.0.0.1:8765/health
-# {"status":"running","version":"...","mcp":{...}}
+# {"status":"running"}
 ```
 
 To start or stop after the initial install:
@@ -175,10 +175,10 @@ Confirm:
 
 ```bash
 curl http://127.0.0.1:18765/health
-# {"status":"running","version":"...","mcp":{...}}
+# {"status":"running"}
 ```
 
-> **Network exposure:** Docker binds `18765` on all host interfaces (`0.0.0.0`) by default. If you want loopback-only binding (recommended for a dev machine not behind a firewall), change the ports line in `docker-compose.yml` to `"127.0.0.1:18765:8765"`.
+> **Network exposure:** `docker-compose.yml` publishes every port on loopback only (`"127.0.0.1:18765:8765"`), so the instances are reachable from the Docker host only. To expose one to other machines, put a TLS reverse proxy on the host in front of it, or add a `docker-compose.override.yml` `ports:` entry for the interface you want (compose appends it), for example `"192.0.2.10:18765:8765"`.
 
 **Port conflict (Docker):**
 

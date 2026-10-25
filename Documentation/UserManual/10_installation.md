@@ -15,7 +15,7 @@
 ## Requirements
 
 - Python `>=3.12`.
-- macOS, Linux, or Windows (service install is supported on macOS and Linux only — see `archon_search/platform/`).
+- macOS, Linux, or Windows (service install is supported on macOS and Linux only — see `archon_search/platform/`). Measured platforms: macOS arm64 (CPU and Apple GPU `mps`) and Linux arm64 (CPU, in Docker). Linux x86_64, Windows, NVIDIA CUDA and Intel Macs have not been measured; the Windows-specific code paths (private file modes, directory fsync, `O_NOFOLLOW`) are guarded and unit-tested but have not been run on Windows.
 - A few hundred MB of disk for the index under `~/.archon-search/search/` (grows with corpus size).
 - Network access on the first run to download the embedding and reranker model weights from Hugging Face. They are stored under `~/.archon-search/models/`. With `HF_HUB_OFFLINE=1` in the server's environment a model that is not already there is an error instead of a download (`archon_search/model_store.py`).
 
@@ -69,7 +69,7 @@ To switch an existing CUDA install to the CPU-only build:
 - **uv:** run the same `uv tool install --upgrade --torch-backend cpu "archon-search[graph,code]"` command, with your extras. It converts the install in place and removes the `nvidia-*`/`cuda-*` packages.
 - **pip:** create a new virtual environment and run the CPU-only `pip install` command there. In the existing environment the command changes nothing, because the installed CUDA torch already satisfies the requirement. Forcing a torch reinstall or upgrade there replaces torch but leaves the `nvidia-*`/`cuda-*` packages behind, because pip does not remove dependencies that are no longer required.
 
-The CPU-only pin in this repository's `pyproject.toml` (`[tool.uv.sources]`, Linux x86_64 only) does not reach these installs. It is uv project configuration, not part of the published wheel's metadata ([uv docs](https://docs.astral.sh/uv/concepts/projects/dependencies/#dependency-sources): "Sources are only respected by uv"), so only `uv sync` in a checkout applies it. The `:latest` Docker image installs the CPU-only build through its own pip configuration — see [`140_running_with_docker.md`](./140_running_with_docker.md).
+The CPU-only pin in this repository's `pyproject.toml` (`[tool.uv.sources]`, every Linux architecture: x86_64 and arm64) does not reach these installs. It is uv project configuration, not part of the published wheel's metadata ([uv docs](https://docs.astral.sh/uv/concepts/projects/dependencies/#dependency-sources): "Sources are only respected by uv"), so only `uv sync` in a checkout applies it. The `:latest` Docker image installs the CPU-only build through its own pip configuration — see [`140_running_with_docker.md`](./140_running_with_docker.md).
 
 ## Install from a checkout
 
@@ -133,13 +133,13 @@ device = "auto"
 
 `[graph].device` is the separate setting for the graph extraction engine. It defaults to `cpu` and is never inherited from `[database].device`.
 
-The settings `[database].providers`, `[database].reranker_providers` and `[graph].providers` (ONNX Runtime execution providers) no longer exist. A config file that still holds one fails to load with `<section>.<key> was replaced by <section>.device (auto|cpu|mps|cuda); see BREAKING.md`: delete the key and set `device` instead.
+The settings `[database].providers`, `[database].reranker_providers` and `[graph].providers` (ONNX Runtime execution providers) no longer exist. `serve` and `start` refuse a config file that still holds one (`Error: [database].providers was replaced by [database].device (auto|cpu|mps|cuda); see BREAKING.md`). `archon-search wizard` tolerates them: it prints `Dropping removed config keys … (replaced by device; see BREAKING.md)`, removes them from the file and writes `device`. `config show`, `config get` and `config set` also still work on such a file (they edit the raw TOML), so you can also delete the keys by hand and run `archon-search config set database.device auto`.
 
 The wizard detects the accelerator with `archon_search/platform/runtime.py:detect_gpu_type` (NVIDIA when `nvidia-smi` succeeds, otherwise Apple Silicon) and asks whether to use it (`--non-interactive` accepts). It then writes `[database].device` (`archon_search/install/installer.py`): `"auto"` only after both the embedder and the reranker pass a load-and-run check on the accelerator, otherwise `"cpu"` — also when no GPU is detected, when you decline, and with `--disable-gpu`. When the check fails the wizard prints `Warning: Apple GPU validation failed — falling back to CPU.` (`CUDA` instead of `Apple GPU` on an NVIDIA host; the CUDA message also points to the section below), and the summary's `Device:` line shows `CPU`. The full per-case matrix is in [`20_wizard.md` — `[database]` section](./20_wizard.md#database-section); `[graph].device` is settled separately, see [`20_wizard.md`](./20_wizard.md#step-8--model-download).
 
 **Apple Silicon.** PyTorch's macOS build includes the Apple GPU (`mps`), so no extra package is needed: once the wizard's check passes on it, it writes `auto`, which picks `mps`.
 
-**PDF / image-OCR parsing.** PDF and image-OCR parsing (docling) also run on PyTorch, but archon-search passes no device setting to docling, so `[database].device` does not apply to them. Which PyTorch build you have depends on how you installed (see [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build)).
+**PDF / image-OCR parsing.** PDF and image-OCR parsing (docling) also run on PyTorch, but `[database].device` does not apply to them: docling chooses its own accelerator in the parse worker process. On macOS the worker sets `DOCLING_DEVICE=cpu` (an operator-set `DOCLING_DEVICE` wins), because docling 2.132 and later fail on Apple's `mps` device ("Cannot convert a MPS Tensor to float64 dtype"); a large scanned PDF is therefore CPU-bound there (measured about 3.8 s per MiB of scanned PDF on an Apple M-series CPU, which is why `[ingest].parse_timeout_seconds_per_mb` exists). Which PyTorch build you have depends on how you installed (see [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build)).
 
 ### NVIDIA GPU: run embedding and reranking on CUDA
 
@@ -169,7 +169,7 @@ The receipt does not record `--torch-backend`: upgrade by re-running this comman
 
 **pip.** Linux: the plain `pip install archon-search` in a new virtual environment already installs PyPI's CUDA 13 build. An existing environment that holds the CPU-only build needs the wizard's swap above, or a new virtual environment.
 
-**Checkout (`uv sync`).** On Linux x86_64 the lock pins the CPU-only torch, so a later `uv sync` re-syncs to that build over a CUDA build the wizard swapped in. Re-run the wizard after each `uv sync`.
+**Checkout (`uv sync`).** On Linux (x86_64 and arm64) the lock pins the CPU-only torch, so a later `uv sync` re-syncs to that build over a CUDA build the wizard swapped in. Re-run the wizard after each `uv sync`.
 
 None of this was run on a real NVIDIA GPU. The commands and the wizard's swap follow `archon_search/install/extras.py` and `archon_search/install/installer.py`; the swap and the CUDA check are covered by unit tests that stub the PyTorch install and the CUDA probe (`tests/test_install_cuda_torch.py`).
 

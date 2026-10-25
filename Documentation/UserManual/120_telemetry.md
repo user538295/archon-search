@@ -102,6 +102,8 @@ In other words, an "unset" range is not unbounded: it always resolves to a windo
 
 ### `GET /telemetry/stats`
 
+> **Admin key only** (this and `GET /telemetry/entries`): the telemetry directory spans every namespace, so a namespace key or `[namespaces]` token gets `403 {"detail": "this operation requires an admin API key"}` (since 2026-10-25).
+
 Verified against `archon_search/server/routes_telemetry.py` and `schemas_telemetry.py`:
 
 | Query parameter | Type | Notes |

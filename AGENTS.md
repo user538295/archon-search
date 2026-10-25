@@ -19,8 +19,14 @@ uv sync --dev
 # Run the server (entry point archon_search.cli.main:main)
 uv run archon-search
 
+# Run the server in the foreground (binds 127.0.0.1 natively; 0.0.0.0 only with ARCHON_SEARCH_CONTAINER=1)
+uv run archon-search serve
+
 # Full test suite (default addopts enforce --cov-fail-under=85)
 uv run pytest
+
+# Lint, zero findings (rule set pinned in pyproject.toml [tool.ruff.lint]; CI runs the same command)
+uvx ruff@0.17.2 check .
 
 # Single test file / single test
 uv run pytest tests/test_router.py
@@ -34,6 +40,11 @@ uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/te
 uv run pytest -m integration
 uv run pytest -m live
 uv run pytest -m benchmark   # needs a running server; auto-skips if unreachable
+uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov   # real-model latency; needs the model cache
+uv run pytest tests/eval/live/ --no-cov                               # live_eval: real model weights
+uv run pytest tests/smoke/ --no-cov                                   # smoke: spawns a real `archon-search serve`
+ARCHON_RUNTIME_PARITY_DATA_DIR=/tmp/rt_data uv run pytest -m runtime_parity tests/runtime_parity/ --no-cov -q -p no:cacheprovider -o addopts=   # PyTorch vs frozen fastembed outputs
+# Docker-gated tests (real image build): ARCHON_SEARCH_RUN_DOCKER_SMOKE=1 uv run pytest tests/test_docker_smoke.py -n0 -o addopts= --no-cov
 
 # Cut a release (tag + push; CI runs eval + publishes to PyPI via OIDC)
 bash release.sh           # interactive
@@ -54,17 +65,19 @@ The runtime is a layered pipeline; understanding the seam between these modules 
 - `collection_meta.py`, `description_generator.py`, `acl.py` add per-collection metadata, auto-generated descriptions, and access control.
 - `watcher.py` + `sync.py` keep on-disk corpora and the index in sync (watchdog-driven).
 - `jobs/` is the async job store (model + store) used by long-running ingest/reindex operations exposed over the API.
-- `key_manager.py` owns the API-key bootstrap (auto-generates `~/.archon-search/.search.env` with mode 600 on first start; `ARCHON_SEARCH_API_KEY` env overrides; `ARCHON_SEARCH_KEY_FILE` redirects).
+- `key_manager.py` owns the API-key bootstrap (auto-generates `~/.archon-search/.search.env` with mode 600 on first start; `ARCHON_SEARCH_API_KEY` env overrides and must be at least 32 lowercase hex characters; `ARCHON_SEARCH_KEY_FILE` redirects).
+- `torch_runtime.py`, `model_specs.py`, `model_store.py`, `reranker_loading.py`, `text_batching.py` are the PyTorch runtime (device resolution, `accelerator_lock`, `TRANSFORMERS_LOCK`, model download, batching). `warmup_coordinator.py` (`WarmupCoordinator`) single-flights model builds; `embedder_cache.py` is the per-collection embedder LRU (the default embedder is pinned); `model_validation.py` probes the pipeline's own embedder/reranker; `memory_budget.py` estimates model memory against the cgroup/RAM limit; `lance_session.py` creates LanceDB connections with capped caches.
+- `ingest_path_policy.py` + `_path_safety.py` decide which client-supplied ingest paths are readable (deny list, `[ingest].allowed_roots`, non-admin refusal when the list is empty); `_durable_io.py` owns private (0700/0600) atomic writes.
 - `config.py` + `constants.py` load `<data-dir>/archon-search.toml` (default `~/.archon-search/archon-search.toml`; `ARCHON_SEARCH_CONFIG` overrides) (see `archon-search.toml.example`).
 - `platform/` (`runtime.py`, `service.py`, `macos.py`, `linux.py`, `windows.py`) handles OS-specific service install/uninstall; `install.py` + `cli/install_cmd.py` wire it to the CLI.
 
 ### Server (`archon_search/server/`)
 
-`app.py` builds the FastAPI app; `mcp.py` exposes the same control-plane tools over MCP using the shared auth middleware (`middleware_auth.py`). All endpoints except `GET /health` require a `Bearer` token.
+`app.py` builds the FastAPI app; `mcp.py` exposes the same control-plane tools over MCP using the shared auth middleware (`middleware_auth.py`). All endpoints except `GET /health` and `GET /ready` require a `Bearer` token. `authz.py` holds the admin-scope policy shared by REST and MCP; `middleware_body_limit.py` enforces `[server].max_request_body_mb` (413) ahead of auth; `_ingest_admission.py` enforces `[ingest].max_concurrent_tasks` (503 `ingest_busy`); `graph_view_token.py` mints the short-lived `view_token` for the graph viewer; `warmup.py` runs warm-up and the background `/ready` recovery.
 
 Routes are split per resource: `routes_health.py`, `routes_state.py`, `routes_status.py`, `routes_search.py`, `routes_route.py`, `routes_collections.py`, `routes_jobs.py`, `routes_telemetry.py`. `schemas.py` + `schemas_telemetry.py` are the Pydantic request/response models. `GET /openapi.json` is the authoritative API contract — keep it in sync, and record breaking changes in `BREAKING.md`.
 
-MCP tools (registered in `mcp.py`, 9 total): `search`, `search_with_context`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document`. They share the REST auth layer but their names do not mirror the REST routes 1:1 — consult `mcp.py` as the source of truth.
+MCP tools (registered in `mcp.py`, 20 total): `search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document`, `update_collection`, `export_collection`, `import_collection`, `create_key`, `list_keys`, `revoke_key`, `rotate_key`, `get_graph`, `get_graph_cross_collection`, `graph_impact`. They share the REST auth layer but their names do not mirror the REST routes 1:1 — consult `mcp.py` as the source of truth.
 
 ### CLI (`archon_search/cli/`)
 
@@ -80,7 +93,7 @@ Opt-in and **disabled by default**. `writer.py` appends one JSONL line per call 
 
 ## Repository conventions
 
-- Default pytest run excludes `live`, `eval`, `benchmark`, `integration` markers. Coverage gate (`--cov-fail-under=85`) applies to the default single-run invocation. Split / matrix CI runs MUST `coverage combine` before applying the threshold; never bake `--no-cov` into `addopts`.
+- Default pytest run excludes the `live_benchmark`, `smoke`, `live_eval`, `docling`, `graph_real_artifact` and `runtime_parity` markers (`-m` filter in `addopts`; the heavyweight directories are also in `norecursedirs`); `live` tests skip because the autouse fixture clears `ANTHROPIC_API_KEY`, and docker-gated tests skip unless `ARCHON_SEARCH_RUN_DOCKER_SMOKE=1`. The default suite stubs the PyTorch model backends (`real_torch_backends` opts out). Coverage gate (`--cov-fail-under=85`) applies to the default single-run invocation. Split / matrix CI runs MUST `coverage combine` before applying the threshold; never bake `--no-cov` into `addopts`. Strategy: `Documentation/Architecture/200_testing_strategy.md`.
 - The package directory is `archon_search/` (underscore), the distribution is `archon-search` (hyphen). `pyproject.toml` `[tool.hatch.build.targets.wheel].packages` is explicit about this — don't "fix" it.
 - Breaking REST/MCP changes go in `BREAKING.md`.
 - Telemetry's no-raw-query guarantee is structural: do not add a `query` parameter to telemetry entry constructors.
@@ -115,7 +128,7 @@ Topic-specific entry points:
 | OpenAPI as authoritative, MCP/REST relationship | `Architecture/520_api_design_and_contracts.md` |
 | Tech-debt register | `Architecture/530_technical_debt_refactoring_roadmap.md` |
 | ADRs (LanceDB, embedder, reranker, router, telemetry) | `Documentation/ADRs/` |
-| Roadmap, planned work | `Documentation/roadmap.md`, `Documentation/Backlog/` |
+| Roadmap, planned work | `Documentation/Backlog/03_world_class_roadmap.md`, `Documentation/Backlog/` |
 | Onboarding (devs) | `Documentation/quick_start.md`, `contributing.md` |
 | End-user / operator guides | `Documentation/UserManual/` |
 

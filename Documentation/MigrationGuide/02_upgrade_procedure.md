@@ -1,7 +1,7 @@
 **Purpose**: Provide a generic, repeatable upgrade procedure for `archon-search`, including the rollback path.
 **Audience**: Operators upgrading an installed copy of `archon-search`; maintainers writing release notes that link here.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
+**Last reviewed**: 2026-10-25
 **Next review**: 2027-05-20
 
 # Upgrade Procedure
@@ -13,7 +13,7 @@ Upgrades are a five-step loop: read, back up, stop, install, verify. The same lo
 1. **Read `BREAKING.md` first.** Skipping this step is the most common cause of post-upgrade outages.
 2. **Back up `~/.archon-search/` before anything else.** All durable state lives there; a single tarball is a complete recovery point.
 3. **Stop the server before swapping the wheel.** Running processes hold open file handles into the state directory.
-4. **Verify with `GET /health` and a smoke search**, not by reading the version string alone.
+4. **Verify with `GET /ready` (and `GET /status` with a key) and a smoke search**, not by reading the version string alone.
 
 ## Step 1 — Read `BREAKING.md` for your range
 
@@ -75,8 +75,10 @@ pip install archon-search==26.5.123
 
 After install:
 
-1. Diff your `~/.archon-search/archon-search.toml` against the current template `archon-search.toml.example` at the repo root for the version you just installed. `load_config` in `archon_search/config.py` only reads an explicit allowlist of known keys per section, so unknown or stale top-level keys are effectively skipped (not raised) — but a renamed key will silently revert to its default. The one **explicit** silent coercion in the loader is `telemetry.export_enabled = true`, which is logged as a warning and forced back to `false` (reserved for a future release; see `config.py` around the `export_enabled` branch). See [`04_config_migration.md`](./04_config_migration.md).
-2. If `BREAKING.md` for your range names any config key changes, apply them now.
+1. Diff your `<data-dir>/archon-search.toml` (default `~/.archon-search/archon-search.toml`) against the current template `archon-search.toml.example` at the repo root for the version you just installed. `load_config` in `archon_search/config.py` only reads an explicit allowlist of known keys per section, so unknown or stale keys are skipped (not raised) — but a renamed key silently reverts to its default. Three removed keys are the exception and are refused: `[database].providers`, `[database].reranker_providers` and `[graph].providers` make `serve`, `start` and `install` exit `1` (`archon-search wizard` drops them); see [`04_config_migration.md`](./04_config_migration.md). The one **explicit** silent coercion in the loader is `telemetry.export_enabled = true`, which is logged as a warning and forced back to `false` (reserved for a future release; see `config.py` around the `export_enabled` branch).
+2. If `BREAKING.md` for your range names any config key changes, apply them now. For the 2026-10-25 security and operations entries that means, at least: every API key at least 32 characters (`ARCHON_SEARCH_API_KEY` lowercase hex; `[namespaces]` tokens printable ASCII), `[ingest].allowed_roots` if non-admin keys send paths, and `[server].host` / `cors_origins` / `docs_enabled` if you relied on the old network defaults. A key shorter than 32 characters, or an invalid key file, stops the server at start with `Error: …` and exit `1`.
+3. Admin-only routes (`/sync`, `/backup/trigger`, `/maintenance/trigger`, `/telemetry/*`, `/keys/rotate`, `POST /collections/`) now need the default key or an `admin: true` managed key; point cron jobs and CI at the right key.
+4. Coming from the fastembed / ONNX build: stop the service **before** installing (launchd or systemd would crash-loop on the old keys), then follow the PyTorch entry's Migration in `BREAKING.md` (remove the three keys, set `device`, `archon-search start`, check `/ready`, then free the orphaned ONNX files with `hf cache rm`, never `rm -rf` on `models--*`). Existing indexes need no re-index.
 
 ## Step 5 — Restart and verify
 
@@ -87,11 +89,12 @@ archon-search start
 Wait for the bind to complete, then run the two-part verification:
 
 ```bash
-# 5a. Health probe — unauthenticated, returns the running version.
-curl -sf http://127.0.0.1:8765/health | jq .
+# 5a. Readiness probe — unauthenticated. `/health` answers only {"status": "running"}; the version is in GET /status.
+curl -sf http://127.0.0.1:8765/ready | jq .
 
-# 5b. Smoke search — uses the auth key from ~/.archon-search/.search.env.
+# 5b. Smoke search — uses the auth key from <data-dir>/.search.env.
 KEY=$(grep -E '^ARCHON_SEARCH_API_KEY=' ~/.archon-search/.search.env | cut -d= -f2-)
+curl -sf -H "Authorization: Bearer $KEY" http://127.0.0.1:8765/status | jq .version
 curl -sf -X POST http://127.0.0.1:8765/search \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
@@ -100,7 +103,7 @@ curl -sf -X POST http://127.0.0.1:8765/search \
 
 Expected outcomes:
 
-- `GET /health` returns 200 and the version reported matches the wheel you just installed.
+- `GET /ready` returns 200 with `"ready": true` (a replica whose default model cannot load answers `503` `checks.models: "fail"` and retries in the background; first starts download model weights and can take minutes). `GET /status` reports the version that matches the wheel you just installed.
 - `POST /search` returns 200 with a `{"results": [...], "acl_filtered": <bool>}` payload. Even an empty `results` array is a passing smoke test — it confirms auth, routing, and the response schema are intact.
 
 If either probe fails, jump to **Rollback** below; do not attempt to debug in place against a partially-upgraded install.

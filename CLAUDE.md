@@ -20,9 +20,10 @@ endpoint sharing the same auth. Runtime state lives under `~/.archon-search/`.
 ```bash
 uv sync --dev                  # dev install
 uv run archon-search           # entry point archon_search.cli.main:main
-uv run archon-search serve     # foreground (container / direct-run); host defaults to 0.0.0.0,
-                               # never touches launchd/systemd, blocks until SIGTERM/Ctrl-C
+uv run archon-search serve     # foreground (container / direct-run); binds 127.0.0.1 natively, 0.0.0.0 only
+                               # when ARCHON_SEARCH_CONTAINER=1; never touches launchd/systemd, blocks until SIGTERM/Ctrl-C
 uv run pytest                  # full suite — see tests/CLAUDE.md before running
+uvx ruff@0.17.2 check .        # lint, zero findings (rule set pinned in pyproject.toml; CI runs the same)
 bash release.sh                # tag + push; CI runs eval + publishes to PyPI via OIDC
                                # `-y` non-interactive, `--dry-run` preview
 ```
@@ -75,6 +76,16 @@ These are the rules that are not discoverable by reading one file. Everything el
 - **`search_with_context` rejects any non-null `graph_mode`** — permanent design decision, not deferred
   work. Use `search` instead.
 - Every new `Path.home()` callsite needs a `tests/path_home_allowlist.txt` entry (file, lineno, sha).
+- **Authorization is enforced on the server, in one place each.** Admin-only routes and MCP tools go through
+  `server/authz.py` (only a default-namespace key with `admin` is admin; TOML namespace tokens never are).
+  Collection ownership is checked by `SearchStore` (`CollectionOwnershipError`, fixed wire text) and at the entry
+  of `SearchPipeline.ingest_*`. Client-supplied ingest paths go through `ingest_path_policy.py` / `_path_safety.py`
+  (deny list always, `[ingest].allowed_roots` for non-admin callers). Archive import/export is confined to
+  `<data>/exports/<ns>/` and `<backup>/<ns>/`. ACL sidecar problems fail closed.
+- **Model loads and accelerator work are serialized.** `torch_runtime.accelerator_lock` (every load and batch
+  forward on `mps`) and `TRANSFORMERS_LOCK` (every `transformers` import and `from_pretrained`; order: accelerator
+  lock, then this one). Warm-up goes through `warmup_coordinator.py`; validation probes the pipeline's own
+  embedder/reranker, never fresh copies. LanceDB connections go through `lance_session.py` (capped caches).
 
 ## Documentation map
 

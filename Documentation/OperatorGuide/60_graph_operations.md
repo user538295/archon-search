@@ -3,7 +3,7 @@
 Purpose: operate the graph subsystem in production — enable it, rebuild communities, inspect the graph, and keep it healthy.
 Audience: operators running `archon-search serve`.
 Status: current.
-Last reviewed: 2026-09-07.
+Last reviewed: 2026-10-25.
 
 The graph subsystem builds an entity/relationship graph from ingested content and powers the graph search modes (`naive`, `local`, `global`, `ppr`). This guide covers the operational surface: enabling it, the extras and NER model it needs, rebuilding Leiden communities, inspecting the graph, garbage collection, and optional LLM enrichment. For how end users query the graph, see [`../UserManual/65_graph_search.md`](../UserManual/65_graph_search.md) and [`../UserManual/70_code_graph_and_impact.md`](../UserManual/70_code_graph_and_impact.md).
 
@@ -50,7 +50,7 @@ GRAPH_NER_MODEL_NAME     = "knowledgator/gliner-relex-multi-v1.0"
 GRAPH_NER_MODEL_REVISION = "e990d9ba6f471b846f7d78bf7e4b4dab11761ada"
 ```
 
-**The runtime downloads it lazily on first use.** `ProseExtractionBackend.load()` (`prose_extraction_backend.py`) calls `load_gliner_model(GRAPH_NER_MODEL_NAME, GRAPH_NER_MODEL_REVISION)`, which runs `GLiNER.from_pretrained(..., cache_dir=get_graph_models_dir())` off the event loop, once per process, and `huggingface_hub` populates the cache if it is empty. So a networked host needs no manual provisioning step at all — the first prose ingest after enabling the graph pays the download, and every later one is warm.
+**The runtime downloads it lazily on first use, from the pinned revision, by an allow-list.** `ProseExtractionBackend.load()` (`prose_extraction_backend.py`) calls `load_gliner_model(GRAPH_NER_MODEL_NAME, GRAPH_NER_MODEL_REVISION)`, off the event loop, once per process. That first runs `model_store.ensure_pinned_snapshot`, which downloads exactly the seven files in `GRAPH_NER_MODEL_FILES` (`model.safetensors`, `gliner_config.json`, `tokenizer.json`, `tokenizer_config.json`, `spm.model`, `added_tokens.json`, `special_tokens_map.json`) at the pinned revision into `get_graph_models_dir()` (a cache hit touches no network, and `HF_HUB_OFFLINE=1` turns a miss into an error), and then loads that local directory with `GLiNER.from_pretrained(..., local_files_only=True)`, so gliner cannot fetch anything else: not the rest of the repo, not the backbone's config or tokenizer at an unpinned revision, and no pickle weights. The import, the build and the `.to(device)` run under the transformers lock and the accelerator lock like the other models. So a networked host needs no manual provisioning step at all — the first prose ingest after enabling the graph pays the download, and every later one is warm.
 
 The cache directory is derived, never hand-written (`paths.get_graph_models_dir()`):
 
@@ -74,7 +74,7 @@ Only a missing `gliner` *package* is fatal, and that is caught before any ingest
 archon-search wizard
 ```
 
-Enabling code indexing installs `[code]` and `[graph]` as one bundle and pre-warms the checkpoint (`_prewarm_graph_model`, `install/prewarm.py`) into the same `get_graph_models_dir()` cache the runtime uses, so the pre-warm and the first ingest share one copy rather than two. The wizard discloses the two download costs separately before fetching anything — about 18 MB for the tree-sitter parsers and an estimated 1218 MB for the prose model, licensed Apache-2.0 — and that same estimate feeds the install-time disk guard. The figure is a declared estimate, not a verified byte count: the checkpoint is fetched by `GLiNER.from_pretrained`, never through the digest-pinned provisioning seam, so it is neither digest- nor size-verified on arrival.
+Enabling code indexing installs `[code]` and `[graph]` as one bundle and pre-warms the checkpoint (`_prewarm_graph_model`, `install/prewarm.py`) into the same `get_graph_models_dir()` cache the runtime uses, so the pre-warm and the first ingest share one copy rather than two. The wizard discloses the two download costs separately before fetching anything — about 18 MB for the tree-sitter parsers and an estimated 1218 MB for the prose model, licensed Apache-2.0 — and that same estimate feeds the install-time disk guard. The figure is a declared estimate, not a verified byte count: the checkpoint is fetched through `ensure_pinned_snapshot` (pinned revision, seven-file allow-list), never through the digest-pinned provisioning seam, so it is neither digest- nor size-verified on arrival beyond what the hub client does.
 
 A failed pre-warm is **non-fatal**: it logs a WARNING and the wizard continues, leaving the model to download on first use instead. After the pre-warm the wizard runs its two-stage device probe and settles `[graph].device` — it offers an accelerator only when one was requested *and* the pre-warmed model actually landed on it, and otherwise settles without prompting. A failed graph pre-warm writes `device = "cpu"` when an accelerator was requested, and writes nothing when none was — leaving any existing `[graph].device` value in place (see [Step 8 of the wizard guide](../UserManual/20_wizard.md#step-8--model-download)).
 
@@ -223,7 +223,7 @@ curl -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" \
 
 Responses are capped and truncated deterministically: nodes by highest salience first (`max_inspection_nodes`, default `5000`), edges by highest weight first (`max_inspection_edges`, default `25000`). The `truncated` flag in the JSON response tells you when a cap was hit — raise the caps in `[graph]` if you need the full graph. For the exhaustive field list, see `GET /openapi.json`.
 
-There is also a browser graph viewer at `GET /graph/{collection}/view` (HTML, auth via `Authorization` header or `?token=`). It is documented for users in [`../UserManual/65_graph_search.md`](../UserManual/65_graph_search.md).
+There is also a browser graph viewer at `GET /graph/{collection}/view` (HTML). A browser cannot send an `Authorization` header, and the API key must not go in a URL, so the viewer is opened with a 60-second **view token**: `POST /graph/{collection}/view-token` (with your Bearer key) returns a `view_url` that carries `?view_token=…`. The old `?token=<API key>` form no longer exists. A view token is scoped to one collection and one namespace, is accepted only on the viewer page and `GET /graph/{collection}`, dies on server restart, and is redacted from the `uvicorn.access` log. It is documented for users in [`../UserManual/65_graph_search.md`](../UserManual/65_graph_search.md).
 
 ---
 
@@ -238,7 +238,7 @@ GC does two sweeps in one pass (`delete_orphan_nodes_and_edges`, `graph_store.py
 
   The support test is co-mention of the two endpoints, and that is weaker than "the model still asserts this relation". A typed edge whose endpoints still share a chunk, but whose relation the model no longer asserts after a text edit, a `relation_confidence` change or a checkpoint revision, is **not** collectable and stays in place. There is no per-relation support ledger.
 
-If the mentions table is absent or empty, GC skips both sweeps rather than risk deleting live rows. When GC removes **either** nodes or edges and `gc_rebuild_communities = true` (default), it triggers a community rebuild at CPU priority `gc_rebuild_cpu_priority` (`low`/`normal`/`high`; per-thread nice is Linux-only) — Leiden partitions over the edge list, so a deleted relationship makes the stored groupings stale even when every member node survives.
+If the mentions table is absent, or empty while the collection still holds chunks, GC skips both sweeps rather than risk deleting live rows. A collection that holds no chunks at all (its last document was deleted) is the exception: the maintenance loop sees the empty chunk listing and tells the sweep the empty mentions table is authoritative, so the emptied collection's mention-derived nodes and edges are removed; file-derived def/ref nodes and edges keep their exemption. When GC removes **either** nodes or edges and `gc_rebuild_communities = true` (default), it triggers a community rebuild at CPU priority `gc_rebuild_cpu_priority` (`low`/`normal`/`high`; per-thread nice is Linux-only) — Leiden partitions over the edge list, so a deleted relationship makes the stored groupings stale even when every member node survives.
 
 **Timing:** a stale relationship disappears at the next maintenance GC pass, not at re-ingest. Ingest never deletes edges, deliberately — edge rows are shared between every document that asserts the same pair, so a document-scoped delete would erase relationships other documents still support.
 

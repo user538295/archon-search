@@ -334,9 +334,9 @@ Each `acl_gate` (`AclGateSchema`) carries:
 
 | Field | Meaning |
 | --- | --- |
-| `allowed_principals` | The chunk's resolved ACL principal list (`null` when no ACL applies to the chunk, including fail-open cases reported in `warnings`). |
+| `allowed_principals` | The chunk's resolved ACL principal list (`null` when the chunk declares no ACL; `[]` is deny-all, which is also what a declaration that cannot be used resolves to — an invalid `_acl`, or an oversized, symlinked, non-UTF-8 or unreadable sidecar — with the reason in `warnings`). |
 | `source` | `"frontmatter"`, `"sidecar"`, or `"collection_default"`; `null` when no provenance is stored (pre-G15 chunk, or a collection without the provenance columns) or the stored value is none of these. |
-| `sidecar_path` | Path of the `.acl` sidecar, when `source="sidecar"` (also set when that sidecar was ignored — see `warnings`). |
+| `sidecar_path` | Path of the `.acl` sidecar, when `source="sidecar"` (also set when that sidecar was unusable, in which case the chunk is deny-all — see `warnings`). |
 | `warnings` | Structured warnings raised while resolving the ACL (malformed value, oversized sidecar, …). |
 
 When `acl_context` is `false` (the default), the `acl_gate` key is still present on every result, with the value `null` (`GET /openapi.json` lists the field as optional only because it defaults to `null`). `POST /explain` always populates `acl_gate` on its results regardless of this flag. `acl_context` and `acl_gate` are REST-only: the MCP `search` and `search_with_context` tools take no `acl_context` input, and their results carry no `acl_gate` key. ACL enforcement itself — how principals gate visibility, sidecar format, the `acl_filtered` response flag — lives in [`../SecurityGuide/03_authorization_and_acl.md`](../SecurityGuide/03_authorization_and_acl.md).

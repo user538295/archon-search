@@ -42,11 +42,11 @@
 
 ## Large files and the size guard
 
-There is no fixed size ceiling on ingestion. Large PDFs (research papers, 500-page manuals, ebooks) ingest successfully — docling materialises the document in memory, so RAM during conversion scales with document size. That conversion happens in a separate worker process (see [Parse memory](#parse-memory-pdfs-and-images) below), so it does not permanently inflate the server. To protect memory-constrained hosts, set an explicit guard:
+Ingestion has a default size ceiling of 100 MiB per file (`[ingest].max_file_mb`; before 2026-10-25 the default was unlimited). Large PDFs (research papers, 500-page manuals, ebooks) up to that size ingest successfully — docling materialises the document in memory, so RAM during conversion scales with document size. That conversion happens in a separate worker process (see [Parse memory](#parse-memory-pdfs-and-images) below), so it does not permanently inflate the server. Raise the guard for bigger files, lower it on memory-constrained hosts, or set `0` for no limit:
 
 ```toml
 [ingest]
-max_file_mb = 100   # default 0 = unlimited (no size guard)
+max_file_mb = 100   # default 100 MiB; 0 = unlimited (no size guard)
 ```
 
 The guard fires **before** parsing at two levels (`archon_search/config.py`, `pipeline.ingest_file()`, and the `POST /ingest` route):
@@ -55,6 +55,12 @@ The guard fires **before** parsing at two levels (`archon_search/config.py`, `pi
 - **Directory ingest / batch** → oversized files do not fail the whole job; each produces a per-file `IngestResult` with `code="file_too_large"` inside the job, and other files continue.
 
 The CLI performs no local size check — it prints the server's 413 message and exits `1`.
+
+**Other per-file limits.** A PDF or image conversion is bounded by `[ingest].parse_timeout_seconds` (300) plus `parse_timeout_seconds_per_mb` (10) per MiB of the file; on timeout that one document fails with a sanitized error and the parse worker is replaced. A zip-based Office file (docx, pptx, xlsx, epub) is refused before it is opened when its central directory lists more than `max_zip_entries` (10000) entries or more than `max_zip_uncompressed_mb` (512) MiB uncompressed. Only regular files are read: a symlink, FIFO or device is refused. On macOS docling runs on the CPU, so a large scanned PDF is slow (about 3.8 s per MiB measured on an Apple M-series Mac).
+
+**What a directory ingest walks.** Directory ingest does not enter hidden directories (names starting with `.`), `node_modules`, `__pycache__`, `venv` or `site-packages`, and files in them are not indexed (this changed on 2026-10-25; point `path` at the file itself or at a directory outside them to index such files). A tree with more than `[ingest].max_discovered_files` (100000) candidate files is refused. One INFO line reports how many files were skipped because they sit in a location the server never reads.
+
+**Concurrency.** At most `[ingest].max_concurrent_tasks` (4) ingest jobs run at once. A request over the limit gets `503` with code `ingest_busy` and a `Retry-After` header, and nothing is created or queued — retry after the header's delay. A request body over `[server].max_request_body_mb` (32) gets `413` with code `request_body_too_large` before authentication; send large corpora as several `POST /ingest` calls or by path.
 
 **Memory under load (D4).** For large files and large corpora the pipeline flushes embed+write batches incrementally (`_INGEST_CHUNK_BATCH_SIZE = 512` chunks per batch) instead of accumulating all chunks and vectors before the first write. This keeps single-file and directory ingests within a bounded footprint (~2 MB per batch) so they complete on 1 GB containers regardless of corpus size. Batch size is an internal constant, not a config knob. Parse-time memory (docling/markitdown internals) is out of D4's scope — for docling formats it is bounded by the worker recycle described next, and otherwise by the size guard above.
 
@@ -68,6 +74,43 @@ max_tasks_per_child = 25   # default; must be >= 1
 ```
 
 Lower it to cap memory harder, raise it to pay the worker restart (~9 s) less often. Images (not PDFs — PDFs keep docling's own OCR resolution) are OCR'd at their native resolution rather than upscaled 3×, which cuts retained memory further; recognised text was unchanged on the text-bearing image tested, not a guarantee that resolution never affects OCR quality on arbitrary imagery. `max_file_mb` does **not** help here — it measures bytes on disk, and a 200 KB icon can cost hundreds of MB of RAM to OCR.
+
+## Letting a team key ingest by path
+
+A **path** ingest (`archon-search ingest PATH`, `POST /ingest` with `path`, `POST /collections/`, the MCP `ingest_file` / `ingest_directory` tools) reads a file **on the server host**, so the server limits where it may read from:
+
+- **Always denied, for every key:** the data directory and the server's own state (keys, config, logs, database, telemetry, backups), `/proc`, `/sys`, `/dev`, and credential files and directories — `.ssh`, `.aws`, `.gnupg`, `.kube`, `.docker`, `.env` and `.env.*`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.pgpass`, private keys (`id_*`, `*.pem`, `*.p12`, `*.pfx`, `*.jks`, and `*.key` files that start with a PEM header), `/etc/passwd`, `/etc/shadow`, browser profiles and macOS Keychains. A symlink or hard link to a denied file is denied too.
+- **Admin key (the default key):** may read any other path while `[ingest].allowed_roots` is empty (the default).
+- **Non-admin keys (namespace keys):** may supply a path **only** when `[ingest].allowed_roots` lists at least one directory, and only inside those directories. With an empty list a non-admin key cannot ingest by path at all. Inline `documents` always work, and so does a single-key deployment (the default key is admin).
+
+To let a team ingest from `/srv/docs/team-a` on a fresh install:
+
+1. Set the roots in `~/.archon-search/archon-search.toml` (absolute paths) and restart the server (the config is read only at startup, see [`40_running_the_server.md`](./40_running_the_server.md#applying-config-changes)):
+
+   ```toml
+   [ingest]
+   allowed_roots = ["/srv/docs/team-a"]
+   ```
+
+2. Create a non-admin key for the team's namespace with the default (admin) key. The CLI uses the key file automatically and prints the token exactly once:
+
+   ```bash
+   archon-search key create --namespace team-a --label "team a ingest"
+   ```
+
+   The REST equivalent is `POST /keys` with `{"namespace": "team-a"}` (`admin` defaults to `false`; only an admin key can set it to `true`). A `[namespaces]` token in the TOML is also non-admin; it must be at least 32 printable characters.
+
+3. The team ingests with that token (`ARCHON_SEARCH_API_KEY=<token>` or `--api-key`). A path inside the roots works; anything else is refused with `400`:
+
+   | Situation | REST (`POST /ingest`) | MCP tool |
+   | --- | --- | --- |
+   | `allowed_roots` empty | `400` `{"detail": "path is unsafe: path-based ingest by this API key needs the operator to set [ingest].allowed_roots; send the content as inline documents instead"}` | `{"error": "<same text>", "code": "path_unsafe"}` |
+   | Path outside the roots | `400` `"path is unsafe: outside_allowed_roots"` | `{"error": "path is unsafe: the path is outside the directories this server is allowed to ingest from", "code": "path_unsafe"}` |
+   | Denied location | `400` `"path is unsafe: denied_location"` | `{"error": "path is unsafe: this location is never ingested (server state, credentials, system files)", "code": "path_unsafe"}` |
+
+   The same text and code apply to a file *inside* a root that is a denied location. Paths named in `[collections]` are operator-trusted: they skip `allowed_roots`, but the deny list still applies.
+
+At startup the server logs one WARNING when non-admin keys exist and `allowed_roots` is empty (`non-admin API keys exist but [ingest].allowed_roots is empty: path-based ingest is refused for them (inline documents still work)`). Keys created later are not announced; the refusal itself names the setting.
 
 ## CLI commands
 
@@ -179,10 +222,10 @@ Proxies `POST /collections/{name}/migrate`. Without flags (or with `--dry-run`) 
 
 The same operations are available over HTTP for programmatic use (all require a `Bearer` token):
 
-- `POST /collections/` (202) — add; `DELETE /collections/{name}` — remove (409 pinned-only, 404 unknown, 503 `store_busy` on a collection-lock timeout or while a job may still be writing to the collection — an ingest, reindex, import, migration, metadata reindex (a `--dry-run` one only reads, so it never blocks) or community rebuild; wait for it to finish — a job cancelled with `DELETE /jobs/{id}` blocks until it settles, so never cancel a metadata-reindex or community-rebuild job an older server left `PENDING`: it does not block, but once cancelled it blocks until the next server restart — then retry).
+- `POST /collections/` (202) — add (**admin key only**: it edits the shared collection list in `archon-search.toml`, so any other key gets `403`); `DELETE /collections/{name}` — remove (409 pinned-only, 404 unknown, 503 `store_busy` on a collection-lock timeout or while a job may still be writing to the collection — an ingest, reindex, import, migration, metadata reindex (a `--dry-run` one only reads, so it never blocks) or community rebuild; wait for it to finish — a job cancelled with `DELETE /jobs/{id}` blocks until it settles, so never cancel a metadata-reindex or community-rebuild job an older server left `PENDING`: it does not block, but once cancelled it blocks until the next server restart — then retry).
 - `GET /collections/` / `GET /collections/{name}` — list / detail.
 - `POST /collections/{name}/reindex` (202) / `.../reindex-metadata` (202) / `.../migrate` (202). Reindex and reindex-metadata answer `409` at once while a job of their kind already runs on the collection, `503` `store_busy` (with `Retry-After`; no job created) when another write holds the collection lock too long, and `404` also when a concurrent `DELETE` removed the collection. Reindex answers `503` `service not ready` when the server lacks its embedder cache, pipeline or search store — a defensive check, as startup sets them before the port opens — even for a collection that does not exist; reindex-metadata (and `graph build-communities`) answer it when the server has no search store. A `--dry-run` reindex-metadata gets the `409` while a non-dry-run one runs, and otherwise waits behind another dry-run.
-- `POST /ingest` (202), `POST /sync`, `GET /jobs/{id}`, `DELETE /jobs/{id}` — job lifecycle.
+- `POST /ingest` (202), `POST /sync` (admin key only), `GET /jobs/{id}`, `DELETE /jobs/{id}` — job lifecycle. A collection name is owned by the namespace that created it: ingesting into a name another namespace owns fails the job with `collection name is not available to this namespace` (MCP: `{"error": …, "code": "collection_unavailable"}`) — for the admin key too. When more than `[ingest].max_concurrent_tasks` ingest jobs run, `POST /ingest` answers `503` `ingest_busy` with `Retry-After`.
 
 `POST /ingest` takes either `path` (a file or directory **on the server host**) or `documents` — a list of `{"text": str, "source_path": str}` items whose content is sent inline. `documents` is the mode to use from a remote client, which cannot place files on the server: `source_path` is the document's logical identity and need not exist on disk, and it seeds the `doc_id`, so re-posting the same `source_path` replaces that document's chunks. Both fields are required — an item missing either, or with the wrong type, is rejected with `422` before the job is created.
 

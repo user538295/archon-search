@@ -1,7 +1,7 @@
 **Purpose**: Define what to back up for `archon-search`, how to restore it, and which disaster scenarios the current code does and does not support — covering both the raw file-system snapshot path and the scheduled `.tar.gz` backup loop.
 **Audience**: SREs and sysadmins responsible for data durability of `archon-search`.
 **Status**: Draft
-**Last reviewed**: 2026-10-20
+**Last reviewed**: 2026-10-25
 **Next review**: 2027-10-20
 
 # Backup, Restore, and Disaster Recovery
@@ -26,7 +26,7 @@ Disaster recovery for a lost host still reduces to restoring the runtime directo
 | --- | --- | --- |
 | `archon-search.toml` | All server configuration (host, port, db_path, collections, `[backup]`, telemetry, namespaces). | Critical. |
 | `.search.env` (mode 0600) | `ARCHON_SEARCH_API_KEY=<hex>`. Auto-generated on first start if missing. | Critical — without it, clients lose access. |
-| `keys.json` (mode 0600) | Managed multi-key store (`id`, `token_hash`, `namespace`, `label`, `expires_at`, `status`). Created on first `archon-search key create/rotate`. | Critical — without it, all managed keys must be reissued. |
+| `keys.json` (mode 0600) | Managed multi-key store (`id`, `token_hash`, `namespace`, `admin`, `label`, `expires_at`, `status`). Created on first `archon-search key create/rotate`. | Critical — without it, all managed keys must be reissued. |
 | `search/` (default `db_path`) | LanceDB tables (vectors + FTS), per-collection metadata, centroids, graph tables. | Critical. |
 | `<db_path>/.indexing_state.json` | Per-collection indexing progress. | Important — recoverable by re-sync, but loses progress. |
 | `archon-search-jobs.json` | Async job records. `RUNNING`/`CANCELLING` jobs are marked failed on next start. A corrupt file is **not** repaired automatically — it logs `JobStore: corrupt jobs file … — resetting` at ERROR on every boot (not just once) until fixed; job history is lost but the index, keys, and config are unaffected. Recover by stopping the service, deleting `archon-search-jobs.json`, and restarting. | Low — transient. |
@@ -34,6 +34,7 @@ Disaster recovery for a lost host still reduces to restoring the runtime directo
 | `.backup-state.json` | `BackupLoop` state: `{namespace}/{collection} → ISO-8601 last_backup_at`. | Low — rebuildable from disk. |
 | `.maintenance-state.json` | `MaintenanceLoop` state. | Low — transient. |
 | `backups/` (default `[backup].output_dir`) | Scheduled `.tar.gz` archives under `{namespace}/`. | Depends — a backup *of* backups is usually redundant; keep off-host instead. |
+| `exports/<namespace>/` (`<data dir>/exports/`) | Archives written by `archon-search export` / `POST /export`, one directory per namespace (mode 0700, files 0600), named `<collection>-<timestamp>.tar.gz`. A flat `exports/*.tar.gz` file is a pre-upgrade export. | Depends — contains the collection's documents in plain text; move off-host or delete when done. |
 | `logs/archon-search.log` | Server log. | Low — operational only. |
 | `search-logs/YYYY-MM-DD.jsonl` | Telemetry, one file per UTC day; self-pruning after `[telemetry].retention_days`. | Optional. |
 
@@ -72,16 +73,16 @@ Behavioral notes:
 ### Forcing a backup now
 
 ```bash
-# CLI (default namespace only — uses the local key file)
+# CLI (default namespace only — uses the local key file, i.e. the default/admin key)
 archon-search backup --now            # non-blocking, prints queued job IDs
 archon-search backup --now --wait     # polls each job to completion (--timeout SECONDS, default 300)
 
-# REST (per-namespace — the caller's API key selects the namespace)
+# REST (admin key only; the caller's own namespace)
 curl -fsS -X POST -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" \
      http://127.0.0.1:8765/backup/trigger
 ```
 
-`POST /backup/trigger` returns `202` with `{queued: [...], skipped: [{collection, reason}]}`; skip reasons are `excluded`, `already_active`, `already_queued`, or `enqueue_failed`. Multi-namespace operators must call the endpoint once per namespace with each namespace's key — the CLI only covers the default namespace.
+`POST /backup/trigger` needs an **admin** key (the default key, or a managed key created with `admin`); a TOML `[namespaces]` token or a non-admin managed key gets `403`. It returns `202` with `{queued: [...], skipped: [{collection, reason}]}` for the collections of the caller's namespace; skip reasons are `excluded`, `already_active`, `already_queued`, or `enqueue_failed`. The CLI and the default key therefore cover the `default` namespace only. Other namespaces are covered by the scheduled `BackupLoop`, which backs up every namespace on its own; a manual run for one of them needs an admin managed key in that namespace.
 
 `backup --now --wait` exits `0` when every job ends `DONE` (or the `--timeout` elapses with nothing failed or cancelled), `2` when any job ends `FAILED`, `FAILED_EXPIRED` or `CANCELLED`, and `1` on a connection, auth, or HTTP error — see the [CLI reference](../Architecture/600_api_reference_or_public_interface.md#cli-commands).
 
@@ -153,13 +154,13 @@ curl -fsS -H "Authorization: Bearer ${ARCHON_SEARCH_API_KEY}" \
      http://127.0.0.1:8765/status | jq '.collections[] | {name, status, error_count}'
 ```
 
-If `/status` shows collections in `failed` or stale `indexing` states, run `archon-search sync` to reconcile.
+If `/status` shows collections in `failed` or stale `in_progress` states, run `archon-search sync` (admin key) to reconcile.
 
 Verification checklist:
 - `/health` returns 200.
-- `/status` lists the expected collections with `status: up_to_date` or `not_yet_indexed`.
+- `/status` lists the expected collections with `status: done` or `not_yet_indexed`.
 - A known-good search returns non-empty results (pipeline failures surface as HTTP 500/504, not silent empty results).
-- `[telemetry].enabled = true` deployments: `GET /telemetry/stats` returns numbers, not `{"enabled": false}`.
+- `[telemetry].enabled = true` deployments: `GET /telemetry/stats` (admin key) returns numbers, not `{"enabled": false}`.
 
 ### Single collection (from a `.tar.gz` archive)
 
@@ -168,6 +169,10 @@ For per-collection restore, cross-instance migration, or recovering one collecti
 ```bash
 archon-search import <collection> /mnt/nfs/archon-search/backups/default/<collection>.backup.<timestamp>.tar.gz --wait
 ```
+
+An import reads an archive only from the caller's own directories: `<data dir>/exports/<namespace>/` and `<[backup].output_dir>/<namespace>/`. Any other path, whether a file exists there or not, answers `400 outside_allowed_dirs` (the admin key has no cross-namespace access, because the manifest binds an archive to the namespace that exported it, and a manifest naming another namespace answers `422 archive_namespace_mismatch`). To restore an archive from elsewhere, copy it into the right directory first (`install -m 0600 <file> ~/.archon-search/exports/<namespace>/`). `output_path` no longer exists on export (REST, MCP, CLI): the archive always lands in `exports/<namespace>/`, and `archon-search export` has no `--output-dir` flag.
+
+**Pre-upgrade archives.** An archive written before manifests carried a `namespace` is accepted only from the caller's own export or backup directory, so scheduled backups under `<output_dir>/<namespace>/` made by an older build restore as before. A pre-upgrade file sitting flat in `<data dir>/exports/` is importable only by the `default` namespace; move it into `exports/<namespace>/` for any other namespace. Take a fresh backup before any upgrade regardless (see [Upgrading](100_upgrading.md)).
 
 With `--wait`, import exits `0` on `DONE` or when `--timeout` (default 300 s) elapses with the job still running (check it with `archon-search jobs status <job_id>`), and `2` on `FAILED`, `FAILED_EXPIRED` or `CANCELLED` (a cancelled import may leave a partial collection — re-run the same import command with `--force-overwrite`); for a large archive pass a longer `--timeout`. See [Export & import](../UserManual/90_export_import.md#import).
 
@@ -179,7 +184,7 @@ A collection restored by import is exempt from maintenance orphan cleanup: every
 
 | Scenario | Recovery |
 | --- | --- |
-| Lost key file, data intact | Delete `.search.env`; restart — a new key is minted. **All existing clients break** until rekeyed. If `keys.json` is also lost, reissue managed keys via `archon-search key create`. See [Incident runbook](90_incident_runbook.md). |
+| Lost key file, data intact | Delete `.search.env`; restart — a new key is minted. **All existing clients break** until rekeyed. If the file exists but holds a key that is not at least 32 lowercase hex characters (or cannot be read), the server refuses to start with a `ConfigError` and leaves the file alone — fix or delete it. If `keys.json` is also lost, reissue managed keys via `archon-search key create`. See [Incident runbook](90_incident_runbook.md). |
 | Lost data, key file intact | Restore `search/` from a file-system backup, or re-import affected collections from `.tar.gz` archives, or re-ingest from source. The key stays valid. |
 | Lost both | Restore from a file-system backup. Without one, re-ingest from source and rotate the key. |
 | LanceDB corruption (process won't start) | Restore `search/` from the last cold backup; or drop `search/` and re-import from `.tar.gz` archives / re-ingest. |

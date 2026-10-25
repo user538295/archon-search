@@ -1,7 +1,7 @@
 **Purpose**: Procedure for upgrading and rolling back an `archon-search` deployment — how to read CalVer, run schema migrations, and where breaking changes and release notes are recorded.
 **Audience**: SREs and sysadmins responsible for the lifecycle of an `archon-search` install.
 **Status**: Draft
-**Last reviewed**: 2026-07-29
+**Last reviewed**: 2026-10-25
 **Next review**: 2027-07-29
 
 # Upgrading
@@ -72,7 +72,7 @@ archon-search install
 
 # 5. Start. In-place startup migrations apply automatically on boot.
 archon-search start
-curl -fsS http://127.0.0.1:8765/health | jq -r .version
+curl -fsS -H "Authorization: Bearer ${ARCHON_SEARCH_API_KEY}" http://127.0.0.1:8765/status | jq -r .version
 archon-search --version    # confirms the new version is live
 
 # 6. Apply any pending REWRITE schema migrations (see next section).
@@ -80,7 +80,7 @@ archon-search --version    # confirms the new version is live
 
 Verification:
 
-- `/health` reports the new version string.
+- `GET /status` reports the new version string (`/health` returns only `{"status":"running"}` and no version).
 - `/status` lists the expected collections without new error entries, and `collections_schema_behind` is `0` once you have run pending migrations.
 - A known-good search query returns hits.
 - If telemetry is on, `/telemetry/stats` returns numbers, not `{"enabled": false}`.
@@ -146,11 +146,11 @@ The authoritative, worked-example reference is [../MigrationGuide/05_data_migrat
 
 ## Configuration drift
 
-The config loader in `archon_search/config.py` ignores unknown keys silently and uses defaults for missing ones. Two implications:
+The config loader in `archon_search/config.py` ignores unknown keys silently and uses defaults for missing ones, with one deliberate exception: a key a release **removed** (the `REMOVED_KEYS` list, e.g. `[database].providers`) stops `serve`, `start`, `install` and `wizard` with a one-line `ConfigError` naming the replacement. Implications:
 
 - Adding new keys to your `archon-search.toml` is safe across upgrades; old versions ignore them.
-- Renamed keys may stop applying without warning. Check `BREAKING.md` for any `[section].key` renames and update before restart.
-- Diff `archon-search.toml.example` against your live config after every upgrade to pick up new keys and comments.
+- Renamed keys that are not on the removed list may stop applying without warning. Check `BREAKING.md` for any `[section].key` renames and update before restart.
+- Diff `archon-search.toml.example` against your live config after every upgrade to pick up new keys and comments (recent additions: `[maintenance].version_retention_hours`, `[server].cors_origins`, `docs_enabled`, `max_request_body_mb`, `graceful_shutdown_seconds`, and the `[ingest]` limits `allowed_roots`, `max_concurrent_tasks`, `parse_timeout_seconds`, `parse_timeout_seconds_per_mb`, `max_zip_entries`, `max_zip_uncompressed_mb`, `max_discovered_files`).
 
 ## Rolling back
 
@@ -198,19 +198,45 @@ Upgrading to the C2 release activates language tagging at ingest time when `mult
 
 ### PyTorch runtime upgrade
 
-Embedding and reranking now run on PyTorch instead of fastembed / ONNX Runtime. Read the matching `BREAKING.md` entry for the full contract. Operationally:
+Embedding and reranking now run on PyTorch instead of fastembed / ONNX Runtime. Read the matching `BREAKING.md` entry for the full contract. The steps below were run on macOS arm64 (2026-10-25) against copies of a real fastembed-era data directory; the old index opened in the new build with no re-index (stored vectors vs a torch re-embedding of the same text: cosine ≥ 0.9999999 on `cpu` and `mps`, and 12 of 12 test queries returned identical ranked lists, max reranker score difference 3.8e-6).
+
+1. **Stop the service first** (`archon-search stop`). A removed config key makes `serve`, `start`, `install` and `wizard` exit 1, so a launchd/systemd unit would crash-loop.
+2. **Upgrade the tool** (`uv tool upgrade archon-search`, or the installer you used; see [Optional extras and the PyTorch build](#optional-extras-and-the-pytorch-build)).
+3. **Migrate the config.** Either let `archon-search wizard` do it (it tolerates the removed keys, prints `Dropping removed config keys …`, writes `device`, and keeps the old file as `.bak`; it still stops at its "changing the embedding model requires rebuilding the index" prompt if your profile differs), or by hand. By hand: back up the file, delete the single-line `providers = [...]` and `reranker_providers = [...]` entries in `[database]` and `providers = [...]` in `[graph]`, then `archon-search config set database.device auto --config <file>` (or `cpu`). `config set` now validates the whole file through the loader and writes only if it passes; `config show` on an old file prints a warning naming the removed keys and still exits 0. A hand-wrapped multi-line array needs a manual edit.
+4. **Check the model names.** Your `embedding_model`, `reranker_model` and every collection's `embedding_model` must be in the supported registry; others fail validation.
+5. **Start** (`archon-search start`). The first start downloads the PyTorch weights into the same `models/` folder (measured: a 557 MB reranker, server ready 55 s after start; with the weights cached, ready in 6-7 s for `multilingual-e5-large` + jina on `mps`). Existing collections need no re-index.
+6. **Verify**: `curl -s localhost:8765/ready` returns `ready: true`, and `GET /status` shows `model_validation.embedder_ok` and `reranker_ok` true with `provider_warnings: []`.
+
+Operationally:
 
 - **Every model is downloaded again.** The weights are a different file format, fetched from Hugging Face at pinned revisions into `<data dir>/models`. Per-profile downloads (embedder plus reranker): English minimal 225 MB, balanced 572 MB, max 2453 MB; multilingual minimal 471 MB, balanced 1670 MB, max 2797 MB. Allow for them, or run `archon-search wizard` to pre-warm while you watch.
-- **Old ONNX directories are orphaned.** `models--Qdrant--*` and `models--Xenova--*` directories in `<data dir>/models` are no longer used and can be deleted.
+- **Old ONNX files are orphaned, and they are not safe to `rm -rf`.** `models--Qdrant--*`, `models--Xenova--*` and the `onnx/` files inside shared repos such as `models--jinaai--jina-reranker-v2-base-multilingual` are no longer read (on a real directory 2.7 GB plus a 1.1 GB `onnx/model.onnx`; old Docker volumes also carry `/data/fastembed-cache`). With `huggingface_hub` 1.x all blobs live in one shared `models/blobs/` and the per-repo entries are symlinks into it, so deleting the repo directories frees almost nothing (2.66 GB of ONNX-only blobs stayed in a symlink analysis). Use the hub CLI, which reference-counts the blobs, after step 5 has succeeded: `HF="$(uv tool dir)/archon-search/bin/hf"; D=~/.archon-search/models; "$HF" cache ls --cache-dir "$D"` to review, then `"$HF" cache rm --cache-dir "$D" -y model/Qdrant/<repo> model/Xenova/<repo> …` for the ONNX-only repos and, in a separate call per file, `"$HF" cache rm --cache-dir "$D" -y hf://models/jinaai/jina-reranker-v2-base-multilingual/onnx/model.onnx`. On a copy of a real 11.3 GB models directory this left 5.6 GB and the server restarted offline with identical rankings.
 - **Config keys changed.** `[database].providers`, `[database].reranker_providers` and `[graph].providers` are replaced by `[database].device` and `[graph].device` (`auto|cpu|mps|cuda`). A config file that still holds a removed key fails to load with `<section>.<key> was replaced by <section>.device (auto|cpu|mps|cuda); see BREAKING.md`. The `FASTEMBED_CACHE_PATH` variable is gone; models live under `ARCHON_SEARCH_DATA_DIR`.
 - **Only registry models load.** Any embedding or reranker name outside the supported registry is rejected (`unsupported model '<name>'; supported: ...`). Check your `embedding_model`, `reranker_model` and per-collection models before upgrading.
 - **Scores shift slightly.** Vectors for a few models differ in small amounts from the old ones (see `tests/fixtures/runtime_parity/README.md`).
+- **Defaults changed in the same release train.** `[ingest].max_file_mb` is 100 (was 0), docling runs on CPU on macOS, `serve` binds loopback outside containers, `/docs` and CORS are off, and several routes need an admin key; see `BREAKING.md` and the [Hardening checklist](../SecurityGuide/06_hardening_checklist.md). Archives and backups made before the manifest carried a namespace still import from the caller's own directory (see [40_backup_restore_disaster_recovery.md](40_backup_restore_disaster_recovery.md#single-collection-from-a-targz-archive)).
+
+### Dependency matrix: torch and transformers
+
+`pyproject.toml` allows `torch>=2.4,<3.0.0` and `transformers>=4.57,<5.14`; `uv.lock` pins torch 2.13.0 and transformers 5.13.1 (its test requires at least 5.10.0, which clears the `transformers` advisory PYSEC-2026-3929). The ceiling is 5.13.x because `gliner` caps `transformers` below 5.14. Tested on Apple silicon (Python 3.13, torch 2.13.0) with `tests/test_embedder.py`, `test_reranker.py`, `test_reranker_loading.py`, `test_torch_runtime.py` and `test_model_store.py` ("unit"), 9 models on CPU and `mps` ("rep"), and the full 145-case parity lane ("full"):
+
+| transformers | unit | rep | full |
+|---|---|---|---|
+| 4.57.1 (lowest allowed) | 141 passed | 50 passed, 4 skipped | 139 passed, 6 skipped |
+| 5.0.0 | 141 passed | 50 passed, 4 skipped | not run |
+| 5.8.1 | 141 passed | 50 passed, 4 skipped | not run |
+| 5.10.4 | 141 passed | 50 passed, 4 skipped | not run |
+| 5.13.1 (highest allowed, in the lock) | 141 passed | 50 passed, 4 skipped | 139 passed, 6 skipped |
+
+The skips are truncation cases the corpus has no text for. Versions between the rows were not run. The torch floor is 2.4 (it used to be docling's 2.2.2): on Python 3.12+, torch 2.2.2 and 2.3.1 cannot load ModernBERT (`granite-embedding-small-english-r2`: "Dynamo is not supported on Python 3.12+"), and transformers 5.13 treats torch below 2.4 as absent. Torch 2.4.1 passed the unit and rep lanes on transformers 4.57.1 and 5.13.1. A defect found by this matrix is fixed: concurrent model builds on transformers 4.57.1 failed with `Cannot copy out of meta tensor` on CPU and CUDA, so builds are now serialized by `TRANSFORMERS_LOCK`.
+
+**Dependency audit.** `pip-audit` of the dependency set before the bump reported 83 vulnerabilities in 12 packages (pillow, docling, pyjwt, filelock, urllib3, fastmcp, certifi, opentelemetry-api, setuptools, transformers and others); after `uv lock --upgrade-package` (docling 2.142.1, pillow 13.0.0, transformers 5.13.1, pyjwt 2.15.1, filelock 4.2.4, urllib3 2.8.0, fastmcp 3.4.11) it reports no known vulnerabilities (2026-10-25). It is a manual check, not a CI gate. The container image installs **unlocked latest** dependencies on purpose (an unlocked-deps CI lane tests that resolution), so its package set differs from `uv.lock` (torch 2.14.1 in the image at the time of writing); audit the image you ship.
 
 ## Version probing
 
 ```bash
 # Server version (from the running process).
-curl -fsS http://127.0.0.1:8765/health | jq -r .version
+curl -fsS -H "Authorization: Bearer ${ARCHON_SEARCH_API_KEY}" http://127.0.0.1:8765/status | jq -r .version
 
 # Installed package version (from the CLI host).
 archon-search --version
@@ -219,7 +245,7 @@ archon-search --version
 pip index versions archon-search
 ```
 
-If the `/health` version and `archon-search --version` disagree, the supervisor is still running the old binary — restart the service.
+If the `/status` version and `archon-search --version` disagree, the supervisor is still running the old binary — restart the service.
 
 ## Related documents
 

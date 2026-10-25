@@ -25,7 +25,7 @@ Operations that run as jobs:
 | Reindex (re-embed) a collection | `archon-search collection reindex` | `POST /collections/{name}/reindex` |
 | Reindex metadata only | `archon-search collection reindex-metadata` | `POST /collections/{name}/reindex-metadata` |
 | Apply a schema migration | `archon-search collection migrate` | `POST /collections/{name}/migrate` |
-| Sync pinned collections | `archon-search sync` | `POST /sync` |
+| Sync pinned collections | `archon-search sync` | `POST /sync` (admin key only) |
 | Export a collection | `archon-search export` | `POST /collections/{name}/export` |
 | Import a collection | `archon-search import` | `POST /collections/{name}/import` |
 | Rebuild graph communities | `archon-search graph build-communities` | `POST /graph/{collection}/rebuild-communities` |

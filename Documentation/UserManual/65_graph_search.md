@@ -160,13 +160,14 @@ Once linked, **every** graph mode traverses synonym edges transparently — sear
 
 `GET /graph/{collection}/view` serves a self-contained, interactive HTML graph — force-directed layout, node search, and click-to-inspect side panels — with no install and no external tools. Nodes are **colored by `entity_type`** and **sized by salience**; edge thickness is proportional to co-occurrence weight. Edges are additionally **colored by relationship type** — `uses`, `implements`, `depends_on`, `synonym_of`, `calls`, `imports`, `defines`, `inherits` each get their own color, and anything else (including `related_to` co-occurrence) falls back to grey — and **directional types draw an arrowhead** from head to tail; `related_to` and `synonym_of` are symmetric and draw none. The relationship type is still shown on hover as well; the color and arrowhead augment that tooltip rather than replacing it. There is no legend and no relationship-type filter. A banner appears if the graph was truncated to the server's inspection caps.
 
-Because browsers cannot attach an `Authorization: Bearer` header when you just open a URL, the viewer accepts the key as a `?token=` query parameter (`archon_search/server/routes_graph.py:get_graph_view`). Open this in a browser:
+Because browsers cannot attach an `Authorization: Bearer` header when you just open a URL, and your real API key must never be put in a URL (access logs, browser history, proxies), the viewer is opened with a short-lived **view token**. The old `?token=<API key>` form was removed on 2026-10-25. Mint a token with your key and open the returned `view_url`:
 
-```
-http://127.0.0.1:8765/graph/docs/view?token=YOUR_API_KEY
+```bash
+curl -s -X POST http://127.0.0.1:8765/graph/docs/view-token -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY"
+# {"view_token": "...", "view_url": "/graph/docs/view?view_token=...", "expires_in": 60}
 ```
 
-The server validates the token, injects it into the page so the embedded graph fetch (`GET /graph/{collection}`) succeeds without a second prompt, and returns `422` if `[graph] enabled = false` or `404` for an unknown collection. The token appears in the page source, so this is intended for local or private-server use, not public or multi-tenant deployments.
+Open `http://127.0.0.1:8765` plus the `view_url` in a browser within `expires_in` seconds (60). The token is an HMAC bound to your namespace and that one collection, and it is accepted only by `GET /graph/{collection}/view` and, as a Bearer credential, `GET /graph/{collection}` — it cannot mint another token or reach any other route. The page embeds its own freshly minted view token for the graph fetch, never your API key, and the server's access log redacts `view_token`, `token`, `api_key` and `access_token` query values. The endpoint returns `422` if `[graph] enabled = false`, `404` for an unknown collection, and `401` for a missing or invalid credential. Send the key as a `Bearer` header to `GET /graph/{collection}/view` directly if your client can (a script, not a browser address bar).
 
 ## Tuning knobs
 

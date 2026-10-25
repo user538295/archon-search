@@ -134,4 +134,4 @@ flowchart LR
 - Component overview: `Architecture/100_system_architecture_overview.md`
 - Compatibility log: `../../BREAKING.md`
 - Onboarding: `../quick_start.md`
-- Forward plan: `../roadmap.md`
+- Forward plan: `../Backlog/03_world_class_roadmap.md`

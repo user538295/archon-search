@@ -47,8 +47,12 @@ Bind address and port for the HTTP API (MCP mounts on the same port).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `host` | `127.0.0.1` | Bind address. `archon-search serve` flips the default to `0.0.0.0`. Override at runtime with `ARCHON_SEARCH_HOST`. |
+| `host` | `127.0.0.1` | Bind address. `archon-search serve` also binds `127.0.0.1` natively; inside a container (`ARCHON_SEARCH_CONTAINER=1`, set by the Docker image) it flips the default to `0.0.0.0`. An explicit `ARCHON_SEARCH_HOST` or this key wins in both cases. |
 | `port` | `8765` | Must be in `[1, 65535]`. Override at runtime with `ARCHON_SEARCH_PORT`. There is **no `--port` CLI flag** at runtime. |
+| `docs_enabled` | `false` | Serve the Swagger UI (`/docs`), ReDoc (`/redoc`) and `/openapi.json` **without authentication**. Off by default: `/docs` and `/redoc` do not exist and `/openapi.json` needs a Bearer token. |
+| `cors_origins` | `[]` | Browser origins (`scheme://host[:port]`) allowed to call the API cross-origin. Empty sends no CORS header at all. `"*"` or a malformed origin raises `ConfigError`; credentials are never allowed, methods and headers are fixed. A `413` from the body cap carries the CORS headers for a listed origin. |
+| `max_request_body_mb` | `32` | Largest request body accepted, in MiB (≥1). A larger body (declared in `Content-Length` or streamed) is refused with `413 {"detail": …, "code": "request_body_too_large"}` **before authentication** and before it is buffered. Raise it only if you ingest very large inline `documents` batches. |
+| `graceful_shutdown_seconds` | `25` | Seconds the server lets open requests (an in-flight ingest) finish after `SIGTERM` before it cancels them (≥1). Keep it below your container runtime's stop grace period (`docker stop` waits 30 s before `SIGKILL`). |
 
 ### `[database]`
 
@@ -69,7 +73,7 @@ Vector store location, models, chunking, and device selection.
 | `profile` | `""` | Install profile (`minimal`/`balanced`/`max`), set by `install --profile`. |
 | `multilingual` | `false` | Per-document language detection (requires `archon-search[multilingual]` + `lid.176.ftz`). |
 | `language_detection_confidence_threshold` | `0.7` | Minimum fasttext confidence in `(0.0, 1.0]`; below it → `language="unknown"`. |
-| `embedder_cache_size` | `3` | LRU cache of embedder instances (≥1). |
+| `embedder_cache_size` | `3` | LRU cache of embedder instances (≥1). The default `embedding_model` is the pipeline's own embedder: it is pinned, never evicted and **not counted** here. Evicting a warm embedder releases its memory (garbage collection plus the accelerator's driver cache). |
 | `eager_load_embedders` | `false` | Widens the startup model warm-up's **scope**. Warm-up itself always runs: at `false` it loads the default `embedding_model` plus the reranker cross-encoder; at `true` it additionally loads every per-collection `active_embedding_model`. `GET /ready` reports `503`/`checks.models: "pending"` until it and the background model validation finish, either way (a failed warm-up ends the wait with `checks.models: "fail"`). |
 
 ### `[search]`
@@ -154,8 +158,15 @@ Full key lifecycle and rotation are in [`../SecurityGuide/02_authentication_and_
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `max_file_mb` | `0` | Per-file size guard. `0` = unlimited. Positive values reject any file whose size **strictly exceeds** the limit (a file exactly equal is accepted); directory ingest skips oversized files per-file and continues. Negative raises `ConfigError`. |
+| `max_file_mb` | `100` | Per-file size guard in MiB, applied to files and to inline documents. `0` = unlimited (it was the default before 2026-10-25). Positive values reject any file whose size **strictly exceeds** the limit (a file exactly equal is accepted); directory ingest skips oversized files per-file and continues. Negative raises `ConfigError`. |
 | `max_tasks_per_child` | `25` | PDFs and images are parsed (and OCR'd) in a separate worker process; the worker exits after this many files and a fresh one takes over. Worker exit is what returns the OCR engine's native memory to the OS, so a lower value caps memory harder while paying the worker restart (~9 s) more often. Must be `>= 1`; anything else raises `ConfigError`. |
+| `allowed_roots` | `[]` | Absolute directories a client-supplied ingest path must lie under. Empty adds no scope restriction beyond the always-on deny list, **but a non-admin key may not ingest by path at all while it is empty** (admin keys, inline `documents` and single-key deployments are unaffected). Entries must be absolute paths. Paths in `[collections]` are operator-trusted and skip this list (the credential deny list still applies). See [Letting a team key ingest by path](./50_ingestion_and_collections.md#letting-a-team-key-ingest-by-path). |
+| `parse_timeout_seconds` | `300` | Wall-clock bound in seconds (>0) on one PDF or image conversion. On timeout that one document fails with a sanitized error, the worker is killed and the pool is replaced. |
+| `parse_timeout_seconds_per_mb` | `10` | Seconds added to the bound per MiB of the file (≥0; `0` keeps it flat), so a large scan is judged by its size: docling runs on the CPU on macOS, about 3.8 s per MiB of scanned PDF measured on an Apple M-series Mac. |
+| `max_zip_entries` | `10000` | Most entries a zip-based Office file (docx, pptx, xlsx, epub) may hold (≥1); checked on the central directory before the file is opened. |
+| `max_zip_uncompressed_mb` | `512` | Most total uncompressed MiB such a file may hold (≥1); same check. |
+| `max_discovered_files` | `100000` | Most files one directory ingest enumerates (≥1); a larger tree is refused (REST job error / MCP `validation_error`). Hidden directories, `node_modules`, `__pycache__`, `venv` and `site-packages` are not walked and do not count. |
+| `max_concurrent_tasks` | `4` | Ingest jobs (`POST /ingest`, `POST /collections/`) running at once across all collections (≥1). A further request is refused with `503` code `ingest_busy` and a `Retry-After` header, before any lock, job or config write; jobs are not queued. |
 
 ### `[hyde]` and `[rag_fusion]`
 
@@ -189,6 +200,7 @@ In-process maintenance passes (FTS optimize, orphan cleanup, failed-ingest retry
 | `prune_expired_chunks` | `true` | Prune chunks whose `expires_at < now`. |
 | `graph_gc` | `true` | Graph GC: prune stale mentions, orphaned nodes and unsupported mention-derived edges. `false` skips it on every pass, including manual triggers. |
 | `exclude` | `[]` | Collections to skip (bare name = all namespaces; `{ns}/{col}` = one namespace). |
+| `version_retention_hours` | `24` | How long a superseded LanceDB table version (manifest, transaction and data files) is kept before a pass deletes it, in hours (≥1). Every ingest batch and every collection-meta write commits a version, so disk use grows with ingest volume until a pass cleans up. The newest version is never removed, so readers are unaffected. The same window applies to the cleanup after a document delete. **Runs only in maintenance passes:** set `interval_hours > 0` or call `POST /maintenance/trigger`. |
 
 Operating maintenance and jobs is covered in [`../OperatorGuide/50_maintenance_and_jobs.md`](../OperatorGuide/50_maintenance_and_jobs.md).
 
@@ -227,6 +239,7 @@ Prose entity and relation extraction additionally needs a model checkpoint, whic
 | `community_summary_chunks` | `3` | MMR-selected representative chunks per community (≥1). |
 | `max_global_candidates` | `100` | Cap on community chunks fed to the reranker in `global` mode (≥1). |
 | `max_inspection_nodes` / `max_inspection_edges` | `5000` / `25000` | Ceilings on nodes/edges returned by `GET /graph/{collection}` (≥1). |
+| `max_cross_collection_collections` | `8` | Most collection names one `GET /graph/cross-collection` (or MCP `get_graph_cross_collection`) call may name (≥2); more is refused with `422` / `validation_error`. |
 | `gc_rebuild_communities` | `true` | Rebuild communities after graph GC removes nodes. |
 | `gc_rebuild_cpu_priority` | `low` | Rebuild-thread CPU priority: `low`/`normal`/`high` (per-thread effect is Linux-only). |
 | `synonym_threshold` | `0.85` | Cosine threshold for automatic synonym edges, in `(0.0, 1.0]`. |
@@ -237,7 +250,7 @@ Prose entity and relation extraction additionally needs a model checkpoint, whic
 | `naive_max_expansion_terms` | `20` | Cap on terms added by naive graph-mode query expansion (≥1). |
 | `ner_confidence` | `0.5` | Minimum engine score for a span to become a node/mention, in `(0.0, 1.0]`. Raising this starves `relation_confidence` of candidates, since relations only reference spans that already cleared `ner_confidence`. |
 | `relation_confidence` | `0.75` | Minimum engine score for a relation to become a typed edge, in `(0.0, 1.0]`. Only relations between spans that already cleared `ner_confidence` are candidates. |
-| `device` | `cpu` | Torch device for the prose extraction engine: `auto` (CUDA if available, else `mps`, else CPU), `cpu`, `mps` or `cuda`. An explicit accelerator the host lacks steps down to CPU with a WARNING rather than failing. Its own `[graph]` setting — never inherited from `[database].device`. Defaults to `cpu`: the engine's guardrails are tuned for CPU, and an accelerator is allowed but unmeasured. Replaces the removed `[graph].providers` key (a config file that still holds it fails to load with a `ConfigError`). |
+| `device` | `cpu` | Torch device for the prose extraction engine: `auto` (CUDA if available, else `mps`, else CPU), `cpu`, `mps` or `cuda`. An explicit accelerator the host lacks steps down to CPU with a WARNING rather than failing. Its own `[graph]` setting — never inherited from `[database].device`. Defaults to `cpu`: the engine's guardrails are tuned for CPU, and an accelerator is allowed but unmeasured. Replaces the removed `[graph].providers` key (`serve` and `start` refuse a config file that still holds it; `archon-search wizard` drops it). |
 
 Graph search modes (`naive`/`local`/`global`/`ppr`) are documented in [`65_graph_search.md`](./65_graph_search.md); operator-side graph management in [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md).
 
@@ -275,9 +288,11 @@ Optional `string = string` mapping of raw token → namespace. Entries must be s
 
 The API key is **not** stored in the TOML. The key manager (`archon_search/key_manager.py:load_or_generate_key`) resolves in this order:
 
-1. **`ARCHON_SEARCH_API_KEY`** (highest priority) — a non-empty lowercase hex string; invalid values are logged and ignored, falling through to the next step.
-2. **`ARCHON_SEARCH_KEY_FILE`** if set, otherwise `<data-dir>/.search.env` (`~/.archon-search/.search.env` by default). The first `ARCHON_SEARCH_API_KEY=` line is used; the loader forces the file mode to `600`.
-3. **Auto-generation** — on first start with no env var and no file, a 64-char hex token is generated, written atomically (mode `600`), and used.
+1. **`ARCHON_SEARCH_API_KEY`** (highest priority) — a lowercase hex string of at least 32 characters. Any other non-empty value (uppercase, non-hex, shorter) makes the server **refuse to start** with a `ConfigError` that names the rule and never echoes the key.
+2. **`ARCHON_SEARCH_KEY_FILE`** if set, otherwise `<data-dir>/.search.env` (`~/.archon-search/.search.env` by default). The first `ARCHON_SEARCH_API_KEY=` line is used; the loader forces the file mode to `600`. A key file that exists but cannot be read, or holds an invalid key, also refuses startup and is left untouched.
+3. **Auto-generation** — on first start with no env var and no file, a 64-char hex token is generated, written atomically (mode `600`, never over an existing file), and used.
+
+`[namespaces]` tokens must be at least 32 printable ASCII characters without whitespace, and a token may not equal the default key, or startup fails with a `ConfigError`. The default key is the only admin key (see [`../SecurityGuide/03_authorization_and_acl.md`](../SecurityGuide/03_authorization_and_acl.md)).
 
 `archon-search key rotate` (or `POST /keys/rotate`) rotates the default key live without a restart; it returns `409` when `ARCHON_SEARCH_API_KEY` is set. Full key management, rotation, and multi-key workflows are in [`../SecurityGuide/02_authentication_and_keys.md`](../SecurityGuide/02_authentication_and_keys.md) and [`../OperatorGuide/70_key_management_and_rotation.md`](../OperatorGuide/70_key_management_and_rotation.md).
 
@@ -293,7 +308,7 @@ Read at config load, key resolution, and by every lazy path accessor. All overri
 | `ARCHON_SEARCH_HOST` | Bind-address override (env > TOML > default). Empty = not set. | unset → `[server].host` |
 | `ARCHON_SEARCH_PORT` | Bind-port override; int `1–65535` or raises `ConfigError`. Empty = not set. | unset → `[server].port` |
 | `ARCHON_SEARCH_DATA_DIR` | Relocate the whole runtime tree (DB, logs, telemetry, key file, jobs file, models). Must be absolute; empty raises `ConfigError`. Docker sets `/data`. | unset → `~/.archon-search/` |
-| `ARCHON_SEARCH_CONTAINER` | `"1"` attaches a stderr handler so `docker logs` captures output. Docker sets `1`. | unset → no stderr handler |
+| `ARCHON_SEARCH_CONTAINER` | `"1"` attaches a stderr handler so `docker logs` captures output and makes `serve` bind `0.0.0.0` instead of `127.0.0.1`. Docker sets `1`. | unset → no stderr handler, loopback bind |
 | `HF_HUB_OFFLINE` | huggingface_hub's own offline switch, honoured by the model store (`archon_search/model_store.py`): with `1`, `on`, `yes` or `true` (any case) a model snapshot missing from `<data-dir>/models` is an error instead of a download. Embedder and reranker weights live in that directory in the Hugging Face hub layout (`models--<org>--<name>/snapshots/<revision>/`). | unset → missing models are downloaded |
 
 `ARCHON_SEARCH_DATA_DIR` also relocates the TOML config file: without `ARCHON_SEARCH_CONFIG` it is `<data-dir>/archon-search.toml`, so on a mounted data volume the config lives on that volume too. `ARCHON_SEARCH_CONFIG` takes precedence and can point anywhere, inside or outside the data dir.

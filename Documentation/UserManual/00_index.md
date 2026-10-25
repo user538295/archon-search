@@ -38,7 +38,7 @@ If you are new, work top to bottom — each step builds on the previous one:
 | [20_wizard.md](20_wizard.md) | The interactive `archon-search wizard` — every prompt, every flag, and what it writes. |
 | [30_configuration.md](30_configuration.md) | The `archon-search.toml` sections and environment variables; where the auth key lives. |
 | [40_running_the_server.md](40_running_the_server.md) | Start/stop/status, `serve` vs `start`, bind address, and reaching the endpoints. |
-| [50_ingestion_and_collections.md](50_ingestion_and_collections.md) | Ingest files and directories; collections, pinned collections, sync vs ingest vs reindex. |
+| [50_ingestion_and_collections.md](50_ingestion_and_collections.md) | Ingest files and directories; collections, pinned collections, sync vs ingest vs reindex; size and path limits and how to let a team (non-admin) key ingest by path with `[ingest].allowed_roots`. |
 | [55_chunk_metadata_and_enrichment.md](55_chunk_metadata_and_enrichment.md) | What metadata each chunk carries, where it comes from, and how to backfill it. |
 | [60_searching.md](60_searching.md) | Hybrid search over `/search`, `/route`, filters, HyDE/RAG-Fusion, and MCP. |
 | [65_graph_search.md](65_graph_search.md) | The GraphRAG subsystem — entity graph, the four `graph_mode` paths, synonyms, graph viewer. |

@@ -1,7 +1,7 @@
 **Purpose**: Describe the privacy guarantees, residual risks, and controls of `archon-search` telemetry.
 **Audience**: Security engineers, privacy reviewers, operators evaluating whether to enable telemetry.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
+**Last reviewed**: 2026-10-25
 **Next review**: 2027-05-20
 
 # Telemetry Privacy
@@ -23,13 +23,13 @@ For the architectural commitment, see ADR [`../ADRs/05_opt_in_local_telemetry_no
 | --- | --- | --- |
 | `[telemetry].enabled` | `false` | `archon_search/config.py` `TelemetryConfig.enabled = False` |
 | `[telemetry].retention_days` | `30` | `archon_search/config.py` `TelemetryConfig.retention_days = 30` |
-| `[telemetry].export_enabled` | `false` (always — coerced from `true` with a warning) | `archon_search/config.py:779–781` |
+| `[telemetry].export_enabled` | `false` (always — coerced from `true` with a warning) | `archon_search/config.py` (`export_enabled` branch of the telemetry loader) |
 | `[telemetry].log_dir` | `~/.archon-search/search-logs` | `archon_search/config.py` `TelemetryConfig.log_dir` |
 | `[telemetry].hash_doc_ids` | `false` | `archon_search/config.py` `TelemetryConfig.hash_doc_ids = False` |
 
-When `enabled = false`, the `TelemetryWriter` is never started and `app.state.telemetry_writer` is `None` (`archon_search/server/app.py:750–751`).
+When `enabled = false`, the `TelemetryWriter` is never started and `app.state.telemetry_writer` is `None` (`archon_search/server/app.py`, lifespan). The `/telemetry/*` routes need an **admin** key (see [`02_authentication_and_keys.md`](./02_authentication_and_keys.md#admin-scope)); a namespace key gets `403`, because the log is not namespace-filtered.
 
-Note: `retention_days` is validated at config load — values `< 1` raise `ConfigError` (`archon_search/config.py:772–773`), so the minimum reachable value is `1`.
+Note: `retention_days` is validated at config load — values `< 1` raise `ConfigError` (`archon_search/config.py`), so the minimum reachable value is `1`.
 
 ## Structural no-raw-query invariant
 
@@ -63,6 +63,10 @@ The invariant is enforced structurally at the factory level AND by a dedicated t
 
 The error path uses a closed `ErrorKind` enum (`empty_query`, `slot_out_of_range`, `timeout`, `internal_error`, `validation_error`, `other`); free-form messages cannot enter telemetry.
 
+## Query fingerprints in the application log
+
+Some application-log lines (HyDE, graph expansion) need to correlate several lines of one query without printing the query. They carry `_query_fingerprint(query)` (`archon_search/_privacy.py`): the first 16 hex characters of an **HMAC-SHA256** of the query text, not a bare hash, so a log reader cannot confirm a guessed query by hashing it. The key is the telemetry salt (`<data dir>/.telemetry-salt`) when `[telemetry].hash_doc_ids = true`, so fingerprints are stable across restarts; otherwise it is a random per-process secret, so fingerprints are only comparable within one server run. The raw query is never logged either way.
+
 ## doc_id path-leak risk — mitigated by HMAC hashing mode (D8)
 
 `doc_id` values are derived from source file paths. The risk:
@@ -92,13 +96,13 @@ See `SEC-2` (now closed) in [`../Architecture/530_technical_debt_refactoring_roa
 ## Storage and retention
 
 - **Location.** One file per UTC date, `~/.archon-search/search-logs/<YYYY-MM-DD>.jsonl`. Lines are appended; one JSON object per call.
-- **Retention.** `archon_search/telemetry/pruner.py::Pruner.prune_once` deletes `*.jsonl` files whose stem date is older than `today - retention_days`. **Today's file is never deleted** regardless of cutoff (`pruner.py:44–45` — `if file_date == now: continue`). Note that `retention_days` is validated at config load to be `>= 1`, so `retention_days = 0` is unreachable through configuration; the smallest reachable value (`retention_days = 1`) still preserves today's file. The pruner runs once at startup and then on a 24-hour interval.
+- **Retention.** `archon_search/telemetry/pruner.py::Pruner.prune_once` deletes `*.jsonl` files whose stem date is older than `today - retention_days`. **Today's file is never deleted** regardless of cutoff (`if file_date == now: continue`). Note that `retention_days` is validated at config load to be `>= 1`, so `retention_days = 0` is unreachable through configuration; the smallest reachable value (`retention_days = 1`) still preserves today's file. The pruner runs once at startup and then on a 24-hour interval.
 - **No per-entry redaction.** Old entries are deleted by *file age*, not by per-line policy.
-- **Directory permissions.** The directory is created with `mkdir(..., parents=True, exist_ok=True)` (`server/app.py:743`) and inherits the user's umask. The operator is responsible for ensuring the parent home directory is not world-readable on shared hosts.
+- **Directory permissions.** The telemetry directory is created `0700` and the JSONL files `0600` (`_durable_io.ensure_private_dir`), which tightens an existing directory only when it lies inside the data directory. If you point `[telemetry].log_dir` outside the data directory, keep it owner-only yourself.
 
 ## No external transmission
 
-`[telemetry].export_enabled = true` is **silently coerced** to `false` and a warning is logged (`archon_search/config.py:779–781`):
+`[telemetry].export_enabled = true` is **silently coerced** to `false` and a warning is logged (`archon_search/config.py`):
 
 > `telemetry: export_enabled is reserved for a future release and will be ignored`
 
@@ -126,8 +130,8 @@ To disable after enabling:
 Three independent checks:
 
 1. **No writer object.** On a process started with telemetry off, no JSONL files are created. After issuing a few `/search` calls, `ls ~/.archon-search/search-logs/` should still be empty or unchanged.
-2. **Telemetry endpoints behave consistently.** `GET /telemetry/stats` (`routes_telemetry.py`) reads from the log directory; with telemetry off it has no data to summarize. A non-empty response on a quiet system is a signal something is writing.
-3. **Startup log.** When telemetry is enabled, the lifespan creates `log_dir`, runs an initial prune, and starts the writer (`server/app.py:741–749`). The application log shows no such activity when disabled.
+2. **Telemetry endpoints behave consistently.** `GET /telemetry/stats` (`routes_telemetry.py`, admin key required) reads from the log directory; with telemetry off it has no data to summarize. A non-empty response on a quiet system is a signal something is writing.
+3. **Startup log.** When telemetry is enabled, the lifespan creates `log_dir`, runs an initial prune, and starts the writer (`server/app.py`). The application log shows no such activity when disabled.
 
 Note: the `grep` recipe below uses a regex anchored on the JSON key boundary to avoid false positives from substrings such as `query_id`.
 

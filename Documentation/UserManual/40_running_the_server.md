@@ -9,7 +9,7 @@ The server is a single process that serves the REST control plane, the MCP endpo
 
 ## Principles
 
-1. **One server, one bind address.** The daemon (`start`) defaults to `127.0.0.1:8765` (`[server]` in `archon-search.toml`, `archon_search/config.py`). `serve` flips the host default to `0.0.0.0` for containers — never expose `0.0.0.0` without firewalling the port.
+1. **One server, one bind address.** The daemon (`start`) defaults to `127.0.0.1:8765` (`[server]` in `archon-search.toml`, `archon_search/config.py`). `serve` also binds `127.0.0.1` natively and flips the host default to `0.0.0.0` only inside a container (`ARCHON_SEARCH_CONTAINER=1`, set by the Docker image) — never expose `0.0.0.0` without firewalling the port, and note that the shipped compose files publish ports on `127.0.0.1` only.
 2. **Auth is uniform.** Every endpoint requires a `Bearer` token except `GET /health` and `GET /ready` (and the FastAPI docs paths). Enforced by `_EXEMPT_PATHS` in `archon_search/server/middleware_auth.py`.
 3. **The same process serves REST and MCP.** `app.py` builds the FastAPI app; `mcp.py` mounts `/mcp` on the same port with the same auth (when `[mcp].enabled`, the default).
 4. **Service identity is fixed.** The launchd plist label / systemd unit name is hard-coded; `stop` needs no `--config`.
@@ -28,7 +28,7 @@ archon-search serve            # foreground; blocks until SIGTERM / Ctrl-C
 Flags:
 
 - `start --config PATH` — validate an alternative config before delegating to the service (`cli/start.py`). On a `ConfigError` the message is printed to stderr and the process exits 1. On success it prints the literal `archon-search started` — it does **not** print the bind address.
-- `serve --config PATH` — same `--config` semantics, but runs uvicorn in the foreground via `run_server(config, config_path)` (`config_path` is the `--config` value, or `None` to use the default path). The host default is `0.0.0.0` (overridable by `[server].host` or `ARCHON_SEARCH_HOST`), so a containerised invocation is publicly reachable on the mapped port. `serve` never touches launchd/systemd (`cli/serve.py`). For the image and compose stack see [`140_running_with_docker.md`](140_running_with_docker.md).
+- `serve --config PATH` — same `--config` semantics, but runs uvicorn in the foreground via `run_server(config, config_path)` (`config_path` is the `--config` value, or `None` to use the default path). The host default is `127.0.0.1` natively and `0.0.0.0` when `ARCHON_SEARCH_CONTAINER=1` (overridable by `[server].host` or `ARCHON_SEARCH_HOST`), so a containerised invocation is reachable on the mapped port (the shipped compose files publish it on `127.0.0.1` only). `SIGTERM` stops it in well under a second (return code −15, container exit 143); `Ctrl-C` (`SIGINT`) exits with code 0 in about a second, except during model warm-up, where it waits for the in-flight model load to finish (about 3 s for a large model) — `SIGTERM` does not wait. `serve` never touches launchd/systemd (`cli/serve.py`). For the image and compose stack see [`140_running_with_docker.md`](140_running_with_docker.md).
 - `stop` blocks until the platform supervisor confirms the service is actually down (it polls up to ~10 s, because `launchctl unload` / `systemctl --user stop` return before the process has released its listening socket). Once it returns, `archon-search status` reads `stopped` and `GET /health` is unreachable (S04). It prints `archon-search stopped` on confirmation; if the wait times out it instead prints a `Warning: … it may still be running. Check archon-search status.` to stderr and still exits 0 (`cli/stop.py`).
 - `status` accepts `--json`, `--api-url`, `--api-key` (`cli/status.py`).
 
@@ -49,8 +49,8 @@ Two auth-exempt probes are distinct on purpose:
 
 | Probe | Meaning | Behaviour |
 | --- | --- | --- |
-| `GET /health` | **Liveness** — the process is up and answering | Always `200` `{"status":"running","version":"…","mcp":…}` (`routes_health.py`) |
-| `GET /ready` | **Readiness** — storage, model, and startup-sync checks | `200` when storage is OK, neither the startup model warm-up (run on every start) nor the background model validation is pending (a failed warm-up ends that wait at once, as `checks.models: "fail"`), and no startup collection sync is running, `503` otherwise; body reports per-check status (`routes_ready.py`) |
+| `GET /health` | **Liveness** — the process is up and answering | Always `200` `{"status":"running"}` — no version or bind address (those are in the authenticated `GET /status`) (`routes_health.py`) |
+| `GET /ready` | **Readiness** — storage, model, and startup-sync checks | `200` when storage is OK, neither the startup model warm-up (run on every start) nor the background model validation is pending, and no startup collection sync is running, `503` otherwise — including when the warm-up failed and the default embedder or a configured reranker is still cold (`checks.models: "fail"`); the server retries the load in the background (5 s, doubling to 300 s), so `/ready` returns to `200` by itself once the models load; body reports per-check status (`routes_ready.py`) |
 
 Use `/health` for a restart-if-dead liveness probe and `/ready` to gate traffic until the store and model backends are usable. For probe wiring and alerting depth see [`../OperatorGuide/20_monitoring_and_alerts.md`](../OperatorGuide/20_monitoring_and_alerts.md).
 
@@ -86,7 +86,7 @@ source ~/.archon-search/.search.env
 #   set -a; source ~/.archon-search/.search.env; set +a
 
 curl -s http://127.0.0.1:8765/health
-# {"status":"running","version":"…","mcp":…}
+# {"status":"running"}
 
 curl -s http://127.0.0.1:8765/status \
   -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY"

@@ -83,7 +83,7 @@ Key properties of the decision:
   `.write_bytes(`, `shutil.move(`) are matched textually by regex; `os.open(...)`
   calls with `O_CREAT` are detected by an AST walker instead, because formatters
   routinely wrap long `os.open(...)` calls across lines where a single-line regex
-  would miss them. A `# noqa: durable-write` allow-list covers documented
+  would miss them. A `# durable-write-exempt` allow-list covers documented
   exceptions.
 - **Crash-injection integration tests verify the call sequence** (flush →
   fsync(file) → replace → fsync(dir)) on a disk-backed filesystem, using
@@ -143,8 +143,8 @@ Key properties of the decision:
 
 ## Links
 
-- Brief: [`Documentation/Backlog/A7-fsync-hardening-brief.md`](../Backlog/A7-fsync-hardening-brief.md)
-- Plan: [`Documentation/Backlog/A7-fsync-hardening-plan.md`](../Backlog/A7-fsync-hardening-plan.md)
+- Brief: [`Documentation/Completed/A7-fsync-hardening-brief.md`](../Completed/A7-fsync-hardening-brief.md)
+- Plan: [`Documentation/Completed/A7-fsync-hardening-plan.md`](../Completed/A7-fsync-hardening-plan.md)
 - The durability contract and the OSError-to-500 mapping are documented in
   [`Architecture / 130 — Data Architecture and Persistence`](../Architecture/130_data_architecture_and_persistence.md)
   and [`Architecture / 140 — Error Handling Strategy`](../Architecture/140_error_handling_strategy.md)

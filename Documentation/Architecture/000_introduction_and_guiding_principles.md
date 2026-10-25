@@ -40,7 +40,7 @@ The following are out of scope for the v1 product. Calling them out prevents acc
 - **Not a multi-tenant cloud service.** There is no per-tenant database, no hosted control plane, and no managed-service offering. ACL and namespace isolation exist at the document level (`acl.py`, namespace field on `CollectionMeta`), but the server itself is a single-process daemon.
 - **No external telemetry transmission in v1.** Setting `[telemetry].export_enabled = true` logs a warning at config load and is coerced back to `false` (`config.py`); the value is reserved but ignored. Telemetry, when enabled, writes JSONL files locally under `~/.archon-search/search-logs/` and stays there. A remote export feature is reserved for a future release.
 - **No raw query logging — by construction.** The factory methods in `archon_search/telemetry/entry.py` do not accept a `query` parameter. This is a structural invariant, not a policy.
-- **Not a distributed system.** LanceDB-based storage is fast locally but is not a multi-writer distributed store. Horizontal scaling is not a v1 concern (see `../roadmap.md`).
+- **Not a distributed system.** LanceDB-based storage is fast locally but is not a multi-writer distributed store. Horizontal scaling is not a v1 concern (see `../Backlog/03_world_class_roadmap.md`).
 - **No hardcoded versions.** Version strings come from git tags via `hatch-vcs`; the package never embeds a literal version. Plain pushes to `main` do not publish — only a tag push (typically via `release.sh`) triggers `archon-search-release.yml`.
 - **No background phone-home, no analytics beacon, no auto-update.** The server starts, serves traffic on `127.0.0.1` by default, and does nothing the operator did not ask for.
 
@@ -69,6 +69,6 @@ flowchart LR
 
 - Engineering constraints that flow from these principles: `Architecture/010_engineering_principles_and_constraints.md`
 - Component-level overview and module seams: `100_system_architecture_overview.md`
-- Forward plan: `../roadmap.md`
+- Forward plan: `../Backlog/03_world_class_roadmap.md`
 - Developer onboarding: `../quick_start.md`
 - Compatibility contract: `../../BREAKING.md`

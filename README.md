@@ -142,7 +142,7 @@ Start the server in the foreground:
 archon-search serve
 ```
 
-That runs the FastAPI app on the configured host/port — `serve` defaults to `0.0.0.0:8765` (all interfaces, not just loopback), unlike the library default of `127.0.0.1:8765` used when embedding `SearchConfig` directly. Binding all interfaces means the server is reachable from other machines on the network the moment it starts; put a reverse proxy in front of it (see [Docker](#running-with-docker)) before exposing it past loopback. It blocks until you stop it (Ctrl-C). For a background service managed by launchd/systemd, use `archon-search wizard` instead — see [Installation](#installation).
+That runs the FastAPI app on the configured host/port — natively `serve` binds `127.0.0.1:8765` (loopback only), the same as the library default used when embedding `SearchConfig` directly. Inside the container (`ARCHON_SEARCH_CONTAINER=1`, set by the image) it binds `0.0.0.0:8765` so the published port is reachable. Set `[server].host` (or `ARCHON_SEARCH_HOST`) to bind anything else; binding all interfaces makes the server reachable from other machines on the network the moment it starts, so put a reverse proxy in front of it (see [Docker](#running-with-docker)) before exposing it past loopback. It blocks until you stop it (Ctrl-C). For a background service managed by launchd/systemd, use `archon-search wizard` instead — see [Installation](#installation).
 
 Once it's up:
 
@@ -160,7 +160,7 @@ Two images, CPU (`:latest`) and NVIDIA GPU (`:gpu`). Both run the foreground `ar
 Kick the tires — ephemeral, the key regenerates on every start, nothing persists:
 
 ```bash
-docker run --rm -p 8765:8765 ghcr.io/user538295/archon-search:latest
+docker run --rm -p 127.0.0.1:8765:8765 ghcr.io/user538295/archon-search:latest
 ```
 
 `/health` answers `200` first, but `/ready` answers `503` until storage is connected and the startup model warm-up, the background model validation and the startup sync finish, so poll `/ready` before sending traffic — see [the `docker run` quickstart's smoke test](Documentation/UserManual/140_running_with_docker.md#docker-run-quickstart).
@@ -172,7 +172,7 @@ docker run -d \
   --name archon-search \
   -e ARCHON_SEARCH_API_KEY=$ARCHON_SEARCH_API_KEY \
   -v archon-search-data:/data \
-  -p 8765:8765 \
+  -p 127.0.0.1:8765:8765 \
   ghcr.io/user538295/archon-search:latest
 ```
 
@@ -182,11 +182,11 @@ Want a dev/test/prod stack with isolated volumes instead of one container? [`doc
 
 **LanceDB is single-writer.** Mount the same data volume into two running containers and the on-disk state is undefined — don't do that.
 
-**The container speaks plaintext HTTP, nothing else.** Put a reverse proxy (nginx, Caddy, Traefik) in front of it before you expose it past loopback.
+**The container speaks plaintext HTTP, nothing else.** `-p 8765:8765` would publish it on every host interface, so the examples above (and the compose stack, which publishes `127.0.0.1:<port>:8765`) bind loopback only. Put a reverse proxy (nginx, Caddy, Traefik) in front of it, or add an explicit bind address, before you expose it past loopback. `ARCHON_SEARCH_API_KEY` must be at least 32 lowercase hex characters (`python3 -c "import secrets; print(secrets.token_hex(32))"`).
 
 ## Authentication
 
-Every endpoint requires a `Bearer` token in the `Authorization` header, except a small unauthenticated set: `GET /health`, `GET /ready`, `GET /docs`, `GET /openapi.json`, `GET /redoc`. One route has a second, narrower exemption — `GET /graph/{collection}/view` (the HTML graph viewer) also accepts the token as a `?token=` query parameter instead of the header, since it's meant to be opened directly in a browser; the query param is still validated against the same key set (`archon_search/server/middleware_auth.py`).
+Every endpoint requires a `Bearer` token in the `Authorization` header, except `GET /health` (which returns only `{"status": "running"}`) and `GET /ready`. `GET /docs`, `GET /redoc` and `GET /openapi.json` do not exist or need a token unless you set `[server].docs_enabled = true`, which serves all three without authentication. One route has a second, narrower credential — the HTML graph viewer `GET /graph/{collection}/view` also accepts a 60-second `?view_token=` that you mint with `POST /graph/{collection}/view-token` (your API key itself never goes in a URL; the old `?token=` form was removed). The default key (and only that key) is the admin key: `POST /keys/rotate`, `/sync`, `/backup/trigger`, `/maintenance/trigger`, `POST /collections/` and `/telemetry/*` answer `403` to a namespace key or a `[namespaces]` token. The key must be at least 32 lowercase hex characters (`ARCHON_SEARCH_API_KEY`) and `[namespaces]` tokens at least 32 printable characters, or the server refuses to start (`archon_search/server/middleware_auth.py`, `server/authz.py`). A non-admin key can ingest by path only after the operator sets `[ingest].allowed_roots` — see the [user manual](Documentation/UserManual/50_ingestion_and_collections.md#letting-a-team-key-ingest-by-path).
 
 First start auto-generates a key and writes it to `~/.archon-search/.search.env` at `600`. Running in Docker, CI, or across multiple hosts? Set `ARCHON_SEARCH_API_KEY` — it wins over the file every time. Need the key read from somewhere else? Set `ARCHON_SEARCH_KEY_FILE`. Need the whole runtime tree — index, logs, key file, jobs file, the downloaded model weights, ingest history — under one root instead of `~/.archon-search/`? Set `ARCHON_SEARCH_DATA_DIR` (the Docker image already does this for you, pointing it at `/data`). The embedding/reranker weights follow it into `<ARCHON_SEARCH_DATA_DIR>/models` (`/data/models` in the Docker image).
 

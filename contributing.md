@@ -69,12 +69,16 @@ uv run pytest -m live
 uv run pytest -m benchmark   # needs a running server; auto-skips if unreachable
 ```
 
-`live_benchmark` and `smoke` are the only markers excluded from the default run:
+`live_benchmark`, `smoke`, `live_eval`, `docling`, `graph_real_artifact` and `runtime_parity` are excluded from the default run (the Docker-gated tests skip unless `ARCHON_SEARCH_RUN_DOCKER_SMOKE=1`):
 
 ```bash
 uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
 uv run pytest tests/smoke/ --no-cov
+ARCHON_RUNTIME_PARITY_DATA_DIR=/tmp/rt_data uv run pytest -m runtime_parity tests/runtime_parity/ --no-cov -q -p no:cacheprovider -o addopts=   # real PyTorch weights vs frozen fastembed outputs (~15 GB first run)
+ARCHON_SEARCH_RUN_DOCKER_SMOKE=1 uv run pytest tests/test_docker_smoke.py -n0 -o addopts= --no-cov   # builds and runs the image
 ```
+
+CI also runs `uvx ruff@0.17.2 check .` (zero findings, rule set pinned in `pyproject.toml`) before the tests; run it locally before pushing.
 
 The test pyramid, marker semantics, parallelism configuration, and the role of the eval harness are documented in [`Documentation/Architecture/200_testing_strategy.md`](Documentation/Architecture/200_testing_strategy.md). The eval fixture and threshold maintenance guide is [`tests/eval/README.md`](tests/eval/README.md).
 

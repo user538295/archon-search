@@ -9,13 +9,31 @@ Usage: HF_HOME=<dir that already holds every torch_repo snapshot at the pinned r
 Measured 2026-10-24 on M4 Pro, torch 2.14.1, transformers 5.20.2 (CPU and MPS): embedders cos >= 0.999945
 (0.999992 or better except bge-base, whose fastembed ONNX is quantized), norm ratio 1.0, reranker max |diff| 1.2e-05.
 """
-import os, sys, json, glob, numpy as np, torch
+import glob
+import json
+import os
+import sys
+
+import numpy as np
+import torch
+
 os.environ["HF_HUB_OFFLINE"]="1"
-from tokenizers import Tokenizer
 from safetensors import safe_open
-from transformers import AutoModel, AutoConfig, AutoModelForSequenceClassification, XLMRobertaConfig, XLMRobertaForSequenceClassification
+from tokenizers import Tokenizer
+from transformers import (
+    AutoModel,
+    AutoModelForSequenceClassification,
+    XLMRobertaConfig,
+    XLMRobertaForSequenceClassification,
+)
+
+
+def _load_json(path):
+    with open(path) as fh:
+        return json.load(fh)
+
 FX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "tests", "fixtures", "runtime_parity") + os.sep
-corpus = json.load(open(FX+"corpus.json")); specs = json.load(open(FX+"model_specs.json")); gold = np.load(FX+"embedder_golden.npz"); rgold = json.load(open(FX+"reranker_golden.json"))
+corpus = _load_json(FX+"corpus.json"); specs = _load_json(FX+"model_specs.json"); gold = np.load(FX+"embedder_golden.npz"); rgold = _load_json(FX+"reranker_golden.json")
 dev = sys.argv[1]
 def snap(repo, rev): return glob.glob(os.path.join(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")), "hub", f"models--{repo.replace('/','--')}", "snapshots", rev))[0]
 def load_tok(p, max_len):
@@ -45,7 +63,7 @@ for name, s in specs["embedders"].items():
     del m
 print(f"=== rerankers on {dev}")
 def jina_native(p):
-    cfg = json.load(open(p+"/config.json")); H=cfg["hidden_size"]; L=cfg["num_hidden_layers"]; out={}
+    cfg = _load_json(p+"/config.json"); H=cfg["hidden_size"]; L=cfg["num_hidden_layers"]; out={}
     with safe_open(p+"/model.safetensors","pt") as f:
         g=f.get_tensor
         for k in ["classifier.dense.weight","classifier.dense.bias","classifier.out_proj.weight","classifier.out_proj.bias","roberta.embeddings.word_embeddings.weight","roberta.embeddings.token_type_embeddings.weight","roberta.embeddings.position_embeddings.weight"]: out[k]=g(k).float()

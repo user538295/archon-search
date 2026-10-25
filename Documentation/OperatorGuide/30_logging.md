@@ -1,7 +1,7 @@
 **Purpose**: Configure `archon-search` application logs — file rotation, log level, text vs JSON output — and ship structured logs to an aggregation pipeline.
 **Audience**: SREs and sysadmins operating `archon-search` in production.
 **Status**: Draft
-**Last reviewed**: 2026-08-04
+**Last reviewed**: 2026-10-25
 **Next review**: 2027-08-04
 
 # Logging
@@ -28,6 +28,9 @@ Notes verified against `archon_search/config.py`:
 - **`format` is the one key whose TOML name differs from its Python attribute** (`log_format`). Write `format = "json"` in the TOML, not `log_format`.
 - Any `level` string outside the accepted set raises `ConfigError`; the same holds for a `format` other than `text`/`json` and for a negative `backup_count`.
 - `~` in `log_file` is expanded at use time (`Path(...).expanduser()`), consistent with `db_path` and `telemetry.log_dir`.
+- **The log file is private.** The rotating handler creates the log directory `0700` (tightened only when it lies inside the data directory) and the files `0600`; point `log_file` outside the data directory and you own that directory's mode.
+- **Credentials in URLs are redacted in the access log.** `uvicorn.access` lines have the values of `view_token`, `token`, `api_key` and `access_token` query parameters replaced (`QueryCredentialRedactionFilter`, installed by `configure_logging`). The filter is unit-tested against a record shaped like uvicorn's; a live uvicorn access line was not captured.
+- **Lines worth knowing.** `model download failed for '<repo>': <ExcClass>: <message>` (WARNING, scrubbed of URL credentials and tokens); `model warm-up recovered: the default models are warm` (INFO); `estimated model memory … exceeds the cgroup memory limit …` (WARNING, once at startup); a startup WARNING when non-admin keys exist and `[ingest].allowed_roots` is empty; and one WARNING listing collections that have a table but no metadata row. A first ingest into a new collection no longer logs a `Collection '…' centroid stale` WARNING per document or a `FTSIndexNotFoundError` traceback (both now DEBUG or silent for an empty collection; a populated collection that lost its centroid still warns).
 
 ### Worked config snippet
 

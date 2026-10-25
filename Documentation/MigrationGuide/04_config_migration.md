@@ -1,7 +1,7 @@
 **Purpose**: Document how `<data-dir>/archon-search.toml` evolves across releases — which keys are stable, which have quirks, and how to validate a config file.
 **Audience**: Operators editing config across upgrades; maintainers changing the config schema in `archon_search/config.py`.
 **Status**: Draft
-**Last reviewed**: 2026-10-17
+**Last reviewed**: 2026-10-25
 **Next review**: 2027-05-20
 
 # Configuration Migration
@@ -20,7 +20,7 @@ A legacy-config WARNING flags installs that still need this. Affected commands, 
 ## Principles
 
 1. **All keys are optional.** A missing key falls back to the default in `SearchConfig` / `TelemetryConfig`. An entirely missing file is valid.
-2. **Unknown keys are silently ignored.** `load_config` reads each section with `doc.get(section, {})` and only consumes known keys. There is no "strict mode" today — typos do not raise.
+2. **Unknown keys are silently ignored, with one exception.** `load_config` reads each section with `doc.get(section, {})` and only consumes known keys, so typos do not raise. The exception is the three removed ONNX-provider keys `[database].providers`, `[database].reranker_providers` and `[graph].providers`: `serve`, `start` and `install` exit `1` on a file that holds one (see [PyTorch runtime keys](#pytorch-runtime-keys-removed-and-added)).
 3. **Type errors raise `ConfigError`.** Wrong type (including a TOML boolean in a number key, `inf`/`nan` in a float key, or a fractional value in an integer key), out-of-range port, negative `chunk_size`, etc. fail loudly at load time. See `_coerce_int` / `_coerce_float` / `_coerce_bool` in `config.py`.
 4. **Range validation is enforced where it exists.** `port` must be `1..65535`, `routing_confidence_threshold` must be in `[0.0, 1.0]`, several integer fields must be `> 0`.
 
@@ -30,14 +30,14 @@ The following sections and keys are part of the documented config surface and ha
 
 | Section | Key | Type | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `[server]` | `host` | string | `"127.0.0.1"` | Bind address. |
-| `[server]` | `port` | int | `8765` | Validated `1..65535`. |
+| `[server]` | `host` | string | `"127.0.0.1"` | Bind address. Native `serve` binds it; with `ARCHON_SEARCH_CONTAINER=1` (the Docker image) the default is `0.0.0.0`. `ARCHON_SEARCH_HOST` overrides. |
+| `[server]` | `port` | int | `8765` | Validated `1..65535`. `ARCHON_SEARCH_PORT` overrides. |
 | `[database]` | `db_path` | string | `"~/.archon-search/search"` | LanceDB root. |
-| `[database]` | `embedding_model` | string | `"BAAI/bge-small-en-v1.5"` | fastembed model id. |
-| `[database]` | `reranker_model` | string | `"Xenova/ms-marco-MiniLM-L-6-v2"` | Cross-encoder id. |
+| `[database]` | `embedding_model` | string | `"BAAI/bge-small-en-v1.5"` | One of the 19 supported embedders (`archon_search/model_specs.py`); any other name is `422` on `POST /collections/`. |
+| `[database]` | `reranker_model` | string | `"Xenova/ms-marco-MiniLM-L-6-v2"` | One of the 5 supported rerankers; empty disables the reranker. |
 | `[database]` | `chunk_size` | int | `512` | Must be `> 0`. |
 | `[database]` | `auto_reindex_on_chunk_size_change` | bool | `true` | Reindex on chunk-size diff at start. |
-| `[database]` | `providers` | list[string] | `[]` | ONNX execution providers. |
+| `[database]` | `device` | string | `"auto"` | `auto`, `cpu`, `mps` or `cuda` for the embedder and the reranker (replaces `providers` / `reranker_providers`). |
 | `[database]` | `top_k_retrieve` | int | `15` | Pipeline shortlist size, must be `> 0`. |
 | `[database]` | `top_k_return` | int | `5` | Final returned cut-off, must be `> 0`. |
 | `[routing]` | `routing_shortlist_size` | int | `8` | Must be `> 0`. |
@@ -51,6 +51,38 @@ The following sections and keys are part of the documented config surface and ha
 | `[telemetry]` | `retention_days` | int | `30` | Must be `>= 1`. |
 | `[telemetry]` | `log_dir` | string | `"~/.archon-search/search-logs"` | Non-empty. |
 | `[namespaces]` | `<key> = <value>` | string = string | `{}` | Both sides must be strings; otherwise `ConfigError`. Note: `load_config` only checks the string-type constraint — the namespace-identifier regex (`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`) and reserved-name rules in `constants.py::_validate_namespace` are enforced by callers that use the namespace, not at config load. |
+
+## Keys added by the 2026-10-25 security and operations batch
+
+Every key is optional and sits in the section shown. Defaults mirror [`archon-search.toml.example`](../../archon-search.toml.example) and `archon_search/constants.py`. Detail and migration: the entries NR-43 … NR-48 in [`03_breaking_changes_index.md`](./03_breaking_changes_index.md) and [`/BREAKING.md`](../../BREAKING.md).
+
+| Section | Key | Type | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `[server]` | `max_request_body_mb` | int | `32` | Must be `>= 1`. A larger body is `413` before authentication. |
+| `[server]` | `cors_origins` | list[string] | `[]` | Explicit `scheme://host[:port]` origins; empty sends no CORS headers; `*` is a `ConfigError`. |
+| `[server]` | `docs_enabled` | bool | `false` | `true` serves `/docs`, `/redoc` and `/openapi.json` without authentication; `false` removes `/docs` and `/redoc` and authenticates `/openapi.json`. |
+| `[server]` | `graceful_shutdown_seconds` | int | `25` | Must be `>= 1`; keep below the 30 s of `docker stop`. |
+| `[ingest]` | `max_file_mb` | int | `100` | Was `0` (no limit); `0` still disables it; applies to files and to one inline document. |
+| `[ingest]` | `allowed_roots` | list[string] | `[]` | Absolute directories a client-supplied path must lie under. Empty adds no scope limit, and a non-admin key may then not send paths at all. |
+| `[ingest]` | `parse_timeout_seconds` | float | `300` | Must be `> 0`; bound on one PDF or image conversion. |
+| `[ingest]` | `parse_timeout_seconds_per_mb` | float | `10` | Must be `>= 0`; added per MiB of the file (`0` keeps the bound flat). |
+| `[ingest]` | `max_zip_entries` | int | `10000` | Must be `>= 1`; `.docx`, `.pptx`, `.xlsx`, `.epub`. |
+| `[ingest]` | `max_zip_uncompressed_mb` | int | `512` | Must be `>= 1`. |
+| `[ingest]` | `max_discovered_files` | int | `100000` | Must be `>= 1`; a larger directory tree is refused. |
+| `[ingest]` | `max_concurrent_tasks` | int | `4` | Must be `>= 1`; more is `503` `ingest_busy`. |
+| `[graph]` | `max_cross_collection_collections` | int | `8` | Must be `>= 2`. |
+| `[maintenance]` | `version_retention_hours` | int | `24` | Must be `>= 1`; passes need `interval_hours > 0` or `POST /maintenance/trigger`. |
+
+`[database].embedder_cache_size` (default `3`) no longer counts the default `embedding_model`, which is pinned. The keys and tokens that authenticate are not config values only: `ARCHON_SEARCH_API_KEY` and the key file must be lowercase hex of at least 32 characters, and a `[namespaces]` token printable ASCII of at least 32 characters, or the server refuses to start (`Error: …`, exit `1`).
+
+## PyTorch runtime keys removed and added
+
+| Section | Key | Change |
+| --- | --- | --- |
+| `[database]` | `providers`, `reranker_providers` | Removed; replaced by `[database].device` (default `"auto"`). |
+| `[graph]` | `providers` | Removed; replaced by `[graph].device` (default `"cpu"`). |
+
+`serve`, `start` and `install` exit `1` with `Error: [database].providers was replaced by [database].device (auto|cpu|mps|cuda); see BREAKING.md` (likewise for the other two). `archon-search wizard` loads such a file, prints `Dropping removed config keys …`, drops them and writes `device`. `archon-search config show` prints the file and warns on stderr; `config set` validates with the loader's rules, so it refuses to set a removed key but `config set database.device auto` works on a legacy file. The environment variable `FASTEMBED_CACHE_PATH` is no longer read. The tested manual sequence is in the PyTorch entry of [`/BREAKING.md`](../../BREAKING.md).
 
 Cross-link to [`Architecture/510_release_and_environment_strategy.md`](../Architecture/510_release_and_environment_strategy.md) "Configuration" for the same surface from the release-engineering angle, and to [`Architecture/130_data_architecture_and_persistence.md`](../Architecture/130_data_architecture_and_persistence.md) for how `db_path` is laid out on disk.
 
@@ -80,17 +112,17 @@ Until a strict-mode loader exists, treat each upgrade as an opportunity to diff 
 
 ## Validating a config file
 
-There is no standalone `config validate` subcommand. The two supported ways to exercise the loader are:
+There is no standalone `config validate` subcommand. The supported ways to exercise the loader are:
 
 ```bash
-# 1. The CLI shows the loaded, merged config — runs the same load_config() the server uses.
+# 1. Show the file with defaults filled in (a raw TOML view; it does not run the server's loader).
 archon-search config show
 
-# 2. Start the server; ConfigError causes start to fail loudly.
+# 2. Start the server; ConfigError causes start to fail loudly (`Error: …`, exit 1).
 archon-search start
 ```
 
-`archon-search config show` is the fastest non-destructive check: it prints the parsed config and surfaces any range or type errors via `ConfigError`. Read individual keys with `archon-search config get <key>`; write them with `archon-search config set <key> <value>` (see `archon_search/cli/config_cmd.py`).
+`archon-search config show` prints the config with defaults filled in (so a value the loader would reject can still print) and warns on stderr when removed keys remain; `config set` refuses a document the loader would reject. The authoritative check is starting the server (check 2). Read individual keys with `archon-search config get <key>`; write them with `archon-search config set <key> <value>` (see `archon_search/cli/config_cmd.py`).
 
 ## Upgrade checklist for config
 
