@@ -13,6 +13,7 @@ backends, so the real PyTorch code path is exercised.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import time
 from pathlib import Path
@@ -83,7 +84,7 @@ def test_steady_state_p95_assertion_fires_on_regression() -> None:
     # Build a times list where the 95th percentile exceeds the threshold
     times_ms = [1.0] * 94 + [999.0, 999.0, 999.0, 999.0, 999.0, 999.0]  # 100 values
     assert len(times_ms) == 100
-    p95 = sorted(times_ms)[int(math.ceil(0.95 * _STEADY_STATE_ITERS)) - 1]
+    p95 = sorted(times_ms)[math.ceil(0.95 * _STEADY_STATE_ITERS) - 1]
     assert p95 == 999.0
     threshold = 500.0
     with pytest.raises(AssertionError, match="Steady-state p95"):
@@ -105,7 +106,7 @@ def test_cold_load_p90_assertion_fires_on_regression() -> None:
     # Need sorted[8] = 999.0: requires at most 8 values below 999.0 → [1.0]*8 + [999.0, 999.0]
     times_ms = [1.0] * 8 + [999.0, 999.0]  # 10 values; sorted[8] = 999.0
     assert len(times_ms) == 10
-    p90 = sorted(times_ms)[int(math.ceil(0.90 * _COLD_LOAD_ITERS)) - 1]
+    p90 = sorted(times_ms)[math.ceil(0.90 * _COLD_LOAD_ITERS) - 1]
     assert p90 == 999.0
     threshold = 500.0
     with pytest.raises(AssertionError, match="Cold-load p90"):
@@ -197,13 +198,11 @@ async def _run_steady_state_benchmark(
             )
             times.append((time.perf_counter() - start) * 1000)
 
-        p95 = sorted(times)[int(math.ceil(0.95 * len(times))) - 1]
+        p95 = sorted(times)[math.ceil(0.95 * len(times)) - 1]
         return p95
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await store.disconnect()
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +252,7 @@ def test_real_model_search_cold_load_p90() -> None:
         times.append(elapsed_ms)
 
     # p90 under nearest-rank: for N=10, ceil(0.90*10)-1 = 9-1 = 8 = index 8
-    p90 = sorted(times)[int(math.ceil(0.90 * _COLD_LOAD_ITERS)) - 1]
+    p90 = sorted(times)[math.ceil(0.90 * _COLD_LOAD_ITERS) - 1]
     print(f"\nCold-load p90: {p90:.1f} ms (threshold: {thresholds.cold_load_p90_ms:.1f} ms)")
     assert p90 <= thresholds.cold_load_p90_ms, (
         f"Cold-load p90 {p90:.1f} ms exceeds threshold {thresholds.cold_load_p90_ms:.1f} ms"

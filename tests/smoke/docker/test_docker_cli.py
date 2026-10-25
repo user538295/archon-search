@@ -123,6 +123,7 @@ def test_help_exits_0(tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 0, (
@@ -143,6 +144,7 @@ def test_version_exits_0(tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 0, (
         f"archon-search --version exited {result.returncode}\n"
@@ -172,6 +174,7 @@ def test_config_show_exits_0(tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 0, (
         f"archon-search config show exited {result.returncode}\n"
@@ -196,6 +199,7 @@ def test_help_completes_within_5s(tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     elapsed = time.monotonic() - start
     assert elapsed < 5.0, f"archon-search --help took {elapsed:.2f}s (limit: 5.0s)"
@@ -259,6 +263,7 @@ def test_status_with_server_shows_http_telemetry(smoke_docker_server, tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 0, (
@@ -304,6 +309,7 @@ def test_status_without_server_clean_exit_0(tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 0, (
@@ -388,6 +394,7 @@ def test_docker_status_renders_telemetry_payload_fields(smoke_docker_server, tmp
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert container_result.returncode == 0, (
         f"container archon-search status exited {container_result.returncode}\n"
@@ -437,6 +444,7 @@ def test_start_emits_clean_container_mode_message(tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 1, (
@@ -460,6 +468,7 @@ def test_stop_emits_clean_container_mode_message(tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 1, (
@@ -488,6 +497,7 @@ def test_install_emits_clean_container_mode_message(tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 1, (
@@ -511,6 +521,7 @@ def test_uninstall_emits_clean_container_mode_message(tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 1, (
@@ -547,6 +558,7 @@ def test_key_list_exits_0(smoke_docker_server_seeded, tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 0, (
@@ -579,6 +591,7 @@ def test_collection_list_exits_0(smoke_docker_server_seeded, tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 0, (
@@ -620,6 +633,7 @@ def test_collection_add_wait_completes(smoke_docker_server_seeded, tmp_path):
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 0, (
@@ -651,6 +665,7 @@ def test_collection_info_exits_0(smoke_docker_server_seeded, tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 0, (
@@ -691,6 +706,7 @@ def test_ingest_wait_completes(smoke_docker_server_seeded, tmp_path):
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 0, (
@@ -758,6 +774,7 @@ def test_jobs_status_reports_status(smoke_docker_server_seeded, tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 0, (
@@ -789,6 +806,7 @@ def test_maintenance_run_exits_0(smoke_docker_server_seeded, tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 0, (

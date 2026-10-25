@@ -110,11 +110,12 @@ def _subprocess_env(*, port: int, data_dir: Path, api_key: str) -> dict[str, str
         "ARCHON_SEARCH_API_KEY": api_key,
         "PYTEST_ADDOPTS": "",
     }
-    # An operator's exported ARCHON_SEARCH_HOST would otherwise leak in via
+    # An operator's exported ARCHON_SEARCH_HOST / ARCHON_SEARCH_CONTAINER would otherwise leak in via
     # **os.environ above and change which interface serve mode binds to,
-    # breaking the 0.0.0.0-default assumption the S15 bind-collision test
-    # relies on. Force serve mode's 0.0.0.0 default to always apply.
+    # breaking the 127.0.0.1-default assumption the S15 bind-collision test
+    # relies on. Force serve mode's native loopback default to always apply.
     env.pop("ARCHON_SEARCH_HOST", None)
+    env.pop("ARCHON_SEARCH_CONTAINER", None)
     return env
 
 

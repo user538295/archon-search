@@ -17,18 +17,18 @@ jobs:
     timeout-minutes: 240
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # setuptools-scm / hatch-vcs need the full history to compute version
           fetch-depth: 0
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
 
@@ -38,8 +38,13 @@ jobs:
       - name: Verify pytest-cov plugin is importable
         run: uv run python -c "import pytest_cov"
 
+      # The rule set is pinned in pyproject.toml ([tool.ruff.lint] select); the ruff version is
+      # pinned here, and tests/test_workflow_action_pinning_lint.py enforces the pin.
+      - name: Lint (ruff, zero findings)
+        run: uvx ruff@0.17.2 check .
+
       - name: Restore model cache (PyTorch snapshots + HuggingFace)
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # The two live-lane snapshot directories of <ARCHON_SEARCH_DATA_DIR>/models (the
           # data dir defaults to ~/.archon-search on a runner; its models/graph is cached by
@@ -124,7 +129,7 @@ jobs:
         run: uv run python -c "import xml.etree.ElementTree as ET; t=ET.parse('benchmark-results.xml').getroot(); ts=t.find('testsuite'); t=ts if ts is not None else t; tests=int(t.attrib.get('tests',0)); skips=int(t.attrib.get('skipped',0)); assert tests-skips>0, f'All {tests} benchmark tests were skipped or none ran — check model cache prefetch step'"
 
       - name: Restore graph NER artifact cache
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # ProseExtractionBackend passes get_graph_models_dir() as GLiNER's cache_dir,
           # which resolves under ARCHON_SEARCH_DATA_DIR (default ~/.archon-search) —

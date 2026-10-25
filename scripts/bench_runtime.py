@@ -3,11 +3,15 @@
 
     bench_runtime.py --runtime torch [--models bge-small,jina-reranker] [--output torch.json]
     bench_runtime.py --runtime fastembed --output fastembed.json    # needs `uv run --with fastembed==0.9.0`
+    bench_runtime.py --runtime both --output both.json              # needs fastembed and torch in one environment
     bench_runtime.py compare torch.json fastembed.json              # markdown table, exit 1 on a regression
+    bench_runtime.py compare both.json
 
-One invocation measures one runtime on CPU. Each model gets one warm-up run (which includes the lazy
-weight load), then the best of three timed runs; embedders are measured in passages/s, rerankers in
-pairs/s. The workload is generated from a fixed seed and a built-in vocabulary, so both runtimes and
+`--runtime torch|fastembed` measures one runtime on CPU. `--runtime both` measures the two in one
+process, alternating them run by run (and flipping who goes first each round) so a load burst on a
+shared host hits both and the ratio stays comparable. Each model gets one warm-up run (which includes
+the lazy weight load), then the best of `TIMED_RUNS` timed runs; embedders are measured in passages/s,
+rerankers in pairs/s. The workload is generated from a fixed seed and a built-in vocabulary, so both runtimes and
 every platform see identical texts. The gate fails when any model's torch throughput falls below
 `MIN_TORCH_TO_FASTEMBED_RATIO` times fastembed's; exactly that ratio passes.
 """
@@ -45,12 +49,13 @@ MODEL_KINDS: Mapping[str, str] = {
 
 TORCH = "torch"
 FASTEMBED = "fastembed"
+BOTH = "both"
 RUNTIMES = (TORCH, FASTEMBED)
 CPU_DEVICE = "cpu"
 FASTEMBED_PROVIDERS = ["CPUExecutionProvider"]
 
 MIN_TORCH_TO_FASTEMBED_RATIO = 0.9
-TIMED_RUNS = 3
+TIMED_RUNS = 10
 
 WORKLOAD_SEED = 20261025
 PASSAGE_COUNT = 32
@@ -108,7 +113,7 @@ def build_pairs() -> list[tuple[str, str]]:
 
 
 def select_models(selector: str | None) -> list[str]:
-    """Registry names matching *selector* (comma-separated names or unambiguous substrings), registry order."""
+    """Names of the benchmarked models matching *selector* (comma-separated names or unambiguous substrings), in `MODEL_KINDS` order."""
     if selector is None:
         return list(MODEL_KINDS)
     chosen: set[str] = set()
@@ -130,14 +135,34 @@ def select_models(selector: str | None) -> list[str]:
 # ----------------------------------------------------------------------------------------------- running
 
 
-def throughput(run: Callable[[], object], items: int) -> float:
+def throughput(
+    run: Callable[[], object],
+    items: int,
+    clock: Callable[[], float] = time.perf_counter,
+) -> float:
     """Items per second of the fastest of `TIMED_RUNS` runs after one warm-up run."""
-    run()
-    best = 0.0
-    for _ in range(TIMED_RUNS):
-        started = time.perf_counter()
+    return interleaved_throughputs({"run": run}, items, clock)["run"]
+
+
+def interleaved_throughputs(
+    runs: Mapping[str, Callable[[], object]],
+    items: int,
+    clock: Callable[[], float] = time.perf_counter,
+) -> dict[str, float]:
+    """Items per second of the fastest of `TIMED_RUNS` rounds per run, after one warm-up of each.
+
+    Every round times each run once, and the order flips between rounds, so a load burst lands on
+    all runs alike and no run always benefits from going first.
+    """
+    for run in runs.values():
         run()
-        best = max(best, items / (time.perf_counter() - started))
+    best = dict.fromkeys(runs, 0.0)
+    for round_index in range(TIMED_RUNS):
+        order = list(runs) if round_index % 2 == 0 else list(reversed(runs))
+        for label in order:
+            started = clock()
+            runs[label]()
+            best[label] = max(best[label], items / (clock() - started))
     return best
 
 
@@ -189,23 +214,52 @@ def environment(runtime: str) -> dict[str, Any]:
     }
 
 
+def _result(runtime: str, models: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    return {"runtime": runtime, "environment": environment(runtime), "models": models}
+
+
+def _model_entry(kind: str, value: float) -> dict[str, Any]:
+    return {"kind": kind, "throughput": value, "unit": UNITS[kind]}
+
+
+def _run_both(names: Sequence[str]) -> dict[str, Any]:
+    passages, pairs = build_passages(), build_pairs()
+    models: dict[str, dict[str, dict[str, Any]]] = {TORCH: {}, FASTEMBED: {}}
+    for name in names:
+        kind = MODEL_KINDS[name]
+        print(f"[bench] both {name}", file=sys.stderr, flush=True)
+        runs = {
+            runtime: _RUNNERS[runtime](name, kind, passages, pairs)
+            for runtime in RUNTIMES
+        }
+        measured = interleaved_throughputs(
+            runs, len(passages) if kind == EMBEDDER else len(pairs)
+        )
+        for runtime in RUNTIMES:
+            models[runtime][name] = _model_entry(kind, measured[runtime])
+        del runs
+        gc.collect()
+    return {
+        "runtime": BOTH,
+        **{runtime: _result(runtime, models[runtime]) for runtime in RUNTIMES},
+    }
+
+
 def run_benchmark(runtime: str, names: Sequence[str]) -> dict[str, Any]:
+    if runtime == BOTH:
+        return _run_both(names)
     passages, pairs = build_passages(), build_pairs()
     models: dict[str, dict[str, Any]] = {}
     for name in names:
         kind = MODEL_KINDS[name]
         print(f"[bench] {runtime} {name}", file=sys.stderr, flush=True)
         run = _RUNNERS[runtime](name, kind, passages, pairs)
-        models[name] = {
-            "kind": kind,
-            "throughput": throughput(
-                run, len(passages) if kind == EMBEDDER else len(pairs)
-            ),
-            "unit": UNITS[kind],
-        }
+        models[name] = _model_entry(
+            kind, throughput(run, len(passages) if kind == EMBEDDER else len(pairs))
+        )
         del run
         gc.collect()
-    return {"runtime": runtime, "environment": environment(runtime), "models": models}
+    return _result(runtime, models)
 
 
 # ------------------------------------------------------------------------------------------------ compare
@@ -253,7 +307,7 @@ def _check_models(label: str, result: Mapping[str, Any]) -> list[str]:
 
 
 def build_rows(torch: Mapping[str, Any], fastembed: Mapping[str, Any]) -> list[Row]:
-    """One row per registry model; raises `BenchError` listing every missing, extra or unusable entry."""
+    """One row per benchmarked model (the ten of `MODEL_KINDS`); raises `BenchError` listing every missing, extra or unusable entry."""
     problems = _check_models("torch", torch) + _check_models("fastembed", fastembed)
     if problems:
         raise BenchError("; ".join(problems))
@@ -284,11 +338,16 @@ def render_markdown(rows: Sequence[Row]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def compare(torch_path: Path, fastembed_path: Path) -> int:
-    rows = build_rows(
-        json.loads(torch_path.read_text(encoding="utf-8")),
-        json.loads(fastembed_path.read_text(encoding="utf-8")),
-    )
+def compare(torch_path: Path, fastembed_path: Path | None = None) -> int:
+    """Gate the results of two single-runtime files, or of one `--runtime both` file."""
+    torch = json.loads(torch_path.read_text(encoding="utf-8"))
+    if fastembed_path is None:
+        if torch.get("runtime") != BOTH:
+            raise BenchError("a single compare file must come from --runtime both")
+        torch, fastembed = torch[TORCH], torch[FASTEMBED]
+    else:
+        fastembed = json.loads(fastembed_path.read_text(encoding="utf-8"))
+    rows = build_rows(torch, fastembed)
     print(render_markdown(rows), end="")
     return 0 if all(row.passed for row in rows) else 1
 
@@ -301,14 +360,20 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         parser = argparse.ArgumentParser(prog="bench_runtime.py compare")
         parser.add_argument("command", choices=["compare"])
         parser.add_argument("torch_json", type=Path)
-        parser.add_argument("fastembed_json", type=Path)
+        parser.add_argument(
+            "fastembed_json",
+            type=Path,
+            nargs="?",
+            help="omit when torch_json comes from --runtime both",
+        )
         return parser.parse_args(argv)
     parser = argparse.ArgumentParser(
         prog="bench_runtime.py", description=__doc__.splitlines()[0]
     )
-    parser.add_argument("--runtime", choices=RUNTIMES, required=True)
+    parser.add_argument("--runtime", choices=(*RUNTIMES, BOTH), required=True)
     parser.add_argument(
-        "--models", help="comma-separated registry names or unambiguous substrings"
+        "--models",
+        help="comma-separated names of the benchmarked models, or unambiguous substrings",
     )
     parser.add_argument(
         "--output", type=Path, help="write the JSON here instead of stdout"

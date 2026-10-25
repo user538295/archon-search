@@ -1,7 +1,8 @@
 # Dev overrides — lean image, extras installed at runtime into a named volume,
 # config from repo, claude CLI proxied to Mac host.
 # Usage:
-#   1. python3 scripts/claude-proxy.py   # run on Mac host (separate terminal)
+#   1. CLAUDE_PROXY_TOKEN=<random secret> python3 scripts/claude-proxy.py   # on the Mac host (separate terminal)
+#      and export the same CLAUDE_PROXY_TOKEN in the shell that runs `docker compose`
 #   2. ARCHON_VERSION=$(git describe --tags --always) docker compose up --build archon-dev
 #      (ARCHON_VERSION stamps the real version; omit it and the image reports 0.0.0+docker)
 services:
@@ -16,6 +17,7 @@ services:
     environment:
       ARCHON_SEARCH_CONFIG: /config/archon-search.toml
       CLAUDE_PROXY_URL: "http://host.docker.internal:18766"
+      CLAUDE_PROXY_TOKEN: ${CLAUDE_PROXY_TOKEN:-}
       ARCHON_EXTRAS: "graph,code,multilingual"
     volumes:
       - archon-dev-data:/data

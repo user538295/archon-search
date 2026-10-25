@@ -36,7 +36,12 @@ from pathlib import Path
 
 import pytest
 
-from tests._docker_support import REPO_ROOT, SMOKE_OPT_IN_ENV, docker_available, smoke_opted_in
+from tests._docker_support import (
+    REPO_ROOT,
+    SMOKE_OPT_IN_ENV,
+    docker_available,
+    smoke_opted_in,
+)
 
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
@@ -55,7 +60,9 @@ CONTAINER_PORT = 8765
 # key — so a non-hex value here silently yields 401 on every authenticated
 # request. The pre-T-13 value ("smoketest") was never noticed because no smoke
 # test authenticated; both S56 legs do.
-SMOKE_API_KEY = "5c0e5ea11eb5"
+# Also at least ``key_manager.MIN_API_KEY_LENGTH`` (32) characters: ``_load_from_env`` raises
+# ``ConfigError`` and the server refuses to start on a shorter explicit key.
+SMOKE_API_KEY = "37b63185edccb44eb3b6c3a34cce781bde8b843c6061eb1d9c23e429a8029cc4"
 # T-13 raised this from 30 s. ``ARCHON_EXTRAS`` defaults to
 # ``graph,code,multilingual`` (the ``EXTRAS=`` default in
 # scripts/docker-entrypoint.sh), so a container started from a freshly built
@@ -220,7 +227,7 @@ def _wait_for_job(base_url: str, job_id: str, timeout_s: int) -> dict:
     string matches an enum member directly, and ``tests/test_types_failed_expired.py``
     already guards every place that set is duplicated.
     """
-    from archon_search.jobs.store import _TERMINAL_STATUSES  # noqa: PLC0415
+    from archon_search.jobs.store import _TERMINAL_STATUSES
 
     deadline = time.monotonic() + timeout_s
     job: dict = {}
@@ -275,7 +282,7 @@ def test_docker_marker_in_pyproject() -> None:
     with PYPROJECT.open("rb") as fp:
         data = tomllib.load(fp)
     markers = data["tool"]["pytest"]["ini_options"]["markers"]
-    assert any(m.startswith("docker:") or m.startswith("docker ") for m in markers), (
+    assert any(m.startswith(("docker:", "docker ")) for m in markers), (
         "pyproject.toml [tool.pytest.ini_options].markers must register a "
         "'docker:' marker so --strict-markers does not reject @pytest.mark.docker"
     )
@@ -395,6 +402,109 @@ def test_uid_1000_can_write_data_dir(cpu_image: str) -> None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+@pytest.mark.docker
+@pytest.mark.xdist_group("docker")
+@pytest.mark.skipif(
+    not smoke_opted_in(),
+    reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker smoke suite",
+)
+@pytest.mark.skipif(not docker_available(), reason="docker not available")
+def test_default_image_runs_read_only_with_data_tmp_and_pip_packages_writable(cpu_image: str) -> None:
+    """The DEFAULT image (default ``ARCHON_EXTRAS``) under ``--read-only`` needs exactly three writable paths.
+
+    ``/data`` (the volume; ``HOME`` points there, so Hugging Face, matplotlib and other ``~/.cache``
+    writes land on it), ``/tmp`` (a tmpfs) and ``/pip-packages`` (the extras the entrypoint installs on
+    first start). Nothing else — not the app, not site-packages, not ``/root``-style home caches. Proven
+    end to end: the server reaches ready, ingests a file and finds it again, and no log line reports a
+    read-only file system.
+    """
+    data_dir = Path(tempfile.mkdtemp(prefix="archon-smoke-ro-data-"))
+    pip_dir = Path(tempfile.mkdtemp(prefix="archon-smoke-ro-pip-"))
+    corpus = Path(tempfile.mkdtemp(prefix="archon-smoke-ro-corpus-"))
+    for path in (data_dir, pip_dir, corpus):
+        os.chmod(path, 0o777)
+    (corpus / "note.md").write_text("The zebra ledger records quarterly revenue.\n", encoding="utf-8")
+
+    host_port = HOST_PORT + 4
+    base_url = f"http://localhost:{host_port}"
+    container_id: str | None = None
+    try:
+        container_id = _run_detached(
+            [
+                "--read-only",
+                "--tmpfs", "/tmp",
+                "-v", f"{data_dir}:/data",
+                "-v", f"{pip_dir}:/pip-packages",
+                "-v", f"{corpus}:/corpus:ro",
+                "-e", f"ARCHON_SEARCH_API_KEY={SMOKE_API_KEY}",
+                "-p", f"{host_port}:{CONTAINER_PORT}",
+                cpu_image,
+            ]
+        )
+        status = _wait_for_ready(f"{base_url}/ready", READY_TIMEOUT_S, container_id)
+        assert status == 200, f"/ready returned HTTP {status}, expected 200"
+
+        submitted = _api(f"{base_url}/ingest", {"collection": "ro", "path": "/corpus"})
+        job = _wait_for_job(base_url, submitted["job_id"], INGEST_TIMEOUT_S)
+        logs = _docker_logs(container_id)
+        assert job["status"] == "DONE", f"ingest must work on a read-only root; job={job!r}\nlogs:\n{logs}"
+
+        found = _api(f"{base_url}/search", {"collection": "ro", "query": "zebra ledger", "top_k": 1})
+        assert [hit["source_path"] for hit in found["results"]] == ["/corpus/note.md"]
+        assert "read-only file system" not in logs.lower(), f"something wrote outside the three paths:\n{logs}"
+    finally:
+        if container_id:
+            subprocess.run(["docker", "rm", "-f", "-v", container_id], check=False, timeout=30)
+        for path in (data_dir, pip_dir, corpus):
+            shutil.rmtree(path, ignore_errors=True)
+
+
+_PARSE_SCANNED_PDF_SCRIPT = """
+import asyncio, tempfile
+from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont
+from archon_search.parser import DocumentParser
+page = Image.new("RGB", (1240, 1754), "white")
+ImageDraw.Draw(page).text((100, 200), "zebra ledger", fill="black", font=ImageFont.load_default(64))
+scan = Path(tempfile.mkdtemp()) / "scan.pdf"
+page.save(scan, "PDF", resolution=150.0)
+print("PARSED:" + asyncio.run(DocumentParser().parse(scan)))
+"""
+# A parse that had to download docling's models took 71 s on a fast link; this one only loads them.
+_OFFLINE_PARSE_TIMEOUT_S = 300
+
+
+@pytest.mark.docker
+@pytest.mark.xdist_group("docker")
+@pytest.mark.skipif(
+    not smoke_opted_in(),
+    reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker smoke suite",
+)
+@pytest.mark.skipif(not docker_available(), reason="docker not available")
+def test_scanned_pdf_parses_with_no_network_and_a_read_only_root(cpu_image: str) -> None:
+    """H3: the image carries the models a scanned PDF needs, so its first parse downloads nothing.
+
+    Docling fetched its layout and table models on the first parse, inside ``parse_timeout_seconds``.
+    ``--network none`` makes any download fail, ``--read-only`` makes a write outside ``/tmp`` fail, and the
+    image's own non-root user runs the parse.
+    """
+    result = subprocess.run(
+        [
+            "docker", "run", "--rm", "--network", "none", "--read-only", "--tmpfs", "/tmp",
+            "--entrypoint", "python3",
+            cpu_image, "-c", _PARSE_SCANNED_PDF_SCRIPT,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=_OFFLINE_PARSE_TIMEOUT_S,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"parse failed:\n{result.stdout}\n{result.stderr}"
+    assert "PARSED:" in result.stdout
+    assert "zebra" in result.stdout.lower(), f"OCR text missing from the parse: {result.stdout!r}"
+
+
 # ---------------------------------------------------------------------------
 # T-13 / S56: the two ARCHON_EXTRAS=graph container legs
 # ---------------------------------------------------------------------------
@@ -472,9 +582,9 @@ def test_cpu_image_starts_and_serves_ready_without_spacy(cpu_image: str) -> None
     probe = subprocess.run(
         [
             "docker", "run", "--rm", "--entrypoint", "python3", cpu_image, "-c",
-            "import importlib.util as u; "
+            ("import importlib.util as u; "
             "print(u.find_spec('spacy') is None, u.find_spec('en_core_web_sm') is None, "
-            "u.find_spec('archon_search') is None)",
+            "u.find_spec('archon_search') is None)"),
         ],
         capture_output=True,
         text=True,
@@ -580,7 +690,7 @@ def test_graph_enabled_image_degrades_to_code_symbols_only(
     ``notes.md`` yields only prose chunks — so the sanitized backend-load
     warning fires exactly once across the flattened per-file results.
     """
-    from archon_search.graph_extractor import BACKEND_UNAVAILABLE_DETAIL  # noqa: PLC0415
+    from archon_search.graph_extractor import BACKEND_UNAVAILABLE_DETAIL
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="archon-smoke-graph-"))
     container_id: str | None = None
@@ -594,7 +704,7 @@ def test_graph_enabled_image_degrades_to_code_symbols_only(
         # Resolve the checkpoint cache path exactly the way the server will,
         # then occupy it with a regular file (see the docstring).
         monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_dir))
-        from archon_search.paths import get_graph_models_dir  # noqa: PLC0415
+        from archon_search.paths import get_graph_models_dir
 
         cache_dir = get_graph_models_dir()
         monkeypatch.undo()
@@ -611,6 +721,7 @@ def test_graph_enabled_image_degrades_to_code_symbols_only(
         container_id = _run_detached(
             [
                 "-v", f"{tmp_dir}:/data",
+                "-v", f"{corpus}:/corpus:ro",
                 "-e", f"ARCHON_SEARCH_API_KEY={SMOKE_API_KEY}",
                 "-p", f"{host_port}:{CONTAINER_PORT}",
                 cpu_image,
@@ -621,7 +732,7 @@ def test_graph_enabled_image_degrades_to_code_symbols_only(
         assert status == 200, f"/ready returned HTTP {status}, expected 200"
 
         submitted = _api(
-            f"{base_url}/ingest", {"collection": "smoke", "path": "/data/corpus"}
+            f"{base_url}/ingest", {"collection": "smoke", "path": "/corpus"}
         )
         job = _wait_for_job(base_url, submitted["job_id"], INGEST_TIMEOUT_S)
         assert job["status"] == "DONE", (
@@ -745,6 +856,7 @@ def test_docker_smoke_suite_exits_0(test_runner_image: str) -> None:
         text=True,
         cwd=str(REPO_ROOT),
         timeout=600,
+        check=False,
     )
     combined = result.stdout + result.stderr
 

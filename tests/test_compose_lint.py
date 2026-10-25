@@ -119,6 +119,30 @@ def test_compose_volumes_declared(compose_doc: dict) -> None:
         )
 
 
+def test_compose_keeps_the_first_start_extras_install_on_a_volume(compose_doc: dict) -> None:
+    """Without a ``/pip-packages`` volume the extras install (internet needed) repeats after every ``down``/``up``."""
+    mounted: dict[str, str] = {}
+    for svc_name in EXPECTED_SERVICES:
+        targets = {}
+        for entry in compose_doc["services"][svc_name]["volumes"]:
+            source, _, target = entry.partition(":")
+            targets[target.split(":")[0]] = source
+        assert "/pip-packages" in targets, f"service `{svc_name}` must mount a volume at /pip-packages"
+        mounted[svc_name] = targets["/pip-packages"]
+        assert mounted[svc_name] in compose_doc["volumes"], f"`{mounted[svc_name]}` must be declared at the top level"
+    assert len(set(mounted.values())) == len(EXPECTED_SERVICES), f"each service needs its own volume; got {mounted}"
+
+
+def test_env_example_explains_the_api_key_format_the_server_accepts(env_example_text: str) -> None:
+    from archon_search.constants import MIN_API_KEY_LENGTH
+    from archon_search.key_manager import api_key_problem
+
+    assert "lowercase hex" in env_example_text
+    assert f"at least {MIN_API_KEY_LENGTH}" in env_example_text
+    assert "token_hex(32)" in env_example_text
+    assert api_key_problem("0123456789abcdef" * 4) is None  # what the documented generator yields is accepted
+
+
 # ---------------------------------------------------------------------------
 # Stop grace period (spec invariant: 30s on every service)
 # ---------------------------------------------------------------------------
@@ -140,6 +164,9 @@ def test_compose_stop_grace_period(compose_doc: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+LOOPBACK_HOST = "127.0.0.1"
+
+
 def test_compose_port_mappings(compose_doc: dict) -> None:
     services = compose_doc["services"]
     for svc_name, (host_port, container_port) in EXPECTED_PORT_MAP.items():
@@ -149,11 +176,28 @@ def test_compose_port_mappings(compose_doc: dict) -> None:
         assert isinstance(first, str), (
             f"service `{svc_name}` must use short-syntax port mapping"
         )
-        host_side, _, container_side = first.partition(":")
-        assert host_side == host_port and container_side == container_port, (
-            f"service `{svc_name}` must map {host_port}:{container_port}, "
-            f"got `{first}`"
+        expected = f"{LOOPBACK_HOST}:{host_port}:{container_port}"
+        assert first == expected, (
+            f"service `{svc_name}` must publish `{expected}` (loopback only), got `{first}`"
         )
+
+
+def test_compose_publishes_only_on_loopback(compose_doc: dict) -> None:
+    """A bare `8765:8765` binds 0.0.0.0, exposing the plaintext API (and its key) to the whole LAN."""
+    for svc_name, service in compose_doc["services"].items():
+        for port in service.get("ports", []):
+            assert isinstance(port, str) and port.startswith(f"{LOOPBACK_HOST}:"), (
+                f"service `{svc_name}` publishes `{port}` on every host interface; "
+                f"prefix it with `{LOOPBACK_HOST}:`"
+            )
+
+
+def test_compose_documents_remote_exposure_needs_explicit_override(compose_text: str) -> None:
+    header = compose_text.split("services:", 1)[0].lower()
+    assert "loopback" in header and "reverse proxy" in header and "override" in header, (
+        "the compose header must say ports bind to loopback and that remote access needs an "
+        "explicit override or a reverse proxy"
+    )
 
 
 # ---------------------------------------------------------------------------

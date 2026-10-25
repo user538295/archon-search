@@ -13,9 +13,10 @@
 #   --no-config    ignores [tool.uv] constraint-dependencies — uv-only, not in the wheel,
 #                  so no end-user install applies them.
 #   --no-sources   ignores [tool.uv.sources] (the torch CPU-index pin), for the same reason.
-#   --torch-backend cpu on linux/x86_64 only — PyPI torch there pulls the nvidia/cuda wheels
-#                  a CPU runner cannot use; this resolves the `+cpu` build the Docker image
-#                  ships (S269). Every other platform keeps PyPI torch, as [tool.uv.sources] does.
+#   --torch-backend cpu on linux (x86_64 and aarch64) — PyPI's linux torch is the CUDA build on
+#                  either arch (it pulls the nvidia/cuda wheels a CPU runner cannot use); this
+#                  resolves the `+cpu` build the Docker image ships (S269). macOS and Windows keep
+#                  PyPI torch, which is already CPU-only, as [tool.uv.sources] does.
 # The dev group supplies pytest & co. and pulls every extra through its
 # `archon-search[...]` self-reference, which resolves to this checkout.
 #
@@ -78,7 +79,7 @@ install() {
     mkdir -p "$WORK_DIR"
     uv venv --no-config --clear --python "$PYTHON_VERSION" "$VENV"
     local args=(--no-config --no-sources --resolution highest --python "$PY")
-    if [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ]; then
+    if [ "$(uname -s)" = Linux ]; then
         args+=(--torch-backend cpu)
     fi
     uv pip install "${args[@]}" . --group dev

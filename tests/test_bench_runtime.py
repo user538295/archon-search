@@ -219,3 +219,88 @@ def test_models_filter_none_selects_all() -> None:
 def test_models_filter_rejects_unknown_and_ambiguous(selector: str) -> None:
     with pytest.raises(bench.BenchError, match=selector):
         bench.select_models(selector)
+
+
+class _FakeClock:
+    """A clock the fake runners advance: each call of a runner costs the next duration of its script."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.calls: list[str] = []
+
+    def runner(self, label: str, durations: list[float]):
+        script = iter(durations)
+
+        def run() -> None:
+            self.calls.append(label)
+            self.now += next(script)
+
+        return run
+
+
+def test_timed_runs_are_ten() -> None:
+    assert bench.TIMED_RUNS == 10
+
+
+def test_throughput_is_best_of_timed_runs_after_one_warmup() -> None:
+    clock = _FakeClock()
+    durations = [99.0, 4.0, 2.0, *[8.0] * (bench.TIMED_RUNS - 2)]
+    run = clock.runner("t", durations)
+    assert bench.throughput(run, 10, clock=lambda: clock.now) == 10 / 2.0
+    assert len(clock.calls) == bench.TIMED_RUNS + 1
+
+
+def test_interleaved_alternates_runtimes_each_round_after_one_warmup_each() -> None:
+    clock = _FakeClock()
+    rounds = bench.TIMED_RUNS
+    runs = {
+        "torch": clock.runner("t", [1.0] * (rounds + 1)),
+        "fastembed": clock.runner("f", [1.0] * (rounds + 1)),
+    }
+    bench.interleaved_throughputs(runs, 5, clock=lambda: clock.now)
+    assert clock.calls[:2] == ["t", "f"]  # warm-ups
+    timed = clock.calls[2:]
+    assert len(timed) == 2 * rounds
+    for start in range(0, len(timed), 2):  # every round runs each runtime exactly once
+        assert sorted(timed[start : start + 2]) == ["f", "t"]
+    assert (
+        timed[0] != timed[2]
+    )  # the order flips between rounds: neither side always goes first
+
+
+def test_interleaved_load_burst_hitting_both_runtimes_leaves_the_ratio_intact() -> None:
+    clock = _FakeClock()
+    burst = 5.0  # a load spike slows whatever runs in the same round, in either runtime
+    torch = [9.0, 1.0 * burst, 0.5, *[1.0] * (bench.TIMED_RUNS - 2)]
+    fastembed = [9.0, 0.8 * burst, 0.4, *[0.8] * (bench.TIMED_RUNS - 2)]
+    result = bench.interleaved_throughputs(
+        {"torch": clock.runner("t", torch), "fastembed": clock.runner("f", fastembed)},
+        10,
+        clock=lambda: clock.now,
+    )
+    assert result == pytest.approx({"torch": 10 / 0.5, "fastembed": 10 / 0.4})
+
+
+def test_both_mode_returns_a_result_per_runtime_and_compare_accepts_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def build(name, kind, passages, pairs):
+        return lambda: None
+
+    monkeypatch.setattr(bench, "_RUNNERS", {"torch": build, "fastembed": build})
+    monkeypatch.setattr(
+        bench,
+        "interleaved_throughputs",
+        lambda runs, items, **_: {"torch": 90.0, "fastembed": 100.0},
+    )
+    monkeypatch.setattr(bench, "environment", lambda runtime: {"runtime": runtime})
+    result = bench.run_benchmark("both", list(bench.MODEL_KINDS))
+    assert result["runtime"] == "both"
+    assert result["torch"]["runtime"] == "torch"
+    assert result["fastembed"]["models"][ALL_MODELS[0]]["throughput"] == 100.0
+    path = tmp_path / "both.json"
+    path.write_text(json.dumps(result))
+    assert bench.main(["compare", str(path)]) == 0  # 0.90 is exactly the threshold
+    result["torch"]["models"][ALL_MODELS[2]]["throughput"] = 89.99
+    path.write_text(json.dumps(result))
+    assert bench.main(["compare", str(path)]) == 1

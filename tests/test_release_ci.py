@@ -128,7 +128,7 @@ def test_docker_job_uses_checkout_v4_with_full_history(docker_steps: list[dict])
     checkout_steps = [s for s in docker_steps if s.get("uses", "").startswith("actions/checkout")]
     assert checkout_steps, "docker job must include actions/checkout"
     first = checkout_steps[0]
-    assert first["uses"] == "actions/checkout@v7.0.1"
+    assert first["uses"].startswith("actions/checkout@")  # SHA pinning is linted in test_workflow_action_pinning_lint.py
     assert first.get("with", {}).get("fetch-depth") == 0
 
 

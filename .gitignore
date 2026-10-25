@@ -46,3 +46,12 @@ tests/eval/corpus/pdf-fixtures/*.pdf
 # which LanceDB materializes on disk as a real directory. Root cause is a pre-existing test
 # bug (LanceDB has no in-memory mode); this guard prevents accidental staging.
 :memory:/
+
+# Credentials: never committed (.env.example is the tracked template)
+.env
+.env.*
+!.env.example
+.search.env
+.secrets.env
+keys.json
+*.pem

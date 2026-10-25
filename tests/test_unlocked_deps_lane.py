@@ -13,6 +13,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "test-unlocked-deps.sh"
 LOCAL_BUILD = "archon-search @ file:///checkout"
 FROZEN = f"{LOCAL_BUILD}\niniconfig==2.3.1\n"
@@ -24,8 +26,18 @@ def _executable(path: Path, body: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-def _lane(tmp_path: Path, *, freeze: str, pytest_rewrites_freeze_to: str | None = None) -> dict:
-    """A repo copy holding the script, a fake `uv` and a work dir; returns the run env."""
+def _lane(
+    tmp_path: Path,
+    *,
+    freeze: str,
+    pytest_rewrites_freeze_to: str | None = None,
+    platform: tuple[str, str] | None = None,
+) -> dict:
+    """A repo copy holding the script, a fake `uv` and a work dir; returns the run env.
+
+    The fake `uv` appends each `pip install` argument line to ``tmp_path / "install_args.txt"``.
+    *platform* is a ``(uname -s, uname -m)`` pair served by a fake `uname`.
+    """
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
     shutil.copy2(SCRIPT, repo / "scripts" / SCRIPT.name)
@@ -43,7 +55,7 @@ def _lane(tmp_path: Path, *, freeze: str, pytest_rewrites_freeze_to: str | None 
         tmp_path / "bin" / "uv",
         f"""case "$1 $2" in
     "pip freeze") cat '{freeze_file}' ;;
-    "pip install") ;;
+    "pip install") echo "$*" >> '{tmp_path / "install_args.txt"}' ;;
     venv*) rm -rf '{venv_python.parent.parent}'  # what --clear does
         mkdir -p '{venv_python.parent}' && cat > '{venv_python}' <<'EOF'
 #!/usr/bin/env bash
@@ -52,6 +64,9 @@ def _lane(tmp_path: Path, *, freeze: str, pytest_rewrites_freeze_to: str | None 
 esac
 """,
     )
+    if platform is not None:
+        system, machine = platform
+        _executable(tmp_path / "bin" / "uname", f'case "$1" in -s) echo {system} ;; -m) echo {machine} ;; esac\n')
     return {
         **os.environ,
         "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
@@ -66,6 +81,7 @@ def _run(tmp_path: Path, env: dict, step: str) -> subprocess.CompletedProcess[st
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
 
 
@@ -110,3 +126,24 @@ def test_a_rejected_reinstall_leaves_no_snapshot_from_the_earlier_install(tmp_pa
     assert "not installed from this checkout" in install.stderr
     assert suite.returncode != 0, "the earlier install's snapshot must not survive a rejected one"
     assert "run the 'install' step first" in suite.stderr
+
+
+@pytest.mark.parametrize(
+    ("platform", "expects_cpu_backend"),
+    [
+        (("Linux", "x86_64"), True),
+        (("Linux", "aarch64"), True),
+        (("Darwin", "arm64"), False),
+    ],
+)
+def test_install_selects_the_cpu_torch_backend_on_every_linux_arch(
+    tmp_path: Path, platform: tuple[str, str], expects_cpu_backend: bool
+) -> None:
+    """PyPI's linux torch is the CUDA build on amd64 and arm64 alike (as `[tool.uv.sources]` pins)."""
+    env = _lane(tmp_path, freeze=FROZEN, platform=platform)
+
+    result = _run(tmp_path, env, "install")
+
+    assert result.returncode == 0, result.stderr
+    install_line = (tmp_path / "install_args.txt").read_text()
+    assert ("--torch-backend cpu" in install_line) is expects_cpu_backend, install_line

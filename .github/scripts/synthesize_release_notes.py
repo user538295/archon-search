@@ -117,7 +117,7 @@ if api_key:
         sys.exit(0)
     except urllib.error.HTTPError as e:
         print(f"API key failed ({e.code}) — trying claude CLI", file=sys.stderr)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — any API failure falls back to the claude CLI
         print(f"API call failed ({e}) — trying claude CLI", file=sys.stderr)
 
 print("release notes: using claude -p CLI", file=sys.stderr)

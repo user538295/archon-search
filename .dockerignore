@@ -52,3 +52,23 @@ docker-compose.override.yml
 .serena/
 .hypothesis/
 .code-review-graph/
+
+# Tool caches and agent/editor state at the repo root. They are not in the VCS, so a clean CI
+# checkout never has them, but a local build used to ship them: `.mypy_cache` alone was 102 MB.
+# `__pycache__/` above only matches at the context root, the second pattern matches every level.
+**/__pycache__/
+.mypy_cache/
+.ruff_cache/
+.obsidian/
+:memory:
+.brooks-lint-history.json
+.double-check.json
+
+# Credentials must never enter an image layer
+.env
+.env.*
+!.env.example
+.search.env
+.secrets.env
+keys.json
+*.pem

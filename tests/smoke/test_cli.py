@@ -59,7 +59,7 @@ def test_smoke_marker_in_pyproject() -> None:
     norecursedirs: list[str] = ini["norecursedirs"]
     addopts: str = ini["addopts"]
 
-    assert any(m.startswith("smoke:") or m.startswith("smoke ") for m in markers), (
+    assert any(m.startswith(("smoke:", "smoke ")) for m in markers), (
         "pyproject.toml [tool.pytest.ini_options].markers must register a "
         "'smoke:' marker so --strict-markers does not reject @pytest.mark.smoke"
     )
@@ -120,6 +120,7 @@ def test_serve_exits_nonzero_on_malformed_config(tmp_path) -> None:
         capture_output=True,
         text=True,
         timeout=15,
+        check=False,
     )
 
     assert result.returncode != 0, (
@@ -148,6 +149,7 @@ def test_help_completes_within_2s() -> None:
         capture_output=True,
         text=True,
         timeout=10,
+        check=False,
     )
     elapsed = time.monotonic() - start
 
@@ -185,6 +187,7 @@ def test_collection_list_no_repr(smoke_server) -> None:
         capture_output=True,
         text=True,
         timeout=20,
+        check=False,
     )
     elapsed = time.monotonic() - start
 
@@ -211,6 +214,7 @@ def test_collection_info_no_repr(smoke_server) -> None:
         capture_output=True,
         text=True,
         timeout=20,
+        check=False,
     )
 
     assert result.returncode == 0, result.stderr
@@ -245,6 +249,7 @@ def test_config_show_timing_and_format() -> None:
             capture_output=True,
             text=True,
             timeout=15,
+            check=False,
         )
         elapsed = time.monotonic() - start
 
@@ -293,6 +298,7 @@ def test_maintenance_run_without_server(smoke_server) -> None:
         capture_output=True,
         text=True,
         timeout=20,
+        check=False,
     )
 
     assert result.returncode == 0
@@ -344,6 +350,7 @@ def test_key_list_no_repr(smoke_server) -> None:
         capture_output=True,
         text=True,
         timeout=20,
+        check=False,
     )
     elapsed = time.monotonic() - start
 
@@ -399,6 +406,7 @@ def test_e2e_graph_build_communities_wait_against_server(smoke_server_graph_enab
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
 
     assert result.returncode == 0, (
@@ -450,6 +458,7 @@ def test_e2e_collection_reindex_wait_against_server(smoke_server) -> None:
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
 
     assert result.returncode == 0, (
@@ -508,6 +517,7 @@ def test_e2e_collection_add_wait_against_server(smoke_server, tmp_path) -> None:
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
 
     assert result.returncode == 0, (
@@ -567,6 +577,7 @@ def test_e2e_collection_add_progress_hint(smoke_server, tmp_path) -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
     assert result.returncode == 0, (
@@ -604,6 +615,7 @@ def test_add_without_server(smoke_server) -> None:
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
 
     assert result.returncode == 1, (
@@ -658,6 +670,7 @@ def test_e2e_ingest_wait_against_server(smoke_server, tmp_path) -> None:
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
 
     assert result.returncode == 0, (
@@ -739,6 +752,7 @@ def test_e2e_jobs_status_after_reindex(smoke_server) -> None:
         capture_output=True,
         text=True,
         timeout=20,
+        check=False,
     )
 
     assert result.returncode == 0, (
@@ -799,6 +813,7 @@ def test_e2e_sync_wait_all_result_fields_against_server(smoke_server) -> None:
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
 
     assert result.returncode == 0, (
@@ -871,6 +886,7 @@ def test_e2e_collection_reindex_metadata_wait_against_server(smoke_server) -> No
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
 
     assert result.returncode == 0, (
@@ -1012,6 +1028,7 @@ def test_e2e_collection_remove_against_server(smoke_server, tmp_path) -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
     assert result.returncode == 0, (

@@ -21,7 +21,12 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.model_specs import EmbedderSpec, RerankerSpec, get_embedder_spec, get_reranker_spec
+from archon_search.model_specs import (
+    EmbedderSpec,
+    RerankerSpec,
+    get_embedder_spec,
+    get_reranker_spec,
+)
 from archon_search.model_store import ensure_model, model_path
 from archon_search.paths import get_models_dir
 

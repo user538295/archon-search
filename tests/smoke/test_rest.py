@@ -181,6 +181,7 @@ def test_smoke_excluded_from_default_run() -> None:
         text=True,
         timeout=120,
         cwd=REPO_ROOT,
+        check=False,
     )
 
     output = result.stdout + result.stderr
@@ -372,6 +373,7 @@ def test_full_smoke_suite_passes() -> None:
             text=True,
             timeout=_CHILD_SUITE_TIMEOUT_S,
             cwd=REPO_ROOT,
+            check=False,
         )
     except subprocess.TimeoutExpired as exc:
         pytest.fail(

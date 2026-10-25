@@ -45,7 +45,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # The `tini` package provides the init-style PID 1 used by ENTRYPOINT.
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates tini; \
+    apt-get install -y --no-install-recommends ca-certificates tini libxcb1 libx11-6 libxext6 libglib2.0-0; \
+    # opencv-python (a dependency of rapidocr and docling) links libGL.so.1 at load time. `apt-get
+    # install libgl1` drags in Mesa's software renderer through libglx0 (LLVM, ~190 MB); nothing here
+    # renders, so the three glvnd packages are unpacked alone and their Mesa dependency is skipped.
+    (cd /tmp && apt-get download libgl1 libglvnd0 libglx0 \
+        && dpkg --force-depends -i libgl1_*.deb libglvnd0_*.deb libglx0_*.deb \
+        && rm -f libgl1_*.deb libglvnd0_*.deb libglx0_*.deb); \
     if ! command -v python3.12 >/dev/null 2>&1; then \
         apt-get install -y --no-install-recommends software-properties-common gnupg; \
         add-apt-repository -y ppa:deadsnakes/ppa; \
@@ -107,6 +113,13 @@ RUN set -eux; \
 RUN set -eux; \
     SETUPTOOLS_SCM_PRETEND_VERSION="${RELEASE_VERSION}+docker" \
         /usr/local/bin/python3 -m pip install --no-cache-dir .; \
+    # Installed packages ship their own test suites (pandas, scipy, numpy, sympy, torch/test: ~240 MB)
+    # that nothing imports at runtime. Pruned here, in the install layer: a later RUN would not shrink it.
+    for lib_dir in $(/usr/local/bin/python3 -c 'import sysconfig; print(" ".join({sysconfig.get_path("purelib"), sysconfig.get_path("platlib")}))'); do \
+        find "${lib_dir}" -depth -type d \( -name tests -o -name test \) -exec rm -rf {} +; \
+    done; \
+    # A missing shared library must fail the build, not the first OCR request.
+    /usr/local/bin/python3 -c 'import cv2'; \
     case "${BASE_IMAGE}" in \
         *nvidia/cuda*) \
             sh /app/scripts/check-gpu-cuda-majors.sh; \
@@ -123,6 +136,19 @@ RUN set -eux; \
 RUN useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin appuser; \
     mkdir -p /data/models /pip-packages; \
     chown appuser:appuser /data /data/models /pip-packages
+
+# Model files the document parser would otherwise download on its first PDF or image: docling's layout and
+# table-structure models, about 0.5 GB. Fetched on use they sat inside `[ingest].parse_timeout_seconds` (300 s)
+# and needed the network. `scripts/prefetch-parse-models.py` runs the real parser, so it fetches exactly what
+# docling needs and fails the build if a PDF or scanned image cannot be parsed. `HF_HUB_CACHE` moves only the
+# Hugging Face hub cache off the data volume (embedder, reranker and graph weights keep using
+# `<data dir>/models`, and the Hub's xet chunk cache stays under `HOME`); the files are owned by appuser, so a
+# root filesystem mounted read-only still reads them. RapidOCR's checkpoints ship inside its wheel.
+ENV HF_HUB_CACHE=/opt/hf-cache
+RUN set -eux; \
+    mkdir -p "${HF_HUB_CACHE}"; \
+    /usr/local/bin/python3 /app/scripts/prefetch-parse-models.py; \
+    chown -R appuser:appuser "${HF_HUB_CACHE}"
 
 # Runtime configuration. `ARCHON_SEARCH_DATA_DIR` redirects every runtime
 # path (db, logs, telemetry, key file, jobs, model weights under `models/`,
@@ -143,10 +169,11 @@ VOLUME ["/data"]
 EXPOSE 8765
 
 # `/ready` is the readiness probe exposed by the FastAPI app. urllib is
-# used to avoid pulling curl into the slim base image. Exit non-zero on
-# any error so the orchestrator can mark the container unhealthy.
+# used to avoid pulling curl into the slim base image. The port follows
+# `ARCHON_SEARCH_PORT` (unset or empty means the default, 8765). Exit non-zero
+# on any error so the orchestrator can mark the container unhealthy.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=600s --retries=3 \
-    CMD python3 -c "import urllib.request, sys; urllib.request.urlopen('http://localhost:8765/ready')" || exit 1
+    CMD python3 -c "import os, urllib.request; urllib.request.urlopen('http://localhost:%s/ready' % (os.environ.get('ARCHON_SEARCH_PORT') or '8765'))" || exit 1
 
 # tini reaps zombies and forwards SIGTERM/SIGINT to uvicorn so the server
 # exits cleanly during `docker stop` (within the compose `stop_grace_period`).

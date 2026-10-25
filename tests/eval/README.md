@@ -218,6 +218,12 @@ Before lowering a live threshold, check:
 - Did the pinned embedder/reranker revision (`model_specs`) or the torch/transformers version change? Update `embedding_model_version` / `reranker_model_version` in the baseline.
 - Did the eval fixture corpus change? Regenerate the baseline.
 
+### `code_chunking_recall_at_5 = 0.0` in the live lane is a fixture property, not a runtime defect
+
+The live run reports `code_chunking_recall_at_5 = 0.0000` (`live_baselines/_artifacts/live_eval_report.md`) while the deterministic lane reports 1.0. The `code-chunking` corpus is calibrated for the deterministic hash embedder and the gated code lane (AST chunker, `chunk_size=65`, `lancedb_root` set). The live lane has no `lancedb_root`, so `_ingest_corpus` ingests it through the shared pipeline: `DocumentChunker(chunk_size=256)` plus real models. Each distractor file then fits in one keyword-dense chunk, while `order_pipeline.py` splits into 6 chunks that each carry only part of the query's keywords.
+
+Measured 2026-10-25 with the same query (`q-code-chunking-001`), corpus and models (`BAAI/bge-small-en-v1.5`, `Xenova/ms-marco-MiniLM-L-6-v2`) on the PyTorch runtime and on the previous fastembed 0.9.0 build: both rank `order_pipeline.py` 5th of 6 by best-chunk embedding cosine (0.8261 vs 0.8260; the order of the six files is identical) and 6th of 6 after hybrid search and reranking (its best reranker score is 6.2128 in both builds; the first-ranked file scores 8.2101 in both). So the 0.0 is not caused by the runtime. Do not edit thresholds or baselines for it: `live_thresholds.toml` has no floor for this metric.
+
 ### `live_thresholds.toml` lifecycle
 
 `live_thresholds.toml` starts as a comment-only stub (no `[quality_floors]` section). In this state `load_live_thresholds()` returns `None` and the CI run is **report-only** — no gates fire. Once calibrated, add a `[quality_floors]` section to activate gating. The latency ceiling is always optional; leave it unset until you have a stable CI baseline.

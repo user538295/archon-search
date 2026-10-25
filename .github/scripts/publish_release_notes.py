@@ -4,8 +4,8 @@
 import json
 import os
 import sys
-import urllib.request
 import urllib.error
+import urllib.request
 
 TOKEN = os.environ["GITHUB_TOKEN"]
 REPO = os.environ.get("REPO", "user538295/archon-search")
@@ -28,7 +28,7 @@ RELEASES = {
 - **Document-level ACL (FEAT-044):** `acl` column added to LanceDB chunk schema; sidecar `.acl` files parsed at ingest via `read_acl_sidecar`/`resolve_acl`; `is_acl_allowed` filter applied in `SearchPipeline.search` and `search_with_context`; `acl_protected_count`/`acl_open_count` on `GET /collections/{name}`; startup `migrate_acl()` for existing tables; `deny-all` reserved as a forbidden namespace
 - **Multi-namespace isolation (FEAT-043):** all routes (`/search`, `/route`, `/ingest`, `/jobs/{id}`, `/indexing-state`, `/status`, `/collections`) filter and enforce namespace scope; per-namespace collection name uniqueness; two-namespace isolation integration tests
 - **Full REST API schema coverage:** shared `schemas.py` with Pydantic `response_model` on every endpoint; `SearchResponse` envelope; always-on CORS middleware; BearerAuth OpenAPI security annotation; `/docs`, `/openapi.json`, `/redoc` exempted from auth
-- **Retrieval pipeline:** `SearchPipeline` + `SearchStore` (LanceDB + FTS hybrid with RRF), `Embedder`/`Reranker` with injectable backends (fastembed dense + cross-encoder second stage), `DocumentChunker` (Chonkie recursive), `DocumentParser` multi-format file parsing, `MultiCollectionRouter` with centroid pre-ranking, `CollectionMeta` + `DescriptionGenerator` (Haiku auto-description), watchdog-driven sync/watcher, async job store for long-running ingest, platform service install/uninstall (macOS launchd, Linux systemd, Windows)
+- **Retrieval pipeline:** `SearchPipeline` + `SearchStore` (LanceDB + FTS hybrid with RRF), `Embedder`/`Reranker` with injectable backends (PyTorch dense embedder + cross-encoder second stage), `DocumentChunker` (Chonkie recursive), `DocumentParser` multi-format file parsing, `MultiCollectionRouter` with centroid pre-ranking, `CollectionMeta` + `DescriptionGenerator` (Haiku auto-description), watchdog-driven sync/watcher, async job store for long-running ingest, platform service install/uninstall (macOS launchd, Linux systemd, Windows)
 - **Key management:** `key_manager.py` auto-generates `~/.archon-search/.search.env` (mode 600) on first start; `ARCHON_SEARCH_API_KEY` env override; `ARCHON_SEARCH_KEY_FILE` redirect
 - **MCP tools (10):** `search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document` — sharing the same auth layer as REST
 - **Opt-in telemetry:** JSONL per-call logging to `~/.archon-search/search-logs/`; no raw query strings logged (structural invariant); `/telemetry/stats` and `/telemetry/entries` endpoints; configurable `retention_days`

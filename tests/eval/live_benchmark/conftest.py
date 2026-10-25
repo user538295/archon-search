@@ -49,9 +49,9 @@ def _activate_deterministic_eval_backends() -> None:
 # Fixtures: one model cache for the guard AND the backends
 # ---------------------------------------------------------------------------
 
-from pathlib import Path  # noqa: E402
+from pathlib import Path
 
-from tests._live_model_cache import (  # noqa: E402, F401 — fixtures, used by name
+from tests._live_model_cache import (  # noqa: F401 — fixtures, used by name
     _pin_live_models_dir,
     live_models_dir,
     missing_live_models,

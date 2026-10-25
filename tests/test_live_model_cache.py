@@ -14,10 +14,19 @@ from pathlib import Path
 import pytest
 
 from archon_search import model_store
-from archon_search.model_specs import EmbedderSpec, RerankerSpec, get_embedder_spec, get_reranker_spec
+from archon_search.model_specs import (
+    EmbedderSpec,
+    RerankerSpec,
+    get_embedder_spec,
+    get_reranker_spec,
+)
 from archon_search.paths import get_models_dir
 from tests import _live_model_cache
-from tests._live_model_cache import live_specs, missing_live_models, prefetch_live_models
+from tests._live_model_cache import (
+    live_specs,
+    missing_live_models,
+    prefetch_live_models,
+)
 
 _TESTS_DIR = Path(__file__).parent
 _HELPER_MODULE = "tests._live_model_cache"

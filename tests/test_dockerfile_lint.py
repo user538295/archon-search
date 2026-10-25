@@ -10,12 +10,14 @@ container env vars, local-source install, GPU swap gating, and the
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import tomllib
+import urllib.request
 from pathlib import Path
 
 import pytest
-from packaging.markers import Marker
+from packaging.markers import InvalidMarker, Marker, UndefinedEnvironmentName
 from packaging.utils import canonicalize_name
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -194,6 +196,72 @@ def test_dockerfile_healthcheck_targets_ready_endpoint(
     )
 
 
+def _healthcheck_probe_url(dockerfile_logical: list[str], monkeypatch: pytest.MonkeyPatch, port: str | None) -> str:
+    """Run the HEALTHCHECK's python payload with ``urlopen`` faked and return the URL it probes."""
+    line = next(line for line in dockerfile_logical if line.startswith("HEALTHCHECK"))
+    payload = re.search(r'python3 -c "(.*)" \|\| exit 1', line)
+    assert payload is not None, f"cannot find the python3 -c payload in {line!r}"
+    probed: list[str] = []
+    monkeypatch.setattr(urllib.request, "urlopen", probed.append)
+    if port is None:
+        monkeypatch.delenv("ARCHON_SEARCH_PORT", raising=False)
+    else:
+        monkeypatch.setenv("ARCHON_SEARCH_PORT", port)
+    exec(payload.group(1), {})  # noqa: S102 — the test's purpose is to run the HEALTHCHECK payload against a faked urlopen
+    [url] = probed
+    return url
+
+
+@pytest.mark.parametrize(
+    ("port", "expected"),
+    [
+        (None, "http://localhost:8765/ready"),
+        ("", "http://localhost:8765/ready"),
+        ("9001", "http://localhost:9001/ready"),
+    ],
+)
+def test_dockerfile_healthcheck_follows_archon_search_port(
+    dockerfile_logical: list[str], monkeypatch: pytest.MonkeyPatch, port: str | None, expected: str
+) -> None:
+    assert _healthcheck_probe_url(dockerfile_logical, monkeypatch, port) == expected
+
+
+def test_dockerfile_prefetches_parse_models_into_a_cache_outside_the_data_volume(
+    dockerfile_text: str, dockerfile_logical: list[str]
+) -> None:
+    """The first PDF/image parse must not download docling's models inside ``parse_timeout_seconds``."""
+    cache = re.search(r"^ENV HF_HUB_CACHE=(\S+)", dockerfile_text, re.MULTILINE)
+    assert cache is not None, "the Dockerfile must pin HF_HUB_CACHE to the prefetched model cache"
+    assert not cache.group(1).startswith("/data"), "a cache on the data volume is not seeded by the image"
+    prefetch = next(
+        (
+            i
+            for i, line in enumerate(dockerfile_logical)
+            if line.startswith("RUN ") and "prefetch-parse-models.py" in line
+        ),
+        None,
+    )
+    assert prefetch is not None, "the Dockerfile must run scripts/prefetch-parse-models.py at build time"
+    assert "chown -R appuser:appuser" in dockerfile_logical[prefetch]
+    pip_install = next(i for i, line in enumerate(dockerfile_logical) if "-m pip install" in line)
+    user_switch = next(i for i, line in enumerate(dockerfile_logical) if line.startswith("USER "))
+    assert pip_install < prefetch < user_switch, "prefetch needs the installed package and root's write access"
+
+
+def test_prefetch_script_writes_a_scanned_pdf_and_a_png(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "prefetch_parse_models", REPO_ROOT / "scripts" / "prefetch-parse-models.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    pdf, png = module._write_samples(tmp_path)
+
+    assert pdf.read_bytes().startswith(b"%PDF")
+    assert png.read_bytes().startswith(b"\x89PNG")
+
+
 # ---------------------------------------------------------------------------
 # Env vars (spec invariants on ENV block)
 # ---------------------------------------------------------------------------
@@ -368,39 +436,18 @@ def test_dockerignore_excludes_git(dockerignore_text: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _uvlock_package_block(name: str) -> str:
-    """Return the `[[package]]` TOML block for *name* from uv.lock.
+def test_uvlock_has_no_nvidia_cuda_package_on_any_platform() -> None:
+    # S269 ground truth, now for both linux archs: PyPI's linux torch wheel declares ~18
+    # nvidia-*/cuda-* dependencies (a ~6 GB CUDA runtime a CPU host never runs), so a lock that
+    # routes linux/x86_64 AND linux/aarch64 torch through the PyTorch CPU index holds no such
+    # package at all. A regression of the `[tool.uv.sources]` marker on either arch (e.g.
+    # back to `platform_machine == 'x86_64'`) re-introduces them for the other arch.
+    locked = {canonicalize_name(p["name"]) for p in tomllib.loads(UV_LOCK.read_text())["package"]}
 
-    Anchors on the ``[[package]]\\nname = "<name>"`` header so it never
-    matches a ``{ name = "<name>" }`` *dependency* entry inside some other
-    package's block.
-    """
-    text = UV_LOCK.read_text()
-    header = re.search(
-        rf'^\[\[package\]\]\nname = "{re.escape(name)}"$', text, re.MULTILINE
-    )
-    assert header is not None, f"uv.lock has no package block for {name!r}"
-    start = header.start()
-    nxt = text.find("[[package]]", header.end())
-    return text[start : nxt if nxt != -1 else len(text)]
-
-
-def test_uvlock_torch_pulls_cuda_stack_on_linux() -> None:
-    # Ground truth for S269: `torch` (a transitive core dependency via
-    # docling) declares nvidia-*/cuda-* dependencies gated on linux. This is
-    # WHY the CPU image must route torch through the PyTorch CPU wheel index —
-    # the default PyPI linux wheel drags the ~6 GB CUDA runtime a CPU host
-    # cannot execute. If torch ever stops depending on CUDA on linux this
-    # guard fails and the CPU-index fix can be revisited.
-    block = _uvlock_package_block("torch")
-    cuda_dep = re.search(
-        r'name = "(?:nvidia-[a-z0-9-]+|cuda-[a-z0-9-]+)"[^\n]*'
-        r"sys_platform == 'linux'",
-        block,
-    )
-    assert cuda_dep is not None, (
-        "Expected torch to declare an nvidia-*/cuda-* dependency gated on "
-        "`sys_platform == 'linux'` in uv.lock (root cause of S269)"
+    banned = sorted(n for n in locked if re.match(r"^(nvidia-|cuda-)", n))
+    assert not banned, (
+        f"uv.lock pins {len(banned)} nvidia/cuda packages: {banned}. torch/torchvision must "
+        "come from the PyTorch CPU index on every linux arch ([tool.uv.sources] marker)."
     )
 
 
@@ -443,7 +490,7 @@ def _marker_holds_on_cpu_target(marker: str | None) -> bool:
         return True
     try:
         return Marker(marker).evaluate(_CPU_TARGET_ENV)
-    except Exception:  # pragma: no cover - defensive, markers here are simple
+    except (InvalidMarker, UndefinedEnvironmentName):  # pragma: no cover - defensive, markers here are simple
         return True
 
 
@@ -649,4 +696,95 @@ def test_dockerignore_excludes_spec_entry(dockerignore_text: str, entry: str) ->
     lines = {line.strip() for line in dockerignore_text.splitlines() if line.strip()}
     assert entry in lines, (
         f".dockerignore must contain `{entry}` per the Task 4.1 spec"
+    )
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        # `__pycache__/` above only matches at the context root; the nested ones are host-compiled
+        # bytecode the image does not need (pip compiles its own at install).
+        "**/__pycache__/",
+        # Repo-root tool caches: a local `.mypy_cache` alone was 102 MB of the 125 MB `COPY . /app` layer.
+        ".mypy_cache/",
+        ".ruff_cache/",
+        ".obsidian/",
+        ":memory:",
+        ".brooks-lint-history.json",
+        ".double-check.json",
+    ],
+)
+def test_dockerignore_excludes_dev_tool_state(dockerignore_text: str, entry: str) -> None:
+    lines = {line.strip() for line in dockerignore_text.splitlines() if line.strip()}
+    assert entry in lines, f".dockerignore must keep `{entry}` out of the `COPY . /app` layer"
+
+# Credential files that live next to the code on a developer machine. `COPY . /app` would bake any
+# of them into an image layer (anyone who can pull the image can read it); git must never see them.
+_SECRET_FILE_PATTERNS = (".env", ".env.*", ".search.env", ".secrets.env", "keys.json", "*.pem")
+_ENV_EXAMPLE_KEEP = "!.env.example"
+
+
+def _ignore_patterns(text: str) -> set[str]:
+    return {line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")}
+
+
+@pytest.mark.parametrize("pattern", _SECRET_FILE_PATTERNS)
+def test_dockerignore_excludes_credential_files(dockerignore_text: str, pattern: str) -> None:
+    assert pattern in _ignore_patterns(dockerignore_text), (
+        f".dockerignore must keep `{pattern}` out of the `COPY . /app` layer"
+    )
+
+
+@pytest.mark.parametrize("pattern", _SECRET_FILE_PATTERNS)
+def test_gitignore_excludes_credential_files(pattern: str) -> None:
+    patterns = _ignore_patterns((REPO_ROOT / ".gitignore").read_text())
+    assert pattern in patterns, f".gitignore must list `{pattern}` so credentials are never committed"
+
+
+@pytest.mark.parametrize("ignore_file", [".gitignore", ".dockerignore"])
+def test_ignore_files_keep_env_example_trackable(ignore_file: str) -> None:
+    """`.env.*` also matches the shipped `.env.example`; it must be re-included after it."""
+    lines = [line.strip() for line in (REPO_ROOT / ignore_file).read_text().splitlines()]
+    assert _ENV_EXAMPLE_KEEP in lines, f"{ignore_file} must re-include `{_ENV_EXAMPLE_KEEP}` after `.env.*`"
+    assert lines.index(_ENV_EXAMPLE_KEEP) > lines.index(".env.*"), (
+        f"in {ignore_file} the `{_ENV_EXAMPLE_KEEP}` negation must come after `.env.*` or it has no effect"
+    )
+
+
+
+def test_dockerfile_prunes_installed_test_suites_in_the_install_layer(dockerfile_text: str) -> None:
+    """Installed packages ship their own test suites (pandas, scipy, numpy, sympy, torch/test: ~240 MB
+    of a ~2.4 GB site-packages) that nothing imports at runtime. They must be removed in the same
+    ``RUN`` as the install: a later ``RUN rm`` would leave them in the layer below."""
+    install_run = re.search(r"^RUN set -eux; \\\n\s+SETUPTOOLS_SCM_PRETEND_VERSION.*?^\s*esac\n", dockerfile_text, re.DOTALL | re.MULTILINE)
+    assert install_run is not None, "the `pip install .` RUN block was not found"
+    block = install_run.group(0)
+    assert re.search(r"-name tests -o -name test", block), "the install RUN must prune `tests`/`test` directories"
+    assert "purelib" in block and "platlib" in block, "prune the interpreter's own install dirs, not a hardcoded path"
+
+
+def test_dockerfile_installs_the_shared_libraries_opencv_links(dockerfile_text: str) -> None:
+    """``opencv-python`` (a dependency of rapidocr and docling) links libGL, libX11, libxcb and
+    libglib at load time, and ``python:3.12-slim`` ships none of them: in the container
+    ``import cv2`` raised ``libxcb.so.1: cannot open shared object file``, so RapidOCR (image and
+    scanned-PDF OCR) and docling's table-structure model could not even be imported."""
+    base_os_run = re.search(r"^RUN set -eux; \\\n\s+apt-get update; .*?^\s*rm -rf /var/lib/apt/lists/\*\n", dockerfile_text, re.DOTALL | re.MULTILINE)
+    assert base_os_run is not None, "the base-OS `apt-get` RUN block was not found"
+    block = base_os_run.group(0)
+    for package in ("libxcb1", "libx11-6", "libxext6", "libglib2.0-0", "libgl1", "libglvnd0", "libglx0"):
+        assert package in block, f"the base-OS RUN must install {package} (needed by cv2)"
+
+
+def test_dockerfile_does_not_install_mesa_for_libgl(dockerfile_text: str) -> None:
+    """``apt-get install libgl1`` pulls Mesa's software renderer through ``libglx0`` (LLVM, ~190 MB of
+    a ~3 GB image); nothing in the server renders, so libGL's three glvnd packages are unpacked alone."""
+    assert not re.search(r"apt-get install[^\n]*\blibgl1\b", dockerfile_text), (
+        "install libgl1 with `apt-get download` + `dpkg --force-depends`, not `apt-get install`"
+    )
+
+
+def test_dockerfile_asserts_opencv_imports_at_build_time(dockerfile_text: str) -> None:
+    """A missing system library must fail the build, not the first OCR request."""
+    assert re.search(r"python3 -c ['\"]import cv2", dockerfile_text), (
+        "the install RUN must `import cv2` so a missing shared library fails `docker build`"
     )

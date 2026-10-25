@@ -33,7 +33,6 @@ from archon_search.eval.runner import (
 from tests._fastmcp_stub import stub_mcp_tool
 from tests._live_model_cache import pin_models_dir
 
-
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
@@ -105,7 +104,9 @@ def _make_live_rag_fusion_generator(num_queries: int = 2):
     if _has_anthropic_key():
         return config, RAGFusionGenerator(config)
 
-    from archon_search.providers.claude_cli_provider import ClaudeCLIQueryExpansionProvider
+    from archon_search.providers.claude_cli_provider import (
+        ClaudeCLIQueryExpansionProvider,
+    )
 
     config.provider = "claude_cli"
     config.timeout_seconds = _CLAUDE_CLI_TIMEOUT_SECONDS

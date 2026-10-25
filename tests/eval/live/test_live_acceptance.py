@@ -25,7 +25,6 @@ from archon_search.eval.runner import (
     run_eval_suite,
 )
 
-
 # bge-small-en-v1.5 vectors are L2-normalised; the stubbed backend's are all zeros.
 _UNIT_NORM_TOLERANCE = 1e-3
 

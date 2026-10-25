@@ -85,22 +85,22 @@ def test_startup_failure_error_includes_stderr(tmp_path_factory) -> None:
     start" message that includes the captured stderr.
 
     Bind-collision mechanism: the subprocess's serve mode binds to its
-    default host, ``0.0.0.0`` (all interfaces). The blocker below binds the
-    SAME address, ``0.0.0.0:{port}`` — not ``127.0.0.1`` — because on macOS
-    (verified empirically on this dev machine) a listener on ``127.0.0.1``
-    does NOT collide with a later bind to ``0.0.0.0`` on the same port; both
-    listen independently and a request to ``127.0.0.1`` connects to whichever
-    socket owns that specific address, producing a hang/timeout rather than
-    a fast, deterministic "address already in use" failure. Binding the
-    blocker to the identical ``0.0.0.0`` address the server itself uses
-    reproduces a genuine ``OSError: [Errno 48] Address already in use`` that
-    the server process surfaces and exits on immediately, regardless of
-    platform.
+    default host, ``127.0.0.1`` (natively ``serve`` is loopback-only; only the
+    container flips it to ``0.0.0.0``). The blocker below binds the SAME
+    address, ``127.0.0.1:{port}``, because on macOS a listener on one address
+    does NOT collide with a later bind to a different one on the same port
+    (``127.0.0.1`` vs ``0.0.0.0``): both listen independently and a request to
+    ``127.0.0.1`` connects to whichever socket owns that specific address,
+    producing a hang/timeout rather than a fast, deterministic "address
+    already in use" failure. Binding the blocker to the identical address the
+    server itself uses reproduces a genuine ``OSError: [Errno 48] Address
+    already in use`` that the server process surfaces and exits on
+    immediately, regardless of platform.
     """
     port = _free_port()
     blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    blocker.bind(("0.0.0.0", port))
+    blocker.bind(("127.0.0.1", port))
     # Default backlog, not listen(1): once a tiny backlog overflows, macOS resets the
     # poller's next connect and httpcore 1.0.9 leaks that socket (its TCP_NODELAY
     # setsockopt raises EINVAL before it can close it) — a ResourceWarning that

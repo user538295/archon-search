@@ -7,6 +7,13 @@
 # the server on its own host port so all three can run side-by-side on
 # a developer workstation.
 #
+# Every published port is bound to loopback (`127.0.0.1:<port>:8765`): the
+# container speaks plaintext HTTP, so it is reachable from this host only.
+# To serve other machines, either put a TLS reverse proxy on the host in front
+# of the loopback port, or add an explicit override (a docker-compose.override.yml
+# `ports:` entry; compose appends it, it does not replace) that publishes the
+# port on the interface you choose, e.g. "192.0.2.10:8765:8765".
+#
 # Operator notes:
 #   - TLS termination is the operator's responsibility — put a reverse
 #     proxy (nginx, Caddy, Traefik) in front of this service if you need
@@ -38,9 +45,10 @@ services:
       # at the same target replaces this service's opt-in mount.
     volumes:
       - archon-dev-data:/data
+      - archon-dev-packages:/pip-packages
       # - archon-model-cache:/data/models
     ports:
-      - "18765:8765"
+      - "127.0.0.1:18765:8765"
     stop_grace_period: 30s
 
   archon-test:
@@ -52,9 +60,10 @@ services:
       # to wire up the shared model cache.
     volumes:
       - archon-test-data:/data
+      - archon-test-packages:/pip-packages
       # - archon-model-cache:/data/models
     ports:
-      - "18766:8765"
+      - "127.0.0.1:18766:8765"
     stop_grace_period: 30s
 
   archon-prod:
@@ -66,9 +75,10 @@ services:
       # to wire up the shared model cache.
     volumes:
       - archon-prod-data:/data
+      - archon-prod-packages:/pip-packages
       # - archon-model-cache:/data/models
     ports:
-      - "8765:8765"
+      - "127.0.0.1:8765:8765"
     restart: unless-stopped
     stop_grace_period: 30s
 
@@ -76,6 +86,11 @@ volumes:
   archon-dev-data:
   archon-test-data:
   archon-prod-data:
+  # The packages the first-start extras install adds to the image (`/pip-packages`). Without a
+  # volume there they are installed again, over the network, after every `docker compose down`.
+  archon-dev-packages:
+  archon-test-packages:
+  archon-prod-packages:
   # Optional shared cache for model weights. Uncomment this
   # volume AND the `archon-model-cache` mount in every service that
   # should reuse the cache. Mount target inside the container is the

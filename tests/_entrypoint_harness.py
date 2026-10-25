@@ -211,8 +211,10 @@ def _clean_env(**extra: str) -> dict[str, str]:
     return env
 
 
-def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S, **kwargs)
+def _run(command: list[str], *, check: bool = False, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S, check=check, **kwargs
+    )
 
 
 def _create_dir(path: Path) -> Path:
