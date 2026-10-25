@@ -6,8 +6,8 @@ and ``Core Step.dc.html``). These are runnable, non-production UI experiments.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from rich.text import Text
 from textual.message import Message

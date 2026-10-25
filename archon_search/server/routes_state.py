@@ -4,7 +4,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 
 from archon_search.progress import to_dict
-from archon_search.server.schemas import ErrorDetail, IndexingStateCollectionEntry, IndexingStateResponse
+from archon_search.server.schemas import (
+    ErrorDetail,
+    IndexingStateCollectionEntry,
+    IndexingStateResponse,
+)
 
 router = APIRouter()
 

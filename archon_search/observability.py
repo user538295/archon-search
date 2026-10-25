@@ -5,9 +5,9 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from collections.abc import Generator
 
 logger = logging.getLogger(__name__)
 

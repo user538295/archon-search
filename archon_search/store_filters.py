@@ -54,7 +54,7 @@ def _where_list_has_or_null(col: str, value: str) -> str:
     return f"({col} IS NULL OR list_has({col}, {_sql_quote_str(value)}))"
 
 
-def build_where(filters: "SearchFilters | None", scope_filter: str | None = None) -> str:
+def build_where(filters: SearchFilters | None, scope_filter: str | None = None) -> str:
     """Compile *filters* (and optional *scope_filter*) into a SQL WHERE predicate string.
 
     Returns ``""`` when no SQL-expressible filters are set (caller should skip

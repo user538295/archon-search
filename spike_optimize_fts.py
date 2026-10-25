@@ -27,7 +27,6 @@ from typing import Any
 import lancedb
 from lancedb.index import FTS
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -138,7 +137,7 @@ async def gate_d_concurrent_safety(db: Any) -> bool:
 
     try:
         await asyncio.gather(tbl.optimize(), tbl.optimize(), tbl.optimize())
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — spike script: any optimize() failure is reported as FAIL, not a crash
         print(f"  (d) FAIL — concurrent optimize() raised {type(exc).__name__}: {exc}")
         return False
 
@@ -147,7 +146,7 @@ async def gate_d_concurrent_safety(db: Any) -> bool:
         hits = await _fts_search(tbl, "concurrent test row")
         print(f"  (d) PASS — 3 concurrent optimize() calls completed; table queryable ({len(hits)} hits)")
         return True
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — spike script: any query failure is reported as FAIL, not a crash
         print(f"  (d) FAIL — table not queryable after concurrent optimize(); error: {exc}")
         return False
 
@@ -228,12 +227,9 @@ async def main() -> None:
         results["f"] = await gate_f_update_row_indexing(db)
 
         print("\n--- Summary ---")
-        all_pass = True
         for gate, passed in results.items():
             status = "PASS" if passed else "FAIL"
             print(f"  ({gate}) {status}")
-            if not passed:
-                all_pass = False
 
         print()
         if not results["a"] or not results["b"]:

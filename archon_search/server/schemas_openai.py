@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+
 class ModelObject(BaseModel):
     """One entry in the GET /v1/models response — mirrors OpenAI's Model object.
 

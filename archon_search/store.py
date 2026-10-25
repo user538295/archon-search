@@ -10,22 +10,34 @@ import math
 import random
 import re
 import time
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, TypedDict, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
-from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestedBy, normalize_iso_utc
-from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, PING_TIMEOUT_SECONDS, PING_TTL_SECONDS, _validate_namespace
-from archon_search.observability import record_stage, _stage_recorder
-from archon_search.store_filters import build_where, _sql_quote_str
+from archon_search._durable_io import ensure_private_dir
+from archon_search._types import (
+    ChunkRecord,
+    CollectionInfo,
+    DocumentInfo,
+    IngestedBy,
+    normalize_iso_utc,
+)
+from archon_search.acl import ChunkVisibility, is_acl_allowed
+from archon_search.constants import (
+    DEFAULT_NAMESPACE,
+    INGEST_LOCK_TIMEOUT_S,
+    PING_TIMEOUT_SECONDS,
+    PING_TTL_SECONDS,
+    _validate_namespace,
+)
+from archon_search.lance_session import new_lance_session
+from archon_search.observability import _stage_recorder, record_stage
+from archon_search.store_filters import _sql_quote_str, build_where
 from archon_search.types import MigrationKind, MigrationSpec
-
-
-from dataclasses import dataclass, field, replace
-from typing import Callable
 
 # Fixed-width UTC timestamp regex: YYYY-MM-DDTHH:MM:SS.ffffffZ
 _FIXED_WIDTH_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
@@ -65,6 +77,27 @@ class StoreBusyError(Exception):
         self.timeout_s = timeout_s
 
 
+#: Wire-facing text of every refused cross-namespace access (REST job error, MCP ``error``): fixed, so it names no
+#: owner and reads the same whether the collection belongs to another namespace or is an orphan this one may not touch.
+COLLECTION_UNAVAILABLE_DETAIL = "collection name is not available to this namespace"
+
+
+class CollectionOwnershipError(Exception):
+    """The caller's namespace may not write, drop or count *collection*: another namespace owns it.
+
+    Ownership is the namespace of the collection's meta row. A collection with no meta row but a non-empty table (an
+    orphan, e.g. what a crashed DELETE leaves) is ``default``-namespace data — the namespace ``list_collections``
+    reports it under — so any other namespace is refused. An empty or absent table belongs to nobody: creating it
+    is how ownership starts. ``str(exc)`` is :data:`COLLECTION_UNAVAILABLE_DETAIL`, never the owner; ``collection``
+    and ``namespace`` (the caller's) are for the server log only.
+    """
+
+    def __init__(self, collection: str, namespace: str) -> None:
+        super().__init__(COLLECTION_UNAVAILABLE_DETAIL)
+        self.collection = collection
+        self.namespace = namespace
+
+
 class FTSIndexNotFoundError(RuntimeError):
     """Raised by ``optimize_fts`` when the collection has no FTS index.
 
@@ -83,6 +116,7 @@ class CollectionLockNotHeldError(RuntimeError):
 if TYPE_CHECKING:
     import lancedb
     import pyarrow as pa
+
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
     from archon_search.filters import SearchFilters
@@ -94,6 +128,8 @@ _DOC_ID_RE = re.compile(r"^[a-f0-9]{64}$")
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 _ARCHON_PREFIX = "_archon_"
 _META_TABLE = "_archon_collection_meta"
+# The most table names one startup "no meta row" warning lists; the count is always exact.
+_ORPHAN_LOG_NAME_LIMIT = 20
 
 _RRF_K = 60
 
@@ -201,6 +237,32 @@ def _centroid_sum_valid(
     return all(math.isfinite(v) for v in centroid_sum)
 
 
+def _log_stale_centroid(collection: str, meta: CollectionMeta) -> None:
+    """Log that *meta*'s centroid cannot be maintained incrementally and a recompute is queued.
+
+    A collection with no chunks and no centroid sum is the empty stub ``POST /collections`` writes
+    (or one just emptied): it has no centroid yet by design, and each batch of its first ingest
+    queues the same recompute, so that case logs at DEBUG. A collection that holds chunks but lost
+    its centroid sum is a real anomaly: WARNING.
+    """
+    if meta.chunk_count == 0 and meta.centroid_sum is None:
+        logger.debug("Collection %r has no centroid yet, recompute queued", collection)
+    else:
+        logger.warning("Collection %r centroid stale, recompute queued", collection)
+
+
+async def _delete_legacy_null_namespace_meta(table: lancedb.table.AsyncTable, name: str) -> None:
+    """Delete the pre-namespace meta row of collection *name* (``namespace IS NULL``), if one exists.
+
+    Counted first because ``delete`` commits a table version even when its predicate matches
+    nothing, and the meta table takes one write per ingested document: the no-op delete doubled
+    its version, manifest and transaction files with nothing to reclaim them.
+    """
+    orphan_filter = _where_eq("name", name) + " AND namespace IS NULL"
+    if await table.count_rows(orphan_filter):
+        await table.delete(orphan_filter)
+
+
 def _batch_vectors_valid(vectors: list[list[float]]) -> bool:
     """Return True iff every element in every vector is finite (no NaN, no inf).
 
@@ -263,9 +325,9 @@ def validate_metadata(metadata: dict[str, str]) -> None:
         raise ValueError(f"metadata exceeds max {META_MAX_FIELDS} fields (got {len(metadata)})")
     for key, value in metadata.items():
         if not isinstance(key, str):
-            raise ValueError(f"metadata key must be a string (got {type(key).__name__})")
+            raise ValueError(f"metadata key must be a string (got {type(key).__name__})")  # noqa: TRY004 — documented contract: ValueError for any invalid metadata
         if not isinstance(value, str):
-            raise ValueError(f"metadata value must be a string (got {type(value).__name__})")
+            raise ValueError(f"metadata value must be a string (got {type(value).__name__})")  # noqa: TRY004 — documented contract: ValueError for any invalid metadata
         if len(key) > _META_MAX_KEY_LEN:
             raise ValueError(f"metadata key too long: max {_META_MAX_KEY_LEN} chars (got {len(key)})")
         if len(value) > _META_MAX_VAL_LEN:
@@ -318,14 +380,14 @@ def parse_metadata(raw: str) -> dict[str, str]:
         return {}
 
 
-def normalize_ingested_by(value: "str | None") -> IngestedBy:
+def normalize_ingested_by(value: str | None) -> IngestedBy:
     """Normalize a stored ``ingested_by`` value at the read boundary.
 
     None / empty / legacy ``"archon-search-cli"`` → ``"cli"``.
     Canonical members pass through. Unknown values DEBUG-logged and coerced
     to ``"cli"`` defensively.
     """
-    from archon_search.constants import INGESTED_BY_VALUES, LEGACY_INGESTED_BY  # noqa: PLC0415
+    from archon_search.constants import INGESTED_BY_VALUES, LEGACY_INGESTED_BY
 
     if not value or value == LEGACY_INGESTED_BY:
         return "cli"
@@ -425,9 +487,9 @@ def row_to_scored_candidate(
 class SearchStore:
     """Async LanceDB store for chunked document embeddings."""
 
-    def __init__(self, db_path: str | Path, config: "SearchConfig | None" = None) -> None:
+    def __init__(self, db_path: str | Path, config: SearchConfig | None = None) -> None:
         self._db_path = Path(db_path).expanduser()
-        self._db: Optional[lancedb.db.AsyncConnection] = None
+        self._db: lancedb.db.AsyncConnection | None = None
         # Per-collection ingest/reindex lock map. Reads do not acquire any
         # lock — LanceDB handles read concurrency. Independent from
         # ``SearchCollectionSync._collection_locks`` (same key space, different
@@ -437,7 +499,7 @@ class SearchStore:
         # (``collection_writer``).
         self._active_writers: dict[str, int] = {}
         self._ping_cache: tuple[float, bool] | None = None
-        from archon_search.config import SearchConfig as _SearchConfig  # noqa: PLC0415
+        from archon_search.config import SearchConfig as _SearchConfig
         self._config: _SearchConfig = config if config is not None else _SearchConfig()
 
     def lock_for(self, collection: str) -> asyncio.Lock:
@@ -468,7 +530,7 @@ class SearchStore:
         return collection in self._active_writers
 
     @asynccontextmanager
-    async def locked_collection(self, collection: str) -> "AsyncIterator[None]":
+    async def locked_collection(self, collection: str) -> AsyncIterator[None]:
         """Hold ``lock_for(collection)`` for the block, so no other write of the collection interleaves.
 
         For a check-then-act on the collection (the sync's drop of a collection gone from the config, as
@@ -484,7 +546,7 @@ class SearchStore:
         lock = self.lock_for(collection)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
         try:
             yield
@@ -492,7 +554,7 @@ class SearchStore:
             lock.release()
 
     @asynccontextmanager
-    async def collection_writer(self, collection: str) -> "AsyncIterator[None]":
+    async def collection_writer(self, collection: str, namespace: str | None = None) -> AsyncIterator[None]:
         """Register the caller as a writer of *collection* for the whole block, so ``has_active_writer`` reports it.
 
         For a write that creates no job — an MCP ``ingest_file`` / ``ingest_directory``, a sync's write of the
@@ -508,11 +570,20 @@ class SearchStore:
         registration is released however the block ends, a cancellation included. Writers of one collection are
         counted, not merged.
 
+        *namespace* is the namespace the writer acts for: the collection must be accessible to it
+        (:meth:`assert_collection_access`), checked under the lock before anything is registered. ``None`` skips the
+        check, for the system writers (the startup sync, ``POST /sync`` and the filesystem watcher) that write each
+        collection on behalf of its recorded owner; the store calls they make still check ownership with that
+        owner's namespace.
+
         Raises:
+            CollectionOwnershipError: if *namespace* may not write *collection* (another namespace owns it).
             ValueError: if *collection* is not a valid collection name (no lock entry is created).
             StoreBusyError: if the lock cannot be acquired within ``INGEST_LOCK_TIMEOUT_S``.
         """
         async with self.locked_collection(collection):
+            if namespace is not None:
+                await self.assert_collection_access(collection, namespace)
             self._active_writers[collection] = self._active_writers.get(collection, 0) + 1
         try:
             yield
@@ -547,16 +618,16 @@ class SearchStore:
         """
 
         def _import_lancedb_and_mkdir() -> Any:
-            import lancedb  # noqa: PLC0415
+            import lancedb
 
-            self._db_path.mkdir(parents=True, exist_ok=True)
+            ensure_private_dir(self._db_path)
             return lancedb
 
         self._ping_cache = None
         # Offloaded: the first `import lancedb` drags in pyarrow + a Rust extension
         # (100s of ms) and mkdir is a blocking syscall — neither may run on the loop.
         lancedb = await asyncio.to_thread(_import_lancedb_and_mkdir)
-        self._db = await lancedb.connect_async(str(self._db_path))
+        self._db = await lancedb.connect_async(str(self._db_path), session=new_lance_session())
 
     async def disconnect(self) -> None:
         """Close the LanceDB connection and clear the ping cache.
@@ -588,7 +659,7 @@ class SearchStore:
             return True
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception:  # noqa: BLE001 — ping contract: any backend failure means "unreachable" (False)
             self._ping_cache = (time.monotonic(), False)
             return False
 
@@ -615,7 +686,7 @@ class SearchStore:
 
     @staticmethod
     def _schema(embedding_dim: int) -> pa.Schema:
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         return pa.schema(
             [
@@ -643,7 +714,7 @@ class SearchStore:
 
     @staticmethod
     def _meta_schema() -> pa.Schema:
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         return pa.schema(
             [
@@ -675,29 +746,102 @@ class SearchStore:
     # Collection management
     # ------------------------------------------------------------------
 
-    async def ensure_collection(self, collection: str, embedding_dim: int) -> None:
+    async def _owner_namespaces(self, db: lancedb.db.AsyncConnection, collection: str) -> set[str]:
+        """The namespaces holding a meta row for *collection*: empty for a collection with none (new, or an orphan).
+
+        Reads only the ``name`` and ``namespace`` columns of the rows named *collection*: this runs on every ownership
+        check, and the other columns (centroid, centroid sum, description embedding) are large JSON strings.
+        """
+        if _META_TABLE not in (await db.list_tables()).tables:
+            return set()
+        table = await db.open_table(_META_TABLE)
+        schema_names = (await table.schema()).names
+        # A meta table from before the namespace column existed has none: every row of it is ``default``'s.
+        columns = [column for column in ("name", "namespace") if column in schema_names]
+        rows = await table.query().select(columns).where(_where_eq("name", collection)).to_list()
+        return {row.get("namespace") or DEFAULT_NAMESPACE for row in rows}
+
+    async def _require_collection_access(
+        self, db: lancedb.db.AsyncConnection, collection: str, namespace: str
+    ) -> set[str]:
+        """Raise :class:`CollectionOwnershipError` unless *namespace* may write or drop *collection*.
+
+        The one ownership rule every shared write path goes through (see :class:`CollectionOwnershipError`): a
+        meta row names the owner; without one, a non-empty table is ``default``-namespace data and an empty or
+        absent one is free to claim.
+
+        Returns the namespaces holding a meta row for *collection*; empty means nobody owns it yet (a writer that
+        goes on to write rows must record its claim first, see :meth:`ingest_chunks`).
+        """
+        _validate_namespace(namespace)
+        owners = await self._owner_namespaces(db, collection)
+        if owners:
+            if namespace not in owners:
+                logger.warning(
+                    "namespace %r refused access to collection %r owned by another namespace", namespace, collection
+                )
+                raise CollectionOwnershipError(collection, namespace)
+            return owners
+        if namespace == DEFAULT_NAMESPACE:
+            return owners
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return owners  # no table yet: this namespace is creating the collection
+        if await table.count_rows() > 0:
+            logger.warning(
+                "namespace %r refused access to collection %r: it has rows but no meta row (orphan)",
+                namespace, collection,
+            )
+            raise CollectionOwnershipError(collection, namespace)
+        return owners
+
+    async def assert_collection_access(self, collection: str, namespace: str) -> None:
+        """Raise :class:`CollectionOwnershipError` unless *namespace* may write *collection* (a lock-free, early check).
+
+        For an edge (an ingest job, an MCP tool, an import) that wants to refuse before it parses, embeds or
+        reads anything. It does not replace the checks ``ingest_chunks``, ``delete_document`` and
+        ``drop_collection`` make under the collection lock: those are what keep a concurrent claim from slipping in.
+
+        Raises:
+            CollectionOwnershipError: if another namespace owns *collection*.
+            RuntimeError: if the store is not connected.
+            ValueError: if *collection* or *namespace* is invalid.
+        """
+        self._validate_collection(collection)
+        await self._require_collection_access(self._require_connected(), collection, namespace)
+
+    async def ensure_collection(
+        self, collection: str, embedding_dim: int, namespace: str = DEFAULT_NAMESPACE
+    ) -> None:
         """Create the LanceDB table for *collection* if it does not already exist.
 
         Idempotent: a pre-existing table with the same name is left untouched
-        (``exist_ok=True``), even if its embedding dimension differs.
+        (``exist_ok=True``), even if its embedding dimension differs. Another namespace's collection is refused
+        (:meth:`assert_collection_access`) — before anything is created, so a refusal changes nothing. The check is
+        lock-free: this call writes no row, and the writers that do re-check under the lock.
 
         Raises:
+            CollectionOwnershipError: if another namespace owns *collection*.
             RuntimeError: if the store is not connected.
             ValueError: if *collection* is not a valid collection name.
         """
         self._validate_collection(collection)
         db = self._require_connected()
+        await self._require_collection_access(db, collection, namespace)
         await db.create_table(
             collection,
             schema=self._schema(embedding_dim),
             exist_ok=True,
         )
 
-    async def drop_collection(self, name: str, *, _locked_by_caller: bool = False) -> None:
-        """Drop a LanceDB table by name.
+    async def drop_collection(self, name: str, *, namespace: str, _locked_by_caller: bool = False) -> None:
+        """Drop a LanceDB table by name; only the namespace that owns it may.
 
         Parameters
         ----------
+        namespace:
+            The caller's namespace. An orphan table (rows, no meta row) is dropped only by ``default``.
         _locked_by_caller:
             When True, assumes ``lock_for(name)`` is already held by the caller
             and skips acquiring it internally (the lock is not reentrant). The
@@ -705,6 +849,7 @@ class SearchStore:
             after releasing it.
 
         Raises:
+            CollectionOwnershipError: if another namespace owns *name*; nothing is dropped.
             RuntimeError: if the store is not connected.
             KeyError: if *name* does not exist in LanceDB.
         """
@@ -715,6 +860,7 @@ class SearchStore:
         if lock is not None:
             await lock.acquire()
         try:
+            await self._require_collection_access(db, name, namespace)
             names: list[str] = (await db.list_tables()).tables
             if name not in names:
                 raise KeyError(name)
@@ -792,8 +938,8 @@ class SearchStore:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _row_to_meta(row: "dict[str, Any]") -> "CollectionMeta":
-        from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
+    def _row_to_meta(row: dict[str, Any]) -> CollectionMeta:
+        from archon_search.collection_meta import CollectionMeta
 
         try:
             centroid = json.loads(row["centroid_json"]) if row["centroid_json"] else None
@@ -872,7 +1018,7 @@ class SearchStore:
             default_ttl_seconds=default_ttl_seconds,
         )
 
-    async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> "CollectionMeta | None":
+    async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> CollectionMeta | None:
         """Return the metadata row for (*name*, *namespace*), or None if absent.
 
         Also returns None if the shared metadata table has never been created
@@ -919,7 +1065,7 @@ class SearchStore:
         # name validated by _COLLECTION_RE, namespace by _validate_namespace; _where_eq is defense-in-depth
         await table.delete(_where_eq("name", name) + " AND " + _where_eq("namespace", namespace))
 
-    async def get_all_collections_meta(self) -> "list[CollectionMeta]":
+    async def get_all_collections_meta(self) -> list[CollectionMeta]:
         """Return every collection's metadata row across all namespaces.
 
         Returns an empty list if the shared metadata table has never been
@@ -1051,7 +1197,7 @@ class SearchStore:
             for row in rows:
                 original_model = row.get("embedding_model", "")
                 name = row["name"]
-                namespace_val = row.get("namespace", "")
+                namespace_val = row.get("namespace") or DEFAULT_NAMESPACE  # a pre-namespace row's NULL is ``default``
                 # Delete the row (use same delete pattern as _do_write_meta_unlocked)
                 ns_predicate = _where_eq("namespace", namespace_val)
                 if namespace_val == DEFAULT_NAMESPACE:
@@ -1065,7 +1211,7 @@ class SearchStore:
             if has_old:
                 try:
                     await table.drop_columns(["embedding_model"])
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — column drop is best-effort cleanup; any lancedb failure is logged
                     logger.warning("migrate_per_collection_model: could not drop embedding_model column — %s", exc)
 
             logger.info("per_collection_model migration (state a): renamed embedding_model → active_embedding_model in %s", _META_TABLE)
@@ -1102,7 +1248,7 @@ class SearchStore:
             return
         meta_table = await db.open_table(_META_TABLE)
         rows = await meta_table.query().to_list()
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         collection_names = [r["name"] for r in rows]
         acl_field = pa.field("acl", pa.list_(pa.utf8()), nullable=True)
@@ -1124,7 +1270,7 @@ class SearchStore:
 
     async def migrate_expires_at_and_scopes(self) -> None:
         """Idempotent: adds expires_at (utf8|null) and scopes (list<utf8>|null) to each chunk table."""
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         db = self._require_connected()
         all_names: list[str] = (await db.list_tables()).tables
@@ -1162,7 +1308,7 @@ class SearchStore:
 
     async def migrate_default_ttl_seconds(self) -> None:
         """Idempotent: adds default_ttl_seconds (int64|null) to _archon_collection_meta."""
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         db = self._require_connected()
         all_names: list[str] = (await db.list_tables()).tables
@@ -1183,7 +1329,7 @@ class SearchStore:
 
     async def _migrate_community_rebuild_job_id(self) -> None:
         """Idempotent: adds community_rebuild_job_id (utf8|null) to _archon_collection_meta."""
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         db = self._require_connected()
         all_names: list[str] = (await db.list_tables()).tables
@@ -1204,7 +1350,7 @@ class SearchStore:
 
     async def _migrate_metadata_reindex_job_id(self) -> None:
         """Idempotent: adds metadata_reindex_job_id (utf8|null) to _archon_collection_meta."""
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         db = self._require_connected()
         all_names: list[str] = (await db.list_tables()).tables
@@ -1231,7 +1377,7 @@ class SearchStore:
         collection.  Safe to call multiple times (concurrent-startup RuntimeError is caught
         and logged).
         """
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         db = self._require_connected()
         all_names: list[str] = (await db.list_tables()).tables
@@ -1308,7 +1454,7 @@ class SearchStore:
                 raise
 
     async def apply_in_place_migrations(
-        self, collection: str, namespace: str, specs: "list[MigrationSpec]"
+        self, collection: str, namespace: str, specs: list[MigrationSpec]
     ) -> bool:
         """Apply a list of in-place migration specs to *collection* and update its schema_version.
 
@@ -1365,13 +1511,47 @@ class SearchStore:
         await self._migrate_community_rebuild_job_id()
         await self._migrate_metadata_reindex_job_id()
         await self.migrate_acl_provenance()
+        await self._log_tables_without_meta()
+
+    async def _log_tables_without_meta(self) -> None:
+        """Log one WARNING naming the collection tables that hold rows but have no meta row.
+
+        The meta row is the only record of a collection's owner, so such a table has none on record: it is treated as
+        ``default``-namespace data and every other namespace is refused (``_require_collection_access``). It arises
+        from a write that died before it recorded its claim, or from data an older build wrote without a meta row.
+        Empty tables are not reported: they hold nothing and any namespace may claim them. Read-only.
+        """
+        db = self._require_connected()
+        tables = (await db.list_tables()).tables
+        owned: set[str] = set()
+        if _META_TABLE in tables:
+            owned = {
+                row["name"] for row in await (await db.open_table(_META_TABLE)).query().select(["name"]).to_list()
+            }
+        orphans = []
+        for name in sorted(tables):
+            if (
+                name != _META_TABLE
+                and _COLLECTION_RE.fullmatch(name)
+                and name not in owned
+                and await (await db.open_table(name)).count_rows() > 0
+            ):
+                orphans.append(name)
+        if orphans:
+            listed = ", ".join(orphans[:_ORPHAN_LOG_NAME_LIMIT])
+            more = f" (and {len(orphans) - _ORPHAN_LOG_NAME_LIMIT} more)" if len(orphans) > _ORPHAN_LOG_NAME_LIMIT else ""
+            logger.warning(
+                "%d collection table(s) hold rows but have no meta row, so no owner is on record: they are treated "
+                "as %r-namespace data and refused to every other namespace: %s%s",
+                len(orphans), DEFAULT_NAMESPACE, listed, more,
+            )
 
     # Catalog of all known migrations.  Each entry is a MigrationSpec that describes
     # one idempotent structural change.  The five existing migrate_*() methods are
     # formalised here with introduced_at=0 (already applied on all pre-D3 stores).
     # Future migrations must increment STORE_SCHEMA_VERSION and add a new entry here.
     @staticmethod
-    def _all_migrations() -> "list[MigrationSpec]":
+    def _all_migrations() -> list[MigrationSpec]:
         """Return the full ordered catalog of MigrationSpec objects."""
         # NOTE: The five pre-D3 migration methods catalogued here have global signatures:
         # migrate_*(self) → None — they operate on ALL collections at once.
@@ -1428,7 +1608,7 @@ class SearchStore:
             ),
         ]
 
-    async def pending_migrations(self, collection: str, namespace: str = DEFAULT_NAMESPACE) -> "list[MigrationSpec]":
+    async def pending_migrations(self, collection: str, namespace: str = DEFAULT_NAMESPACE) -> list[MigrationSpec]:
         """Return the list of MigrationSpec entries not yet applied to *collection*.
 
         A migration is pending when its ``introduced_at`` version is strictly
@@ -1454,8 +1634,8 @@ class SearchStore:
         self,
         collection: str,
         namespace: str,
-        spec: "MigrationSpec",
-        progress_cb: "Callable[[int, int, str], None] | None" = None,
+        spec: MigrationSpec,
+        progress_cb: Callable[[int, int, str], None] | None = None,
     ) -> int:
         """Apply a single rewrite migration to *collection* by reading, transforming, and writing back all chunks.
 
@@ -1543,7 +1723,7 @@ class SearchStore:
     @asynccontextmanager
     async def locked_collection_meta(
         self, collection: str, namespace: str = DEFAULT_NAMESPACE
-    ) -> "AsyncIterator[CollectionMeta | None]":
+    ) -> AsyncIterator[CollectionMeta | None]:
         """Hold ``lock_for(collection)`` and yield the meta row of (*collection*, *namespace*) read under it.
 
         For a read-modify-write of the row: it is read after the lock is acquired, so a ``DELETE`` that dropped the
@@ -1563,7 +1743,7 @@ class SearchStore:
         lock = self.lock_for(collection)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
         meta: CollectionMeta | None = None
         try:
@@ -1574,7 +1754,7 @@ class SearchStore:
             if meta is None:
                 self.discard_lock(collection)
 
-    async def update_collection_meta(self, meta: "CollectionMeta", *, _locked_by_caller: bool = False) -> None:
+    async def update_collection_meta(self, meta: CollectionMeta, *, _locked_by_caller: bool = False) -> None:
         """Upsert *meta* into the shared metadata table, by ``meta.name``.
 
         Creates the metadata table on first use. A collection name already
@@ -1607,7 +1787,7 @@ class SearchStore:
         if lock is not None:
             try:
                 await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
         try:
             db = self._require_connected()
@@ -1676,7 +1856,7 @@ class SearchStore:
             # Remove any legacy NULL-namespace orphan for the same collection name. The canonical
             # row was already written above, so get_collection_meta sees no gap.
             if meta.namespace == DEFAULT_NAMESPACE:
-                await table.delete(_where_eq("name", meta.name) + " AND namespace IS NULL")
+                await _delete_legacy_null_namespace_meta(table, meta.name)
         finally:
             if lock is not None:
                 lock.release()
@@ -1684,10 +1864,10 @@ class SearchStore:
     async def update_description(
         self,
         collection: str,
-        description: "str | None",
-        last_described: "datetime | None",
-        described_at_doc_count: "int | None",
-        last_indexed: "datetime | None",
+        description: str | None,
+        last_described: datetime | None,
+        described_at_doc_count: int | None,
+        last_indexed: datetime | None,
         namespace: str = DEFAULT_NAMESPACE,
     ) -> None:
         """Partial-write description/timestamp fields without touching centroid fields.
@@ -1696,14 +1876,14 @@ class SearchStore:
         Description is cosmetic — stalling indefinitely behind reindex_metadata is
         worse than skipping one description update.
         """
-        from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
+        from archon_search.collection_meta import CollectionMeta
 
         self._validate_collection(collection)
         db = self._require_connected()
         lock = self.lock_for(collection)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Collection %r lock timeout in update_description, skipping", collection)
             return
         try:
@@ -1742,8 +1922,8 @@ class SearchStore:
     # ------------------------------------------------------------------
 
     async def _do_read_meta_unlocked(
-        self, db: "lancedb.db.AsyncConnection", collection: str, namespace: str = DEFAULT_NAMESPACE
-    ) -> "CollectionMeta | None":
+        self, db: lancedb.db.AsyncConnection, collection: str, namespace: str = DEFAULT_NAMESPACE
+    ) -> CollectionMeta | None:
         # Caller must hold lock_for(collection)
         all_names: list[str] = (await db.list_tables()).tables
         if _META_TABLE not in all_names:
@@ -1760,7 +1940,7 @@ class SearchStore:
         return self._row_to_meta(row) if row is not None else None
 
     async def _check_namespace_ownership(
-        self, db: "lancedb.db.AsyncConnection", collection: str, namespace: str
+        self, db: lancedb.db.AsyncConnection, collection: str, namespace: str
     ) -> None:
         # Caller must hold lock_for(collection).
         all_names: list[str] = (await db.list_tables()).tables
@@ -1789,7 +1969,7 @@ class SearchStore:
             )
 
     async def _do_write_meta_unlocked(
-        self, db: "lancedb.db.AsyncConnection", collection: str, meta: "CollectionMeta"
+        self, db: lancedb.db.AsyncConnection, collection: str, meta: CollectionMeta
     ) -> None:
         # Caller must hold lock_for(collection)
         if collection != meta.name:
@@ -1844,10 +2024,10 @@ class SearchStore:
         # Remove any legacy NULL-namespace orphan for the same collection name. The canonical
         # row was already written above, so get_collection_meta sees no gap.
         if meta.namespace == DEFAULT_NAMESPACE:
-            await table.delete(_where_eq("name", meta.name) + " AND namespace IS NULL")
+            await _delete_legacy_null_namespace_meta(table, meta.name)
 
     async def _do_fetch_doc_vectors_unlocked(
-        self, db: "lancedb.db.AsyncConnection", collection: str, doc_id: str
+        self, db: lancedb.db.AsyncConnection, collection: str, doc_id: str
     ) -> list[list[float]]:
         # Caller must hold lock_for(collection)
         if not _DOC_ID_RE.match(doc_id):
@@ -1865,36 +2045,25 @@ class SearchStore:
 
     async def _do_update_meta_on_add(
         self,
-        db: "lancedb.db.AsyncConnection",
+        db: lancedb.db.AsyncConnection,
         collection: str,
-        batch_vectors: "list[list[float]]",
+        batch_vectors: list[list[float]],
         distinct_doc_count: int,
-        embedding_model: "str | None",
+        embedding_model: str | None,
         embedding_dim: int,
         namespace: str = DEFAULT_NAMESPACE,
+        *,
+        claimed: bool = False,
     ) -> bool:
         # Caller must hold lock_for(collection).
         # Returns True when the caller should invoke recompute_collection_meta.
-        from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
+        # ``claimed``: the caller wrote a bare claim row (``_do_claim_collection``) just before these rows landed, so the
+        # collection was brand new and this batch IS the whole collection (the claim row is overwritten below).
+        from archon_search.collection_meta import CollectionMeta
         if embedding_model is None:
             return False
 
-        existing = await self._do_read_meta_unlocked(db, collection, namespace=namespace)
-
-        if existing is None:
-            # No meta row for this namespace. Check if another namespace already owns this
-            # collection — if so, update the owner's meta row rather than creating a fork.
-            all_names = (await db.list_tables()).tables
-            if _META_TABLE in all_names:
-                _meta_tbl = await db.open_table(_META_TABLE)
-                _all_rows = await _meta_tbl.query().to_list()
-                _owner_row = next(
-                    (r for r in _all_rows if r["name"] == collection),
-                    None,
-                )
-                if _owner_row is not None:
-                    existing = self._row_to_meta(_owner_row)
-
+        existing = None if claimed else await self._do_read_meta_unlocked(db, collection, namespace=namespace)
         if existing is not None:
             if not _batch_vectors_valid(batch_vectors):
                 logger.warning("Collection %r batch vectors contain NaN/inf; skipping centroid maintenance", collection)
@@ -1929,7 +2098,7 @@ class SearchStore:
                 stored_model=existing.active_embedding_model,
                 writer_model=embedding_model,
             ):
-                logger.warning("Collection %r centroid stale, recompute queued", collection)
+                _log_stale_centroid(collection, existing)
                 patched = CollectionMeta(
                     name=existing.name,
                     description=existing.description,
@@ -2015,14 +2184,14 @@ class SearchStore:
 
     async def _do_subtract_meta_on_delete(
         self,
-        db: "lancedb.db.AsyncConnection",
+        db: lancedb.db.AsyncConnection,
         collection: str,
-        del_vectors: "list[list[float]]",
+        del_vectors: list[list[float]],
         namespace: str = DEFAULT_NAMESPACE,
     ) -> None:
         # Caller must hold lock_for(collection).
-        from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
-        from datetime import timezone  # noqa: PLC0415
+
+        from archon_search.collection_meta import CollectionMeta
 
         if not del_vectors:
             return
@@ -2032,7 +2201,7 @@ class SearchStore:
             logger.warning("Collection %r has no meta row; delete cannot update centroid", collection)
             return
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         new_mutations = existing.mutations_since_recompute + len(del_vectors)
 
         embedding_dim = len(existing.centroid_sum) if existing.centroid_sum is not None else 0
@@ -2041,7 +2210,7 @@ class SearchStore:
             stored_model=existing.active_embedding_model or "",
             writer_model=existing.active_embedding_model or "",
         ):
-            logger.warning("Collection %r centroid stale, recompute queued", collection)
+            _log_stale_centroid(collection, existing)
             patched = CollectionMeta(
                 name=existing.name,
                 description=existing.description,
@@ -2141,7 +2310,9 @@ class SearchStore:
             Name of the embedding model used to produce the vectors; stored in
             collection metadata when centroid incremental updates are enabled.
         namespace:
-            Collection namespace (default ``DEFAULT_NAMESPACE``).
+            The caller's namespace (default ``DEFAULT_NAMESPACE``). It must own *collection* — or *collection* has no
+            meta row yet and is empty (a new collection: this write claims it) — else
+            :class:`CollectionOwnershipError` is raised under the lock, before any row or meta is written.
         """
         self._validate_collection(collection)
         db = self._require_connected()
@@ -2155,10 +2326,24 @@ class SearchStore:
         if lock is not None:
             try:
                 await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
         try:
-            chunks_ingested = await self._do_ingest(db, collection, chunks)
+            owners = await self._require_collection_access(db, collection, namespace)
+            # No owner on record yet: this write claims the collection, and the claim is recorded BEFORE the rows
+            # land. The meta row is the only record of the owner, so a crash or a failed meta write after the rows
+            # would leave a table every non-default namespace — its creator included — is refused.
+            # A caller that names no embedding model (no production caller) keeps the old behaviour: no meta row is
+            # written for it, because a claim row would pin the collection to an unset model.
+            claimed = not owners and embedding_model is not None
+            if claimed:
+                await self._do_claim_collection(db, collection, namespace, embedding_model)
+            try:
+                chunks_ingested = await self._do_ingest(db, collection, chunks)
+            except BaseException:
+                if claimed:
+                    await self._release_claim(collection, namespace)
+                raise
             needs_recompute = False
 
             batch_vectors = [list(c.vector) for c in chunks]
@@ -2169,12 +2354,46 @@ class SearchStore:
                     embedding_model=embedding_model,
                     embedding_dim=len(batch_vectors[0]),
                     namespace=namespace,
+                    claimed=claimed,
                 )
 
             return ChunkIngestResult(chunks_ingested=chunks_ingested, needs_recompute=needs_recompute)
         finally:
             if lock is not None:
                 lock.release()
+
+    async def _do_claim_collection(
+        self, db: lancedb.db.AsyncConnection, collection: str, namespace: str, embedding_model: str | None
+    ) -> None:
+        """Record *namespace* as the owner of *collection* with a bare meta row (counts and centroid unknown).
+
+        Caller must hold ``lock_for(collection)``. The row says ``needs_recompute`` until the write that follows
+        replaces it with real counts and centroid (or, for a caller that names no embedding model, until a
+        recompute does).
+        """
+        from archon_search.collection_meta import CollectionMeta
+
+        await self._do_write_meta_unlocked(
+            db,
+            collection,
+            CollectionMeta(
+                name=collection,
+                namespace=namespace,
+                active_embedding_model=embedding_model or "",
+                needs_recompute=True,
+                schema_version=STORE_SCHEMA_VERSION,
+            ),
+        )
+
+    async def _release_claim(self, collection: str, namespace: str) -> None:
+        """Undo :meth:`_do_claim_collection` after the rows it preceded failed to land; best effort, never raises.
+
+        A claim that cannot be undone stays: an owner on record is the safe state.
+        """
+        try:
+            await self.delete_collection_meta(collection, namespace)
+        except Exception:
+            logger.warning("could not release the ownership claim on collection %r", collection, exc_info=True)
 
     async def _do_ingest(self, db, collection: str, chunks: list[ChunkRecord]) -> int:
         table = await db.open_table(collection)
@@ -2245,7 +2464,7 @@ class SearchStore:
         """
         self._validate_collection(collection)
         db = self._require_connected()
-        from lancedb.index import FTS  # noqa: PLC0415
+        from lancedb.index import FTS
 
         tokenizer_name = _LANCEDB_TOKENIZER_MAP.get(language, "English")
         if language and language not in _LANCEDB_TOKENIZER_MAP:
@@ -2280,7 +2499,46 @@ class SearchStore:
                 f"optimize_fts: collection {collection!r} has no FTS index; "
                 "call rebuild_fts_index() first to create the initial index"
             )
-        await table.optimize()
+        await table.optimize(cleanup_older_than=timedelta(hours=self._config.maintenance.version_retention_hours))
+
+    async def prune_versions(self, retention: timedelta) -> None:
+        """Compact and delete the table versions older than *retention* — the collection-meta table and every collection.
+
+        ``table.optimize(cleanup_older_than=retention)`` merges small fragments and deletes the manifest,
+        transaction and data files of every version older than the window; the newest version is never
+        removed, so a reader on it is unaffected. Each collection table is optimized under its lock, like
+        ``optimize_fts`` in a maintenance pass, and a collection whose lock is not free within
+        ``INGEST_LOCK_TIMEOUT_S`` is skipped until the next pass. A table that fails is logged and the
+        others still run.
+
+        Raises:
+            RuntimeError: if the store is not connected.
+        """
+        db = self._require_connected()
+        for name in (await db.list_tables()).tables:
+            if name == _META_TABLE:
+                await self._prune_table_logged(name, retention)
+            elif _COLLECTION_RE.fullmatch(name):
+                lock = self.lock_for(name)
+                try:
+                    await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+                except TimeoutError:
+                    logger.debug("prune_versions: %s skipped — collection locked", name)
+                    continue
+                try:
+                    await self._prune_table_logged(name, retention)
+                finally:
+                    lock.release()
+
+    async def _prune_table_logged(self, name: str, retention: timedelta) -> None:
+        try:
+            await self._prune_table(name, retention)
+        except Exception:  # one table's failure must not stop the others
+            logger.warning("prune_versions failed for table %s; it is retried next pass", name, exc_info=True)
+
+    async def _prune_table(self, name: str, retention: timedelta) -> None:
+        table = await self._require_connected().open_table(name)
+        await table.optimize(cleanup_older_than=retention)
 
     async def sample_chunk_texts(
         self,
@@ -2336,7 +2594,7 @@ class SearchStore:
         ``source_path`` (the offloaded ``stat``), so a ``CancelledError`` there
         discards the accumulated ``updates`` batch.
         """
-        from archon_search.constants import LEGACY_INGESTED_BY  # noqa: PLC0415
+        from archon_search.constants import LEGACY_INGESTED_BY
 
         self._validate_collection(collection)
         db = self._require_connected()
@@ -2377,7 +2635,7 @@ class SearchStore:
                     if isinstance(cached, OSError):
                         result.warnings.append(f"missing-source: {source_path}")
                     else:
-                        mtime_dt = datetime.fromtimestamp(cached.st_mtime, tz=timezone.utc)
+                        mtime_dt = datetime.fromtimestamp(cached.st_mtime, tz=UTC)
                         new_updated_at = (
                             normalize_iso_utc(mtime_dt)
                             if normalize_timestamps
@@ -2398,13 +2656,13 @@ class SearchStore:
                         try:
                             new_indexed_at = normalize_iso_utc(stored_indexed_at)
                             ts_row_changed = True
-                        except Exception:  # noqa: BLE001
+                        except (ValueError, OverflowError):
                             result.warnings.append(f"bad-indexed_at: {stored_indexed_at}")
                     if new_updated_at and not _FIXED_WIDTH_TS_RE.match(new_updated_at):
                         try:
                             new_updated_at = normalize_iso_utc(new_updated_at)
                             ts_row_changed = True
-                        except Exception:  # noqa: BLE001
+                        except (ValueError, OverflowError):
                             result.warnings.append(f"bad-updated_at: {new_updated_at}")
                 if ts_row_changed:
                     result.ts_normalized += 1
@@ -2457,7 +2715,7 @@ class SearchStore:
         query_vector: list[float] | None,
         query_text: str,
         candidate_depth: int,
-        filters: "SearchFilters | None" = None,
+        filters: SearchFilters | None = None,
         scope_filter: str | None = None,
     ) -> list[ScoredSearchCandidate]:
         """Thin instance-method delegate to module-level _hybrid_search_with_trace.
@@ -2519,8 +2777,8 @@ class SearchStore:
         doc_id:
             64-hex-char document identifier.
         namespace:
-            Namespace used for centroid bookkeeping (ignored when centroid
-            incremental updates are disabled).
+            The caller's namespace: it must own *collection* (:class:`CollectionOwnershipError` otherwise, before any
+            row is touched), and it keys the centroid bookkeeping.
         skip_fts_optimize:
             When ``True``, suppress the post-delete FTS maintenance call.
             Pass ``True`` from ingest paths that will call ``optimize_fts``
@@ -2535,10 +2793,11 @@ class SearchStore:
         lock = self.lock_for(collection)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
         count: int = 0
         try:
+            await self._require_collection_access(db, collection, namespace)
             try:
                 table = await db.open_table(collection)
             except ValueError:
@@ -2599,29 +2858,36 @@ class SearchStore:
     # ------------------------------------------------------------------
 
     async def list_documents(
-        self, collection: str, limit: int = 100, cursor: str | None = None
+        self, collection: str, limit: int = 100, cursor: str | None = None, namespace: str = DEFAULT_NAMESPACE
     ) -> tuple[list[DocumentInfo], str | None, int]:
-        """List documents in a collection with stable cursor-based pagination.
+        """List the documents of a collection visible to *namespace*, with stable cursor-based pagination.
+
+        A document is visible when at least one of its chunks passes the chunk ACL for *namespace*
+        (the rule search applies: ``is_acl_allowed``). A document all of whose chunks are hidden is
+        absent from the page and from *total* — its id and source path are never disclosed — and
+        ``chunk_count`` / ``scopes`` are computed over the visible chunks only.
 
         Returns ``(items, next_cursor, total)`` where:
 
-        - *items* — up to *limit* documents sorted by ``doc_id`` ascending.
+        - *items* — up to *limit* visible documents sorted by ``doc_id`` ascending.
         - *next_cursor* — the ``doc_id`` of the last item in this page, or
           ``None`` if this is the last page.
-        - *total* — accurate total document count for the collection (via
-          :meth:`count_documents`), independent of the current page.
+        - *total* — accurate count of the documents visible to *namespace* (via
+          :meth:`count_visible_documents`), independent of the current page.
 
         If *cursor* is provided the result starts from the first document whose
         ``doc_id`` sorts strictly after the cursor value (lexicographic order).
         A cursor that references a deleted document silently resumes from its
-        sort position; no error is raised.
+        sort position; no error is raised. Hidden documents never enter the ordering, so the
+        cursor stays stable whatever the ACLs are.
 
         .. note::
             The store pre-fetches at most ``limit * 50`` raw chunk rows before
-            aggregating to distinct documents.  For collections where documents
+            filtering and aggregating to distinct documents.  For collections where documents
             average more than 50 chunks, some documents near the pre-fetch
-            boundary may not appear in any page.  This is an accepted v1
-            trade-off; see the project's known-limitations documentation.
+            boundary may not appear in any page; chunks hidden from *namespace* consume the
+            window too.  This is an accepted v1 trade-off; see the project's
+            known-limitations documentation.
         """
         self._validate_collection(collection)
         limit = max(0, min(limit, _LIST_DOCUMENTS_MAX_LIMIT))  # clamp: non-negative, at most the cap
@@ -2631,17 +2897,20 @@ class SearchStore:
         except ValueError:
             return [], None, 0
 
-        # Include "scopes" only if the column exists (pre-E2a stores may not have it)
+        # Include "scopes" / "acl" only if the column exists (pre-E2a / pre-ACL stores may not have them)
+        select_cols = ["doc_id", "source_path", "indexed_at"]
         try:
             tbl_schema = await table.schema()
-            select_cols = ["doc_id", "source_path", "indexed_at"]
-            has_scopes_col = "scopes" in tbl_schema.names
-            if has_scopes_col:
-                select_cols.append("scopes")
         except (ValueError, RuntimeError) as exc:
-            logger.warning("list_documents: could not read schema for %r, scopes disabled — %s", collection, exc)
-            select_cols = ["doc_id", "source_path", "indexed_at"]
-            has_scopes_col = False
+            # Without the schema the ACL column cannot be told from a pre-ACL table: list nothing rather than everything.
+            logger.warning("list_documents: could not read schema for %r, listing no documents — %s", collection, exc)
+            return [], None, 0
+        has_scopes_col = "scopes" in tbl_schema.names
+        has_acl_col = "acl" in tbl_schema.names
+        if has_scopes_col:
+            select_cols.append("scopes")
+        if has_acl_col:
+            select_cols.append("acl")
 
         rows = (
             await table.query()
@@ -2650,9 +2919,11 @@ class SearchStore:
             .to_list()
         )
 
-        # Aggregate per doc_id
+        # Aggregate per doc_id over the chunks visible to the namespace
         docs: dict[str, dict[str, Any]] = {}
         for r in rows:
+            if has_acl_col and not is_acl_allowed(decode_row_acl_fields(r)["acl"], namespace):
+                continue
             doc_id = r["doc_id"]
             if doc_id not in docs:
                 docs[doc_id] = {
@@ -2697,8 +2968,7 @@ class SearchStore:
         # NOTE: DocumentInfo.scopes is computed here but not yet surfaced in the API response.
         # BE-11 will add scopes to DocumentInfoItem in schemas.py and routes_collections.py.
 
-        # Accurate total using count_documents (reads full collection)
-        total = await self.count_documents(collection)
+        total = await self.count_visible_documents(collection, namespace)
 
         return items, next_cursor, total
 
@@ -2743,7 +3013,7 @@ class SearchStore:
         if "expires_at" not in schema.names:
             return [], None
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cutoff = now + timedelta(seconds=within_seconds)
         now_iso = normalize_iso_utc(now)
         cutoff_iso = normalize_iso_utc(cutoff)
@@ -2842,7 +3112,7 @@ class SearchStore:
         if "expires_at" not in schema.names:
             return []
 
-        now_utc_iso = normalize_iso_utc(datetime.now(timezone.utc))
+        now_utc_iso = normalize_iso_utc(datetime.now(UTC))
         expired_pred = "expires_at IS NOT NULL AND expires_at < " + _sql_quote_str(now_utc_iso)
         fully_pruned_doc_ids: dict[str, None] = {}
 
@@ -2896,7 +3166,7 @@ class SearchStore:
         if "expires_at" not in schema.names:
             return 0
 
-        now_utc_iso = normalize_iso_utc(datetime.now(timezone.utc))
+        now_utc_iso = normalize_iso_utc(datetime.now(UTC))
         pred = "expires_at IS NOT NULL AND expires_at < " + _sql_quote_str(now_utc_iso)
         return await table.count_rows(pred)
 
@@ -3078,6 +3348,37 @@ class SearchStore:
         rows = await table.query().select(["doc_id"]).to_list()
         return len({r["doc_id"] for r in rows})
 
+    async def _chunk_acl_rows(self, collection: str) -> list[tuple[str, str, list[str] | None]]:
+        """Return ``(doc_id, chunk_id, acl)`` for every chunk, reading only those three columns.
+
+        ``acl`` is ``None`` (open) for every chunk of a table that predates the ``acl`` column.
+        Returns ``[]`` for a missing collection.
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except (ValueError, FileNotFoundError):
+            return []
+        columns = ["doc_id", "chunk_id"]
+        if "acl" in (await table.schema()).names:
+            columns.append("acl")
+        rows = await table.query().select(columns).to_list()
+        return [(r["doc_id"], r["chunk_id"], decode_row_acl_fields(r)["acl"]) for r in rows]
+
+    async def count_visible_documents(self, collection: str, namespace: str) -> int:
+        """Return the number of distinct documents with at least one chunk visible to *namespace*."""
+        rows = await self._chunk_acl_rows(collection)
+        return len({doc_id for doc_id, _chunk_id, acl in rows if is_acl_allowed(acl, namespace)})
+
+    async def get_chunk_visibility(self, collection: str, namespace: str) -> ChunkVisibility:
+        """Return which chunks/documents of *collection* the chunk ACL hides from *namespace*.
+
+        The input of every derived surface (document list, graph) that must show *namespace*
+        no more than search would. Reads only ``doc_id``, ``chunk_id`` and ``acl``.
+        """
+        return ChunkVisibility.from_chunk_acls(await self._chunk_acl_rows(collection), namespace)
+
     async def get_stored_vector_dimension(
         self, collection: str, namespace: str = DEFAULT_NAMESPACE
     ) -> int | None:
@@ -3108,11 +3409,12 @@ class SearchStore:
         Returns ``0`` if the collection does not exist.  This is O(1) —
         uses ``table.count_rows()`` which reads metadata only.
 
-        The *namespace* parameter is accepted for API symmetry but does not
-        affect table-name resolution (the collection name is the table name).
+        *namespace* must own *collection*: another namespace's raises :class:`CollectionOwnershipError` (the count
+        would otherwise confirm the collection exists). An orphan table is counted only for ``default``.
         """
         self._validate_collection(collection)
         db = self._require_connected()
+        await self._require_collection_access(db, collection, namespace)
         try:
             table = await db.open_table(collection)
         except ValueError:
@@ -3139,14 +3441,15 @@ class SearchStore:
         back to ``indexed_at``) and the ACL fields through ``decode_row_acl_fields``
         (lists copied, a stored null ``acl_warning`` widened to ``[]``).
 
-        The *namespace* parameter is accepted for API symmetry but does not
-        affect table-name resolution (the collection name is the table name).
+        *namespace* must own *collection* (:class:`CollectionOwnershipError` otherwise), so an export job cannot read
+        the rows of a same-named collection another namespace created after the job's own was dropped.
 
         Returns an empty async iterator if the collection does not exist.
         Uses ``table.query().to_list()`` for a full bulk scan.
         """
         self._validate_collection(collection)
         db = self._require_connected()
+        await self._require_collection_access(db, collection, namespace)
         try:
             table = await db.open_table(collection)
         except ValueError:
@@ -3201,7 +3504,7 @@ class SearchStore:
             table = await db.open_table(collection)
         except ValueError:
             return ""
-        from collections import Counter  # noqa: PLC0415
+        from collections import Counter
 
         arrow_table = await table.query().select(["language"]).to_arrow()
         lang_col = arrow_table.column("language")
@@ -3228,13 +3531,39 @@ class SearchStore:
             table = await db.open_table(collection)
         except ValueError:
             return (0, 0)
-        import pyarrow.compute as pc  # noqa: PLC0415
+        import pyarrow.compute as pc
 
         arrow_table = await table.query().select(["acl"]).to_arrow()
         acl_col = arrow_table.column("acl")
         acl_open_count = int(pc.sum(pc.is_null(acl_col)).as_py() or 0)
         acl_protected_count = len(acl_col) - acl_open_count
         return (acl_protected_count, acl_open_count)
+
+
+async def refresh_fts(store: SearchStore, collection: str) -> None:
+    """Bring the FTS index of *collection* up to date after a batch of writes.
+
+    Plan B stores rebuild unconditionally. Otherwise ``optimize_fts`` is O(delta); it raises
+    ``FTSIndexNotFoundError`` on the first write into a collection, which is the designed
+    trigger to create the index (DEBUG, no traceback). Any other optimize failure is a real
+    error: WARNING with traceback, then the same rebuild as a safety net.
+
+    Shared by the ingest pipeline and the collection sync so both treat the same failure the same way.
+    """
+    if store.supports_incremental_fts_delete:
+        try:
+            await store.optimize_fts(collection)
+            return
+        except FTSIndexNotFoundError:
+            logger.debug("No FTS index for collection %r yet; building it", collection)
+        except Exception:
+            logger.warning(
+                "optimize_fts failed for collection %r; falling back to rebuild_fts_index",
+                collection,
+                exc_info=True,
+            )
+    dominant_lang = await store.get_dominant_language(collection)
+    await store.rebuild_fts_index(collection, language=dominant_lang)
 
 
 # ---------------------------------------------------------------------------
@@ -3257,7 +3586,7 @@ async def _hybrid_search_with_trace(
     query_vector: list[float] | None,
     query_text: str,
     candidate_depth: int,
-    filters: "SearchFilters | None" = None,
+    filters: SearchFilters | None = None,
     scope_filter: str | None = None,
 ) -> list[ScoredSearchCandidate]:
     """Internal trace helper — returns full score provenance per candidate.

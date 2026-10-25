@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from archon_search._durable_io import atomic_write_json
+from archon_search._durable_io import atomic_write_json, ensure_private_dir
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ class IndexingStateStore:
         except json.JSONDecodeError as exc:
             logger.warning("IndexingStateStore: corrupt JSON in state file: %s", exc)
             return None
-        except Exception as exc:
+        except RecursionError as exc:
             logger.warning("IndexingStateStore: unexpected read error: %s", exc)
             return None
         return from_dict(data)
@@ -111,7 +111,7 @@ class IndexingStateStore:
     def write(self, state: IndexingState) -> None:
         """Serialize and atomically write state to disk. Re-raises on failure."""
         with self._lock:
-            self._state_dir.mkdir(parents=True, exist_ok=True)
+            ensure_private_dir(self._state_dir)
             atomic_write_json(self._state_file, to_dict(state))
 
     def update_collection(self, name: str, progress: CollectionProgress) -> None:

@@ -6,25 +6,29 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass, field
-from functools import partial
-from datetime import UTC, datetime
-from pathlib import Path
-from collections.abc import Awaitable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING, Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from functools import partial
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-from archon_search._durable_io import atomic_write_json
+from archon_search._durable_io import atomic_write_json, ensure_private_dir
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder import make_embedder
-from archon_search.store import StoreBusyError
+from archon_search.store import StoreBusyError, refresh_fts
 from archon_search.torch_runtime import AUTO_DEVICE
 
 if TYPE_CHECKING:
     from archon_search.collection_meta import CollectionMeta
     from archon_search.jobs.store import JobStore
     from archon_search.pipeline import SearchPipeline
-    from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore
+    from archon_search.progress import (
+        CollectionProgress,
+        IndexingState,
+        IndexingStateStore,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -267,11 +271,10 @@ class SearchCollectionSync:
         for name in existing_and_desired:
             try:
                 state = self._state_store.read() if self._state_store else None
-                if state and name in state.collections:
-                    if state.collections[name].status != IndexingStatus.DONE:
-                        to_resume.add(name)
-            except Exception:  # noqa: BLE001
-                pass  # treat as DONE on read failure
+                if state and name in state.collections and state.collections[name].status != IndexingStatus.DONE:
+                    to_resume.add(name)
+            except Exception:  # noqa: BLE001, S110 — state read failure is treated as DONE (collection not resumed)
+                pass
 
         for name in sorted(to_resume):
             path_str = desired[name]
@@ -282,7 +285,7 @@ class SearchCollectionSync:
             _ns = name_to_ns.get(name, DEFAULT_NAMESPACE)
             try:
                 resume_meta = await self._pipeline.store.get_collection_meta(name, _ns)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — meta lookup is advisory; any store failure means "no meta"
                 resume_meta = None
             still_configured, error = await self._write_collection(
                 name,
@@ -323,7 +326,7 @@ class SearchCollectionSync:
                 _ns = name_to_ns.get(name, DEFAULT_NAMESPACE)
                 try:
                     meta = await self._pipeline.store.get_collection_meta(name, _ns)
-                except Exception:
+                except Exception:  # noqa: BLE001 — meta lookup is advisory; any store failure means "no meta"
                     meta = None
                 new_f, changed_f, deleted_p, force_reindex = self._check_collection_changes(
                     name, p, file_mtimes,
@@ -396,14 +399,14 @@ class SearchCollectionSync:
                 if _m.name == collection_name:
                     _col_ns = _m.namespace
                     break
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — namespace lookup is advisory; any store failure falls back to the default namespace
             logger.warning(
                 "sync: failed to resolve namespace for %r; falling back to %r",
                 collection_name, _col_ns,
             )
         try:
             meta = await self._pipeline.store.get_collection_meta(collection_name, _col_ns)
-        except Exception:
+        except Exception:  # noqa: BLE001 — meta lookup is advisory; any store failure means "no meta"
             meta = None
 
         new_f, changed_f, deleted_p, force_reindex = self._check_collection_changes(
@@ -457,7 +460,7 @@ class SearchCollectionSync:
             return
         try:
             self._state_store.update_collection(name, progress)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Failed to write indexing state for %r", name, exc_info=True)
 
     def _safe_state_remove(self, name: str) -> None:
@@ -466,7 +469,7 @@ class SearchCollectionSync:
             return
         try:
             self._state_store.remove_collection(name)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Failed to remove indexing state for %r", name, exc_info=True)
 
     def _reset_stale_in_progress(self) -> None:
@@ -480,7 +483,7 @@ class SearchCollectionSync:
             self._state_store.reset_in_progress(
                 lambda cp: cp.status == IndexingStatus.IN_PROGRESS
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Failed to reset stale IN_PROGRESS states", exc_info=True)
 
     def _load_processed_paths(self, name: str) -> list[str]:
@@ -492,10 +495,10 @@ class SearchCollectionSync:
             if state is None or name not in state.collections:
                 return []
             return state.collections[name].processed_paths
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — documented: [] on any state read failure
             return []
 
-    def _load_file_mtimes(self, name: str, state: "IndexingState | None" = None) -> dict[str, float]:
+    def _load_file_mtimes(self, name: str, state: IndexingState | None = None) -> dict[str, float]:
         """Return file_mtimes for collection from state, or {} on any failure/absence.
 
         If state is provided, use it directly. Otherwise read from state_store.
@@ -510,7 +513,7 @@ class SearchCollectionSync:
             if loaded is None or name not in loaded.collections:
                 return {}
             return dict(loaded.collections[name].file_mtimes)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — documented: {} on any state read failure
             return {}
 
     def _check_collection_changes(
@@ -618,8 +621,8 @@ class SearchCollectionSync:
         name: str,
         p: Path,
         progress_cb: Callable[[int, int], None | Awaitable[None]] | None,
-        CollectionProgress: type,  # noqa: N803 — forwarded from caller
-        IndexingStatus: type,  # noqa: N803
+        CollectionProgress: type,
+        IndexingStatus: type,
         meta=None,
         namespace: str = DEFAULT_NAMESPACE,
     ) -> str | None:
@@ -680,7 +683,7 @@ class SearchCollectionSync:
             else:
                 try:
                     embedder = make_embedder(_active_model, device=self._device)
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001 — embedder construction is a third-party backend; fall back to the global embedder
                     logger.warning(
                         "Could not load stored embedder %r for collection %r; using global embedder",
                         _active_model, name,
@@ -738,7 +741,7 @@ class SearchCollectionSync:
                         indexed_chunk_size=self._chunk_size,
                     ))
                 return None
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Sync of collection %r failed during ingest", name)
                 error = collection_sync_failed_detail(name)
                 # Compute partial file_mtimes for files processed before the exception
@@ -790,7 +793,7 @@ class SearchCollectionSync:
         else:
             try:
                 embedder = make_embedder(_active_model, device=self._device)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — embedder construction is a third-party backend; fall back to the global embedder
                 logger.warning(
                     "Could not load stored embedder %r for collection %r; using global embedder",
                     _active_model, name,
@@ -907,11 +910,7 @@ class SearchCollectionSync:
                     )
 
                 # Optimize FTS once after all file operations
-                if self._pipeline.store.supports_incremental_fts_delete:
-                    await self._pipeline.store.optimize_fts(name)
-                else:
-                    dominant_lang = await self._pipeline.store.get_dominant_language(name)
-                    await self._pipeline.store.rebuild_fts_index(name, language=dominant_lang)
+                await refresh_fts(self._pipeline.store, name)
 
                 # Centroid maintenance: incremental path fires when checkpoint signal raised.
                 try:
@@ -925,7 +924,7 @@ class SearchCollectionSync:
                         logger.debug("Recompute collection meta for %r after sync", name)
                         # TODO(C1): pass per-collection embedder once centroid IoC is updated
                         await self._pipeline.recompute_collection_meta(name, self._pipeline._global_embedder, namespace=namespace)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.warning(
                         "Failed to recompute collection meta for %r after sync; centroid may be stale",
                         name,
@@ -944,7 +943,7 @@ class SearchCollectionSync:
                 ))
                 return None
 
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Sync of collection %r failed while applying file changes", name)
                 error = collection_sync_failed_detail(name)
                 self._safe_state_update(name, CollectionProgress(
@@ -1043,7 +1042,7 @@ class SearchCollectionSync:
                         name,
                     )
                     return False
-                await store.drop_collection(name, _locked_by_caller=True)
+                await store.drop_collection(name, namespace=namespace, _locked_by_caller=True)
                 return True
         except StoreBusyError:
             logger.warning(
@@ -1201,5 +1200,5 @@ class SearchCollectionSync:
             return {}
 
     def _write_manifest(self, manifest_path: Path, manifest: dict[str, str]) -> None:
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(manifest_path.parent)
         atomic_write_json(manifest_path, manifest)

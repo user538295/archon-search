@@ -62,8 +62,8 @@ class PPRWalkResult:
 
 
 def _run_ppr_sync(
-    nodes: list["GraphNode"],
-    edges: list["GraphEdge"],
+    nodes: list[GraphNode],
+    edges: list[GraphEdge],
     personalization: dict[str, float],
     damping: float,
     top_k: int,
@@ -112,7 +112,7 @@ class PPRWalker:
     ``walk()`` is safe to call concurrently — it holds no mutable state.
     """
 
-    def __init__(self, graph_store: "GraphStore") -> None:
+    def __init__(self, graph_store: GraphStore) -> None:
         self._store = graph_store
 
     async def walk(

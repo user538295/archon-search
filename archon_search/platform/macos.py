@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.parsers.expat import ExpatError
 
+from archon_search._durable_io import ensure_private_dir
 from archon_search.paths import get_data_dir
 from archon_search.platform.service import (
     _STOP_WAIT_TIMEOUT_S,
@@ -186,7 +187,7 @@ class LaunchdSearchService(SearchServiceLifecycle):
         return Path.home() / "Library" / "LaunchAgents" / "com.archon.search.plist"
 
     def _run(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(cmd, capture_output=True, text=True)
+        return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
     def _is_loaded(self) -> bool:
         try:
@@ -209,13 +210,13 @@ class LaunchdSearchService(SearchServiceLifecycle):
         wrapper_content = _wrapper_content(paths)
 
         with write_errors_naming(f"service files in {paths.data_dir}"):
-            paths.data_dir.mkdir(parents=True, exist_ok=True)
-            paths.wrapper.write_text(wrapper_content, encoding=_WRAPPER_ENCODING)  # noqa: durable-write
+            ensure_private_dir(paths.data_dir)
+            paths.wrapper.write_text(wrapper_content, encoding=_WRAPPER_ENCODING)  # durable-write-exempt
             paths.wrapper.chmod(_WRAPPER_SCRIPT_MODE)
-            paths.log_path.parent.mkdir(parents=True, exist_ok=True)
+            ensure_private_dir(paths.log_path.parent)
         with write_errors_naming(str(self._plist_path)):
             self._plist_path.parent.mkdir(parents=True, exist_ok=True)
-            self._plist_path.write_bytes(plist_content)  # noqa: durable-write
+            self._plist_path.write_bytes(plist_content)  # durable-write-exempt
 
     def unregister(self, dry_run: bool = False) -> None:
         # Uninstall path — unlike stop(), this deliberately does NOT wait for the

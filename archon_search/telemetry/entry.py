@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 def _strict_bool(v: object) -> bool:
     if not isinstance(v, bool):
-        raise ValueError(f"Expected bool, got {type(v).__name__!r}")
+        raise ValueError(f"Expected bool, got {type(v).__name__!r}")  # noqa: TRY004 — pydantic only converts ValueError into a ValidationError
     return v
 
 
@@ -47,7 +47,7 @@ class FilterFlags(BaseModel):
     language_filter_used: StrictBool = False
 
     @classmethod
-    def from_search_filters(cls, filters: "SearchFilters") -> "FilterFlags":
+    def from_search_filters(cls, filters: SearchFilters) -> FilterFlags:
         """Build FilterFlags from a SearchFilters — booleans only, no raw values."""
         return cls(
             file_type=filters.file_type is not None,

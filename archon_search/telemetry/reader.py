@@ -9,7 +9,12 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from archon_search.telemetry.entry import EndpointKind, ErrorKind, Status, TelemetryEntry
+from archon_search.telemetry.entry import (
+    EndpointKind,
+    ErrorKind,
+    Status,
+    TelemetryEntry,
+)
 
 _ALL_ERROR_KINDS = (
     "empty_query",
@@ -45,9 +50,7 @@ class TelemetryReader:
 
         retention_floor = until - timedelta(days=self._retention_days)
 
-        if since is None:
-            since = retention_floor
-        elif since < retention_floor:
+        if since is None or since < retention_floor:
             since = retention_floor
 
         if since > until:
@@ -105,7 +108,7 @@ class TelemetryReader:
                         data = json.loads(line)
                         entry = TelemetryEntry.model_validate(data)
                         entries.append(entry)
-                    except Exception:
+                    except ValueError:  # JSONDecodeError and pydantic ValidationError both subclass ValueError
                         logger.warning(
                             "telemetry: skipping malformed line in %s", path
                         )

@@ -1,14 +1,17 @@
 """FastMCP HTTP server for RAG search."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from contextlib import AsyncExitStack, ExitStack
-from time import monotonic
 from collections.abc import Callable
+from contextlib import AsyncExitStack, ExitStack
+from datetime import UTC
+from time import monotonic
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
 
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
 from pydantic import Field, ValidationError
 from starlette.applications import Starlette
@@ -16,13 +19,50 @@ from starlette.datastructures import State
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-import tarfile
-
-from archon_search._path_safety import PathUnsafeError, validate_archive_members, validate_export_path, validate_ingest_path
+from archon_search._path_safety import (
+    ALLOWED_ROOTS_REQUIRED,
+    ALLOWED_ROOTS_REQUIRED_DETAIL,
+    DENIED_LOCATION,
+    OUTSIDE_ALLOWED_ROOTS,
+    IngestPathPolicy,
+    PathUnsafeError,
+    validate_archive_file,
+    validate_glob_pattern,
+    validate_ingest_source,
+)
+from archon_search._types import IngestTooManyFilesError
 from archon_search.config import resolve_active_model
-from archon_search.constants import DEFAULT_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW_MAX, DEFAULT_NAMESPACE
+from archon_search.constants import (
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_CONTEXT_WINDOW_MAX,
+    DEFAULT_MAX_CROSS_COLLECTION_COLLECTIONS,
+    DEFAULT_NAMESPACE,
+)
+from archon_search.embedder_cache import (
+    EMBEDDER_NOT_READY_CODE,
+    EMBEDDER_NOT_READY_DETAIL,
+    EmbedderCache,
+    EmbedderNotReadyError,
+)
 from archon_search.filters import SearchFilters
-from archon_search.hyde import HYDE_DEPENDENCY_CODE, HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
+from archon_search.hyde import (
+    HYDE_DEPENDENCY_CODE,
+    HYDE_DEPENDENCY_DETAIL,
+    HyDEDependencyError,
+)
+from archon_search.ingest_path_policy import ingest_path_policy
+from archon_search.jobs.export_archive import (
+    ARCHIVE_NAMESPACE_MISMATCH_DETAIL,
+    EXPORT_SCHEMA_VERSION,
+    INVALID_ARCHIVE_DETAIL,
+    ImportArchiveReader,
+    exports_dir,
+    importable_archive_path,
+    manifest_error_detail,
+    manifest_namespace_ok,
+    quote_archive_value,
+)
+from archon_search.jobs.model import job_to_dict
 from archon_search.key_manager import (
     KEY_STORE_UNREADABLE_DETAIL,
     ROTATE_KEYS_JSON_FAILED_DETAIL,
@@ -37,6 +77,13 @@ from archon_search.key_manager import (
     resolve_rotation_key_file,
     rotate_and_persist_default_key,
 )
+from archon_search.model_validation import (
+    ModelValidationError,
+    validate_embedding_model,
+)
+from archon_search.observability import bind_stage_recorder
+from archon_search.observability import correlation_id as _correlation_id
+from archon_search.paths import get_data_dir
 from archon_search.pipeline import (
     METADATA_STORE_UNAVAILABLE_CODE,
     METADATA_STORE_UNAVAILABLE_DETAIL,
@@ -50,41 +97,34 @@ from archon_search.pipeline import (
     context_window_error,
 )
 from archon_search.progress import IndexingState, IndexingStatus
-from archon_search.router import MultiCollectionRouter
-from archon_search.server.middleware_auth import APIKeyMiddleware
-from archon_search.server._validators import validate_scope_filter as _check_scope_filter
-from archon_search.server.routes_explain import (
-    EXPLAIN_FAILED_DETAIL,
-    ExplainRequest,
-    ExplainResponse,
-    RoutingCandidate,
-    RoutingExplain,
+from archon_search.rag_fusion import (
+    RAG_FUSION_DEPENDENCY_CODE,
+    RAG_FUSION_DEPENDENCY_DETAIL,
 )
-from archon_search.server.schemas import GRAPH_COMMUNITIES_NOT_BUILT_CODE, INVALID_SCOPE_FILTER_CODE
-from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_CODE, RAG_FUSION_DEPENDENCY_DETAIL
+from archon_search.router import MultiCollectionRouter
 from archon_search.server._hyde import RequestHyDE
 from archon_search.server._search_budget import (
     SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+)
+from archon_search.server._search_budget import (
     SearchBudgetExceeded,
     run_within_budget,
     warmup_for_search,
 )
-from archon_search.store import StoreBusyError
-from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
-from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
-from archon_search.telemetry.writer import TelemetryWriter
-
-from archon_search.embedder_cache import EMBEDDER_NOT_READY_CODE, EMBEDDER_NOT_READY_DETAIL, EmbedderCache, EmbedderNotReadyError
-from archon_search.jobs.export_archive import (
-    EXPORT_SCHEMA_VERSION,
-    INVALID_ARCHIVE_DETAIL,
-    ImportArchiveReader,
-    manifest_error_detail,
-    quote_archive_value,
+from archon_search.server._validators import (
+    validate_scope_filter as _check_scope_filter,
 )
-from archon_search.jobs.model import job_to_dict
-from archon_search.model_validation import ModelValidationError, validate_embedding_model
-from archon_search.paths import get_data_dir
+from archon_search.server.authz import (
+    FORBIDDEN_CODE,
+    AuthIdentity,
+    ForbiddenError,
+    authorize_key_create,
+    authorize_key_listing_namespace,
+    caller_may_revoke,
+    can_manage_key,
+    identity_of,
+    require_admin,
+)
 from archon_search.server.mcp_schemas import (
     CollectionDetailSchema,
     CollectionListItemSchema,
@@ -99,6 +139,21 @@ from archon_search.server.mcp_schemas import (
     SearchWithContextItemSchema,
     SearchWithContextResponse,
 )
+from archon_search.server.middleware_auth import APIKeyMiddleware
+from archon_search.server.routes_explain import (
+    EXPLAIN_FAILED_DETAIL,
+    ExplainRequest,
+    ExplainResponse,
+    RoutingCandidate,
+    RoutingExplain,
+)
+from archon_search.server.schemas import (
+    GRAPH_COMMUNITIES_NOT_BUILT_CODE,
+    INVALID_SCOPE_FILTER_CODE,
+)
+from archon_search.store import CollectionOwnershipError, StoreBusyError
+from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
+from archon_search.telemetry.writer import TelemetryWriter
 from archon_search.types import JobStatus
 
 if TYPE_CHECKING:
@@ -217,7 +272,7 @@ def _dependency_error_response(
     return McpErrorResponse(error=RAG_FUSION_DEPENDENCY_DETAIL, code=RAG_FUSION_DEPENDENCY_CODE)
 
 
-def _validate_scope_filter(scope_filter: str | None) -> "McpErrorResponse | None":
+def _validate_scope_filter(scope_filter: str | None) -> McpErrorResponse | None:
     """Validate scope_filter for MCP tools; wraps the shared validator into a McpErrorResponse."""
     msg = _check_scope_filter(scope_filter)
     if msg is None:
@@ -227,6 +282,9 @@ def _validate_scope_filter(scope_filter: str | None) -> "McpErrorResponse | None
 
 _ERR_INTERNAL = "internal_error"
 _ERR_VALIDATION = "validation_error"
+# ``code`` of the refusal of a write to a collection name another namespace owns (the ``error`` is the store's fixed
+# COLLECTION_UNAVAILABLE_DETAIL, which names no owner).
+COLLECTION_UNAVAILABLE_CODE = "collection_unavailable"
 # Sanitized wire text for the other tools' caught exceptions whose message may embed
 # internals (store paths, model paths, pydantic ``input_value`` of server-built data).
 # The full exception goes to the server log only — CLAUDE.md hard invariant.
@@ -248,7 +306,7 @@ def _schema_error(tool: str) -> McpErrorResponse:
     return McpErrorResponse(error=SCHEMA_VALIDATION_DETAIL, code=_ERR_SCHEMA)
 
 
-def _validate_context_window(context_window: int, context_window_max: int) -> "McpErrorResponse | None":
+def _validate_context_window(context_window: int, context_window_max: int) -> McpErrorResponse | None:
     """Validate search_with_context's context_window; wraps the shared pipeline check into a McpErrorResponse.
 
     Checked before the pipeline call, so MCP clients get code="validation_error"
@@ -263,18 +321,17 @@ def _validate_context_window(context_window: int, context_window_max: int) -> "M
 def _validate_ttl_and_scopes(
     chunk_ttl_seconds: int | None,
     chunk_scopes: list[str] | None,
-) -> "McpErrorResponse | None":
+) -> McpErrorResponse | None:
     """Validate chunk_ttl_seconds and chunk_scopes for MCP ingest tools.
 
     Returns a McpErrorResponse dict if validation fails, None if valid.
     Mirrors the validation in routes_jobs.py IngestRequest validators.
     """
-    if chunk_ttl_seconds is not None:
-        if chunk_ttl_seconds < 1 or chunk_ttl_seconds > _INT32_MAX:
-            return McpErrorResponse(
-                error=f"chunk_ttl_seconds must be in [1, {_INT32_MAX}]; got {chunk_ttl_seconds}",
-                code="invalid_parameter",
-            )
+    if chunk_ttl_seconds is not None and not 1 <= chunk_ttl_seconds <= _INT32_MAX:
+        return McpErrorResponse(
+            error=f"chunk_ttl_seconds must be in [1, {_INT32_MAX}]; got {chunk_ttl_seconds}",
+            code="invalid_parameter",
+        )
     if chunk_scopes is not None:
         if len(chunk_scopes) > _MAX_SCOPE_LIST_ITEMS:
             return McpErrorResponse(
@@ -300,6 +357,13 @@ _PATH_UNSAFE_MESSAGES: dict[str, str] = {
     "nul_byte": "path is unsafe: the path contains a NUL byte — provide a valid absolute path",
     "contains_dotdot": "path is unsafe: the path contains a '..' segment — use an absolute path without traversal",
     "not_absolute": "path is unsafe: the path is not absolute — use an absolute path (no relative or '..' segments)",
+    DENIED_LOCATION: "path is unsafe: this location is never ingested (server state, credentials, system files)",
+    OUTSIDE_ALLOWED_ROOTS: "path is unsafe: the path is outside the directories this server is allowed to ingest from",
+    ALLOWED_ROOTS_REQUIRED: ALLOWED_ROOTS_REQUIRED_DETAIL,
+    "glob_empty": "glob_pattern is unsafe: the pattern is empty — use a relative glob such as '**/*'",
+    "glob_too_long": "glob_pattern is unsafe: the pattern is too long",
+    "glob_absolute": "glob_pattern is unsafe: the pattern is absolute — use a pattern relative to the directory",
+    "glob_too_recursive": "glob_pattern is unsafe: the pattern has too many '**' segments",
 }
 
 
@@ -309,16 +373,21 @@ def _path_unsafe_message(reason: str) -> str:
 
 
 
-def _get_request_namespace() -> str:
-    """Return the namespace resolved by APIKeyMiddleware for the current MCP request.
+NO_AUTH_CONTEXT_DETAIL = "unauthenticated: this tool call carries no authenticated namespace"
+
+
+def _get_request_identity() -> AuthIdentity:
+    """Return the identity ``APIKeyMiddleware`` resolved for the current MCP request, failing closed.
 
     FastMCP's RequestContextMiddleware stores the current Starlette Request in the
-    HTTP context. APIKeyMiddleware writes request.state.namespace before calling next.
-    This helper reads that value so every tool closure can use the authenticated
+    HTTP context. APIKeyMiddleware writes ``request.state.namespace`` / ``request.state.admin`` before calling
+    next. This helper reads them so every tool closure can use the authenticated
     namespace instead of hardcoding DEFAULT_NAMESPACE.
 
-    Falls back to DEFAULT_NAMESPACE when called outside an HTTP request context
-    (e.g. direct invocation in tests or CLI mode).
+    Raises:
+        ToolError: there is no HTTP request (a tool invoked outside the authenticated transport) or the
+            request carries no namespace. The call is refused — never served as the default namespace. The
+            message is fixed and reaches the client (FastMCP does not mask ``ToolError``).
 
     Per ADR 09 (K-1 spike): the current HTTP request is set fresh on every HTTP POST
     (not frozen at session-initialize time), so this must be called on each tool
@@ -331,9 +400,22 @@ def _get_request_namespace() -> str:
     # get_http_request() raises RuntimeError when no HTTP request is active.
     try:
         req = get_http_request()
-    except RuntimeError:
-        return DEFAULT_NAMESPACE
-    return getattr(req.state, "namespace", DEFAULT_NAMESPACE)
+    except RuntimeError as exc:
+        raise ToolError(NO_AUTH_CONTEXT_DETAIL) from exc
+    identity = identity_of(req)
+    if identity is None:
+        raise ToolError(NO_AUTH_CONTEXT_DETAIL)
+    return identity
+
+
+def _get_request_namespace() -> str:
+    """Return the authenticated namespace of the current MCP request (see :func:`_get_request_identity`)."""
+    return _get_request_identity().namespace
+
+
+def _forbidden(exc: ForbiddenError) -> McpErrorResponse:
+    """Answer a refused key/control tool call with the fixed authorization detail."""
+    return McpErrorResponse(error=str(exc), code=FORBIDDEN_CODE)
 
 
 async def _resolve_embedder_by_model(
@@ -383,12 +465,13 @@ def create_app(
     config: SearchConfig | None = None,
     embedder_cache: EmbedderCache | None = None,
     job_store: JobStore | None = None,
-    hyde_generator: "HyDEGenerator | None" = None,
-    rag_fusion_generator: "RAGFusionGenerator | None" = None,
-    key_store: "KeyStore | None" = None,
+    hyde_generator: HyDEGenerator | None = None,
+    rag_fusion_generator: RAGFusionGenerator | None = None,
+    key_store: KeyStore | None = None,
     doc_id_hasher: Callable[[str], str] | None = None,
-    graph_store: "GraphStore | None" = None,
+    graph_store: GraphStore | None = None,
     api_key_state: State | None = None,
+    ingest_policy: IngestPathPolicy | None = None,
 ) -> FastMCP:
     """Create a FastMCP app with 16 RAG tools + up to 4 optional key-management tools.
 
@@ -411,7 +494,7 @@ def create_app(
     # Late-bound import: archon_search.rag_fusion may be reloaded in tests,
     # so we import lazily here (inside create_app) so the closures below always
     # capture the current class from sys.modules at app-creation time.
-    from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
+    from archon_search.rag_fusion import RAGFusionDependencyError
 
     # An ordinary exception escaping a tool reaches the client as a bare "Error calling
     # tool <name>" instead of "<name>: <exception text>". Not a full safety net: FastMCP
@@ -419,6 +502,13 @@ def create_app(
     # and the MCP server then sends str(exc) — so the tools' own handlers still catch
     # their response-schema ValidationErrors and return the coded McpErrorResponse.
     app = FastMCP("archon-search", mask_error_details=True)
+    # What the ingest tools may read: the deny list is always on, ``[ingest].allowed_roots`` scopes the paths a client
+    # names. Without a config (a bare test harness) only the name-based deny list applies.
+    path_policy = (
+        ingest_policy
+        if ingest_policy is not None
+        else ingest_path_policy(config) if config is not None else IngestPathPolicy()
+    )
 
     @app.tool()
     async def search(
@@ -461,7 +551,7 @@ def create_app(
 
         # graph_mode validation — must be None, "naive", "local", or "global".
         if graph_mode not in _VALID_GRAPH_MODES:
-            return McpErrorResponse(error=f"graph_mode must be one of {list(m for m in _VALID_GRAPH_MODES if m is not None)!r}", code="invalid_graph_mode")
+            return McpErrorResponse(error=f"graph_mode must be one of {[m for m in _VALID_GRAPH_MODES if m is not None]!r}", code="invalid_graph_mode")
         _graph_config = getattr(config, "graph", None)
         _graph_enabled = getattr(_graph_config, "enabled", False) if _graph_config is not None else False
         if graph_mode is not None and not _graph_enabled:
@@ -480,7 +570,7 @@ def create_app(
 
         _rf_config = getattr(config, "rag_fusion", None)
         if _rf_config is None:
-            from archon_search.config import RAGFusionConfig  # noqa: PLC0415
+            from archon_search.config import RAGFusionConfig
             _rf_config = RAGFusionConfig()
 
         _request_hyde = RequestHyDE.for_request(
@@ -516,7 +606,7 @@ def create_app(
             if config is not None:
                 _cfg = config
             else:
-                from archon_search.config import SearchConfig as _SearchConfig  # noqa: PLC0415
+                from archon_search.config import SearchConfig as _SearchConfig
                 _cfg = _SearchConfig()
             _max_fanout = _cfg.max_fanout
             if len(deduped) > _max_fanout:
@@ -550,7 +640,7 @@ def create_app(
                 _multi_filters = None
             # Same warm-up as the REST fan-out route: the global embedder (which
             # search_many embeds with) and the shared reranker, both bounded, so no
-            # cold ONNX build can block this tool call for its whole duration — it
+            # cold model build can block this tool call for its whole duration — it
             # degrades to the fused ranking (S288) or the FTS leg alone (S290).
             _warmup = await warmup_for_search(pipeline)
             try:
@@ -666,7 +756,7 @@ def create_app(
             _search_embedder = await _resolve_embedder(pipeline, embedder_cache, _col, config, namespace=ns, meta=_col_meta)
             # Outside the budget below by design (S184/S288/S290): a cold cross-encoder
             # built inside rerank_candidates — or a cold embedder built inside
-            # embed_one — would park this tool call for the whole ONNX build.
+            # embed_one — would park this tool call for the whole model build.
             # rerank=False degrades to the fused vector+FTS ranking, fts_only=True to
             # the FTS leg alone.
             _warmup = await warmup_for_search(pipeline, _search_embedder)
@@ -824,7 +914,7 @@ def create_app(
 
         _swc_rf_config = getattr(config, "rag_fusion", None)
         if _swc_rf_config is None:
-            from archon_search.config import RAGFusionConfig  # noqa: PLC0415
+            from archon_search.config import RAGFusionConfig
             _swc_rf_config = RAGFusionConfig()
 
         try:
@@ -984,7 +1074,7 @@ def create_app(
         if config is not None:
             _explain_cfg = config
         else:
-            from archon_search.config import SearchConfig as _SearchConfig  # noqa: PLC0415
+            from archon_search.config import SearchConfig as _SearchConfig
             _explain_cfg = _SearchConfig()
         _top_k_max = _explain_cfg.top_k_max
         if top_k > _top_k_max:
@@ -1001,7 +1091,7 @@ def create_app(
         # graph_mode validation — must be None, "naive", "local", or "global".
         if graph_mode not in _VALID_GRAPH_MODES:
             return McpErrorResponse(
-                error=f"graph_mode must be one of {list(m for m in _VALID_GRAPH_MODES if m is not None)!r}",
+                error=f"graph_mode must be one of {[m for m in _VALID_GRAPH_MODES if m is not None]!r}",
                 code="invalid_graph_mode",
             )
         _explain_graph_config = getattr(config, "graph", None)
@@ -1024,7 +1114,7 @@ def create_app(
 
         _explain_rf_config = getattr(config, "rag_fusion", None)
         if _explain_rf_config is None:
-            from archon_search.config import RAGFusionConfig  # noqa: PLC0415
+            from archon_search.config import RAGFusionConfig
             _explain_rf_config = RAGFusionConfig()
 
         _explain_hyde = RequestHyDE.for_request(
@@ -1296,14 +1386,16 @@ def create_app(
         _ingest_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         try:
-            validated = validate_ingest_path(path)
+            validated = await asyncio.to_thread(
+                validate_ingest_source, path, path_policy, admin=_get_request_identity().admin
+            )
         except PathUnsafeError as e:
             return McpErrorResponse(error=_path_unsafe_message(e.reason), code="path_unsafe")
         try:
             _ingest_col = collection or default_collection
             _ingest_embedder = await _resolve_embedder(pipeline, embedder_cache, _ingest_col, config, namespace=_ingest_ns)
             async with AsyncExitStack() as stack:
-                await stack.enter_async_context(pipeline.store.collection_writer(_ingest_col))
+                await stack.enter_async_context(pipeline.store.collection_writer(_ingest_col, _ingest_ns))
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 result = await pipeline.ingest_file(
@@ -1329,13 +1421,15 @@ def create_app(
                 return schema.model_dump(mode="json")
             except ValidationError:
                 return _schema_error("ingest_file")
+        except CollectionOwnershipError as exc:
+            return McpErrorResponse(error=str(exc), code=COLLECTION_UNAVAILABLE_CODE)
         except StoreBusyError as exc:
             return McpErrorResponse(error=str(exc), code="store_busy")
         except EmbedderNotReadyError as exc:
             # The model is still loading (or its load is wedged) — retryable.
             logger.warning("ingest_file: embedder not ready — %s", exc)
             return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("ingest_file failed")
 
     @app.tool()
@@ -1354,7 +1448,10 @@ def create_app(
         _dir_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         try:
-            validated = validate_ingest_path(path)
+            validated = await asyncio.to_thread(
+                validate_ingest_source, path, path_policy, admin=_get_request_identity().admin
+            )
+            validate_glob_pattern(glob_pattern)
         except PathUnsafeError as e:
             return McpErrorResponse(error=_path_unsafe_message(e.reason), code="path_unsafe")
         try:
@@ -1366,7 +1463,7 @@ def create_app(
                     await ctx.report_progress(done, total)
 
             async with AsyncExitStack() as stack:
-                await stack.enter_async_context(pipeline.store.collection_writer(_dir_col))
+                await stack.enter_async_context(pipeline.store.collection_writer(_dir_col, _dir_ns))
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 results = await pipeline.ingest_directory(
@@ -1397,25 +1494,30 @@ def create_app(
                 return [IngestResultSchema.from_result(r).model_dump(mode="json") for r in results]
             except ValidationError:
                 return _schema_error("ingest_directory")
+        except IngestTooManyFilesError as exc:
+            return McpErrorResponse(error=str(exc), code=_ERR_VALIDATION)
+        except CollectionOwnershipError as exc:
+            return McpErrorResponse(error=str(exc), code=COLLECTION_UNAVAILABLE_CODE)
         except StoreBusyError as exc:
             return McpErrorResponse(error=str(exc), code="store_busy")
         except EmbedderNotReadyError as exc:
             # The model is still loading (or its load is wedged) — retryable.
             logger.warning("ingest_directory: embedder not ready — %s", exc)
             return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("ingest_directory failed")
 
     @app.tool()
     async def list_collections() -> list[dict[str, Any]]:
         """List all document collections with doc/chunk counts (internal fields omitted)."""
+        _ns = _get_request_namespace()
         try:
-            results = await pipeline.get_all_collections_meta(_get_request_namespace())
+            results = await pipeline.get_all_collections_meta(_ns)
             try:
                 return [CollectionListItemSchema.from_result(r).model_dump(mode="json") for r in results]
             except ValidationError:
                 return _schema_error("list_collections")
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("list_collections failed")
 
     @app.tool()
@@ -1428,8 +1530,9 @@ def create_app(
         increase payload size at scale (one dense vector per collection). Pass
         ``include_description_embedding=True`` to retain the field.
         """
+        _ns = _get_request_namespace()
         try:
-            results = await pipeline.get_all_collections_meta(_get_request_namespace())
+            results = await pipeline.get_all_collections_meta(_ns)
             try:
                 return [
                     CollectionMetaMcpSchema.from_result(
@@ -1439,14 +1542,15 @@ def create_app(
                 ]
             except ValidationError:
                 return _schema_error("get_collections_meta")
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("get_collections_meta failed")
 
     @app.tool()
     async def get_collection_meta(name: str) -> dict[str, Any]:
         """Return public CollectionMeta for one named collection (internal fields omitted)."""
+        _ns = _get_request_namespace()
         try:
-            meta = await pipeline.get_collection_meta(name, namespace=_get_request_namespace())
+            meta = await pipeline.get_collection_meta(name, namespace=_ns)
             if meta is None:
                 return McpErrorResponse(error=f"Collection {name!r} not found", code="not_found")
             try:
@@ -1454,7 +1558,7 @@ def create_app(
                 return schema.model_dump(mode="json")
             except ValidationError:
                 return _schema_error("get_collection_meta")
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("get_collection_meta failed")
 
     @app.tool()
@@ -1464,15 +1568,16 @@ def create_app(
         cursor: str | None = None,
     ) -> list[dict[str, Any]]:
         """List documents in a collection."""
+        _ns = _get_request_namespace()
         try:
             items, _next_cursor, _total = await pipeline.list_documents(
-                collection or default_collection, limit, cursor=cursor, namespace=_get_request_namespace()
+                collection or default_collection, limit, cursor=cursor, namespace=_ns
             )
             try:
                 return [DocumentInfoSchema.from_result(r).model_dump(mode="json") for r in items]
             except ValidationError:
                 return _schema_error("list_documents")
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("list_documents failed")
 
     @app.tool()
@@ -1501,7 +1606,7 @@ def create_app(
         except StoreBusyError as exc:
             logger.warning("delete_document store busy: %s", exc)
             return McpErrorResponse(error=str(exc), code="store_busy")
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("delete_document failed")
 
     @app.tool()
@@ -1520,13 +1625,15 @@ def create_app(
         - Active reindex job in progress → error dict (conflict, 409-equivalent).
         - Collection lock not acquired in time → error dict (store_busy).
         """
+        ns: str = _get_request_namespace()
         try:
-            ns: str = _get_request_namespace()
             store = pipeline.store
 
             # 404 if collection not in config
             if config is not None:
-                from archon_search.server.routes_collections import _all_collection_paths  # noqa: PLC0415
+                from archon_search.server.routes_collections import (
+                    _all_collection_paths,
+                )
                 path_to_name = _all_collection_paths(config)
                 if collection_name not in path_to_name:
                     return McpErrorResponse(error=f"Collection {collection_name!r} not found", code="not_found")
@@ -1609,47 +1716,38 @@ def create_app(
         except StoreBusyError as exc:
             logger.warning("update_collection store busy: %s", exc)
             return McpErrorResponse(error=str(exc), code="store_busy")
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("update_collection failed")
 
     @app.tool()
     async def export_collection(
         collection: str,
-        output_path: str = "",
     ) -> dict[str, Any]:
         """Enqueue an export job for a collection. Returns immediately with a QUEUED job dict.
 
-        The MCP client can poll GET /jobs/{job_id} for progress.
-        ``output_path`` must be an absolute path inside the server's data directory.
-        If omitted, defaults to ``<data_dir>/exports/``.
+        The MCP client can poll GET /jobs/{job_id} for progress. The archive is written to the caller's own export
+        directory, ``<data_dir>/exports/<namespace>/`` (the job's ``output_path`` names the file); the directory
+        cannot be chosen.
         """
         if job_store is None:
             return McpErrorResponse(error=JOB_STORE_NOT_CONFIGURED_DETAIL, code=_ERR_INTERNAL)
 
         _export_ns = _get_request_namespace()
-        exports_dir = get_data_dir() / "exports"
-        raw_output = output_path if output_path else str(exports_dir)
-
-        try:
-            resolved_dir = validate_export_path(raw_output, [get_data_dir()])
-        except PathUnsafeError as exc:
-            return McpErrorResponse(
-                error=_path_unsafe_message(exc.reason), code="path_unsafe"
-            )
+        resolved_dir = exports_dir(get_data_dir(), _export_ns)
 
         try:
             meta = await pipeline.store.get_collection_meta(collection, _export_ns)
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("export_collection: collection lookup failed")
         if meta is None:
             return McpErrorResponse(
                 error=f"Collection {collection!r} not found", code="not_found"
             )
 
-        from datetime import datetime, timezone  # noqa: PLC0415
-        from uuid import uuid4  # noqa: PLC0415
+        from datetime import datetime
+        from uuid import uuid4
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         job_uuid = str(uuid4())
         archive_path = resolved_dir / f"{collection}-{timestamp}.tar.gz"
         tmp_path_val = resolved_dir / f".export-{job_uuid}.jsonl.tmp"
@@ -1661,7 +1759,7 @@ def create_app(
                 tmp_path=str(tmp_path_val),
                 namespace=_export_ns,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("export_collection: job creation failed")
         return job_to_dict(job)
 
@@ -1676,7 +1774,9 @@ def create_app(
         """Enqueue an import job for a collection from a .tar.gz archive.
 
         Returns immediately with a QUEUED job dict; poll GET /jobs/{job_id} for progress.
-        ``path`` must be an absolute path to the archive, inside the server's data directory.
+        ``path`` must be the absolute path of an archive in the caller's own namespace: its export directory
+        (``<data_dir>/exports/<namespace>/``) or its backup directory. An archive exported by another namespace is
+        refused, whichever directory it sits in.
         ``on_error`` must be ``"fail"`` (abort on corrupt line) or ``"skip"`` (skip corrupt lines).
         """
         if job_store is None:
@@ -1689,41 +1789,43 @@ def create_app(
                 error="on_error must be 'fail' or 'skip'", code=_ERR_VALIDATION
             )
 
+        # The archive must sit in the caller's own namespace directory (its exports or its backups): a path outside
+        # answers the same ``path_unsafe`` whether or not a file exists there, so it is no probe for other
+        # namespaces' archives.
+        backup_output_dir = config.backup.output_dir if config is not None else str(get_data_dir() / "backups")
         try:
-            validate_export_path(path, [get_data_dir()])
+            archive_path = importable_archive_path(path, get_data_dir(), backup_output_dir, _import_ns)
         except PathUnsafeError as exc:
             return McpErrorResponse(
                 error=_path_unsafe_message(exc.reason), code="path_unsafe"
             )
-
-        from pathlib import Path as _Path  # noqa: PLC0415
-
-        archive_path = _Path(path)
-        if not archive_path.exists():
+        if not await asyncio.to_thread(archive_path.exists):
             return McpErrorResponse(
                 error=f"Archive not found: {path}", code="not_found"
             )
 
         try:
-            with tarfile.open(archive_path, "r:gz") as tf:
-                validate_archive_members(tf)
+            await asyncio.to_thread(validate_archive_file, archive_path)
         except PathUnsafeError as exc:
             return McpErrorResponse(
                 error=f"unsafe archive: {exc.reason}", code="path_unsafe"
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # tarfile/gzip error text can reflect the archive's own bytes: log it, send a fixed detail.
             logger.warning("import archive %s could not be opened: %s", archive_path, exc, exc_info=exc)
             return McpErrorResponse(error=INVALID_ARCHIVE_DETAIL, code=_ERR_VALIDATION)
 
         try:
             reader = ImportArchiveReader(archive_path)
-            manifest = reader.read_manifest()
+            manifest = await asyncio.to_thread(reader.read_manifest)
         except (ValueError, PathUnsafeError) as exc:
             return McpErrorResponse(
                 error=f"invalid manifest: {manifest_error_detail(exc, archive_path)}",
                 code=_ERR_VALIDATION,
             )
+
+        if not manifest_namespace_ok(manifest, _import_ns, archive_path, get_data_dir(), backup_output_dir):
+            return McpErrorResponse(error=ARCHIVE_NAMESPACE_MISMATCH_DETAIL, code=_ERR_VALIDATION)
 
         # The mismatch texts below match POST /collections/{name}/import's `detail` verbatim.
         archive_model = manifest.get("active_embedding_model", "")
@@ -1739,8 +1841,10 @@ def create_app(
 
         try:
             existing_meta = await pipeline.store.get_collection_meta(collection, _import_ns)
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("import_collection: collection lookup failed")
+        # Only the caller's own collection is visible here: a name another namespace owns is refused by the import
+        # job itself, with a fixed text that names no owner.
         if existing_meta is not None and not force_overwrite:
             return McpErrorResponse(
                 error=f"collection {collection!r} already exists; use force_overwrite=True to overwrite",
@@ -1761,13 +1865,13 @@ def create_app(
         try:
             job = job_store.create_import(
                 collection=collection,
-                archive_path=path,
+                archive_path=str(archive_path),
                 force_overwrite=force_overwrite,
                 ignore_schema_version=ignore_schema_version,
                 on_error=on_error,
                 namespace=_import_ns,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("import_collection: job creation failed")
         return job_to_dict(job)
 
@@ -1779,17 +1883,18 @@ def create_app(
     # -----------------------------------------------------------------------
 
     if key_store is not None:
-        import asyncio as _asyncio  # noqa: PLC0415
-        import os as _os  # noqa: PLC0415
+        import asyncio as _asyncio
+        import os as _os
 
-        from archon_search.constants import _validate_namespace  # noqa: PLC0415
-        from archon_search.key_manager import ENV_VAR as _ENV_VAR  # noqa: PLC0415
+        from archon_search.constants import _validate_namespace
+        from archon_search.key_manager import ENV_VAR as _ENV_VAR
 
         @app.tool()
         async def create_key(
             namespace: str,
             label: str | None = None,
             expires_at: str | None = None,
+            admin: bool = False,
         ) -> dict[str, Any]:
             """Issue a new managed API key.
 
@@ -1798,19 +1903,28 @@ def create_app(
 
             ``expires_at`` must be an ISO-8601 datetime string with timezone offset
             (e.g. ``"2030-01-01T00:00:00Z"``), or ``null`` for no expiry.
+
+            ``admin`` creates an admin key (may manage keys of every namespace and run the server-wide
+            control endpoints); only an admin key may set it. A non-admin key may only create non-admin keys
+            for its own namespace.
             """
+            try:
+                authorize_key_create(_get_request_identity(), namespace=namespace, admin=admin)
+            except ForbiddenError as exc:
+                return _forbidden(exc)
+
             try:
                 _validate_namespace(namespace)
             except ValueError as exc:
                 return McpErrorResponse(error=str(exc), code=_ERR_VALIDATION)
 
-            from datetime import datetime  # noqa: PLC0415
+            from datetime import datetime
 
             parsed_expires_at = None
             if expires_at is not None:
                 try:
                     parsed_expires_at = datetime.fromisoformat(
-                        expires_at.replace("Z", "+00:00")
+                        expires_at
                     )
                 except ValueError as exc:
                     return McpErrorResponse(
@@ -1823,10 +1937,11 @@ def create_app(
                     )
 
             try:
-                result = await key_store.create(
+                created = await key_store.create(
                     ns=namespace,
                     label=label,
                     expires_at=parsed_expires_at,
+                    admin=admin,
                 )
             except KeyStoreUnreadableError:
                 return McpErrorResponse(error=KEY_STORE_UNREADABLE_DETAIL, code=_ERR_INTERNAL)
@@ -1834,13 +1949,14 @@ def create_app(
                 logger.exception("create_key failed")
                 return McpErrorResponse(error=CREATE_KEY_FAILED_DETAIL, code=_ERR_INTERNAL)
             return {
-                "id": result["id"],
-                "token": result["token"],
+                "id": created.id,
+                "token": created.token,
                 "namespace": namespace,
                 "label": label,
-                "created_at": str(result["created_at"]),
+                "created_at": str(created.created_at),
                 "expires_at": str(parsed_expires_at) if parsed_expires_at is not None else None,
                 "status": "active",
+                "admin": admin,
             }
 
         @app.tool()
@@ -1860,7 +1976,13 @@ def create_app(
                     code=_ERR_VALIDATION,
                 )
 
-            all_records = await key_store.list_keys()
+            identity = _get_request_identity()
+            try:
+                namespace = authorize_key_listing_namespace(identity, namespace)
+            except ForbiddenError as exc:
+                return _forbidden(exc)
+
+            all_records = [r for r in await key_store.list_keys() if can_manage_key(identity, r)]
 
             if namespace is not None:
                 scope = [r for r in all_records if r.namespace == namespace]
@@ -1886,6 +2008,7 @@ def create_app(
                         "created_at": str(r.created_at),
                         "expires_at": str(r.expires_at) if r.expires_at is not None else None,
                         "status": r.status,
+                        "admin": r.admin,
                     }
                     for r in filtered
                 ],
@@ -1901,6 +2024,7 @@ def create_app(
             TOML synthetic keys (``id=null``) cannot be targeted — pass the
             literal string ``"null"`` to get a helpful error message.
             """
+            identity = _get_request_identity()
             if key_id == "null":
                 return McpErrorResponse(
                     error=(
@@ -1910,6 +2034,11 @@ def create_app(
                     code="not_found",
                 )
 
+            # A non-admin may revoke only the non-admin keys of its own namespace; any other id is
+            # reported as unknown so a key's existence in another namespace is not revealed.
+            if not await caller_may_revoke(key_store, identity, key_id):
+                return McpErrorResponse(error=f"Key not found: {key_id!r}", code="not_found")
+
             try:
                 await key_store.revoke(key_id)
             except KeyError:
@@ -1918,14 +2047,14 @@ def create_app(
                 )
             except KeyStoreUnreadableError:
                 return McpErrorResponse(error=KEY_STORE_UNREADABLE_DETAIL, code=_ERR_INTERNAL)
-            except Exception:
+            except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
                 return _internal_error("revoke_key failed")
 
             return {"id": key_id, "status": "revoked"}
 
         @app.tool()
         async def rotate_key(grace_seconds: int | None = None) -> dict[str, Any]:
-            """Rotate the default API key.
+            """Rotate the default API key (admin key required: it replaces the server-wide default key).
 
             Generates a new managed API key, writes the new raw token to
             ``.search.env``, and revokes (or grace-expires) the old default key
@@ -1943,6 +2072,11 @@ def create_app(
             this MCP endpoint. When MCP is mounted on the REST server (``/mcp``), that is
             the key ``POST /keys/rotate`` would retire, and the new key is current for REST too.
             """
+            try:
+                require_admin(_get_request_identity())
+            except ForbiddenError as exc:
+                return _forbidden(exc)
+
             # Determine grace_seconds: argument wins over config default.
             _grace: int
             if grace_seconds is not None:
@@ -1997,11 +2131,11 @@ def create_app(
                 return McpErrorResponse(error=ROTATE_WRITE_FAILED_DETAIL, code=_ERR_INTERNAL)
             except RotationIncompleteError:
                 return McpErrorResponse(error=ROTATE_KEYS_JSON_FAILED_DETAIL, code=_ERR_INTERNAL)
-            except Exception:
+            except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
                 return _internal_error("rotate_key failed")
 
-            new_key_id: str = result["new_key_id"]  # type: ignore[assignment]
-            old_record = result["old_record"]
+            new_key_id = result.new_key_id
+            old_record = result.old_record
 
             old_key_id_str = old_record.id if old_record is not None else None
             old_key_expires_at = old_record.expires_at if old_record is not None else None
@@ -2016,7 +2150,7 @@ def create_app(
 
             return {
                 "new_key_id": new_key_id,
-                "token": result["new_token"],
+                "token": result.new_token,
                 "status": "active",
                 "old_key_id": old_key_id_str,
                 "old_key_expires_at": str(old_key_expires_at) if old_key_expires_at is not None else None,
@@ -2027,8 +2161,12 @@ def create_app(
     # Graph inspection tools (E2b) — always registered; guard at runtime.
     # -----------------------------------------------------------------------
 
-    from archon_search.graph_inspector import _edge_sort_key, inspect_collection, inspect_cross_collection  # noqa: PLC0415
-    from archon_search.graph_types import DEFAULT_IMPACT_DEPTH, ImpactDirection  # noqa: PLC0415
+    from archon_search.graph_inspector import (
+        _edge_sort_key,
+        inspect_collection,
+        inspect_cross_collection,
+    )
+    from archon_search.graph_types import DEFAULT_IMPACT_DEPTH, ImpactDirection
 
     async def _resolve_salience_context(
         resolved_salience_mode: str,
@@ -2115,6 +2253,7 @@ def create_app(
                 entity_presence=entity_presence,
                 num_collections=num_collections,
                 ns=ns,
+                visibility_source=pipeline.store,
             )
 
             # Build entity_type_distribution from nodes
@@ -2150,7 +2289,7 @@ def create_app(
                 "top_nodes": top_nodes,
                 "top_edges": top_edges,
             }
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("get_graph failed")
 
     @app.tool()
@@ -2200,6 +2339,13 @@ def create_app(
                     code=_ERR_VALIDATION,
                 )
 
+            max_collections = getattr(_ggc_config, "max_cross_collection_collections", DEFAULT_MAX_CROSS_COLLECTION_COLLECTIONS)
+            if len(deduped_collections) > max_collections:
+                return McpErrorResponse(
+                    error=f"collections may name at most {max_collections} collections ([graph].max_cross_collection_collections)",
+                    code=_ERR_VALIDATION,
+                )
+
             # Fetch metadata for each collection and build total_chunk_counts
             total_chunk_counts: dict[str, int] = {}
             for col in deduped_collections:
@@ -2223,6 +2369,7 @@ def create_app(
                 entity_presence=entity_presence,
                 num_collections=num_collections,
                 ns=ns,
+                visibility_source=pipeline.store,
             )
 
             # Build entity_type_distribution from merged nodes
@@ -2255,7 +2402,7 @@ def create_app(
                 "top_nodes": top_nodes,
                 "top_edges": top_edges,
             }
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("get_graph_cross_collection failed")
 
     def _impact_edge_to_dict(e: Any) -> dict[str, Any]:
@@ -2334,6 +2481,7 @@ def create_app(
                 extraction_method_filter,
                 file_path,
                 ns,
+                visibility=await pipeline.store.get_chunk_visibility(collection, ns),
             )
 
             return {
@@ -2342,7 +2490,7 @@ def create_app(
                 "callees": _impact_group_to_dict(result.callees),
                 "depth_used": result.depth_used,
             }
-        except Exception:
+        except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("graph_impact failed")
 
     @app.custom_route("/health", methods=["GET"])
@@ -2360,12 +2508,13 @@ def create_mcp_http_app(
     request_id_header: str = "X-Request-ID",
     embedder_cache: EmbedderCache | None = None,
     job_store: JobStore | None = None,
-    hyde_generator: "HyDEGenerator | None" = None,
-    rag_fusion_generator: "RAGFusionGenerator | None" = None,
-    key_store: "KeyStore | None" = None,
+    hyde_generator: HyDEGenerator | None = None,
+    rag_fusion_generator: RAGFusionGenerator | None = None,
+    key_store: KeyStore | None = None,
     doc_id_hasher: Callable[[str], str] | None = None,
-    graph_store: "GraphStore | None" = None,
+    graph_store: GraphStore | None = None,
     api_key_state: State | None = None,
+    ingest_policy: IngestPathPolicy | None = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
@@ -2394,7 +2543,7 @@ def create_mcp_http_app(
 
     if api_key_state is None:
         api_key_state = State({"api_key": load_or_generate_key()[0]})
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store, doc_id_hasher=doc_id_hasher, graph_store=graph_store, api_key_state=api_key_state)
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store, doc_id_hasher=doc_id_hasher, graph_store=graph_store, api_key_state=api_key_state, ingest_policy=ingest_policy)
     # FastMCP 3.4.x renamed ``streamable_http_app()`` to ``http_app()``; ``path='/'``
     # exposes the JSON-RPC endpoint at the sub-app root so it is reachable at the
     # ``/mcp`` mount point without an extra suffix (see ADR 09, K-1 spike).

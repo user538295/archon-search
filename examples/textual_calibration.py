@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import ClassVar
 
 from rich.text import Text
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.screen import Screen
 from textual.widgets import Static
 
@@ -81,7 +82,7 @@ def _ease(progress: float) -> float:
 class CalibrationView(Static, can_focus=True):
     """The animated bench. Owns the benchmark clock and renders the whole screen."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("r", "rerun", "Re-run"),
         Binding("d", "cycle_device", "Cycle device"),
         Binding("n,enter,right", "next", "Next"),

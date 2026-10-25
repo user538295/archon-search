@@ -18,7 +18,7 @@ import asyncio
 import logging
 import math
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from archon_search.uv_tool import extra_install_hint
@@ -163,8 +163,8 @@ def _mmr_select(chunks: list[dict], k: int) -> list[str]:
 
 
 def _run_leiden_partition_sync(
-    nodes: list["GraphNode"],
-    edges: list["GraphEdge"],
+    nodes: list[GraphNode],
+    edges: list[GraphEdge],
     resolution: float,
     seed: int | None = None,
 ) -> list[list[str]]:
@@ -189,8 +189,8 @@ def _run_leiden_partition_sync(
         to the same community.
     """
     try:
-        import igraph as ig  # noqa: PLC0415
-        import leidenalg  # noqa: PLC0415
+        import igraph as ig
+        import leidenalg
     except (ImportError, TypeError) as exc:
         raise CommunityDependencyError(
             "leidenalg is required for community detection. "
@@ -235,8 +235,8 @@ def _run_leiden_partition_sync(
 
 def _split_oversized_communities(
     entity_id_groups: list[list[str]],
-    nodes_by_id: dict[str, "GraphNode"],
-    edges: list["GraphEdge"],
+    nodes_by_id: dict[str, GraphNode],
+    edges: list[GraphEdge],
     max_size: int,
     resolution: float,
     depth: int,
@@ -323,8 +323,8 @@ def _split_oversized_communities(
 
 
 def _cluster_with_size_limit(
-    nodes: list["GraphNode"],
-    edges: list["GraphEdge"],
+    nodes: list[GraphNode],
+    edges: list[GraphEdge],
     resolution: float,
     max_size: int,
     seed: int | None = None,
@@ -377,11 +377,11 @@ class CommunityBuilder:
 
     def __init__(
         self,
-        graph_store: "GraphStore",
-        config: "GraphConfig",
+        graph_store: GraphStore,
+        config: GraphConfig,
         *,
-        search_store: "SearchStore | None" = None,
-        enrichment_client: "LLMEnrichmentClientProtocol | None" = None,
+        search_store: SearchStore | None = None,
+        enrichment_client: LLMEnrichmentClientProtocol | None = None,
     ) -> None:
         self._store = graph_store
         self._config = config
@@ -406,7 +406,7 @@ class CommunityBuilder:
         self,
         collection: str,
         entity_ids: list[str],
-        nodes_by_id: "dict[str, GraphNode]",
+        nodes_by_id: dict[str, GraphNode],
     ) -> tuple[list[str], list[dict]]:
         """Select representative chunk IDs for a community via MMR.
 
@@ -441,7 +441,7 @@ class CommunityBuilder:
 
         return _mmr_select(candidate_chunks, self._config.community_summary_chunks), candidate_chunks
 
-    async def build(self, collection: str, ns: str, *, seed: int | None = None) -> list["Community"]:
+    async def build(self, collection: str, ns: str, *, seed: int | None = None) -> list[Community]:
         """Build Leiden communities for *collection*.
 
         Resolves and acquires the module-level per-``(ns, collection)`` rebuild
@@ -481,9 +481,9 @@ class CommunityBuilder:
         async with lock:
             return await self._build_locked(collection, ns, seed=seed)
 
-    async def _build_locked(self, collection: str, ns: str, *, seed: int | None = None) -> list["Community"]:
+    async def _build_locked(self, collection: str, ns: str, *, seed: int | None = None) -> list[Community]:
         """Build body — caller must hold ``_get_rebuild_lock(ns, collection)``."""
-        from archon_search.graph_types import Community  # noqa: PLC0415
+        from archon_search.graph_types import Community
 
         nodes = await self._store.get_all_nodes(collection, ns=ns)
         if not nodes:
@@ -492,7 +492,7 @@ class CommunityBuilder:
                 "Run ingest with graph.enabled=true first."
             )
 
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         nodes_by_id = {n.id: n for n in nodes}
 
         if len(nodes) < 2:
@@ -559,7 +559,7 @@ class CommunityBuilder:
                     summary_text = await self._generate_llm_summary(
                         community_id, chunk_texts, entity_names
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — an LLM provider failure must fall back to MMR representatives, not abort the build
                     _logger.warning(
                         "community_builder: LLM summary failed for community %s "
                         "(extraction_model=%r): %s; falling back to MMR representatives only",

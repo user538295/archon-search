@@ -153,7 +153,7 @@ class DefRefExtractor:
     mirroring ``GraphExtractor.extract()`` and ``SynonymDetector.detect()``.
     """
 
-    def __init__(self, graph_store: "GraphStoreProtocol") -> None:
+    def __init__(self, graph_store: GraphStoreProtocol) -> None:
         self._graph_store = graph_store
 
     # ------------------------------------------------------------------
@@ -461,7 +461,7 @@ def _parse_and_walk(
     inside ``asyncio.to_thread`` so it never blocks the event loop, mirroring
     the pattern ``GraphExtractor`` uses for its CPU-bound prose NER calls.
     """
-    from tree_sitter import Parser  # type: ignore[import-untyped]  # noqa: PLC0415
+    from tree_sitter import Parser  # type: ignore[import-untyped]
 
     parser = Parser(lang)
     tree = parser.parse(file_text.encode("utf-8"))

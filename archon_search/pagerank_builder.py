@@ -38,8 +38,8 @@ _CODE_SYMBOL_RELATIONSHIP_TYPES = frozenset({
 
 
 def _compute_pagerank_sync(
-    nodes: list["GraphNode"],
-    edges: list["GraphEdge"],
+    nodes: list[GraphNode],
+    edges: list[GraphEdge],
 ) -> dict[str, float]:
     """Compute unweighted PageRank over code-symbol edges.
 
@@ -73,7 +73,7 @@ def _compute_pagerank_sync(
 class PageRankBuilder:
     """Use Cases layer — computes and persists code-symbol PageRank (E2g BE-7)."""
 
-    def __init__(self, graph_store: "GraphStore") -> None:
+    def __init__(self, graph_store: GraphStore) -> None:
         self._store = graph_store
 
     async def build(self, collection: str, ns: str) -> dict[str, float]:

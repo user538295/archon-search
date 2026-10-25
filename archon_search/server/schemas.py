@@ -20,7 +20,6 @@ from pydantic import (
 
 from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
 
-
 # Inclusive valid range for TTL seconds — shared by IngestRequest and PatchCollectionBody.
 _TTL_MIN: int = 1
 _TTL_MAX: int = 2**31 - 1
@@ -32,8 +31,8 @@ class CheckStatus(str, Enum):
     ``PENDING`` and ``WARN`` (D6 C2) are additive values used by the model
     validation check: ``PENDING`` while background validation has not yet
     completed, ``WARN`` when both models loaded but validation reported warnings —
-    e.g. a configured ONNX provider the installed onnxruntime lacks, so the models
-    loaded on the remaining providers or CPU (S635). See contract C2 in
+    e.g. a configured ``device`` the host lacks, so the models
+    loaded on the CPU (S635). See contract C2 in
     ``Documentation/Completed/D6-provider-validation-team-plan.md``.
     """
 
@@ -151,10 +150,9 @@ class ReadinessDetail(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    """Liveness probe body; it carries no version or bind address (``GET /status`` does, authenticated)."""
+
     status: str  # "running"
-    version: str
-    # D9 BE-9 — MCP status field (additive, nullable); null when mcp.enabled = false
-    mcp: McpStatusDetail | None = None
 
 
 class StatusCollectionEntry(BaseModel):
@@ -682,6 +680,7 @@ class KeyResponse(BaseModel):
     created_at: datetime
     expires_at: datetime | None = None
     status: Literal["active", "revoked"] = "active"
+    admin: bool = False
 
 
 class KeyListResponse(BaseModel):
@@ -712,6 +711,7 @@ class KeyCreateRequest(BaseModel):
     namespace: str
     label: str | None = None
     expires_at: AwareDatetime | None = None
+    admin: bool = False
 
 
 class KeyCreateResponse(BaseModel):
@@ -732,6 +732,7 @@ class KeyCreateResponse(BaseModel):
     created_at: datetime
     expires_at: datetime | None = None
     status: Literal["active", "revoked"] = "active"
+    admin: bool = False
 
 
 class KeyRotateRequest(BaseModel):
@@ -836,6 +837,18 @@ class GraphEdgeResponse(BaseModel):
     """Semantic relationship type (e.g. 'related_to', 'synonym_of'). BE-7."""
 
 
+class GraphViewTokenResponse(BaseModel):
+    """Response body for POST /graph/{collection}/view-token: a short-lived token that opens the graph viewer.
+
+    ``view_url`` is the viewer page URL carrying the token; the token reads this collection's graph in
+    the minting namespace, only until ``expires_in`` seconds from now, and is accepted nowhere else.
+    """
+
+    view_token: str
+    view_url: str
+    expires_in: int
+
+
 class GraphInspectionResponse(BaseModel):
     """Response body for GET /graph/{collection} (E2b)."""
 
@@ -908,12 +921,12 @@ class AclGateSchema(BaseModel):
     ``POST /explain`` (and the MCP ``explain`` tool): every top-level result always
     carries this object, no flag required; ``near_misses`` entries never carry it.
     ``warnings`` is always a non-null list (C3). ``allowed_principals`` is null when
-    no ACL applies to the chunk (open to all), including fail-open cases reported in
-    ``warnings``. ``source`` is null when no provenance is stored (pre-G15 chunks, or
+    no ACL applies to the chunk (open to all); a declared-but-unusable ACL is deny-all
+    (``[]``) and reported in ``warnings``. ``source`` is null when no provenance is stored (pre-G15 chunks, or
     a collection without the provenance columns) or the stored value is unrecognised;
     graph-sourced candidates (communities, PPR) carry the same stored provenance as
     hybrid hits. ``sidecar_path`` is non-null only when ``source`` is ``"sidecar"``,
-    even if that sidecar was ignored.
+    even if that sidecar was unusable (the document is then denied).
     """
 
     allowed_principals: list[str] | None = None

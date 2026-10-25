@@ -7,40 +7,84 @@ import inspect
 import logging
 import math
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
-from archon_search._diagnostics import GraphProvenance, ScoredSearchCandidate, SearchScoreBreakdown, TraversalStep
+from archon_search._diagnostics import (
+    GraphProvenance,
+    ScoredSearchCandidate,
+    SearchScoreBreakdown,
+    TraversalStep,
+)
+from archon_search._path_safety import IngestPathPolicy, PathUnsafeError
 from archon_search._privacy import _query_fingerprint
-from archon_search._types import FILE_TOO_LARGE_CODE, INVALID_DOCUMENT_CODE, PARSE_ERROR_CODE, ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, FanoutTimings, IngestedBy, IngestError, IngestResult, SearchResult, _file_exceeds_limit, normalize_iso_utc
+from archon_search._types import (
+    FILE_TOO_LARGE_CODE,
+    INVALID_DOCUMENT_CODE,
+    PARSE_ERROR_CODE,
+    PATH_DENIED_CODE,
+    PATH_DENIED_DETAIL,
+    ChunkRecord,
+    CollectionInfo,
+    DocumentInfo,
+    ExcludedCollection,
+    FanoutTimings,
+    IngestedBy,
+    IngestError,
+    IngestResult,
+    IngestTooManyFilesError,
+    SearchResult,
+    _file_exceeds_limit,
+    normalize_iso_utc,
+)
 from archon_search.acl import apply_acl_filter, resolve_acl
-from archon_search.observability import record_stage
-from archon_search.filters import SearchFilters
+from archon_search.chunker import ASTChunker, DocumentChunker
+from archon_search.code_enricher import (
+    CODE_EXTENSIONS,
+    CodeEnricher,
+    missing_code_parser_extensions,
+)
+from archon_search.collection_meta import CollectionMeta
 from archon_search.constants import (
+    _INGEST_CHUNK_BATCH_SIZE,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_CONTEXT_WINDOW_MAX,
+    DEFAULT_MAX_DISCOVERED_FILES,
+    DEFAULT_MAX_FILE_MB,
     DEFAULT_NAMESPACE,
     INLINE_CHUNK_METADATA_KEY,
     INLINE_CHUNK_METADATA_VALUE,
-    _INGEST_CHUNK_BATCH_SIZE,
 )
-from archon_search.collection_meta import CollectionMeta
-from archon_search.description_generator import MAX_SAMPLE_CHUNKS, _should_regenerate, generate_description
-from archon_search.chunker import ASTChunker, DocumentChunker
-from archon_search.embedder import (
-    _WARMUP_TIMEOUT_SECONDS as _EMBEDDER_BUILD_TIMEOUT_SECONDS,
-)
-from archon_search.embedder import Embedder, EmbedderBackend, EmbedderWarmupTimeout, ModelEmbedder
-from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher, missing_code_parser_extensions
 from archon_search.defref_extractor import DEFREF_SUPPORTED_EXTENSIONS
-from archon_search.enricher import MarkdownEnricher, is_docling_source, source_subtype_for
-from archon_search.parser import PARSE_FAILED_TEMPLATE, DocumentParser, ParseError
-from archon_search.reranker import (
-    _WARMUP_TIMEOUT_SECONDS as _RERANKER_BUILD_TIMEOUT_SECONDS,
+from archon_search.description_generator import (
+    MAX_SAMPLE_CHUNKS,
+    _should_regenerate,
+    generate_description,
 )
+from archon_search.embedder import (
+    Embedder,
+    EmbedderBackend,
+    EmbedderWarmupTimeout,
+    ModelEmbedder,
+)
+from archon_search.enricher import (
+    MarkdownEnricher,
+    is_docling_source,
+    source_subtype_for,
+)
+from archon_search.filters import SearchFilters
+from archon_search.graph_expander import (
+    build_expanded_text,
+    tokenize_and_generate_ngrams,
+)
+from archon_search.graph_types import ChunkInput, GraphNode
+from archon_search.ingest_path_policy import ingest_path_policy
+from archon_search.observability import record_stage
+from archon_search.parser import PARSE_FAILED_TEMPLATE, DocumentParser, ParseError
 from archon_search.reranker import (
     ModelReranker,
     Reranker,
@@ -53,11 +97,11 @@ from archon_search.store import (
     StoreBusyError,
     doc_id_for_source_path,
     elementwise_sum,
+    refresh_fts,
     row_to_scored_candidate,
 )
 from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
-from archon_search.graph_types import ChunkInput, GraphNode
-from archon_search.graph_expander import build_expanded_text, tokenize_and_generate_ngrams
+from archon_search.warmup_coordinator import WARMUP_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig, RAGFusionConfig, SearchConfig
@@ -217,6 +261,72 @@ _BINARY_EXTENSIONS = frozenset(
 )
 
 
+# Directories a directory ingest never walks (besides every hidden one): dependency and bytecode trees that hold
+# thousands of files nobody indexed on purpose. They are pruned before they are listed, so they cost nothing.
+_PRUNED_DIRECTORY_NAMES = frozenset({"node_modules", "__pycache__", "venv", "site-packages"})
+_RECURSIVE_GLOB_SEGMENT = "**"
+
+
+def _matches_glob(parts: tuple[str, ...], segments: tuple[str, ...]) -> bool:
+    """Whether a relative file path (its *parts*) matches a glob (its *segments*), as :meth:`pathlib.Path.glob` reads it.
+
+    ``**`` stands for any number of directories (and, last in the pattern, for everything below); every other
+    segment is an :func:`fnmatch.fnmatch` pattern for exactly one path component.
+    """
+    if not segments:
+        return not parts
+    head, rest = segments[0], segments[1:]
+    if head == _RECURSIVE_GLOB_SEGMENT:
+        if not rest:
+            return bool(parts)
+        return any(_matches_glob(parts[skipped:], rest) for skipped in range(len(parts)))
+    return bool(parts) and fnmatch.fnmatch(parts[0], head) and _matches_glob(parts[1:], rest)
+
+
+def _discover_ingest_files(
+    root: Path, glob_pattern: str, policy: IngestPathPolicy, max_files: int
+) -> list[Path]:
+    """The sorted files of *root* matching *glob_pattern* that a directory ingest indexes. Blocking: run it in a thread.
+
+    Not walked at all: hidden directories (``.git``, ``.venv``) and ``node_modules``, ``__pycache__``, ``venv`` and
+    ``site-packages``. Skipped: symlinks, non-files, hidden files, binary extensions, ``.acl`` sidecars and files in a
+    location *policy* never ingests (credential names, the server's own state); those last are counted in one INFO
+    line for the whole run.
+
+    Raises:
+        IngestTooManyFilesError: more than *max_files* files qualify. The walk stops at the first one over the limit,
+            so a request for ``/`` costs at most *max_files* qualifying files, never an unbounded list.
+    """
+    segments = tuple(glob_pattern.split("/"))
+    files: list[Path] = []
+    denied = 0
+    for directory, subdirectories, names in os.walk(root):
+        subdirectories[:] = [
+            name for name in subdirectories if not name.startswith(".") and name not in _PRUNED_DIRECTORY_NAMES
+        ]
+        relative_directory = Path(directory).relative_to(root).parts
+        for name in names:
+            if name.startswith(".") or not _matches_glob((*relative_directory, name), segments):
+                continue
+            file_path = Path(directory, name)
+            if file_path.is_symlink() or not file_path.is_file():
+                continue
+            if file_path.suffix.lower() in _BINARY_EXTENSIONS or file_path.name.endswith(".acl"):
+                continue
+            try:
+                policy.check_secrets(file_path)
+            except PathUnsafeError:
+                denied += 1
+                continue
+            if len(files) == max_files:
+                raise IngestTooManyFilesError(max_files)
+            files.append(file_path)
+    if denied:
+        logger.info("directory ingest of %s skipped %d file(s) in denied locations (credentials, server state)", root, denied)
+    files.sort()
+    return files
+
+
 # File extensions for which YAML front matter detection is safe
 # (text-based formats where `---\n...\n---` at the top is genuinely front matter).
 # Binary formats (PDF, DOCX, etc.) are excluded — their extracted text may begin
@@ -269,9 +379,9 @@ def _fuse_rag_fusion_results(
 
 
 def _apply_scope_wildcard_filter(
-    candidates: "list[ScoredSearchCandidate]",
+    candidates: list[ScoredSearchCandidate],
     scope_filter: str,
-) -> "list[ScoredSearchCandidate]":
+) -> list[ScoredSearchCandidate]:
     """Python-side wildcard post-filter for scope_filter ending with '*'.
 
     Unscoped chunks (scopes is None or scopes == []) are shared/global and
@@ -287,9 +397,7 @@ def _apply_scope_wildcard_filter(
     prefix = scope_filter[:-1]  # strip trailing '*'
     result = []
     for c in candidates:
-        if not c.scopes:  # None or []
-            result.append(c)
-        elif any(s.startswith(prefix) for s in c.scopes):
+        if not c.scopes or any(s.startswith(prefix) for s in c.scopes):  # None or []
             result.append(c)
     return result
 
@@ -322,10 +430,10 @@ def _extract_front_matter(text: str) -> tuple[dict, str]:
     raw_yaml = text[4:end_idx]  # content between the two `---` markers
 
     try:
-        import yaml  # noqa: PLC0415
+        import yaml
 
         parsed = yaml.safe_load(raw_yaml)
-    except Exception:
+    except Exception:  # noqa: BLE001 — malformed YAML (or missing yaml) means "no front matter"; any parser failure falls back to the raw text
         return {}, text
 
     if not isinstance(parsed, dict):
@@ -336,6 +444,9 @@ def _extract_front_matter(text: str) -> tuple[dict, str]:
     body = text[body_start:].lstrip("\r\n")
     return parsed, body
 
+
+# Immutable (frozen dataclass), so safe as a shared default for ``SearchPipeline(path_policy=...)``.
+_DEFAULT_PATH_POLICY = IngestPathPolicy()
 
 
 class SearchPipeline:
@@ -355,15 +466,17 @@ class SearchPipeline:
         fanout_timeout_seconds: float = 30.0,
         language_detector: LanguageDetector | None = None,
         language_detection_confidence_threshold: float = 0.7,
-        max_file_mb: int = 0,
+        max_file_mb: int = DEFAULT_MAX_FILE_MB,
         context_window_max: int = DEFAULT_CONTEXT_WINDOW_MAX,
         graph_extractor: GraphExtractor | None = None,
         graph_store: GraphStore | None = None,
         graph_config: GraphConfig | None = None,
-        graph_expander: "GraphExpander | None" = None,
-        defref_extractor: "DefRefExtractor | None" = None,
+        graph_expander: GraphExpander | None = None,
+        defref_extractor: DefRefExtractor | None = None,
         ast_chunker: ASTChunker | None = None,
-        ppr_walker: "PPRWalker | None" = None,
+        ppr_walker: PPRWalker | None = None,
+        path_policy: IngestPathPolicy = _DEFAULT_PATH_POLICY,
+        max_discovered_files: int = DEFAULT_MAX_DISCOVERED_FILES,
     ) -> None:
         self.store = store
         self._global_embedder = embedder
@@ -389,6 +502,8 @@ class SearchPipeline:
         self._language_detector = language_detector
         self._language_detection_confidence_threshold = language_detection_confidence_threshold
         self._max_file_mb = max_file_mb
+        self._path_policy = path_policy
+        self._max_discovered_files = max_discovered_files
         self._context_window_max = context_window_max
         self._graph_extractor = graph_extractor
         self._graph_store = graph_store
@@ -428,6 +543,11 @@ class SearchPipeline:
     def context_window_max(self) -> int:
         """Inclusive upper bound on ``search_with_context``'s ``context_window``."""
         return self._context_window_max
+
+    @property
+    def reranker(self) -> Reranker | None:
+        """The pipeline's cross-encoder, ``None`` when reranking is disabled."""
+        return self._reranker
 
     @property
     def global_embedder(self) -> Embedder:
@@ -482,9 +602,9 @@ class SearchPipeline:
             # limit — distinct from this caller merely giving up on waiting.
             logger.warning(
                 "warm-up: embedder build exceeded its own %ss limit; this search runs FTS-only",
-                _EMBEDDER_BUILD_TIMEOUT_SECONDS,
+                WARMUP_TIMEOUT_SECONDS,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if embedder_timeout is None:
                 # An unbounded wait cannot time out, so this is not the caller
                 # giving up: since 3.11 asyncio.TimeoutError *is* the builtin
@@ -511,15 +631,20 @@ class SearchPipeline:
             # limit — distinct from this caller merely giving up on waiting.
             logger.warning(
                 "warm-up: reranker build exceeded its own %ss limit; this search skips reranking",
-                _RERANKER_BUILD_TIMEOUT_SECONDS,
+                WARMUP_TIMEOUT_SECONDS,
             )
             return self._reranker.is_warm
-        except asyncio.TimeoutError:
-            logger.warning(
-                "warm-up: reranker still cold after waiting %ss; this search skips reranking "
-                "(the build continues in the background)",
-                reranker_timeout,
-            )
+        except TimeoutError:
+            if reranker_timeout is None:
+                # An unbounded wait cannot time out, so this is not the caller giving up: a
+                # socket ETIMEDOUT from a model download lands here too (see the embedder above).
+                logger.warning("warm-up: reranker failed; first search will pay the init cost", exc_info=True)
+            else:
+                logger.warning(
+                    "warm-up: reranker still cold after waiting %ss; this search skips reranking "
+                    "(the build continues in the background)",
+                    reranker_timeout,
+                )
             return self._reranker.is_warm
         except Exception:
             logger.warning("warm-up: reranker failed; first search will pay the init cost", exc_info=True)
@@ -544,12 +669,27 @@ class SearchPipeline:
         collection_root: Path | None = None,
         chunk_ttl_seconds: int | None = None,
         chunk_scopes: list[str] | None = None,
+        _access_checked: bool = False,
     ) -> IngestResult:
+        # Ownership before anything else (the parse and the embed are the expensive part, and a foreign namespace
+        # must not get either, nor touch the owner's lock): a batch caller checked once for all its files already.
+        if not _access_checked:
+            await self.store.assert_collection_access(collection, namespace)
         doc_id = doc_id_for_source_path(path)
 
         # Skip .acl sidecar files — they are metadata, not indexable content
         if path.suffix == ".acl" or path.name.endswith(".acl"):
             return IngestResult(doc_id=doc_id, chunks_created=0, status="ok")
+
+        # Never read the server's own state or credentials, whoever configured the path (operator-trusted collection
+        # paths included); only the client-path scope (``allowed_roots``) is skipped for them.
+        try:
+            self._path_policy.check_secrets(path)
+        except PathUnsafeError:
+            logger.warning("refusing to ingest a file in a denied location: %s", path)
+            return IngestResult(
+                doc_id=doc_id, chunks_created=0, status="error", error=PATH_DENIED_DETAIL, code=PATH_DENIED_CODE
+            )
 
         # Size guard — checked before parse; max_file_mb=0 disables the check.
         # Follows symlinks (os.path.getsize dereferences symlinks by design).
@@ -714,7 +854,7 @@ class SearchPipeline:
                         markdown,
                         confidence_threshold=self._language_detection_confidence_threshold,
                     )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — language detector is a pluggable backend; failure degrades to untagged chunks
                 logger.warning(
                     "language detection failed for %s — tagging chunks as untagged: %s",
                     path,
@@ -846,7 +986,7 @@ class SearchPipeline:
 
         # Persist
         with record_stage("persist"):
-            await self.store.ensure_collection(collection, embedder.embedding_dim)
+            await self.store.ensure_collection(collection, embedder.embedding_dim, namespace=namespace)
             try:
                 await self.store.delete_document(collection, doc_id, namespace=namespace, skip_fts_optimize=True)
             except StoreBusyError:
@@ -882,20 +1022,7 @@ class SearchPipeline:
                 await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
 
             if rebuild_fts:
-                if self.store.supports_incremental_fts_delete:
-                    try:
-                        await self.store.optimize_fts(collection)
-                    except Exception:
-                        dominant_lang = await self.store.get_dominant_language(collection)
-                        logger.warning(
-                            "optimize_fts failed for collection %r; falling back to rebuild_fts_index",
-                            collection,
-                            exc_info=True,
-                        )
-                        await self.store.rebuild_fts_index(collection, language=dominant_lang)
-                else:
-                    dominant_lang = await self.store.get_dominant_language(collection)
-                    await self.store.rebuild_fts_index(collection, language=dominant_lang)
+                await refresh_fts(self.store, collection)
 
         # E2g BE-7: tracks whether this ingest wrote new code-symbol graph
         # nodes/edges via the BE-3 def/ref write further down — drives the
@@ -910,27 +1037,30 @@ class SearchPipeline:
             if _extraction_result.warnings:
                 acl_warnings.extend(_extraction_result.warnings)
             try:
-                await self._graph_store.ensure_graph_tables(collection, ns=namespace)
-                if _extraction_result.degraded:
-                    # Prose NER did not run, so this result carries code symbols
-                    # only. The mention delete below would otherwise strip the
-                    # document's prose mentions while its previous prose EDGES
-                    # survived (the write is skipped when there are no nodes or
-                    # edges to write) — edges asserting relations for a document
-                    # that now records mentioning nothing, which mention-based
-                    # orphan GC cannot clean because it bails on an empty
-                    # mentions table. Delete the doc's graph rows so the
-                    # contribution is consistently "code symbols only" rather
-                    # than half-removed (2026-08-19-030 C2-I-2).
-                    await self._graph_store.delete_graph_by_doc(collection, doc_id, ns=namespace)
-                if _extraction_result.nodes or _extraction_result.edges:
-                    await self._graph_store.write_graph(
-                        collection, _extraction_result.nodes, _extraction_result.edges, ns=namespace
-                    )
-                # E2b: delete existing mentions for this doc, then write new ones
-                await self._graph_store.delete_mentions_by_doc(collection, doc_id, ns=namespace)
-                await self._graph_store.write_mentions(collection, _extraction_result.mentions, ns=namespace)
-                edge_count = await self._graph_store.edge_count(collection, ns=namespace)
+                # Under the collection lock, as graph GC is: GC deletes every node that has no mention, so it must
+                # not run between this document's nodes and its mentions.
+                async with self.store.locked_collection(collection):
+                    await self._graph_store.ensure_graph_tables(collection, ns=namespace)
+                    if _extraction_result.degraded:
+                        # Prose NER did not run, so this result carries code symbols
+                        # only. The mention delete below would otherwise strip the
+                        # document's prose mentions while its previous prose EDGES
+                        # survived (the write is skipped when there are no nodes or
+                        # edges to write) — edges asserting relations for a document
+                        # that now records mentioning nothing, which mention-based
+                        # orphan GC cannot clean because it bails on an empty
+                        # mentions table. Delete the doc's graph rows so the
+                        # contribution is consistently "code symbols only" rather
+                        # than half-removed (2026-08-19-030 C2-I-2).
+                        await self._graph_store.delete_graph_by_doc(collection, doc_id, ns=namespace)
+                    if _extraction_result.nodes or _extraction_result.edges:
+                        await self._graph_store.write_graph(
+                            collection, _extraction_result.nodes, _extraction_result.edges, ns=namespace
+                        )
+                    # E2b: delete existing mentions for this doc, then write new ones
+                    await self._graph_store.delete_mentions_by_doc(collection, doc_id, ns=namespace)
+                    await self._graph_store.write_mentions(collection, _extraction_result.mentions, ns=namespace)
+                    edge_count = await self._graph_store.edge_count(collection, ns=namespace)
                 if edge_count >= self._graph_config.backend_threshold_edges:
                     hint = (
                         f"Graph edge count ({edge_count:,}) has reached "
@@ -1080,26 +1210,13 @@ class SearchPipeline:
         chunk_ttl_seconds: int | None = None,
         chunk_scopes: list[str] | None = None,
     ) -> list[IngestResult]:
-        # Collect and filter files
-        files: list[Path] = []
-        for file_path in path.glob(glob_pattern):
-            if file_path.is_symlink():
-                continue
-            if not file_path.is_file():
-                continue
-            # Skip hidden paths
-            rel_parts = file_path.relative_to(path).parts
-            if any(part.startswith(".") for part in rel_parts):
-                continue
-            # Skip binary extensions
-            if file_path.suffix.lower() in _BINARY_EXTENSIONS:
-                continue
-            # Skip .acl sidecar files — they are metadata, not indexable content
-            if file_path.suffix == ".acl" or file_path.name.endswith(".acl"):
-                continue
-            files.append(file_path)
-
-        files.sort()
+        # Ownership first (once for the whole directory): a foreign namespace is refused before the tree is walked,
+        # any file is parsed or embedded, or the owner's collection lock is touched.
+        await self.store.assert_collection_access(collection, namespace)
+        # Collect and filter files: the walk runs off the event loop and stops at ``max_discovered_files``.
+        files = await asyncio.to_thread(
+            _discover_ingest_files, path, glob_pattern, self._path_policy, self._max_discovered_files
+        )
 
         if exclude_paths is not None:
             files = [f for f in files if str(f) not in exclude_paths]
@@ -1125,6 +1242,7 @@ class SearchPipeline:
                 ingested_by=ingested_by,
                 chunk_ttl_seconds=effective_batch_ttl,
                 chunk_scopes=chunk_scopes,
+                _access_checked=True,
             )
             results.append(result)
             if on_file_complete is not None and result.status == "ok":
@@ -1175,20 +1293,7 @@ class SearchPipeline:
         """
         # Optimize (or rebuild) FTS once if at least one successful ingest
         if rebuild_fts and any(r.status == "ok" for r in results):
-            if self.store.supports_incremental_fts_delete:
-                try:
-                    await self.store.optimize_fts(collection)
-                except Exception:
-                    dominant_lang = await self.store.get_dominant_language(collection)
-                    logger.warning(
-                        "optimize_fts failed for collection %r; falling back to rebuild_fts_index",
-                        collection,
-                        exc_info=True,
-                    )
-                    await self.store.rebuild_fts_index(collection, language=dominant_lang)
-            else:
-                dominant_lang = await self.store.get_dominant_language(collection)
-                await self.store.rebuild_fts_index(collection, language=dominant_lang)
+            await refresh_fts(self.store, collection)
 
         # Only update metadata when at least one file was successfully ingested
         if any(r.status == "ok" for r in results):
@@ -1247,6 +1352,7 @@ class SearchPipeline:
         sidecar is read beside the client-supplied path and the chunks are marked
         as having no backing file for the maintenance orphan sweep.
         """
+        await self.store.assert_collection_access(collection, namespace)
         if not documents:
             return []
 
@@ -1305,8 +1411,8 @@ class SearchPipeline:
         filters: SearchFilters | None = None,
         query_vector: list[float] | None = None,
         rag_fusion: bool = False,
-        rag_fusion_generator: "RAGFusionGenerator | None" = None,
-        rag_fusion_config: "RAGFusionConfig | None" = None,
+        rag_fusion_generator: RAGFusionGenerator | None = None,
+        rag_fusion_config: RAGFusionConfig | None = None,
         graph_mode: str | None = None,
         scope_filter: str | None = None,
         rerank: bool = True,
@@ -1365,7 +1471,7 @@ class SearchPipeline:
             and rag_fusion_config is not None
             and rag_fusion_config.enabled
         ):
-            from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
+            from archon_search.rag_fusion import RAGFusionDependencyError
 
             # 0. Vector conflict guard: ignore caller-supplied query_vector when RAG Fusion active.
             if query_vector is not None:
@@ -1390,7 +1496,7 @@ class SearchPipeline:
                 variants = await rag_fusion_generator.generate_variants(query)
             except RAGFusionDependencyError:
                 raise
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "rag_fusion generate_variants timed out for query=%s; falling back",
                     _query_fingerprint(query),
@@ -1403,7 +1509,7 @@ class SearchPipeline:
                 fallback.rag_fusion_warning = "RAG Fusion timed out"
                 fallback.graph_expansion_applied = graph_expansion_applied
                 return fallback
-            except Exception:
+            except Exception:  # noqa: BLE001 — pluggable LLM variant generator; any failure falls back to standard search
                 logger.warning(
                     "rag_fusion generate_variants failed unexpectedly for query=%s; falling back",
                     _query_fingerprint(query),
@@ -1423,7 +1529,7 @@ class SearchPipeline:
             # 4. Embed all queries in parallel.
             try:
                 vectors = await asyncio.gather(*[embedder.embed_one(q) for q in all_queries])
-            except Exception:
+            except Exception:  # noqa: BLE001 — embedder backend failure falls back to single-query search
                 logger.warning(
                     "rag_fusion embedding stage failed for query=%s; falling back to single-query search",
                     _query_fingerprint(query),
@@ -1533,10 +1639,10 @@ class SearchPipeline:
         query: str,
         namespace: str = DEFAULT_NAMESPACE,
         *,
-        filters: "SearchFilters | None" = None,
+        filters: SearchFilters | None = None,
         scope_filter: str | None = None,
         rerank: bool = True,
-    ) -> "SearchPipelineResult | str":
+    ) -> SearchPipelineResult | str:
         """Dispatch for graph retrieval modes.
 
         Returns:
@@ -1622,8 +1728,8 @@ class SearchPipeline:
         query: str,
         namespace: str = DEFAULT_NAMESPACE,
         *,
-        filters: "SearchFilters | None" = None,
-        scope_filter: "str | None" = None,
+        filters: SearchFilters | None = None,
+        scope_filter: str | None = None,
         rerank: bool = True,
     ) -> SearchPipelineResult:
         """Personalized PageRank retrieval mode (E2h BE-6).
@@ -1769,7 +1875,7 @@ class SearchPipeline:
         collection: str,
         namespace: str = DEFAULT_NAMESPACE,
         *,
-        filters: "SearchFilters | None" = None,
+        filters: SearchFilters | None = None,
         rerank: bool = True,
     ) -> SearchPipelineResult:
         """Single-collection path for graph_mode='local' (BE-7a).
@@ -2068,8 +2174,8 @@ class SearchPipeline:
         query_vector: list[float] | None = None,
         embedder: Embedder | None = None,
         rag_fusion: bool = False,
-        rag_fusion_generator: "RAGFusionGenerator | None" = None,
-        rag_fusion_config: "RAGFusionConfig | None" = None,
+        rag_fusion_generator: RAGFusionGenerator | None = None,
+        rag_fusion_config: RAGFusionConfig | None = None,
         graph_mode: Literal["naive", "local", "global", "ppr"] | None = None,
         scope_filter: str | None = None,
     ) -> ExplainPipelineResult:
@@ -2282,7 +2388,7 @@ class SearchPipeline:
             and rag_fusion_config is not None
             and rag_fusion_config.enabled
         ):
-            from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
+            from archon_search.rag_fusion import RAGFusionDependencyError
 
             _single_embedder = embedder if embedder is not None else self._global_embedder
             candidate_depth = max(self._top_k_retrieve * 3, 20)
@@ -2301,7 +2407,7 @@ class SearchPipeline:
                 variants = await rag_fusion_generator.generate_variants(query)
             except RAGFusionDependencyError:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — pluggable LLM variant generator; any failure falls back to standard explain
                 logger.warning(
                     "rag_fusion explain generate_variants failed for query=%s; falling back",
                     _query_fingerprint(query),
@@ -2320,7 +2426,7 @@ class SearchPipeline:
             # Embed all queries in parallel.
             try:
                 vectors = await asyncio.gather(*[_single_embedder.embed_one(q) for q in all_queries])
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — embedder backend failure falls back to standard explain
                 logger.warning(
                     "rag_fusion explain embedding stage failed for query=%s; falling back",
                     _query_fingerprint(query),
@@ -2429,7 +2535,7 @@ class SearchPipeline:
         collection: str,
         namespace: str = DEFAULT_NAMESPACE,
         *,
-        embedder: "Embedder",
+        embedder: Embedder,
         scope_filter: str | None = None,
     ) -> list[ScoredSearchCandidate]:
         """Graph retrieval for naive-mode explain — E1a wiring (BE-7).
@@ -2638,7 +2744,7 @@ class SearchPipeline:
         rerank: bool,
         namespace: str,
         query_vector: list[float] | None,
-        embedder: "Embedder",
+        embedder: Embedder,
         graph_mode: Literal["naive", "local", "global", "ppr"],
         scope_filter: str | None = None,
     ) -> ExplainPipelineResult:
@@ -2947,8 +3053,8 @@ class SearchPipeline:
         namespace: str = DEFAULT_NAMESPACE,
         query_vector: list[float] | None = None,
         rag_fusion: bool = False,
-        rag_fusion_generator: "RAGFusionGenerator | None" = None,
-        rag_fusion_config: "RAGFusionConfig | None" = None,
+        rag_fusion_generator: RAGFusionGenerator | None = None,
+        rag_fusion_config: RAGFusionConfig | None = None,
         filters: SearchFilters | None = None,
         graph_mode: str | None = None,
         scope_filter: str | None = None,
@@ -3019,7 +3125,7 @@ class SearchPipeline:
             and rag_fusion_config is not None
             and rag_fusion_config.enabled
         ):
-            from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
+            from archon_search.rag_fusion import RAGFusionDependencyError
 
             candidate_depth = max(self._top_k_retrieve * 3, 20)
             if filters and filters.source_path_glob:
@@ -3031,14 +3137,14 @@ class SearchPipeline:
                 variants = await rag_fusion_generator.generate_variants(query)
             except RAGFusionDependencyError:
                 raise
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "rag_fusion search_many generate_variants timed out for query=%s; falling back",
                     _query_fingerprint(query),
                 )
                 _rag_fusion_warning = "RAG Fusion timed out"
                 variants = []
-            except Exception:
+            except Exception:  # noqa: BLE001 — pluggable LLM variant generator; any failure falls back to no variants
                 logger.warning(
                     "rag_fusion search_many generate_variants failed for query=%s; falling back",
                     _query_fingerprint(query),
@@ -3054,7 +3160,7 @@ class SearchPipeline:
                 all_vectors: list[list[float]] = list(await asyncio.gather(
                     *[self._global_embedder.embed_one(q) for q in all_queries_rf]
                 ))
-            except Exception:
+            except Exception:  # noqa: BLE001 — embedder backend failure falls back to single-query search
                 logger.warning(
                     "rag_fusion search_many embedding failed for query=%s; falling back to single-query",
                     _query_fingerprint(query),
@@ -3184,7 +3290,7 @@ class SearchPipeline:
                 "scope_filter must be None in graph-mode paths — check the 422 guard"
             )
             # Step 1: Expand query per collection in parallel.
-            expansions: list["ExpandedQuery"] = list(await asyncio.gather(*[
+            expansions: list[ExpandedQuery] = list(await asyncio.gather(*[
                 self._graph_expander.expand(query, coll, ns=namespace)
                 for coll in collections_in_scope
             ]))
@@ -3204,7 +3310,7 @@ class SearchPipeline:
             trim = max(self._fanout_leg_trim, 1)
 
             async def _graph_leg(
-                coll: str, exp: "ExpandedQuery",
+                coll: str, exp: ExpandedQuery,
             ) -> tuple[str, list[ScoredSearchCandidate], float]:
                 effective_text = exp.expanded_text
                 effective_vec = text_to_vec[effective_text]
@@ -3648,8 +3754,8 @@ class SearchPipeline:
         filters: SearchFilters | None = None,
         query_vector: list[float] | None = None,
         rag_fusion: bool = False,
-        rag_fusion_generator: "RAGFusionGenerator | None" = None,
-        rag_fusion_config: "RAGFusionConfig | None" = None,
+        rag_fusion_generator: RAGFusionGenerator | None = None,
+        rag_fusion_config: RAGFusionConfig | None = None,
         scope_filter: str | None = None,
     ) -> SearchWithContextResult:
         """Search with surrounding context chunks.
@@ -3784,17 +3890,19 @@ class SearchPipeline:
         cursor: str | None = None,
         namespace: str = DEFAULT_NAMESPACE,
     ) -> tuple[list[DocumentInfo], str | None, int]:
-        """List documents in a collection with cursor-based pagination.
+        """List the documents of a collection visible to *namespace*, with cursor-based pagination.
 
-        Returns ``(items, next_cursor, total)`` — delegates directly to
-        :meth:`SearchStore.list_documents` after validating namespace access.
+        Returns ``(items, next_cursor, total)`` — delegates to
+        :meth:`SearchStore.list_documents` after validating namespace access; documents
+        whose chunks are all hidden from *namespace* by the chunk ACL are omitted
+        (``total`` counts visible documents only).
         Returns ``([], None, 0)`` if the collection is not found in the given
         namespace.
         """
         meta = await self.store.get_collection_meta(collection, namespace=namespace)
         if meta is None:
             return [], None, 0
-        return await self.store.list_documents(collection, limit, cursor=cursor)
+        return await self.store.list_documents(collection, limit, cursor=cursor, namespace=namespace)
 
     async def recompute_collection_meta(
         self,
@@ -3816,13 +3924,12 @@ class SearchPipeline:
         """
         existing_meta = await self.store.get_collection_meta(collection, namespace=namespace)
 
-        if not force:
-            if (
-                existing_meta is not None
-                and existing_meta.needs_recompute is False
-                and existing_meta.mutations_since_recompute == 0
-            ):
-                return
+        if not force and (
+            existing_meta is not None
+            and existing_meta.needs_recompute is False
+            and existing_meta.mutations_since_recompute == 0
+        ):
+            return
 
         vectors = await self.store.get_all_vectors(collection)
 
@@ -3925,20 +4032,19 @@ def create_pipeline(
 
     Does NOT call store.connect() — caller is responsible for connecting.
     """
-    from archon_search.language_detector import (  # noqa: PLC0415
-        LanguageDetector,
-        FASTTEXT_MODEL_FILENAME,
-    )
-    from archon_search.paths import get_fasttext_models_dir  # noqa: PLC0415
-
     # 2026-08-19-030: same construction-time guard `create_app` applies. Without
     # it, non-server callers (e.g. `install/installer.py`) built a pipeline whose
     # every graph ingest would abort pre-persist on the not-importable path.
-    from archon_search.graph_extractor import ensure_graph_engine_importable  # noqa: PLC0415
+    from archon_search.graph_extractor import ensure_graph_engine_importable
+    from archon_search.language_detector import (
+        FASTTEXT_MODEL_FILENAME,
+        LanguageDetector,
+    )
+    from archon_search.paths import get_fasttext_models_dir
 
     ensure_graph_engine_importable(cfg.graph)
 
-    store = SearchStore(cfg.db_path)
+    store = SearchStore(cfg.db_path, config=cfg)
     _embedder_backend: EmbedderBackend = embedder_backend or ModelEmbedder(
         cfg.embedding_model,
         device=cfg.device,
@@ -3954,7 +4060,7 @@ def create_pipeline(
     embedder = Embedder(_embedder_backend)
     chunker = DocumentChunker(cfg.chunk_size)
     ast_chunker = ASTChunker(cfg.chunk_size)
-    parser = DocumentParser(max_tasks_per_child=cfg.ingest.max_tasks_per_child)
+    parser = DocumentParser.from_config(cfg.ingest)
 
     language_detector: LanguageDetector | None = None
     if cfg.multilingual:
@@ -3966,10 +4072,10 @@ def create_pipeline(
     graph_expander = None
     defref_extractor = None
     if cfg.graph.enabled:
-        from archon_search.defref_extractor import DefRefExtractor  # noqa: PLC0415
-        from archon_search.graph_extractor import GraphExtractor  # noqa: PLC0415
-        from archon_search.graph_store import GraphStore as _GraphStore  # noqa: PLC0415
-        from archon_search.graph_expander import GraphExpander  # noqa: PLC0415
+        from archon_search.defref_extractor import DefRefExtractor
+        from archon_search.graph_expander import GraphExpander
+        from archon_search.graph_extractor import GraphExtractor
+        from archon_search.graph_store import GraphStore as _GraphStore
         graph_store = _GraphStore(cfg.db_path)
         graph_extractor = GraphExtractor(cfg.graph)
         graph_expander = GraphExpander(graph_store, naive_max_expansion_terms=cfg.graph.naive_max_expansion_terms)
@@ -3989,6 +4095,8 @@ def create_pipeline(
         language_detector=language_detector,
         language_detection_confidence_threshold=cfg.language_detection_confidence_threshold,
         max_file_mb=cfg.ingest.max_file_mb,
+        max_discovered_files=cfg.ingest.max_discovered_files,
+        path_policy=ingest_path_policy(cfg),
         context_window_max=cfg.context_window_max,
         graph_extractor=graph_extractor,
         graph_store=graph_store,

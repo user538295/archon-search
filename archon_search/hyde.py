@@ -58,7 +58,7 @@ class HyDEGenerator:
     def __init__(
         self,
         config: HyDEConfig,
-        provider: "QueryExpansionProvider | None" = None,
+        provider: QueryExpansionProvider | None = None,
     ) -> None:
         self._config = config
 
@@ -68,11 +68,11 @@ class HyDEGenerator:
         else:
             # Default: construct AnthropicQueryExpansionProvider (lazy)
             try:
-                from archon_search.providers.anthropic_provider import (  # noqa: PLC0415
+                from archon_search.providers.anthropic_provider import (
                     AnthropicQueryExpansionProvider,
                 )
 
-                self._provider: "QueryExpansionProvider" = AnthropicQueryExpansionProvider(
+                self._provider: QueryExpansionProvider = AnthropicQueryExpansionProvider(
                     model=config.model
                 )
                 self._provider_available: bool = True
@@ -92,7 +92,7 @@ class HyDEGenerator:
         """Return ``True`` when the provider's required API key is set at call time (G10 BE-5 Root-2)."""
         return provider_key_available(self._config.provider)
 
-    async def generate(self, query: str, *, embedder: "Embedder") -> list[float] | None:
+    async def generate(self, query: str, *, embedder: Embedder) -> list[float] | None:
         """Generate a hypothetical document embedding for the given query.
 
         The hypothesis is embedded with *embedder*, which must be the embedder

@@ -66,7 +66,7 @@ class RAGFusionGenerator:
     def __init__(
         self,
         config: RAGFusionConfig,
-        provider: "QueryExpansionProvider | None" = None,
+        provider: QueryExpansionProvider | None = None,
     ) -> None:
         self._config = config
         self._provider_available: bool = False
@@ -77,11 +77,11 @@ class RAGFusionGenerator:
         else:
             # Default: construct AnthropicQueryExpansionProvider (lazy)
             try:
-                from archon_search.providers.anthropic_provider import (  # noqa: PLC0415
+                from archon_search.providers.anthropic_provider import (
                     AnthropicQueryExpansionProvider,
                 )
 
-                self._provider: "QueryExpansionProvider" = AnthropicQueryExpansionProvider(
+                self._provider: QueryExpansionProvider = AnthropicQueryExpansionProvider(
                     model=config.model
                 )
                 self._provider_available = True

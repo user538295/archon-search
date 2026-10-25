@@ -1,7 +1,7 @@
 """Document chunking for RAG — wraps Chonkie RecursiveChunker."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from archon_search._types import ChunkRecord, IngestedBy
@@ -14,7 +14,7 @@ class DocumentChunker:
     """Splits text into token-sized ChunkRecords using Chonkie's RecursiveChunker."""
 
     def __init__(self, chunk_size: int = 512) -> None:
-        from chonkie import RecursiveChunker  # noqa: PLC0415
+        from chonkie import RecursiveChunker
 
         self._chunk_size = chunk_size
         self._chunker = RecursiveChunker(tokenizer="gpt2", chunk_size=chunk_size)
@@ -46,7 +46,7 @@ class DocumentChunker:
             return []
 
         chunks = self._chunker.chunk(text)
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         return [
             ChunkRecord(
                 doc_id=doc_id,
@@ -66,7 +66,7 @@ class DocumentChunker:
         ]
 
 
-def _top_level_scopes(scope_table: "ScopeTable") -> list:
+def _top_level_scopes(scope_table: ScopeTable) -> list:
     """Return the entries in *scope_table* not strictly contained by any other entry.
 
     A scope is top-level if no other entry in the table has ``other.start <=
@@ -115,7 +115,7 @@ class ASTChunker:
     """
 
     def __init__(self, chunk_size: int = 512) -> None:
-        from chonkie import RecursiveChunker  # noqa: PLC0415
+        from chonkie import RecursiveChunker
 
         self._chunk_size = chunk_size
         self._sub_chunker = RecursiveChunker(tokenizer="gpt2", chunk_size=chunk_size)
@@ -130,7 +130,7 @@ class ASTChunker:
         file_type: str,
         updated_at: str,
         ingested_by: IngestedBy,
-        scope_table: "ScopeTable",
+        scope_table: ScopeTable,
         language: str = "",
     ) -> list[ChunkRecord]:
         """Split *text* into ChunkRecords aligned to *scope_table* boundaries.
@@ -159,7 +159,7 @@ class ASTChunker:
             )
 
         segments = self._build_segments(text, scope_table)
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         return [
             ChunkRecord(
                 doc_id=doc_id,
@@ -178,7 +178,7 @@ class ASTChunker:
             for start, end, seg_text in segments
         ]
 
-    def _build_segments(self, text: str, scope_table: "ScopeTable") -> list[tuple[int, int, str]]:
+    def _build_segments(self, text: str, scope_table: ScopeTable) -> list[tuple[int, int, str]]:
         """Split *text* into scope-aligned blocks, then merge/sub-split to budget."""
         top_level = sorted(_top_level_scopes(scope_table), key=lambda e: e.start)
 

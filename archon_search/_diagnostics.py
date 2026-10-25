@@ -119,7 +119,7 @@ class ScoredSearchCandidate:
         acl_sidecar_path: Relative path to the ``.acl`` sidecar file; ``None``
             when not sidecar-sourced.
         acl_warning: Structured warnings emitted during ACL loading (e.g.
-            fail-open cases); empty list = no issues.
+            fail-closed cases); empty list = no issues.
     """
 
     doc_id: str

@@ -24,6 +24,7 @@ import math
 from fastapi.responses import JSONResponse
 
 import archon_search.constants as _constants
+from archon_search.store import CollectionOwnershipError
 from archon_search.types import IngestJob
 
 #: Wire ``code`` of the 503s built by :func:`store_busy_503`: the lock-timeout refusal of every
@@ -74,20 +75,32 @@ def store_busy_503(detail: str) -> JSONResponse:
 async def acquire_collection_lock_or_503(
     store,
     collection_name: str,
+    namespace: str | None = None,
 ):
     """Pre-acquire the per-collection ingest lock.
+
+    With a *namespace*, the lock is taken only for a collection that namespace may write: a collection another
+    namespace owns gets no lock (the caller would hold it for up to ``INGEST_LOCK_TIMEOUT_S`` and make the owner's
+    own writes answer ``store_busy``). The caller then proceeds as if the store were unavailable, and its job
+    is refused by the pipeline's own ownership check with the fixed ``COLLECTION_UNAVAILABLE_DETAIL``.
 
     Returns:
         The acquired asyncio.Lock on success.
         A 503 JSONResponse on acquisition timeout.
-        None when store is unavailable (handler proceeds best-effort).
+        None when store is unavailable, or *namespace* may not write the collection (handler proceeds best-effort).
     """
     if store is None:
         return None
 
+    if namespace is not None:
+        try:
+            await store.assert_collection_access(collection_name, namespace)
+        except CollectionOwnershipError:
+            return None
+
     lock = store.lock_for(collection_name)
     try:
         await asyncio.wait_for(lock.acquire(), timeout=_constants.INGEST_LOCK_TIMEOUT_S)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return store_busy_503(STORE_BUSY_DETAIL)
     return lock

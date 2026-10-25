@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final, Literal
 
@@ -21,9 +21,9 @@ def normalize_iso_utc(dt: datetime | str) -> str:
         dt = datetime.fromisoformat(normalised)
 
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     else:
-        dt = dt.astimezone(timezone.utc)
+        dt = dt.astimezone(UTC)
 
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
@@ -35,17 +35,21 @@ normalized to ``"cli"`` at boundaries (header parser, read path) and is
 intentionally *not* a member of this Literal — see
 ``archon_search.constants.LEGACY_INGESTED_BY``.
 """
-IngestErrorCode = Literal["file_too_large", "parse_error", "invalid_document"]
+IngestErrorCode = Literal["file_too_large", "parse_error", "invalid_document", "path_denied"]
 """``IngestResult.code`` of a failed ingest; ``None`` on success."""
 
 # ``IngestResult.code`` (and the REST ``413`` ``detail.code``) of a file rejected by the
 # ``[ingest].max_file_mb`` pre-check. Narrower than ``IngestErrorCode`` because
 # ``IngestError.code`` is typed as exactly this member.
-FILE_TOO_LARGE_CODE: Final[Literal["file_too_large"]] = "file_too_large"
+FILE_TOO_LARGE_CODE: Final = "file_too_large"
 # ``IngestResult.code`` of a file whose parse raised ``parser.ParseError``.
 PARSE_ERROR_CODE: Final[IngestErrorCode] = "parse_error"
 # ``IngestResult.code`` of an ``ingest_documents`` item missing ``text`` or ``source_path``.
 INVALID_DOCUMENT_CODE: Final[IngestErrorCode] = "invalid_document"
+# ``IngestResult.code`` of a file in a location that is never ingested (the server's own state, credentials).
+PATH_DENIED_CODE: Final[IngestErrorCode] = "path_denied"
+# ``IngestResult.error`` of such a file: fixed text, never the path.
+PATH_DENIED_DETAIL: Final[str] = "the file is in a location that is never ingested (server state or credentials)"
 
 
 @dataclass
@@ -73,7 +77,7 @@ class ChunkRecord:
             to ``collection_root`` when available, else basename-only); ``None``
             when not sidecar-sourced.
         acl_warning: Structured warnings emitted during ACL loading (e.g.
-            fail-open cases); empty list = no issues.
+            fail-closed cases); empty list = no issues.
     """
 
     doc_id: str
@@ -119,7 +123,7 @@ class ChunkRecord:
     acl_sidecar_path: str | None = None
     """system: relative path to the .acl sidecar file (relative to collection_root when available, else basename-only); null when not sidecar-sourced."""
     acl_warning: list[str] = field(default_factory=list)
-    """system: structured warnings emitted during ACL loading (e.g. fail-open cases); empty list = no issues."""
+    """system: structured warnings emitted during ACL loading (e.g. fail-closed cases); empty list = no issues."""
 
 
 @dataclass
@@ -206,6 +210,19 @@ class IngestError(Exception):
             f"(`[ingest].max_file_mb`). Raise the limit in `archon-search.toml` or split the file."
         )
         super().__init__(self.message)
+
+
+class IngestTooManyFilesError(Exception):
+    """A directory ingest found more files than ``[ingest].max_discovered_files``; nothing was ingested.
+
+    The text is built here and names no path, so it is safe as a job error and as an MCP error.
+    """
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(
+            f"the directory holds more than {limit} files (`[ingest].max_discovered_files`); "
+            "ingest a subdirectory or raise the limit in `archon-search.toml`"
+        )
 
 
 def _file_exceeds_limit(path: Path, max_file_mb: int) -> bool:

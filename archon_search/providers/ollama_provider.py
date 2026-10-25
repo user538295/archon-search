@@ -69,7 +69,7 @@ class OllamaQueryExpansionProvider:
         self._ollama_module: object | None = None
 
         try:
-            import ollama  # noqa: PLC0415
+            import ollama
 
             self._ollama_available = True
             self._ollama_module = ollama
@@ -116,14 +116,14 @@ class OllamaQueryExpansionProvider:
                 ),
                 timeout=timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _logger.warning(
                 "OllamaQueryExpansionProvider: HyDE call timed out after %.1fs (fp=%s)",
                 timeout_seconds,
                 _query_fingerprint(query),
             )
             return None
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — provider contract: never raise, any client/SDK failure degrades gracefully
             _logger.warning(
                 "OllamaQueryExpansionProvider: error during HyDE generation (fp=%s)",
                 _query_fingerprint(query),
@@ -188,14 +188,14 @@ class OllamaQueryExpansionProvider:
                 ),
                 timeout=timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _logger.warning(
                 "OllamaQueryExpansionProvider: RAG Fusion call timed out after %.1fs (fp=%s)",
                 timeout_seconds,
                 _query_fingerprint(query),
             )
             return []
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — provider contract: never raise, any client/SDK failure degrades gracefully
             _logger.warning(
                 "OllamaQueryExpansionProvider: error during RAG Fusion decomposition (fp=%s)",
                 _query_fingerprint(query),

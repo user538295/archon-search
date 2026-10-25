@@ -125,7 +125,7 @@ class ClaudeCLIQueryExpansionProvider:
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(), timeout=timeout_seconds
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if proc is not None:
                     proc.kill()
                     with contextlib.suppress(Exception):
@@ -137,7 +137,7 @@ class ClaudeCLIQueryExpansionProvider:
                     fp,
                 )
                 return None
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — provider contract: never raise, any subprocess spawn failure degrades to None
                 _logger.warning(
                     "ClaudeCLIQueryExpansionProvider: error running claude CLI for %s (fp=%s)",
                     label,
@@ -166,7 +166,7 @@ class ClaudeCLIQueryExpansionProvider:
         self,
         query: str,
         *,
-        max_tokens: int = 200,  # noqa: ARG002 — ponytail: no CLI token cap; prompt bounds output
+        max_tokens: int = 200,
         timeout_seconds: float = 10.0,
     ) -> str | None:
         """Generate a short hypothetical passage that would answer the query.
@@ -207,7 +207,7 @@ class ClaudeCLIQueryExpansionProvider:
         query: str,
         *,
         num_queries: int = 3,
-        max_tokens: int = 450,  # noqa: ARG002 — ponytail: no CLI token cap; prompt bounds output
+        max_tokens: int = 450,
         timeout_seconds: float = 10.0,
     ) -> list[str]:
         """Decompose the query into semantic variant strings.

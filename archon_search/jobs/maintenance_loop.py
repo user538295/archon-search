@@ -27,14 +27,21 @@ import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from archon_search._durable_io import atomic_write_json
-from archon_search.constants import INGEST_LOCK_TIMEOUT_S, NOT_DISK_INGESTED_CHUNK_MARKERS
+from archon_search._durable_io import atomic_write_json, ensure_private_dir
+from archon_search.constants import (
+    INGEST_LOCK_TIMEOUT_S,
+    NOT_DISK_INGESTED_CHUNK_MARKERS,
+)
 from archon_search.jobs.store import PROCESS_RESTART_ERROR
-from archon_search.store import FTSIndexNotFoundError, doc_id_for_source_path, parse_metadata
+from archon_search.store import (
+    FTSIndexNotFoundError,
+    doc_id_for_source_path,
+    parse_metadata,
+)
 from archon_search.types import (
     IngestJob,
     JobStatus,
@@ -59,6 +66,7 @@ _FTS_OPTIMIZE = "fts_optimize"
 _ORPHAN_CLEANUP = "orphan_cleanup"
 _EXPIRED_CHUNK_PRUNING = "expired_chunk_pruning"
 _GRAPH_GC = "graph_gc"
+_VERSION_CLEANUP = "version_cleanup"
 
 
 def _policy_failed_detail(policy: str) -> str:
@@ -263,15 +271,15 @@ class MaintenanceLoop:
 
     def __init__(
         self,
-        job_store: "JobStore",
-        search_store: "SearchStore",
-        config: "MaintenanceConfig",
+        job_store: JobStore,
+        search_store: SearchStore,
+        config: MaintenanceConfig,
         data_dir: Path,
         *,
         dispatch_retry: Callable[[IngestJob], None],
-        graph_store: "GraphStore | None" = None,
-        graph_config: "GraphConfig | None" = None,
-        enrichment_client: "LLMEnrichmentClientProtocol | None" = None,
+        graph_store: GraphStore | None = None,
+        graph_config: GraphConfig | None = None,
+        enrichment_client: LLMEnrichmentClientProtocol | None = None,
     ) -> None:
         """*dispatch_retry* starts each PENDING retry job the failed-ingest retry creates
         (``routes_jobs.make_retry_dispatcher`` in the lifespan); required, as nothing else would run the job."""
@@ -355,12 +363,26 @@ class MaintenanceLoop:
 
     def _save_state(self, state: dict[str, Any]) -> None:
         """Atomic durable write of the state file via the shared helper."""
-        self._state_file.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self._state_file.parent)
         atomic_write_json(self._state_file, state)
 
     # ------------------------------------------------------------------
     # Per-pass policies
     # ------------------------------------------------------------------
+
+    async def _run_version_cleanup(self) -> None:
+        """Delete table versions older than ``version_retention_hours`` from the search and graph tables.
+
+        The newest version of every table is never removed, so a concurrent reader is unaffected. A store
+        that fails is logged and the other still runs; never raises.
+        """
+        retention = timedelta(hours=self._config.version_retention_hours)
+        stores = [self._search_store] if self._graph_store is None else [self._search_store, self._graph_store]
+        for store in stores:
+            try:
+                await store.prune_versions(retention)
+            except Exception:
+                logger.exception("MaintenanceLoop: %s failed for %s", _VERSION_CLEANUP, type(store).__name__)
 
     async def _run_fts_optimize(self, collection: str, namespace: str) -> None:
         """FTS optimize for a single collection (BE-5).
@@ -385,7 +407,7 @@ class MaintenanceLoop:
         lock = self._search_store.lock_for(collection)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.debug(
                 "MaintenanceLoop: FTS optimize skipped for %s/%s — collection locked",
                 namespace,
@@ -408,7 +430,7 @@ class MaintenanceLoop:
 
         # Update fts_optimized_at in the current pass health dict.
         if hasattr(self, "_current_health"):
-            self._current_health["fts_optimized_at"] = datetime.now(timezone.utc).isoformat()
+            self._current_health["fts_optimized_at"] = datetime.now(UTC).isoformat()
 
     async def _scan_source_paths(self, collection: str, namespace: str) -> dict[str, _SourcePathDocIds]:
         """Map every local file ``source_path`` of the collection to its chunks' doc_ids.
@@ -422,7 +444,7 @@ class MaintenanceLoop:
                 continue
 
             # Skip URLs — these are not on the local filesystem.
-            if source_path.startswith("http://") or source_path.startswith("https://"):
+            if source_path.startswith(("http://", "https://")):
                 logger.debug(
                     "MaintenanceLoop: skipping URL source_path for %s/%s: %s",
                     namespace,
@@ -492,7 +514,7 @@ class MaintenanceLoop:
                         collection, sp, namespace=namespace, skip_fts_optimize=True
                     )
                     orphan_count += 1
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — one orphan's failure is logged and must not stop the orphan sweep
                 logger.warning(
                     "MaintenanceLoop: orphan check or delete_by_source_path failed for %s in %s/%s: %s",
                     sp,
@@ -506,7 +528,7 @@ class MaintenanceLoop:
             lock = self._search_store.lock_for(collection)
             try:
                 await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "MaintenanceLoop: could not acquire lock for post-orphan FTS optimize "
                     "for %s/%s; FTS index may be stale",
@@ -582,7 +604,7 @@ class MaintenanceLoop:
                         namespace,
                         delete_doc_owned_code_symbols=True,
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — one doc's graph cleanup failure is logged and must not stop the pass
                     logger.warning(
                         "MaintenanceLoop: def/ref graph cleanup failed for %s/%s doc_id=%s: %s",
                         namespace,
@@ -608,12 +630,20 @@ class MaintenanceLoop:
         Algorithm:
         1. Skip when ``_graph_gc_active`` is False — no graph store (``[graph].enabled=false``)
            or ``[maintenance].graph_gc=false``
-        2. Fetch live chunk IDs via store.list_chunks_raw(collection, namespace)
+        2. Take the collection lock (wait at most ``INGEST_LOCK_TIMEOUT_S``; skip the pass when it stays
+           busy) and hold it across steps 3-6: an ingest writes chunks, then graph nodes/edges, then
+           mentions, so a GC that interleaved would delete the nodes of a document whose mentions are not
+           yet written, or prune the mentions of a chunk that appeared after the snapshot. The ingest
+           takes the same lock around its chunk writes and around its graph write.
+        3. Fetch live chunk IDs via store.list_chunks_raw(collection, namespace)
            On exception: WARNING logged, abort collection GC, return early
-        3. Call graph_store.count_stale_mentions(collection, live_chunk_ids, namespace)
-        4. Call graph_store.prune_stale_mentions(collection, live_chunk_ids, namespace)
-        5. Call graph_store.delete_orphan_nodes_and_edges(collection, namespace) → GcPassResult
-        6. If communities_invalidated=True:
+        4. Call graph_store.count_stale_mentions(collection, live_chunk_ids, namespace)
+        5. Call graph_store.prune_stale_mentions(collection, live_chunk_ids, namespace)
+        6. Call graph_store.delete_orphan_nodes_and_edges(collection, namespace,
+           no_live_chunks=<no chunk is live>) → GcPassResult. With zero live chunks the
+           mentions table is empty, and ``no_live_chunks`` makes that authoritative so the
+           emptied collection's graph nodes/edges are removed instead of leaking.
+        7. With the lock released, if communities_invalidated=True:
            - Check _rebuild_state[(namespace, collection)]:
              - If task exists and not done: set pending=True, don't spawn new task
              - If task done or no task: spawn new async rebuild task with done-callback
@@ -627,35 +657,21 @@ class MaintenanceLoop:
         if not self._graph_gc_active:
             return (0, None)
 
-        # Phase 1: Fetch live chunk IDs from the search store
-        live_chunk_ids: set[str] = set()
+        lock = self._search_store.lock_for(collection)
         try:
-            async for chunk in self._search_store.list_chunks_raw(collection, namespace):
-                chunk_id: str = chunk.get("chunk_id", "")
-                if chunk_id:
-                    live_chunk_ids.add(chunk_id)
-        except Exception as exc:
-            logger.warning(
-                "MaintenanceLoop: list_chunks_raw failed for %s/%s, skipping graph GC: %s",
-                namespace,
-                collection,
-                exc,
-            )
+            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+        except TimeoutError:
+            logger.debug("MaintenanceLoop: graph GC skipped for %s/%s — collection locked", namespace, collection)
             return (0, None)
+        try:
+            collected = await self._collect_graph_garbage(collection, namespace)
+        finally:
+            lock.release()
+        if collected is None:
+            return (0, None)
+        stale_count, gc_result = collected
 
-        # Convert to frozenset for GraphStore API
-        live_chunk_ids_frozen = frozenset(live_chunk_ids)
-
-        # Phase 2: Count stale mentions (read-only)
-        stale_count = await self._graph_store.count_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
-
-        # Phase 3: Prune stale mentions
-        await self._graph_store.prune_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
-
-        # Phase 4: Delete orphan nodes and edges
-        gc_result = await self._graph_store.delete_orphan_nodes_and_edges(collection, ns=namespace)
-
-        # Phase 5: Spawn (or mark pending) a community rebuild when orphans were removed
+        # Spawn (or mark pending) a community rebuild when orphans were removed
         rebuild_key = (namespace, collection)
         if gc_result.communities_invalidated:
             # Check if rebuild already in flight
@@ -673,6 +689,43 @@ class MaintenanceLoop:
                 self._spawn_rebuild_task(namespace, collection)
 
         return (stale_count, gc_result)
+
+    async def _collect_graph_garbage(self, collection: str, namespace: str) -> tuple[int, Any] | None:
+        """Snapshot, count, prune, delete orphans: the part of graph GC that needs the collection lock.
+
+        Returns ``(stale_count, GcPassResult)``, or ``None`` when the live chunks could not be listed.
+        """
+        # Fetch live chunk IDs from the search store
+        live_chunk_ids: set[str] = set()
+        try:
+            async for chunk in self._search_store.list_chunks_raw(collection, namespace):
+                chunk_id: str = chunk.get("chunk_id", "")
+                if chunk_id:
+                    live_chunk_ids.add(chunk_id)
+        except Exception as exc:  # noqa: BLE001 — store failure skips graph GC for this collection; maintenance pass must survive
+            logger.warning(
+                "MaintenanceLoop: list_chunks_raw failed for %s/%s, skipping graph GC: %s",
+                namespace,
+                collection,
+                exc,
+            )
+            return None
+
+        # Convert to frozenset for GraphStore API
+        live_chunk_ids_frozen = frozenset(live_chunk_ids)
+
+        # Count stale mentions (read-only)
+        stale_count = await self._graph_store.count_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
+
+        # Prune stale mentions
+        await self._graph_store.prune_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
+
+        # Delete orphan nodes and edges. A successful, empty chunk listing means the
+        # collection's last document is gone: the emptied mentions table is then authoritative.
+        gc_result = await self._graph_store.delete_orphan_nodes_and_edges(
+            collection, ns=namespace, no_live_chunks=not live_chunk_ids
+        )
+        return stale_count, gc_result
 
     async def _run_collection_graph_gc(
         self, collection: str, namespace: str, col_health: dict[str, Any]
@@ -901,10 +954,10 @@ class MaintenanceLoop:
         if self._graph_store is None or self._graph_config is None:
             return
 
-        from archon_search.alias_loader import AliasLoader  # noqa: PLC0415
-        from archon_search.config import SearchConfig  # noqa: PLC0415
-        from archon_search.embedder import Embedder  # noqa: PLC0415
-        from archon_search.synonym_detector import SynonymDetector  # noqa: PLC0415
+        from archon_search.alias_loader import AliasLoader
+        from archon_search.config import SearchConfig
+        from archon_search.embedder import Embedder
+        from archon_search.synonym_detector import SynonymDetector
 
         # Step 1: Load manual alias edges and produce skip_pairs to exclude from ANN.
         # S319 race: this method runs as a background task scheduled by the
@@ -919,7 +972,7 @@ class MaintenanceLoop:
             if not alias_edges and self._graph_config.alias_file:
                 await asyncio.sleep(0.5)
                 alias_edges, skip_pairs = await alias_loader.load(collection, ns)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning(
                 "MaintenanceLoop: AliasLoader.load() failed for %s/%s; proceeding with ANN only",
                 ns, collection, exc_info=True,
@@ -1051,7 +1104,7 @@ class MaintenanceLoop:
         if self._graph_store is None:
             return
 
-        from archon_search.pagerank_builder import PageRankBuilder  # noqa: PLC0415
+        from archon_search.pagerank_builder import PageRankBuilder
 
         builder = PageRankBuilder(self._graph_store)
         await builder.build(collection, ns)
@@ -1093,7 +1146,7 @@ class MaintenanceLoop:
                 jobs_by_key[_retry_key(job)].append(job)
         histories = {key: _RetryKeyHistory.of(key_jobs) for key, key_jobs in jobs_by_key.items()}
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # retry_max_age_hours=0 puts the cutoff at now, so every job is aged out: retry is disabled.
         cutoff = now - timedelta(hours=self._config.retry_max_age_hours)
 
@@ -1191,7 +1244,7 @@ class MaintenanceLoop:
                 result = self._job_store.transition(
                     failed.job_id, from_statuses={JobStatus.FAILED}, to_status=JobStatus.FAILED_EXPIRED
                 )
-            except Exception:  # noqa: BLE001 — one failed write must not abort the pass
+            except Exception:
                 logger.warning(
                     "MaintenanceLoop: could not expire job %s; it stays FAILED until the next pass",
                     failed.job_id, exc_info=True,
@@ -1221,7 +1274,7 @@ class MaintenanceLoop:
                 ingest_options=job.ingest_options,
                 retry_count=attempt,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — re-enqueue failure is logged and reported as False; pass must survive
             logger.warning(
                 "MaintenanceLoop: failed to re-enqueue job for %s in %s/%s: %s",
                 job.source_path, job.namespace, job.collection, exc,
@@ -1238,11 +1291,11 @@ class MaintenanceLoop:
         """
         try:
             self._dispatch_retry(retry_job)
-        except Exception:  # noqa: BLE001 — logged with traceback; the pass continues
+        except Exception:
             logger.exception("MaintenanceLoop: failed to dispatch retry job %s", retry_job.job_id)
             try:
                 self._job_store.update(retry_job.job_id, status=JobStatus.FAILED, error=RETRY_DISPATCH_FAILED_DETAIL)
-            except Exception:  # noqa: BLE001 — best-effort status write
+            except Exception:
                 logger.exception("MaintenanceLoop: could not persist FAILED status for retry job %s", retry_job.job_id)
                 return True
         return False
@@ -1263,7 +1316,7 @@ class MaintenanceLoop:
         After all per-collection work: run _run_failed_ingest_retry() once.
         Then write the state file atomically.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_str = now.isoformat()
 
         state = self._load_state()
@@ -1279,7 +1332,7 @@ class MaintenanceLoop:
         # Discover all collections.
         try:
             collections = await self._search_store.list_collections()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — maintenance pass logs and aborts on any store failure instead of crashing the loop
             logger.error("MaintenanceLoop: list_collections failed during pass: %s", exc)
             return
 
@@ -1307,7 +1360,7 @@ class MaintenanceLoop:
                 if meta is not None:
                     meta_chunk_count = meta.chunk_count
                     mutations_since_recompute = meta.mutations_since_recompute
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — per-collection metadata failure is logged; pass continues
                 logger.warning(
                     "MaintenanceLoop: get_collection_meta failed for %s: %s", key, exc
                 )
@@ -1331,7 +1384,7 @@ class MaintenanceLoop:
             for label, policy, failed_detail in collection_policies:
                 try:
                     await policy(col, ns)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.exception("MaintenanceLoop: %s failed for %s", label, key)
                     col_health["last_error"] = failed_detail
 
@@ -1340,7 +1393,7 @@ class MaintenanceLoop:
                     per_collection_stale_counts.append(
                         await self._run_collection_graph_gc(col, ns, col_health)
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.exception("MaintenanceLoop: %s failed for %s", _GRAPH_GC, key)
                     col_health["last_error"] = GRAPH_GC_FAILED_DETAIL
             else:
@@ -1369,7 +1422,7 @@ class MaintenanceLoop:
                 col_health["meta_chunk_count"] = meta.chunk_count
                 col_health["mutations_since_recompute"] = meta.mutations_since_recompute
                 health[meta_key] = col_health
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — health back-fill is best-effort; pass continues on any store failure
             logger.warning(
                 "MaintenanceLoop: get_all_collections_meta failed; "
                 "empty collections may lack health entries: %s",
@@ -1398,15 +1451,19 @@ class MaintenanceLoop:
         # once per pass regardless of which collections had enrichment.
         try:
             self._drain_communities_pending_rebuild()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — community-rebuild drain failure is logged; pass must still finish and save state
             logger.error("MaintenanceLoop: _drain_communities_pending_rebuild failed: %s", exc)
+
+        # Pass-level version cleanup: the collection-meta table is rewritten by every ingest batch and
+        # no per-collection policy touches it, so superseded table versions accumulate on disk.
+        await self._run_version_cleanup()
 
         # Pass-level retry (once per pass, after all per-collection work).
         # Passes the pass-level health dict so the method mutates it in-place;
         # no internal save is done by the method.
         try:
             await self._run_failed_ingest_retry(health)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — retry failure is logged; pass must still finish and save state
             logger.error("MaintenanceLoop: _run_failed_ingest_retry failed: %s", exc)
 
         # Write state atomically.
@@ -1446,7 +1503,7 @@ class MaintenanceLoop:
                     self._trigger_event.wait(),
                     timeout=interval_seconds,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Scheduled interval elapsed.
                 pass
 

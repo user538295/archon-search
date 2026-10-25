@@ -37,7 +37,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 if TYPE_CHECKING:
@@ -47,7 +47,12 @@ if TYPE_CHECKING:
     from archon_search.sync import SearchCollectionSync
 
 from archon_search.jobs.model import job_to_dict
-from archon_search.server.routes_jobs import INTERNAL_ERROR_DETAIL, JOB_SUPERSEDED_DETAIL, _persist_job_status
+from archon_search.server.authz import ADMIN_ONLY_RESPONSES, require_admin_dependency
+from archon_search.server.routes_jobs import (
+    INTERNAL_ERROR_DETAIL,
+    JOB_SUPERSEDED_DETAIL,
+    _persist_job_status,
+)
 from archon_search.server.schemas import ErrorDetail, JobResponse, StartupSyncResult
 from archon_search.sync_suppression import clear_sync_suppressed_sentinel
 from archon_search.types import JobStatus, SyncJob
@@ -103,7 +108,7 @@ async def _try_acquire(lock: asyncio.Lock) -> bool:
     return True
 
 
-def _supersede_legacy_sync_jobs(job_store: "JobStore") -> None:
+def _supersede_legacy_sync_jobs(job_store: JobStore) -> None:
     """Mark every legacy QUEUED/PENDING SyncJob FAILED (best-effort), so none stays non-terminal forever.
 
     A RUNNING SyncJob is never touched: the startup sync creates its job RUNNING before it waits for the lock.
@@ -115,7 +120,7 @@ def _supersede_legacy_sync_jobs(job_store: "JobStore") -> None:
             )
 
 
-def _clear_degraded_sync_state(app_state: "State") -> None:
+def _clear_degraded_sync_state(app_state: State) -> None:
     """Clear sticky startup-sync degradation after a clean manual sync.
 
     A clean ``POST /sync`` (no exception, no per-collection errors) is the
@@ -152,12 +157,12 @@ def _clear_degraded_sync_state(app_state: "State") -> None:
 
 
 async def _sync_task(
-    job: "SyncJob",
-    job_store: "JobStore",
-    collection_sync: "SearchCollectionSync",
+    job: SyncJob,
+    job_store: JobStore,
+    collection_sync: SearchCollectionSync,
     collections: list[str],
     lock: asyncio.Lock,
-    app_state: "State",
+    app_state: State,
 ) -> None:
     """Drive a SyncJob from RUNNING to DONE, FAILED, or CANCELLED.
 
@@ -215,12 +220,12 @@ async def _sync_task(
 
 
 def _spawn_sync_task(
-    job: "SyncJob",
-    job_store: "JobStore",
-    collection_sync: "SearchCollectionSync",
+    job: SyncJob,
+    job_store: JobStore,
+    collection_sync: SearchCollectionSync,
     collections: list[str],
     lock: asyncio.Lock,
-    app_state: "State",
+    app_state: State,
 ) -> bool:
     """Spawn and track ``_sync_task`` for *job*, which then owns the held *lock*; return whether it was spawned.
 
@@ -239,7 +244,7 @@ def _spawn_sync_task(
     )
     try:
         task = asyncio.create_task(sync_coro)
-    except Exception:  # noqa: BLE001 — any spawn failure maps to one sanitized 500
+    except Exception:
         sync_coro.close()
         logger.exception("trigger_sync: failed to spawn _sync_task for job %s", job.job_id)
         _persist_job_status(
@@ -257,7 +262,8 @@ def _spawn_sync_task(
     name="trigger_sync",
     status_code=202,
     response_model=JobResponse,
-    responses=_SYNC_ERROR_RESPONSES,
+    responses={**_SYNC_ERROR_RESPONSES, **ADMIN_ONLY_RESPONSES},
+    dependencies=[Depends(require_admin_dependency)],
 )
 async def trigger_sync(request: Request) -> JSONResponse:
     """Start an async full-collection sync — CSP120 BE-3.
@@ -272,8 +278,8 @@ async def trigger_sync(request: Request) -> JSONResponse:
     - 500: The job could not be saved or its task could not be started
       (sanitized ``{"detail": "internal error"}``); a retry is accepted (no 409).
     """
-    job_store: "JobStore" = request.app.state.job_store
-    collection_sync: "SearchCollectionSync" = request.app.state.collection_sync
+    job_store: JobStore = request.app.state.job_store
+    collection_sync: SearchCollectionSync = request.app.state.collection_sync
     config = request.app.state.config
     lock: asyncio.Lock = request.app.state.sync_lock
 
@@ -290,7 +296,7 @@ async def trigger_sync(request: Request) -> JSONResponse:
     # schedules a SyncJob, so a QUEUED one would never run.
     try:
         running_job = job_store.create_sync(namespace=request.state.namespace)
-    except Exception:  # noqa: BLE001 — no job exists; any persist failure maps to one sanitized 500
+    except Exception:
         logger.exception("trigger_sync: failed to persist a SyncJob")
         lock.release()
         return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)

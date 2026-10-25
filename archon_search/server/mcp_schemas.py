@@ -12,9 +12,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from archon_search._types import IngestErrorCode
-
 from pydantic import BaseModel, ConfigDict, Field
+
+from archon_search._types import IngestErrorCode
 
 if TYPE_CHECKING:
     from archon_search._types import (

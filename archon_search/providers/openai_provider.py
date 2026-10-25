@@ -67,7 +67,7 @@ class OpenAIQueryExpansionProvider:
         self._client: object | None = None
 
         try:
-            import openai  # noqa: PLC0415
+            import openai
 
             self._openai_available = True
             self._openai_module = openai
@@ -128,14 +128,14 @@ class OpenAIQueryExpansionProvider:
                 ),
                 timeout=timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _logger.warning(
                 "OpenAIQueryExpansionProvider: HyDE call timed out after %.1fs (fp=%s)",
                 timeout_seconds,
                 _query_fingerprint(query),
             )
             return None
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — provider contract: never raise, any client/SDK failure degrades gracefully
             _logger.warning(
                 "OpenAIQueryExpansionProvider: error during HyDE generation (fp=%s)",
                 _query_fingerprint(query),
@@ -210,14 +210,14 @@ class OpenAIQueryExpansionProvider:
                 ),
                 timeout=timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _logger.warning(
                 "OpenAIQueryExpansionProvider: RAG Fusion call timed out after %.1fs (fp=%s)",
                 timeout_seconds,
                 _query_fingerprint(query),
             )
             return []
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — provider contract: never raise, any client/SDK failure degrades gracefully
             _logger.warning(
                 "OpenAIQueryExpansionProvider: error during RAG Fusion decomposition (fp=%s)",
                 _query_fingerprint(query),

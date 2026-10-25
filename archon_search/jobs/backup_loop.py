@@ -23,11 +23,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from archon_search._durable_io import atomic_write_json
+from archon_search._durable_io import atomic_write_json, ensure_private_dir
 from archon_search.jobs.model import JobStatus
 
 if TYPE_CHECKING:
@@ -57,9 +57,9 @@ class BackupLoop:
 
     def __init__(
         self,
-        job_store: "JobStore",
-        search_store: "SearchStore",
-        config: "BackupConfig",
+        job_store: JobStore,
+        search_store: SearchStore,
+        config: BackupConfig,
         data_dir: Path,
     ) -> None:
         self._job_store = job_store
@@ -122,7 +122,7 @@ class BackupLoop:
 
     def _save_state(self, state: dict[str, str]) -> None:
         """Atomic durable write of the state map via the shared helper."""
-        self._state_file.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self._state_file.parent)
         atomic_write_json(self._state_file, state)
 
     # ------------------------------------------------------------------
@@ -162,16 +162,16 @@ class BackupLoop:
         Updates ``_last_tick_at`` even when the tick fails so observability
         reflects that the scheduler is alive.
         """
-        self._last_tick_at = datetime.now(timezone.utc).isoformat()
+        self._last_tick_at = datetime.now(UTC).isoformat()
         try:
             collections = await self._search_store.list_collections()
-        except Exception as exc:  # noqa: BLE001 — survive any backend hiccup
+        except Exception as exc:  # noqa: BLE001 — scheduler tick must log and survive any store failure
             logger.error("BackupLoop: list_collections failed during tick: %s", exc)
             return
 
         try:
             queued = self._job_store.list_queued_bulk()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — scheduler tick must log and survive any job-store failure
             logger.error("BackupLoop: list_queued_bulk failed during tick: %s", exc)
             return
         # Build a set of (ns, col) for already-queued backup jobs — O(1) dedup
@@ -182,7 +182,7 @@ class BackupLoop:
             if getattr(j, "source", "user") == "backup"
         }
 
-        ts = datetime.now(timezone.utc).strftime(_ARCHIVE_TIMESTAMP_FORMAT)
+        ts = datetime.now(UTC).strftime(_ARCHIVE_TIMESTAMP_FORMAT)
         for info in collections:
             ns = info.namespace
             col = info.name
@@ -198,7 +198,7 @@ class BackupLoop:
                 job = self._job_store.create_export(
                     col, archive_path, tmp_path, namespace=ns, source="backup"
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — one collection's enqueue failure must not stop the others
                 logger.error("BackupLoop: failed to enqueue backup for %s/%s: %s", ns, col, exc)
                 continue
             self.track(job.job_id, ns, col)
@@ -216,8 +216,8 @@ class BackupLoop:
         if not state:
             return False
         threshold = timedelta(hours=self._config.interval_hours)
-        now = datetime.now(timezone.utc)
-        for _, ts_str in state.items():
+        now = datetime.now(UTC)
+        for ts_str in state.values():
             try:
                 ts = datetime.fromisoformat(ts_str)
             except ValueError:
@@ -279,7 +279,7 @@ class BackupLoop:
         while True:
             try:
                 self._drain_completed()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — background completion loop must survive any drain failure
                 logger.error("BackupLoop: completion drain failed: %s", exc)
             await asyncio.sleep(_BACKUP_COMPLETION_POLL_SECONDS)
 

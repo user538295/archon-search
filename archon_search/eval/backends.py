@@ -11,6 +11,12 @@ import hashlib
 import logging
 import math
 import re
+from datetime import UTC
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from archon_search.graph_expander import ExpandedQuery
+    from archon_search.graph_store import GraphStore
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +104,7 @@ class StubGraphExpander:
     def __init__(self, entity_map: dict[str, list[str]]) -> None:
         self._entity_map = {k.lower(): v for k, v in entity_map.items()}
 
-    async def expand(self, query: str, collection: str, ns: str = "default") -> "ExpandedQuery":  # type: ignore[name-defined]  # noqa: F821
+    async def expand(self, query: str, collection: str, ns: str = "default") -> ExpandedQuery:  # type: ignore[name-defined]
         from archon_search.graph_expander import (
             ExpandedQuery,
             build_expanded_text,
@@ -174,7 +180,7 @@ class CommunityStoreStub:
         self, collection: str, ns: str = "default"
     ) -> list:  # list[Community]
         """Return one stub community for graph and multihop-* collections; empty otherwise."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from archon_search.graph_types import Community
 
@@ -185,7 +191,7 @@ class CommunityStoreStub:
                 community_id=_STUB_COMMUNITY_ID,
                 entity_ids=["stub-entity-01", "stub-entity-02"],
                 representative_chunk_ids=list(_STUB_CHUNK_IDS),
-                built_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                built_at=datetime(2025, 1, 1, tzinfo=UTC),
                 summary_text=None,
             )
         ]
@@ -215,7 +221,7 @@ class CommunityStoreStub:
         self, collection: str, entity_ids: list[str], ns: str = "default"
     ) -> list:  # list[Community]
         """Return one stub community when entity_ids are non-empty for graph or multihop-* collections."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from archon_search.graph_types import Community
 
@@ -226,7 +232,7 @@ class CommunityStoreStub:
                 community_id=_STUB_COMMUNITY_ID,
                 entity_ids=list(entity_ids),
                 representative_chunk_ids=list(_STUB_CHUNK_IDS),
-                built_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                built_at=datetime(2025, 1, 1, tzinfo=UTC),
                 summary_text=None,
             )
         ]
@@ -245,7 +251,7 @@ class RealCommunityEvalBackend:
     where real community detection has pre-built communities.
     """
 
-    def __init__(self, graph_store: "GraphStore") -> None:  # type: ignore[name-defined]  # noqa: F821
+    def __init__(self, graph_store: GraphStore) -> None:  # type: ignore[name-defined]
         self._graph_store = graph_store
 
     async def communities_table_exists(self, collection: str, ns: str = "default") -> bool:
@@ -297,10 +303,10 @@ class DispatchingCommunityStore:
     through this class, name the exact call site here when re-adding them.
     """
 
-    def __init__(self, backend_map: dict[str, "RealCommunityEvalBackend | CommunityStoreStub"]) -> None:  # type: ignore[name-defined]  # noqa: F821
+    def __init__(self, backend_map: dict[str, RealCommunityEvalBackend | CommunityStoreStub]) -> None:  # type: ignore[name-defined]
         self._backend_map = backend_map
 
-    def _get_backend(self, collection: str) -> "RealCommunityEvalBackend | CommunityStoreStub":  # type: ignore[name-defined]  # noqa: F821
+    def _get_backend(self, collection: str) -> RealCommunityEvalBackend | CommunityStoreStub:  # type: ignore[name-defined]
         """Get the backend for a collection, falling back to CommunityStoreStub.
 
         Collections not in the map (e.g. the ``graph`` collection retained for
@@ -343,10 +349,10 @@ class RealGraphExpander:
     from a GraphStore (as opposed to the stub which uses a fixed dictionary).
     """
 
-    def __init__(self, graph_store: "GraphStore") -> None:  # type: ignore[name-defined]  # noqa: F821
+    def __init__(self, graph_store: GraphStore) -> None:  # type: ignore[name-defined]
         self._graph_store = graph_store
 
-    async def expand(self, query: str, collection: str, ns: str = "default") -> "ExpandedQuery":  # type: ignore[name-defined]  # noqa: F821
+    async def expand(self, query: str, collection: str, ns: str = "default") -> ExpandedQuery:  # type: ignore[name-defined]
         """Expand query with first-degree graph-neighbour entity names.
 
         Reads entity names from the eval GraphStore's node table and

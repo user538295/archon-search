@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
-from typing import Callable
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -386,7 +386,7 @@ def compute_latency_percentiles(latencies_ms: list[float]) -> tuple[float, float
 
     def _at(p: float) -> float:
         # Round to 9 dp before ceil to absorb fp drift like 19.000000000000004.
-        rank = int(math.ceil(round(p / 100.0 * n, 9)))
+        rank = math.ceil(round(p / 100.0 * n, 9))
         rank = max(1, min(rank, n))
         return sorted_latencies[rank - 1]
 

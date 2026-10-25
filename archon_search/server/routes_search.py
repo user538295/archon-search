@@ -21,6 +21,8 @@ from archon_search.embedder_cache import (
 )
 from archon_search.filters import SearchFilters
 from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
+from archon_search.observability import bind_stage_recorder
+from archon_search.observability import correlation_id as _correlation_id
 from archon_search.pipeline import (
     METADATA_STORE_UNAVAILABLE_CODE,
     METADATA_STORE_UNAVAILABLE_DETAIL,
@@ -29,7 +31,23 @@ from archon_search.pipeline import (
     GraphCommunitiesNotBuiltError,
     MetadataLookupError,
 )
-from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
+from archon_search.rag_fusion import (
+    RAG_FUSION_DEPENDENCY_DETAIL,
+    RAGFusionDependencyError,
+)
+from archon_search.server._hyde import RequestHyDE
+from archon_search.server._search_budget import (
+    EMBEDDER_WARMUP_WAIT_SECONDS,
+    SearchBudgetExceeded,
+    run_within_budget,
+    warmup_for_search,
+)
+from archon_search.server._search_budget import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+)
+from archon_search.server._validators import (
+    validate_scope_filter as _check_scope_filter,
+)
 from archon_search.server.schemas import (
     GRAPH_COMMUNITIES_NOT_BUILT_CODE,
     INVALID_SCOPE_FILTER_CODE,
@@ -39,16 +57,6 @@ from archon_search.server.schemas import (
     ExcludedCollectionSchema,
     route_422_response,
 )
-from archon_search.server._search_budget import (
-    EMBEDDER_WARMUP_WAIT_SECONDS,
-    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
-    SearchBudgetExceeded,
-    run_within_budget,
-    warmup_for_search,
-)
-from archon_search.server._hyde import RequestHyDE
-from archon_search.server._validators import validate_scope_filter as _check_scope_filter
-from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
 if TYPE_CHECKING:
@@ -57,7 +65,7 @@ if TYPE_CHECKING:
 # Upper bound on how long a single POST /search request waits on
 # embedder_cache.get_or_load() before degrading to the FTS leg alone.
 #
-# What can be slow here is NOT the ONNX build: make_embedder() only constructs a
+# What can be slow here is NOT the model build: make_embedder() only constructs a
 # lazy backend (embedder.py) and the weights are built on the first encode(), one
 # stage later in warmup_for_search. This wait is the cache's *handoff* — queueing
 # behind a saturated asyncio.to_thread executor, or blocking as a deduplicated
@@ -85,7 +93,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _discard_abandoned_load(task: "asyncio.Future[object]") -> None:
+def _discard_abandoned_load(task: asyncio.Future[object]) -> None:
     """Consume the outcome of an embedder load this request stopped waiting for.
 
     The load is shielded so it keeps running and caches its embedder for later
@@ -119,7 +127,7 @@ def _enqueue_error(
                 correlation_id=_correlation_id.get(),
             )
         )
-    except Exception as tel_exc:
+    except Exception as tel_exc:  # noqa: BLE001 — telemetry must never break the request; failure is logged
         logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
 
 
@@ -205,7 +213,7 @@ class SearchRequest(BaseModel):
         return stripped
 
     @model_validator(mode="after")
-    def _validate_collection_selection(self) -> "SearchRequest":
+    def _validate_collection_selection(self) -> SearchRequest:
         if self.collection is not None and self.collections is not None:
             raise ValueError("supply either collection or collections, not both")
         if self.collection is None and self.collections is None:
@@ -245,7 +253,7 @@ class SearchResultSchema(BaseModel):
     acl_gate: AclGateSchema | None = None
 
     @classmethod
-    def from_result(cls, r: SearchResult, *, include_acl_gate: bool = False) -> "SearchResultSchema":
+    def from_result(cls, r: SearchResult, *, include_acl_gate: bool = False) -> SearchResultSchema:
         gate: AclGateSchema | None = None
         if include_acl_gate:
             gate = AclGateSchema(
@@ -384,7 +392,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             return dependency_error_response("search", exc)
         except EmbedderNotReadyError:
             raise  # retryable 503 (app-level handler), as for the fan-out itself
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — any HyDE/embedding failure is mapped to an internal-error response
             return _hyde_failure_response(writer, start, exc)
         try:
             # search_many's own _fanout_timeout_seconds bounds the per-collection leg
@@ -483,8 +491,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
 
     try:
         meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
-    except Exception as exc:
-        logger.exception("search: meta lookup failed for collection %r: %s", body.collection, exc)
+    except Exception:
+        logger.exception("search: meta lookup failed for collection %r", body.collection)
         return JSONResponse(
             {"detail": METADATA_STORE_UNAVAILABLE_DETAIL, "code": METADATA_STORE_UNAVAILABLE_CODE},
             status_code=503,
@@ -521,7 +529,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                     embedder = await asyncio.wait_for(
                         asyncio.shield(load), timeout=_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if load.done():
                         # Not this bound expiring: since 3.11 asyncio.TimeoutError *is*
                         # the builtin TimeoutError (an OSError), so a TimeoutError the
@@ -562,15 +570,12 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 logger.warning("search: embedder_cache absent from app.state — falling back to global embedder")
                 embedder = pipeline.global_embedder
                 active_model = config.embedding_model
-            # Outside the wait_for below by design (S184): a cold ONNX build must not
+            # Outside the wait_for below by design (S184): a cold model build must not
             # consume the search budget. Both legs are bounded and degrade instead of
             # parking the connection — the reranker to the fused ranking (S288), the
             # embedder to the FTS leg alone (S290); see _search_budget.warmup_for_search.
             # The same cold-model root cause is reported by S278/S288/S299/S302.
-            # (S283 was a distinct bug, not this gap: Reranker._warmup_failed latched a
-            # single transient warm-up failure permanently, silently no-opping this
-            # call and the S281 ingest gate alike for the rest of the process — fixed
-            # in reranker.py so a failed attempt is retried, not latched.)
+            # A failed warm-up attempt is not latched: the next call retries it (S283).
             warmup = await warmup_for_search(pipeline, embedder)
             fts_only = warmup.fts_only or embedder_cold
             # Resolved only now that the collection's embedder is known, so the
@@ -583,7 +588,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 return dependency_error_response("search", exc)
             except EmbedderNotReadyError:
                 raise  # retryable 503, answered below
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — any HyDE/embedding failure is mapped to an internal-error response
                 _emit_timings()
                 return _hyde_failure_response(writer, start, exc)
             # run_within_budget, not a bare asyncio.wait_for: since 3.11

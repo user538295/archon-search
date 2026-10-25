@@ -8,14 +8,15 @@ machine-readable reason for each skip.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from archon_search.config import SearchConfig
 from archon_search.jobs.backup_loop import BackupLoop
 from archon_search.jobs.store import JobStore
+from archon_search.server.authz import ADMIN_ONLY_RESPONSES, require_admin_dependency
 from archon_search.server.schemas import (
     BackupTriggerResponse,
     ErrorDetail,
@@ -37,7 +38,8 @@ _ARCHIVE_TIMESTAMP_FORMAT: str = "%Y%m%dT%H%M%SZ"
     "/backup/trigger",
     status_code=202,
     response_model=BackupTriggerResponse,
-    responses={401: {"model": ErrorDetail}},
+    responses={401: {"model": ErrorDetail}, **ADMIN_ONLY_RESPONSES},
+    dependencies=[Depends(require_admin_dependency)],
 )
 async def trigger_backup(request: Request) -> BackupTriggerResponse:
     """Enqueue backup export jobs for every eligible collection in the caller's namespace."""
@@ -57,7 +59,7 @@ async def trigger_backup(request: Request) -> BackupTriggerResponse:
         if getattr(j, "source", "user") == "backup"
     }
 
-    ts = datetime.now(timezone.utc).strftime(_ARCHIVE_TIMESTAMP_FORMAT)
+    ts = datetime.now(UTC).strftime(_ARCHIVE_TIMESTAMP_FORMAT)
     queued_jobs: list[QueuedBackupJob] = []
     skipped: list[SkippedItem] = []
 
@@ -82,7 +84,7 @@ async def trigger_backup(request: Request) -> BackupTriggerResponse:
             job = job_store.create_export(
                 col, archive_path, tmp_path, namespace=ns, source="backup"
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — one collection's enqueue failure must not abort the batch; recorded as skipped
             logger.error(
                 "trigger_backup: failed to enqueue backup for %s/%s: %s", ns, col, exc
             )

@@ -7,16 +7,21 @@ from datetime import date
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from archon_search.config import SearchConfig
-from archon_search.server.schemas_telemetry import DisabledResponse, EntriesResponse, StatsResponse
+from archon_search.server.authz import ADMIN_ONLY_RESPONSES, require_admin_dependency
+from archon_search.server.schemas_telemetry import (
+    DisabledResponse,
+    EntriesResponse,
+    StatsResponse,
+)
 from archon_search.telemetry.entry import EndpointKind, ErrorKind, Status
 from archon_search.telemetry.reader import TelemetryReader
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin_dependency)], responses=ADMIN_ONLY_RESPONSES)
 
 
 @router.get("/telemetry/stats")

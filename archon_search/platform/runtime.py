@@ -39,7 +39,7 @@ class SearchRuntime:
     def detect_gpu_type(self) -> GpuType:
         """Detect available GPU acceleration: CUDA on Linux, METAL on ARM macOS, NONE otherwise."""
         try:
-            result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=5)
+            result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=5, check=False)
             if result.returncode == 0:
                 return GpuType.CUDA
         except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -63,12 +63,12 @@ def get_search_service() -> SearchServiceLifecycle:
     """Return the platform-appropriate service lifecycle implementation."""
     system = platform.system()
     if system == "Darwin":
-        from archon_search.platform.macos import LaunchdSearchService  # noqa: PLC0415
+        from archon_search.platform.macos import LaunchdSearchService
         return LaunchdSearchService()
     if system == "Linux":
-        from archon_search.platform.linux import SystemdSearchService  # noqa: PLC0415
+        from archon_search.platform.linux import SystemdSearchService
         return SystemdSearchService()
     if system == "Windows":
-        from archon_search.platform.windows import WindowsSearchService  # noqa: PLC0415
+        from archon_search.platform.windows import WindowsSearchService
         return WindowsSearchService()
     raise NotImplementedError(f"Service lifecycle not implemented for platform: {system}")

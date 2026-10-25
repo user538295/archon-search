@@ -15,11 +15,15 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import UTC
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
+from archon_search._durable_io import ensure_private_dir
 from archon_search.constants import _validate_namespace, _validate_segment_safe
 from archon_search.graph_types import (
+    MAX_IMPACT_DEPTH,
+    MAX_IMPACT_GROUP_SIZE,
     Community,
     EntityType,
     GcPassResult,
@@ -30,15 +34,17 @@ from archon_search.graph_types import (
     ImpactEdge,
     ImpactGroup,
     ImpactResult,
-    MAX_IMPACT_DEPTH,
-    MAX_IMPACT_GROUP_SIZE,
     RelationshipType,
 )
+from archon_search.lance_session import new_lance_session
 from archon_search.store_filters import _sql_quote_str
 
 if TYPE_CHECKING:
+    from datetime import datetime, timedelta
+
     import lancedb
-    from datetime import datetime
+
+    from archon_search.acl import ChunkVisibility
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 _ARCHON_PREFIX = "_archon_"
+_GRAPH_TABLE_PREFIX = _ARCHON_PREFIX + "graph_"
 _GC_DELETE_BATCH_SIZE = 500
 
 # E2g BE-3: def/ref edges (calls/imports/defines/inherits, produced by
@@ -167,7 +174,7 @@ class GraphStore:
 
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = Path(db_path).expanduser()
-        self._db: Optional[lancedb.db.AsyncConnection] = None
+        self._db: lancedb.db.AsyncConnection | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -175,10 +182,10 @@ class GraphStore:
 
     async def connect(self) -> None:
         """Open the LanceDB async connection."""
-        import lancedb  # noqa: PLC0415
+        import lancedb
 
-        self._db_path.mkdir(parents=True, exist_ok=True)
-        self._db = await lancedb.connect_async(str(self._db_path))
+        ensure_private_dir(self._db_path)
+        self._db = await lancedb.connect_async(str(self._db_path), session=new_lance_session())
 
     async def disconnect(self) -> None:
         """Close the connection (noop if already disconnected)."""
@@ -191,10 +198,25 @@ class GraphStore:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _require_db(self) -> "lancedb.db.AsyncConnection":
+    def _require_db(self) -> lancedb.db.AsyncConnection:
         if self._db is None:
             raise RuntimeError("GraphStore not connected — call connect() first")
         return self._db
+
+    async def prune_versions(self, retention: timedelta) -> None:
+        """Compact and delete the versions older than *retention* of every graph table.
+
+        See ``SearchStore.prune_versions``; the newest version of each table is never removed. A table
+        that fails is logged and the others still run.
+        """
+        db = self._require_db()
+        for name in (await db.list_tables()).tables:
+            if not name.startswith(_GRAPH_TABLE_PREFIX):
+                continue
+            try:
+                await (await db.open_table(name)).optimize(cleanup_older_than=retention)
+            except Exception:  # one table's failure must not stop the others
+                logger.warning("prune_versions failed for graph table %s; it is retried next pass", name, exc_info=True)
 
     def _validate_collection(self, collection: str) -> None:
         """Raise ValueError for collection names that fail _COLLECTION_RE."""
@@ -231,7 +253,7 @@ class GraphStore:
         against their absence with ``has_name_embedding_col``/``has_pagerank_score_col``
         checks.
         """
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         return pa.schema([
             pa.field("id", pa.utf8()),
@@ -248,7 +270,7 @@ class GraphStore:
     @staticmethod
     def _edges_schema():  # type: ignore[return]
         """Return the PyArrow schema for the edges table."""
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         return pa.schema([
             pa.field("id", pa.utf8()),
@@ -268,7 +290,7 @@ class GraphStore:
         ``built_at`` is stored as ISO 8601 UTC string (same convention as the rest of
         the codebase; no timezone coercion enforced at the storage layer).
         """
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         return pa.schema([
             pa.field("community_id", pa.utf8()),
@@ -286,7 +308,7 @@ class GraphStore:
         The mentions table allows duplicate rows with the same (entity_id, chunk_id)
         if an extractor produces the same entity twice in one chunk.
         """
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         return pa.schema([
             pa.field("entity_id", pa.utf8()),
@@ -318,7 +340,7 @@ class GraphStore:
             )
         else:
             # BE-7 migration: pre-E2g node tables lack pagerank_score; add it if absent.
-            import pyarrow as pa  # noqa: PLC0415
+            import pyarrow as pa
 
             nodes_tbl = await db.open_table(nodes_name)
             nodes_schema = await nodes_tbl.schema()
@@ -359,7 +381,7 @@ class GraphStore:
             await db.create_table(edges_name, schema=self._edges_schema())
         else:
             # BE-1 migration: pre-E2f edge tables lack extraction_method; add it if absent.
-            import pyarrow as pa  # noqa: PLC0415
+            import pyarrow as pa
 
             edges_tbl = await db.open_table(edges_name)
             edges_schema = await edges_tbl.schema()
@@ -396,7 +418,7 @@ class GraphStore:
         Uses ``merge_insert`` keyed on ``id`` so that re-ingesting the same
         document replaces existing rows rather than duplicating them.
         """
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         self._validate_collection(collection)
         _validate_namespace(ns)
@@ -619,7 +641,7 @@ class GraphStore:
         are silently skipped (e.g. a node deleted between compute and persist).
         No-op when *scores* is empty.
         """
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         self._validate_collection(collection)
         _validate_namespace(ns)
@@ -692,6 +714,7 @@ class GraphStore:
         extraction_method_filter: str | None,
         file_path: str | None,
         ns: str,
+        visibility: ChunkVisibility | None = None,
     ) -> ImpactResult:
         """Return the callers/callees blast radius for *symbol* — E2g BE-8.
 
@@ -749,6 +772,11 @@ class GraphStore:
         reflect only what was actually explored — deeper descendants reachable
         exclusively through the un-expanded remainder of that hop are not
         discovered and are therefore not counted anywhere in the result.
+
+        *visibility* (the caller's chunk-ACL view of *collection*, ``None`` = no ACL) hides what
+        came from a document the caller cannot read: such a symbol is never a root (the answer is
+        the same as for a symbol that does not exist) and such an edge is never traversed, so
+        neither it nor anything reachable only through it appears in the result.
         """
         self._validate_collection(collection)
         _validate_namespace(ns)
@@ -757,6 +785,8 @@ class GraphStore:
 
         candidates = await self.find_nodes_by_name(collection, [symbol], ns)
         code_symbol_candidates = [c for c in candidates if c.entity_type == EntityType.code_symbol]
+        if visibility is not None:
+            code_symbol_candidates = [c for c in code_symbol_candidates if visibility.doc_visible(c.source_doc_id)]
         if not code_symbol_candidates:
             return ImpactResult(
                 symbol=symbol, callers=empty_group, callees=empty_group, depth_used=0
@@ -782,12 +812,12 @@ class GraphStore:
 
         if want_callers:
             callers_group, callers_depth = await self._traverse_impact(
-                collection, root.id, effective_depth, "callers", extraction_method_filter, ns
+                collection, root.id, effective_depth, "callers", extraction_method_filter, ns, visibility
             )
             depth_used = max(depth_used, callers_depth)
         if want_callees:
             callees_group, callees_depth = await self._traverse_impact(
-                collection, root.id, effective_depth, "callees", extraction_method_filter, ns
+                collection, root.id, effective_depth, "callees", extraction_method_filter, ns, visibility
             )
             depth_used = max(depth_used, callees_depth)
 
@@ -860,7 +890,7 @@ class GraphStore:
 
     async def get_nodes_by_ids(
         self, collection: str, entity_ids: list[str], *, ns: str
-    ) -> dict[str, "GraphNode"]:
+    ) -> dict[str, GraphNode]:
         """Return a ``{id: GraphNode}`` map for *entity_ids*; empty dict for empty input.
 
         Performs a targeted lookup by IDs rather than a full table scan — use this
@@ -876,6 +906,7 @@ class GraphStore:
         direction: str,
         extraction_method_filter: str | None,
         ns: str,
+        visibility: ChunkVisibility | None = None,
     ) -> tuple[ImpactGroup, int]:
         """BFS outward from *root_id* one *direction* ("callers" or "callees").
 
@@ -905,6 +936,8 @@ class GraphStore:
             edges = await self.get_edges_for_nodes(collection, list(frontier), ns)
             if extraction_method_filter is not None:
                 edges = [e for e in edges if e.extraction_method == extraction_method_filter]
+            if visibility is not None:
+                edges = [e for e in edges if visibility.doc_visible(e.source_doc_id)]
 
             next_hop: dict[str, GraphEdge] = {}
             for edge in edges:
@@ -989,7 +1022,7 @@ class GraphStore:
         # ponytail: IvfFlat(distance_type="cosine") + idx.columns/idx.name reflection
         # assume the installed LanceDB API; verify on upgrade.
         """
-        from lancedb.index import IvfFlat  # noqa: PLC0415
+        from lancedb.index import IvfFlat
 
         self._validate_collection(collection)
         _validate_namespace(ns)
@@ -1018,7 +1051,7 @@ class GraphStore:
                 "name_embedding",
                 config=IvfFlat(distance_type="cosine"),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — index creation is an optimisation; failure falls back to brute-force scan
             logger.warning(
                 "_ensure_cosine_index: failed to create cosine index on name_embedding "
                 "for collection %r (ns=%r): %s — vector_search_nodes will use brute-force scan.",
@@ -1337,7 +1370,7 @@ class GraphStore:
         rebuild (``archon-search graph build-communities <collection>`` or the REST
         endpoint directly) to restore full community coverage.
         """
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         self._validate_collection(collection)
         _validate_namespace(ns)
@@ -1379,7 +1412,7 @@ class GraphStore:
         The pipeline uses delete-then-add per doc_id for idempotency on re-ingest:
         ``delete_mentions_by_doc(doc_id)`` followed by ``write_mentions(new_mentions)``.
         """
-        import pyarrow as pa  # noqa: PLC0415
+        import pyarrow as pa
 
         self._validate_collection(collection)
         _validate_namespace(ns)
@@ -1747,14 +1780,14 @@ class GraphStore:
         self,
         collection: str,
         ns: str,
-    ) -> tuple[int, "datetime | None"]:
+    ) -> tuple[int, datetime | None]:
         """Return ``(community_count, last_built_at)`` for *collection*.
 
         Returns ``(0, None)`` when the communities table has not been created or is
         empty.  ``last_built_at`` is the maximum ``built_at`` across all communities,
         returned as a :class:`datetime` (UTC).
         """
-        from datetime import datetime  # noqa: PLC0415
+        from datetime import datetime
 
         self._validate_collection(collection)
         _validate_namespace(ns)
@@ -1795,14 +1828,14 @@ class GraphStore:
     @staticmethod
     def _row_to_community(row: dict) -> Community:
         """Convert a raw LanceDB row dict to a :class:`Community` dataclass."""
-        from datetime import datetime, timezone  # noqa: PLC0415
+        from datetime import datetime
 
         raw_ts = row.get("built_at") or ""
         try:
             built_at = datetime.fromisoformat(raw_ts)
         except (ValueError, TypeError):
             logger.warning("_row_to_community: unparseable built_at %r; using epoch sentinel", raw_ts)
-            built_at = datetime(1970, 1, 1, tzinfo=timezone.utc)
+            built_at = datetime(1970, 1, 1, tzinfo=UTC)
 
         entity_ids = list(row.get("entity_ids") or [])
         representative_chunk_ids = list(row.get("representative_chunk_ids") or [])
@@ -2049,7 +2082,7 @@ class GraphStore:
     # ------------------------------------------------------------------
 
     async def delete_orphan_nodes_and_edges(
-        self, collection: str, ns: str
+        self, collection: str, ns: str, *, no_live_chunks: bool = False
     ) -> GcPassResult:
         """Delete graph nodes that have no remaining mention rows, then delete
         edges whose source or target endpoint was among the deleted nodes.
@@ -2057,6 +2090,14 @@ class GraphStore:
         A node is considered an "orphan" when the mentions table contains no row
         with that entity's ``entity_id``.  All edges touching an orphan node are
         also considered orphaned because at least one endpoint no longer exists.
+
+        Args:
+            no_live_chunks: The caller has verified that the collection holds no
+                chunks at all (its last document was deleted), so an empty
+                mentions table is authoritative: no entity is supported and
+                every non-exempt node and mention-derived edge is an orphan.
+                Without it an empty mentions table is indistinguishable from
+                "mentions never populated" and the pass is skipped.
 
         Returns:
             ``GcPassResult`` with ``orphan_nodes_removed`` and
@@ -2067,12 +2108,11 @@ class GraphStore:
             - If the mentions table does not exist, returns ``GcPassResult(0, 0)``
               because orphan status cannot be determined without mention data.
             - Uses ``_where_in`` for all SQL predicates (no f-string SQL).
-            - When called in the same GC pass after ``prune_stale_mentions`` has
-              emptied the mentions table (all chunks TTL-expired or deleted), this
-              method will skip with a WARNING.  The orchestrator
-              (``_run_graph_gc``) is responsible for detecting this case (via
-              ``list_chunks_raw`` returning empty) and clearing the graph tables
-              directly.
+            - Def/ref and module pseudo-node exemptions apply in both modes.
+            - When called after ``prune_stale_mentions`` emptied the mentions
+              table because the collection has no live chunks, the orchestrator
+              (``_run_graph_gc``) detects that case (``list_chunks_raw`` returned
+              nothing) and passes ``no_live_chunks=True``.
         """
         self._validate_collection(collection)
         _validate_namespace(ns)
@@ -2095,8 +2135,9 @@ class GraphStore:
             entity_chunks.setdefault(_eid, set()).add(_cid)
 
         # Fix C1-I-1: empty mentions table is indistinguishable from "mentions never
-        # populated" — cannot safely determine orphan status; skip GC.
-        if not mentioned_entity_ids:
+        # populated" — cannot safely determine orphan status; skip GC unless the
+        # caller has verified the collection holds no chunks.
+        if not mentioned_entity_ids and not no_live_chunks:
             logger.warning(
                 "GC skipped for collection %r (ns=%r): mentions table exists but has "
                 "zero rows — cannot safely determine orphan status.",
@@ -2410,7 +2451,7 @@ _NEW_PATTERN_RE = re.compile(
 )
 
 
-async def check_and_warn_legacy_graph_tables(db: "lancedb.db.AsyncConnection") -> list[str]:
+async def check_and_warn_legacy_graph_tables(db: lancedb.db.AsyncConnection) -> list[str]:
     """Scan *db* for legacy graph tables and emit a WARNING if any are found.
 
     Runs on every server startup so operators are notified whenever old tables
@@ -2458,6 +2499,6 @@ async def check_and_warn_legacy_graph_tables(db: "lancedb.db.AsyncConnection") -
             )
 
         return legacy
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("Legacy graph table scan failed; skipping", exc_info=True)
         return []

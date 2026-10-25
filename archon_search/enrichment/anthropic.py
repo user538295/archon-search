@@ -68,11 +68,11 @@ class AnthropicEnrichmentClient:
         self._client: object | None = None
 
         try:
-            import anthropic  # noqa: PLC0415
+            import anthropic
 
             self._client = anthropic.AsyncAnthropic()
             self._anthropic_available = True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — optional client: ImportError or any construction failure disables LLM enrichment
             # Covers ImportError (package absent) and any construction failure
             # (e.g. test fixture blocking AsyncAnthropic() instantiation).
             _logger.debug(

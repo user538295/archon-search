@@ -7,11 +7,11 @@ import logging
 import threading
 import uuid
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
-from archon_search._durable_io import atomic_write_json
+from archon_search._durable_io import atomic_write_json, ensure_private_dir
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import IngestJob, JobStatus, get_jobs_file
 from archon_search.types import (
@@ -148,7 +148,7 @@ def may_write_collection(job: IngestJob) -> bool:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _ingest_options_from_json(job_id: object, raw: object) -> IngestOptions | None:
@@ -345,7 +345,7 @@ class JobStore:
         """
         try:
             self._write_atomic()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — best-effort rewrite on an error path; must not mask the original persist error
             logger.warning(
                 "JobStore: corrective rewrite after a failed persist also failed: %s: %s",
                 type(exc).__name__,
@@ -378,7 +378,7 @@ class JobStore:
             self._jobs[job_id] = dataclasses.replace(job, status=JobStatus.CANCELLED, updated_at=now)
         try:
             self._write_atomic()
-        except Exception:  # noqa: BLE001 — auxiliary write: logged, never fails the caller
+        except Exception:
             self._jobs.update(old_jobs)
             self._rewrite_after_failed_persist()
             logger.warning(
@@ -676,7 +676,7 @@ class JobStore:
     def _write_atomic(self) -> None:
         with self._lock:
             self._evict_old()  # evict BEFORE serializing so stale jobs are never written
-            self._path.parent.mkdir(parents=True, exist_ok=True)
+            ensure_private_dir(self._path.parent)
             data = []
             for job in self._jobs.values():
                 item = dataclasses.asdict(job)
@@ -709,7 +709,7 @@ class JobStore:
             atomic_write_json(self._path, data)
 
     def _evict_old(self) -> None:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=_EVICTION_DAYS)
+        cutoff = datetime.now(UTC) - timedelta(days=_EVICTION_DAYS)
         to_remove = [
             job_id
             for job_id, job in self._jobs.items()

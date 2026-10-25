@@ -4,15 +4,23 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import re
 import sys
 import time
+from io import TextIOWrapper
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
+from typing import cast
 
 from pythonjsonlogger.jsonlogger import JsonFormatter
 
+from archon_search._durable_io import (
+    PRIVATE_FILE_MODE,
+    ensure_private_dir,
+    restrict_fd_to_owner,
+)
 from archon_search.config import SearchConfig
-from archon_search.constants import LOG_FILE_DISABLED_WARNING
+from archon_search.constants import LOG_FILE_DISABLED_WARNING, VIEW_TOKEN_QUERY_PARAM
 from archon_search.observability import correlation_id
 
 
@@ -28,6 +36,32 @@ class CorrelationIdFilter(logging.Filter):
         value = correlation_id.get()
         if value is not None:
             record.correlation_id = value  # type: ignore[attr-defined]
+        return True
+
+
+# Query parameters that carry a credential; uvicorn's access log prints the full request target, so the value
+# of each is replaced before the line is formatted.
+_CREDENTIAL_QUERY_PARAMS = (VIEW_TOKEN_QUERY_PARAM, "token", "api_key", "access_token")
+_CREDENTIAL_QUERY_RE = re.compile(rf"(?P<param>[?&](?:{'|'.join(_CREDENTIAL_QUERY_PARAMS)}))=[^&\s]*")
+REDACTED_VALUE = "[REDACTED]"
+
+
+class QueryCredentialRedactionFilter(logging.Filter):
+    """Redact credential-bearing query parameters from uvicorn access-log request targets.
+
+    uvicorn's ``uvicorn.access`` record carries ``(client, method, full_path, http_version, status)``;
+    ``full_path`` includes the raw query string, e.g. ``/graph/docs/view?view_token=...``. The value of any
+    parameter in ``_CREDENTIAL_QUERY_PARAMS`` is replaced with ``[REDACTED]`` so a credential never reaches
+    the log, whatever the log format.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple):
+            record.args = tuple(
+                _CREDENTIAL_QUERY_RE.sub(rf"\g<param>={REDACTED_VALUE}", arg) if isinstance(arg, str) else arg
+                for arg in args
+            )
         return True
 
 
@@ -86,6 +120,19 @@ def build_uvicorn_log_config(config: SearchConfig) -> dict[str, object] | None:
     return log_config
 
 
+class _PrivateTimedRotatingFileHandler(TimedRotatingFileHandler):
+    """A rotating log handler whose files (current and rotated) are owner-only whatever the umask."""
+
+    def _open(self) -> TextIOWrapper:
+        fd = os.open(self.baseFilename, os.O_WRONLY | os.O_APPEND | os.O_CREAT, PRIVATE_FILE_MODE)  # durable-write-exempt — append-only log
+        try:
+            restrict_fd_to_owner(fd)  # a log an older version created world-readable is tightened too
+            return cast(TextIOWrapper, os.fdopen(fd, self.mode, encoding=self.encoding, errors=self.errors))
+        except BaseException:
+            os.close(fd)  # fdopen did not take ownership of it
+            raise
+
+
 def _attach_file_handler(logger: logging.Logger, config: SearchConfig) -> None:
     """Attach a TimedRotatingFileHandler to ``logger`` based on ``config.log_file``.
 
@@ -95,15 +142,15 @@ def _attach_file_handler(logger: logging.Logger, config: SearchConfig) -> None:
     log_path = Path(config.log_file).expanduser()
 
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(log_path.parent)
     except OSError:
-        logging.warning(
+        logging.warning(  # noqa: LOG015 — the file handler is not configured yet; the root logger is the only sink
             "archon-search: could not create log directory %s", log_path.parent
         )
         return
 
     try:
-        handler = TimedRotatingFileHandler(
+        handler = _PrivateTimedRotatingFileHandler(
             log_path,
             when="midnight",
             utc=True,
@@ -111,7 +158,7 @@ def _attach_file_handler(logger: logging.Logger, config: SearchConfig) -> None:
             encoding="utf-8",
         )
     except OSError:
-        logging.warning("archon-search: could not open log file %s", log_path)
+        logging.warning("archon-search: could not open log file %s", log_path)  # noqa: LOG015 — handler not configured yet; root logger is the only sink
         return
 
     handler.addFilter(CorrelationIdFilter())
@@ -136,6 +183,11 @@ def configure_logging(config: SearchConfig) -> None:
         logger.removeHandler(handler)
         handler.close()
     logger.propagate = True
+
+    # uvicorn's access log prints the request target with its query string; never let a credential reach it.
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, QueryCredentialRedactionFilter) for f in access_logger.filters):
+        access_logger.addFilter(QueryCredentialRedactionFilter())
 
     # Set the log level.
     logger.setLevel(config.level)

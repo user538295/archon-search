@@ -68,7 +68,7 @@ async def collect_search_trace(
     collection: str,
     candidate_depth: int,
     return_depth: int,
-    metric_depth: int,  # noqa: ARG001 — reserved for caller-side scoring; not used here
+    metric_depth: int,
 ) -> tuple[list[EvalSearchResult], list[EvalSearchResult]]:
     """Run the production search path with trace sinks, capturing pre- and post-rerank results.
 

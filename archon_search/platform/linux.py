@@ -178,7 +178,7 @@ class SystemdSearchService(SearchServiceLifecycle):
         return Path.home() / ".config" / "systemd" / "user" / "archon-search.service"
 
     def _run(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(cmd, capture_output=True, text=True)
+        return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
     def start(self, dry_run: bool = False) -> int:
         if dry_run:
@@ -256,7 +256,7 @@ class SystemdSearchService(SearchServiceLifecycle):
 
         with write_errors_naming(str(self._unit_path)):
             self._unit_path.parent.mkdir(parents=True, exist_ok=True)
-            self._unit_path.write_text(content, encoding=_UNIT_ENCODING)  # noqa: durable-write
+            self._unit_path.write_text(content, encoding=_UNIT_ENCODING)  # durable-write-exempt
 
         try:
             reload = self._run(["systemctl", "--user", "daemon-reload"])

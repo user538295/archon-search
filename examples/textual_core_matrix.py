@@ -12,17 +12,17 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from typing import ClassVar
 
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.screen import Screen
 from textual.widgets import Static
 
 from examples.textual_design import (
     BRAILLE,
     PALETTE,
-    NextScreenRequest,
     PrevScreenRequest,
     box_bottom,
     box_row,
@@ -417,7 +417,7 @@ class WizardApp(App[None]):
     CalibrationView, CoreView { width: 100%; height: auto; padding: 1 2; }
     """
 
-    BINDINGS = [Binding("q", "quit", "Quit"), Binding("escape", "quit", "Quit")]
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("q", "quit", "Quit"), Binding("escape", "quit", "Quit")]
 
     def on_mount(self) -> None:
         from examples.textual_calibration import CalibrationScreen

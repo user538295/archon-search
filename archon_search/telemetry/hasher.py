@@ -27,7 +27,7 @@ import logging
 import secrets
 from pathlib import Path
 
-from archon_search._durable_io import atomic_write_bytes
+from archon_search._durable_io import atomic_write_bytes, ensure_private_dir
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def load_or_create_salt(
         # First-time generation: create the salt and persist it atomically.
         new_salt = secrets.token_bytes(_SALT_SIZE)
         try:
-            salt_path.parent.mkdir(parents=True, exist_ok=True)
+            ensure_private_dir(salt_path.parent)
             atomic_write_bytes(salt_path, new_salt, mode=0o600)
         except OSError as exc:
             logger.error(

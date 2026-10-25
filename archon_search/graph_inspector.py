@@ -21,11 +21,13 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from archon_search.acl import ChunkVisibility, ChunkVisibilitySource
 from archon_search.graph_types import RelationshipType
 from archon_search.uv_tool import extra_install_hint
 
 if TYPE_CHECKING:
     from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import GraphEdge, GraphNode
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +143,7 @@ _MAX_SOURCE_CHUNK_IDS = 20
 
 
 def _node_sort_key(
-    n: "GraphNodeInspection", salience_mode: Literal["frequency", "tfidf", "importance"]
+    n: GraphNodeInspection, salience_mode: Literal["frequency", "tfidf", "importance"]
 ) -> tuple[bool, float, str] | tuple[float, str]:
     """Return the sort key for a node given the active salience mode."""
     if salience_mode == "importance":
@@ -152,7 +154,7 @@ def _node_sort_key(
     return (-n.chunk_count, n.entity_id)
 
 
-def _edge_sort_key(e: "GraphEdgeInspection") -> tuple[int, bool, str]:
+def _edge_sort_key(e: GraphEdgeInspection) -> tuple[int, bool, str]:
     """Return the sort key for an edge: weight desc, typed-before-untyped, edge_id asc."""
     return (-e.weight, e.relationship_type == RelationshipType.related_to.value, e.edge_id)
 
@@ -299,8 +301,93 @@ def _apply_tfidf(
     return result
 
 
+@dataclass
+class _AclVisibleGraph:
+    """One collection's graph after the chunk ACL was applied (see ``_load_acl_visible_graph``)."""
+
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
+    entity_chunks: dict[str, set[str]]
+    """entity_id -> the chunk ids, visible to the caller, in which the entity is mentioned."""
+    mention_count: int
+    mentions_ceiling_hit: bool
+
+
+async def _load_acl_visible_graph(
+    graph_store: GraphStore,
+    collection: str,
+    *,
+    ns: str,
+    visibility_source: ChunkVisibilitySource | None,
+) -> _AclVisibleGraph:
+    """Read one collection's nodes, edges and mentions, minus whatever the chunk ACL hides from *ns*.
+
+    Nodes, edges and ``source_chunk_ids`` are derived from chunks, so they obey the chunk ACL
+    search applies (``is_acl_allowed``), the same way for the REST routes and the MCP tools:
+
+    - A mention of a hidden chunk is dropped: it no longer counts toward ``chunk_count``,
+      ``weight`` or ``source_chunk_ids``.
+    - A node with mentions is dropped when ALL of them are hidden (its only evidence is hidden).
+      A node with no mention at all (pre-E2b data) is kept unless the document that wrote it
+      is hidden.
+    - An edge is dropped when an endpoint is dropped; when its endpoints co-occurred in chunks
+      but none is visible; or, with no co-occurrence data (def/ref and synonym edges), when the
+      document that wrote it is hidden.
+
+    ``visibility_source=None`` applies no ACL (graph-only unit tests); every caller serving a
+    namespace passes the search store.
+    """
+    visibility = (
+        ChunkVisibility()
+        if visibility_source is None
+        else await visibility_source.get_chunk_visibility(collection, ns)
+    )
+    all_nodes = await graph_store.get_all_nodes(collection, ns=ns)
+    all_edges = await graph_store.get_all_edges(collection, ns=ns)
+    all_mentions = await graph_store.get_all_mentions(collection, limit=_MENTIONS_SCAN_CEILING, ns=ns)
+
+    mentioned_chunks: dict[str, set[str]] = {}
+    visible_chunks: dict[str, set[str]] = {}
+    for mention in all_mentions:
+        mentioned_chunks.setdefault(mention.entity_id, set()).add(mention.chunk_id)
+        if visibility.chunk_visible(mention.chunk_id):
+            visible_chunks.setdefault(mention.entity_id, set()).add(mention.chunk_id)
+
+    nodes = [
+        node
+        for node in all_nodes
+        if (node.id in visible_chunks)
+        or (node.id not in mentioned_chunks and visibility.doc_visible(node.source_doc_id))
+    ]
+    hidden_node_ids = {node.id for node in all_nodes} - {node.id for node in nodes}
+
+    edges = []
+    for edge in all_edges:
+        if edge.source_node_id in hidden_node_ids or edge.target_node_id in hidden_node_ids:
+            continue
+        cooccurring = mentioned_chunks.get(edge.source_node_id, set()) & mentioned_chunks.get(
+            edge.target_node_id, set()
+        )
+        if cooccurring:
+            evidence_visible = bool(
+                visible_chunks.get(edge.source_node_id, set()) & visible_chunks.get(edge.target_node_id, set())
+            )
+        else:
+            evidence_visible = visibility.doc_visible(edge.source_doc_id)
+        if evidence_visible:
+            edges.append(edge)
+
+    return _AclVisibleGraph(
+        nodes=nodes,
+        edges=edges,
+        entity_chunks=visible_chunks,
+        mention_count=len(all_mentions),
+        mentions_ceiling_hit=len(all_mentions) >= _MENTIONS_SCAN_CEILING,
+    )
+
+
 async def inspect_collection(
-    graph_store: "GraphStore",
+    graph_store: GraphStore,
     collection: str,
     total_chunk_count: int,
     max_nodes: int,
@@ -310,6 +397,7 @@ async def inspect_collection(
     num_collections: int = 1,
     *,
     ns: str,
+    visibility_source: ChunkVisibilitySource | None = None,
 ) -> CollectionGraphView:
     """Inspect a single collection's graph and derive metrics.
 
@@ -331,6 +419,9 @@ async def inspect_collection(
             Absent entries default to df=1 with a WARNING log.
         num_collections: Total number of namespace collections; used as N in the IDF
             formula log((N+1)/df). Ignored in frequency mode.
+        visibility_source: provider of the chunk ACL (the search store). Entities, edges and
+            ``source_chunk_ids`` that only hidden chunks support are left out for *ns* — see
+            ``_load_acl_visible_graph``. ``None`` applies no ACL.
 
     Returns:
         CollectionGraphView with derived metrics and truncation info.
@@ -351,22 +442,9 @@ async def inspect_collection(
     if salience_mode == "tfidf" and num_collections < 1:
         raise ValueError("num_collections must be >= 1 in tfidf mode")
 
-    # Fetch all nodes and edges
-    all_nodes = await graph_store.get_all_nodes(collection, ns=ns)
-    all_edges = await graph_store.get_all_edges(collection, ns=ns)
-
-    # Fetch mentions up to the ceiling
-    all_mentions = await graph_store.get_all_mentions(collection, limit=_MENTIONS_SCAN_CEILING, ns=ns)
-
-    # Check if mentions hit the ceiling
-    mentions_ceiling_hit = len(all_mentions) >= _MENTIONS_SCAN_CEILING
-
-    # Build entity_chunks index: entity_id → set of chunk_ids
-    entity_chunks: dict[str, set[str]] = {}
-    for mention in all_mentions:
-        if mention.entity_id not in entity_chunks:
-            entity_chunks[mention.entity_id] = set()
-        entity_chunks[mention.entity_id].add(mention.chunk_id)
+    graph = await _load_acl_visible_graph(graph_store, collection, ns=ns, visibility_source=visibility_source)
+    all_nodes, all_edges, entity_chunks = graph.nodes, graph.edges, graph.entity_chunks
+    mentions_ceiling_hit = graph.mentions_ceiling_hit
 
     # Derive node metrics
     node_inspections: list[GraphNodeInspection] = []
@@ -453,7 +531,7 @@ async def inspect_collection(
 
 
 async def inspect_cross_collection(
-    graph_store: "GraphStore",
+    graph_store: GraphStore,
     collections: list[str],
     total_chunk_counts: dict[str, int],
     max_nodes: int,
@@ -463,6 +541,7 @@ async def inspect_cross_collection(
     num_collections: int = 1,
     *,
     ns: str,
+    visibility_source: ChunkVisibilitySource | None = None,
 ) -> CrossCollectionGraphView:
     """Inspect and merge graph data across multiple collections.
 
@@ -489,6 +568,8 @@ async def inspect_cross_collection(
         num_collections: Total number of namespace collections; used as N in the IDF
             formula log((N+1)/df). Should be the full namespace count, not just the
             number of collections listed. Ignored in frequency mode.
+        visibility_source: provider of the chunk ACL (the search store), applied per
+            collection exactly as in ``inspect_collection``. ``None`` applies no ACL.
 
     Returns:
         CrossCollectionGraphView with merged data, truncation info, and salience_mode echoed.
@@ -506,23 +587,15 @@ async def inspect_cross_collection(
     mentions_ceiling_hit = False
 
     for collection in collections:
-        # Fetch nodes, edges, mentions for this collection
-        all_nodes = await graph_store.get_all_nodes(collection, ns=ns)
-        all_edges = await graph_store.get_all_edges(collection, ns=ns)
-        all_mentions = await graph_store.get_all_mentions(collection, limit=_MENTIONS_SCAN_CEILING, ns=ns)
+        # Fetch the ACL-visible nodes, edges, mentions for this collection
+        graph = await _load_acl_visible_graph(graph_store, collection, ns=ns, visibility_source=visibility_source)
+        all_nodes, all_edges, entity_chunks = graph.nodes, graph.edges, graph.entity_chunks
 
         # Check if this collection hit the ceiling
-        if len(all_mentions) >= _MENTIONS_SCAN_CEILING:
+        if graph.mentions_ceiling_hit:
             mentions_ceiling_hit = True
 
-        total_mentions_scanned += len(all_mentions)
-
-        # Build entity_chunks index for this collection
-        entity_chunks: dict[str, set[str]] = {}
-        for mention in all_mentions:
-            if mention.entity_id not in entity_chunks:
-                entity_chunks[mention.entity_id] = set()
-            entity_chunks[mention.entity_id].add(mention.chunk_id)
+        total_mentions_scanned += graph.mention_count
 
         # Merge nodes
         total_chunk_count = total_chunk_counts.get(collection, 0)
@@ -658,8 +731,8 @@ def to_graphml(view: CollectionGraphView | CrossCollectionGraphView) -> bytes:
             f"GraphML export requires networkx. Install it with: {extra_install_hint('graph')}"
         ) from exc
 
-    import tempfile
     import os
+    import tempfile
     import xml.etree.ElementTree as ET
 
     # Create directed graph

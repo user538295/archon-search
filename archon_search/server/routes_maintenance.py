@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
+from archon_search.server.authz import ADMIN_ONLY_RESPONSES, require_admin_dependency
 from archon_search.server.schemas import ErrorDetail, MaintenanceTriggerResponse
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,8 @@ router = APIRouter(tags=["maintenance"])
     "/maintenance/trigger",
     status_code=202,
     response_model=MaintenanceTriggerResponse,
-    responses={401: {"model": ErrorDetail}},
+    responses={401: {"model": ErrorDetail}, **ADMIN_ONLY_RESPONSES},
+    dependencies=[Depends(require_admin_dependency)],
 )
 async def trigger_maintenance(request: Request) -> MaintenanceTriggerResponse:
     """Set the maintenance trigger event; the loop fires a pass asynchronously.

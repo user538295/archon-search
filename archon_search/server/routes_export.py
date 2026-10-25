@@ -15,41 +15,61 @@ import json
 import logging
 import math
 import struct
-import tarfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter
-from fastapi import Request
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
-from archon_search._path_safety import PathUnsafeError, validate_archive_members, validate_export_path
+from archon_search._durable_io import ensure_private_dir
+from archon_search._path_safety import PathUnsafeError, validate_archive_file
 from archon_search._types import ChunkRecord
 from archon_search.config import SearchConfig
-from archon_search.constants import IMPORTED_CHUNK_METADATA_KEY, IMPORTED_CHUNK_METADATA_VALUE
-from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderCache, EmbedderNotReadyError
+from archon_search.constants import (
+    IMPORTED_CHUNK_METADATA_KEY,
+    IMPORTED_CHUNK_METADATA_VALUE,
+)
+from archon_search.embedder_cache import (
+    EMBEDDER_NOT_READY_DETAIL,
+    EmbedderCache,
+    EmbedderNotReadyError,
+)
 from archon_search.jobs.export_archive import (
+    ARCHIVE_NAMESPACE_MISMATCH_DETAIL,
     EXPORT_SCHEMA_VERSION,
     INVALID_ARCHIVE_DETAIL,
     ArchiveRejectedError,
     ExportArchiveWriter,
     ImportArchiveReader,
+    exports_dir,
     get_lancedb_version,
+    importable_archive_path,
     manifest_error_detail,
+    manifest_namespace_ok,
     quote_archive_value,
 )
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.paths import get_data_dir
 from archon_search.pipeline import SearchPipeline
-from archon_search.server._ingest_lock import acquire_collection_lock_or_503, collection_job_in_progress_detail
+from archon_search.server._ingest_lock import (
+    acquire_collection_lock_or_503,
+    collection_job_in_progress_detail,
+)
 from archon_search.server._job_warmup import await_models_warm
 from archon_search.server.schemas import ErrorDetail, JobResponse
-from archon_search.store import META_MAX_FIELDS, SearchStore, normalize_ingested_by, validate_chunk_record
+from archon_search.store import (
+    COLLECTION_UNAVAILABLE_DETAIL,
+    META_MAX_FIELDS,
+    CollectionOwnershipError,
+    SearchStore,
+    normalize_ingested_by,
+    validate_chunk_record,
+)
 from archon_search.types import ExportJob, ImportJob, IngestJob, JobStatus
 
 logger = logging.getLogger(__name__)
@@ -72,8 +92,7 @@ router = APIRouter()
 # Byte width of one archived vector component (little-endian float32).
 _FLOAT32_BYTES = struct.calcsize("<f")
 
-_ERROR_400_401_404: dict[int | str, dict[str, Any]] = {
-    400: {"model": ErrorDetail, "description": "Path unsafe or invalid request"},
+_ERROR_401_404: dict[int | str, dict[str, Any]] = {
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
 }
@@ -173,7 +192,7 @@ async def _export_task(
         archive_path = Path(job.output_path)
         tmp_path = Path(job.tmp_path)
         # Ensure parent directory exists
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(archive_path.parent)
 
         # --- Phase: reading — count total docs ---
         store.update_progress(job_id, 0, 0, "reading")
@@ -218,7 +237,8 @@ async def _export_task(
                 "archon_search_version": archon_version,
                 "schema_version": EXPORT_SCHEMA_VERSION,
                 "collection": job.collection,
-                "exported_at": datetime.now(timezone.utc).isoformat(),
+                "namespace": job.namespace,
+                "exported_at": datetime.now(UTC).isoformat(),
                 "doc_count": writer.lines_written,
                 "active_embedding_model": active_model,
                 "description": description,
@@ -230,7 +250,7 @@ async def _export_task(
 
         store.update(job_id, status=JobStatus.DONE, result={"archive_path": str(archive_path)})
 
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("_export_task: job %s failed", job_id)
         try:
             store.update(job_id, status=JobStatus.FAILED, error=EXPORT_FAILED_DETAIL)
@@ -304,7 +324,13 @@ class _ImportCounters:
 
 
 def _validate_manifest(manifest: dict[str, Any], job: ImportJob, config: SearchConfig) -> None:
-    """Reject an archive whose schema version (unless bypassed) or embedding model the server cannot import."""
+    """Reject an archive of another namespace, or whose schema version (unless bypassed) or embedding model the server cannot import."""
+    # Re-checked here (the route checked it at submission): the archive file may have been replaced since, and a
+    # resumed job reads it again. Not bypassable.
+    if not manifest_namespace_ok(
+        manifest, job.namespace, Path(job.archive_path), get_data_dir(), config.backup.output_dir
+    ):
+        raise ArchiveRejectedError(ARCHIVE_NAMESPACE_MISMATCH_DETAIL)
     if not job.ignore_schema_version and manifest["schema_version"] != EXPORT_SCHEMA_VERSION:
         raise ArchiveRejectedError(
             f"schema_version mismatch: archive has {quote_archive_value(manifest['schema_version'])}, "
@@ -484,8 +510,17 @@ async def _ensure_collection_absent(
     Raises:
         ArchiveRejectedError: with *refusal* as its message, when the collection exists and *may_drop* is false;
             with ``OVERWRITE_REFUSED_PREFIX`` + the cause, when *may_drop* but the collection lock is not acquired
-            within ``INGEST_LOCK_TIMEOUT_S`` or another job may still write the collection (nothing is dropped).
+            within ``INGEST_LOCK_TIMEOUT_S`` or another job may still write the collection (nothing is dropped);
+            with ``COLLECTION_UNAVAILABLE_DETAIL``, when another namespace owns the name — whatever *may_drop*
+            says: a ``force_overwrite`` import never drops a collection its namespace does not own, and the text
+            is the same whether the collection is another namespace's or an orphan this one may not touch.
     """
+    # Refused before the lock is even taken, so a busy lock cannot tell a namespace that a foreign collection of
+    # that name exists and is being written: it is the same fixed refusal whoever owns the name.
+    try:
+        await search_store.assert_collection_access(job.collection, job.namespace)
+    except CollectionOwnershipError as exc:
+        raise ArchiveRejectedError(COLLECTION_UNAVAILABLE_DETAIL) from exc
     lock = await acquire_collection_lock_or_503(search_store, job.collection) if may_drop else None
     if isinstance(lock, JSONResponse):
         raise ArchiveRejectedError(IMPORT_OVERWRITE_LOCK_BUSY_DETAIL)
@@ -509,11 +544,14 @@ async def _ensure_collection_absent(
             )
         dropped = True
         try:
-            await search_store.drop_collection(job.collection, _locked_by_caller=True)
+            await search_store.drop_collection(job.collection, namespace=job.namespace, _locked_by_caller=True)
         except (KeyError, RuntimeError):
             pass  # table may not exist in LanceDB; that's fine
         if existing_meta is not None:
             await search_store.delete_collection_meta(job.collection, job.namespace)
+    except CollectionOwnershipError as exc:
+        # Raised by the store's own check under the lock: another namespace claimed the name since the early check.
+        raise ArchiveRejectedError(COLLECTION_UNAVAILABLE_DETAIL) from exc
     finally:
         if isinstance(lock, asyncio.Lock) and lock.locked():
             lock.release()
@@ -553,12 +591,17 @@ async def _store_batch_reporting_overlap(
     batch: list[ChunkRecord],
     *,
     may_overlap: bool,
+    embedding_model: str,
 ) -> bool:
     """Store *batch*; return whether the next batch may still overlap chunks a failed previous run stored.
 
     A failed run may commit batches past its checkpoint, so while *may_overlap* the chunks already stored are
     dropped from *batch* first. Commits follow archive order: once a batch holds no stored chunk, no later
     batch does, and this returns ``False`` from then on.
+
+    *embedding_model* makes the first batch write the collection's meta row in *namespace*: the store refuses a
+    later batch from a namespace that has written rows without owning a meta row (``CollectionOwnershipError``), so
+    the import must record its ownership with its first batch rather than only at the end.
 
     Limitation (accepted): a resume run with a smaller ``checkpoint_interval`` than the failed run, whose first
     resumed batch's overlap rows were deleted since, stops checking early and can re-append the rest of that
@@ -568,7 +611,7 @@ async def _store_batch_reporting_overlap(
         stored = await search_store.stored_chunk_ids(collection, [chunk.chunk_id for chunk in batch])
         batch = [chunk for chunk in batch if chunk.chunk_id not in stored]
         may_overlap = bool(stored)
-    await search_store.ingest_chunks(collection, batch, namespace=namespace)
+    await search_store.ingest_chunks(collection, batch, namespace=namespace, embedding_model=embedding_model)
     return may_overlap
 
 
@@ -582,6 +625,7 @@ async def _ingest_docs(
     embedding_dim: int | None,
     doc_count: int,
     config: SearchConfig,
+    embedding_model: str,
 ) -> _ImportCounters | None:
     """Stream the archive's docs after *resume*'s skip position into the collection, checkpointing each batch.
 
@@ -607,6 +651,7 @@ async def _ingest_docs(
         if len(batch) >= config.jobs.checkpoint_interval:
             may_overlap = await _store_batch_reporting_overlap(
                 search_store, job.collection, job.namespace, batch, may_overlap=may_overlap,
+                embedding_model=embedding_model,
             )
             counters.stored += len(batch)
             batch = []
@@ -624,7 +669,7 @@ async def _ingest_docs(
     # Flush remaining batch
     if batch:
         await _store_batch_reporting_overlap(
-            search_store, job.collection, job.namespace, batch, may_overlap=may_overlap,
+            search_store, job.collection, job.namespace, batch, may_overlap=may_overlap, embedding_model=embedding_model,
         )
         counters.stored += len(batch)
     return counters
@@ -704,11 +749,13 @@ async def _import_task(
         # Ensure the LanceDB table exists before we ingest into it.
         # For empty archives: nothing to ingest; skip ensure_collection.
         if embedding_dim is not None:
-            await search_store.ensure_collection(job.collection, embedding_dim)
+            await search_store.ensure_collection(job.collection, embedding_dim, namespace=job.namespace)
 
         # --- Phase: ingesting ---
         counters = await _ingest_docs(
-            job, store, search_store, reader, resume, embedding_dim=embedding_dim, doc_count=doc_count, config=config,
+            job, store, search_store, reader, resume,
+            embedding_dim=embedding_dim, doc_count=doc_count, config=config,
+            embedding_model=manifest["active_embedding_model"],
         )
         if counters is None:
             return  # cancelled
@@ -774,7 +821,7 @@ async def _import_task(
             store.update(job_id, status=JobStatus.FAILED, error=str(exc))
         except (KeyError, OSError):
             logger.error("_import_task: could not persist FAILED status for job %s", job_id)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("_import_task: job %s failed", job_id)
         try:
             store.update(job_id, status=JobStatus.FAILED, error=IMPORT_FAILED_DETAIL)
@@ -788,14 +835,17 @@ async def _import_task(
 
 
 class ExportRequest(BaseModel):
-    output_path: str = ""
+    """No fields: the archive's directory is fixed to the caller's namespace (``exports_dir``); a body that names an
+    ``output_path`` (or anything else) is refused with 422 rather than silently ignored."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 @router.post(
     "/{name}/export",
     status_code=202,
     response_model=JobResponse,
-    responses=_ERROR_400_401_404,
+    responses=_ERROR_401_404,
 )
 async def export_collection(
     name: str,
@@ -804,22 +854,15 @@ async def export_collection(
 ) -> JobResponse | JSONResponse:
     """Enqueue an export job for the named collection.
 
-    Returns 202 with a JobResponse (status=QUEUED). The job is dispatched by
-    the scheduler when a slot is available.
+    The archive is written to ``<data_dir>/exports/<namespace>/``, the caller's own export directory: the caller
+    cannot pick another directory, so an export never lands in (or creates directories under) a place the caller
+    chose. Returns 202 with a JobResponse (status=QUEUED). The job is dispatched by the scheduler when a slot is
+    available.
     """
     store: JobStore = request.app.state.job_store
     search_store: SearchStore = request.app.state.search_store
     ns: str = request.state.namespace
-
-    # Resolve output path — default to get_data_dir() / "exports"
-    exports_dir = get_data_dir() / "exports"
-    raw_output = body.output_path if body.output_path else str(exports_dir)
-
-    # Validate the output directory path
-    try:
-        resolved_dir = validate_export_path(raw_output, [get_data_dir()])
-    except PathUnsafeError as exc:
-        return JSONResponse({"error": "path_unsafe", "reason": exc.reason}, status_code=400)
+    resolved_dir = exports_dir(get_data_dir(), ns)
 
     # Verify collection exists
     meta = await search_store.get_collection_meta(name, ns)
@@ -827,7 +870,7 @@ async def export_collection(
         return JSONResponse({"error": "not_found", "detail": f"Collection {name!r} not found"}, status_code=404)
 
     # Compute paths for the job
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     job_uuid = str(uuid4())
     archive_path = resolved_dir / f"{name}-{timestamp}.tar.gz"
     tmp_path = resolved_dir / f".export-{job_uuid}.jsonl.tmp"
@@ -888,40 +931,37 @@ async def import_collection(
     ns: str = request.state.namespace
     config: SearchConfig = request.app.state.config
 
-    # Step 1: Validate the archive path is within the allowed data directory, or
-    # within the configured [backup].output_dir — the backup job writes archives
-    # straight to that directory and it may legitimately sit off-tree (see
-    # Documentation/OperatorGuide/40_backup_restore_disaster_recovery.md), so an
-    # archive this product wrote itself must remain restorable.
-    allowed_dirs = [get_data_dir()]
-    if config.backup.output_dir:
-        allowed_dirs.append(Path(config.backup.output_dir))
+    # Step 1: the archive must sit in the caller's own namespace directory: its exports
+    # (``<data>/exports/<ns>``) or its scheduled backups (``[backup].output_dir/<ns>``, which may legitimately sit
+    # off-tree — see Documentation/OperatorGuide/40_backup_restore_disaster_recovery.md — and which the backup job
+    # writes straight to). Nothing else under the data or backup directory is importable, so one namespace cannot
+    # read another's archive; a path outside answers the same 400 whether or not a file exists there.
     try:
-        validated_path = validate_export_path(body.path, allowed_dirs)
+        validated_path = importable_archive_path(body.path, get_data_dir(), config.backup.output_dir, ns)
     except PathUnsafeError as exc:
         return JSONResponse({"error": "path_unsafe", "reason": exc.reason}, status_code=400)
 
     # Step 2: Verify archive file exists. Use the resolved, already-validated Path
     # returned by validate_export_path() above — not a fresh Path(body.path) — so every
     # later filesystem operation acts on the exact path that was checked against
-    # allowed_dirs.
+    # the allowed directories.
     archive_path = validated_path
-    if not archive_path.exists():
+    if not await asyncio.to_thread(archive_path.exists):
         return JSONResponse(
             {"error": "archive_not_found", "detail": f"Archive not found: {body.path}"},
             status_code=422,
         )
 
-    # Step 3: Pre-validate archive members (zip-slip guard)
+    # Step 3: Pre-validate archive members (zip-slip guard). Off the event loop: opening a gzip tar and listing its
+    # members is blocking I/O and decompression.
     try:
-        with tarfile.open(archive_path, "r:gz") as tf:
-            validate_archive_members(tf)
+        await asyncio.to_thread(validate_archive_file, archive_path)
     except PathUnsafeError as exc:
         return JSONResponse(
             {"error": "unsafe_archive", "reason": exc.reason},
             status_code=422,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # Full original is logged server-side; the wire detail is a fixed, sanitized
         # message — tarfile/gzip errors can embed the archive's own byte content.
         logger.warning("import archive %s could not be opened: %s", archive_path, exc, exc_info=exc)
@@ -930,13 +970,19 @@ async def import_collection(
             status_code=422,
         )
 
-    # Step 4: Read manifest to early-detect embedding model mismatch
+    # Step 4: Read manifest (also off the loop) to early-detect a foreign archive or embedding model mismatch
     try:
         reader = ImportArchiveReader(archive_path)
-        manifest = reader.read_manifest()
+        manifest = await asyncio.to_thread(reader.read_manifest)
     except (ValueError, PathUnsafeError) as exc:
         return JSONResponse(
             {"error": "invalid_manifest", "detail": manifest_error_detail(exc, archive_path)},
+            status_code=422,
+        )
+
+    if not manifest_namespace_ok(manifest, ns, archive_path, get_data_dir(), config.backup.output_dir):
+        return JSONResponse(
+            {"error": "archive_namespace_mismatch", "detail": ARCHIVE_NAMESPACE_MISMATCH_DETAIL},
             status_code=422,
         )
 
@@ -954,7 +1000,8 @@ async def import_collection(
             status_code=422,
         )
 
-    # Step 5: Check collection existence vs force_overwrite
+    # Step 5: Check collection existence vs force_overwrite. Only the caller's own collection is visible here: a name
+    # another namespace owns is refused by the import job itself, with a fixed text that names no owner.
     existing_meta = await search_store.get_collection_meta(name, ns)
     if existing_meta is not None and not body.force_overwrite:
         return JSONResponse(

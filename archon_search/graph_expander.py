@@ -143,7 +143,7 @@ class GraphExpander:
 
     _DEFAULT_MAX_EXPANSION_TERMS: int = 20
 
-    def __init__(self, graph_store: "GraphStore", naive_max_expansion_terms: int = _DEFAULT_MAX_EXPANSION_TERMS) -> None:
+    def __init__(self, graph_store: GraphStore, naive_max_expansion_terms: int = _DEFAULT_MAX_EXPANSION_TERMS) -> None:
         self._store = graph_store
         self._naive_max_expansion_terms = naive_max_expansion_terms
         if self._naive_max_expansion_terms < 1:

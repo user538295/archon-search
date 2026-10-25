@@ -25,9 +25,9 @@ Edge creation (co-occurrence):
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import itertools
 import logging
-import importlib.util
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -123,7 +123,7 @@ def gliner_absent() -> bool:
         return False
 
 
-def ensure_graph_engine_importable(config: "GraphConfig") -> None:
+def ensure_graph_engine_importable(config: GraphConfig) -> None:
     """Raise ``ConfigError`` when graph is enabled but the prose extraction
     engine (``gliner``) is not importable.
 
@@ -135,7 +135,7 @@ def ensure_graph_engine_importable(config: "GraphConfig") -> None:
     """
     if not config.enabled:
         return
-    from archon_search.config import ConfigError  # noqa: PLC0415
+    from archon_search.config import ConfigError
 
     if gliner_absent():
         raise ConfigError(f"graph.enabled=true but {gliner_not_installed_message()}")
@@ -213,7 +213,7 @@ class GraphExtractor:
 
     def __init__(
         self,
-        config: "GraphConfig",
+        config: GraphConfig,
     ) -> None:
         self._config = config
         self._backend = ProseExtractionBackend(device=config.device)

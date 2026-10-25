@@ -34,9 +34,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response, StreamingResponse
 
 from archon_search.config import resolve_active_model
-from archon_search.pipeline import CollectionNotFoundError, FanoutTimeoutError, MetadataLookupError
+from archon_search.pipeline import (
+    CollectionNotFoundError,
+    FanoutTimeoutError,
+    MetadataLookupError,
+)
 from archon_search.server._search_budget import (
     SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+)
+from archon_search.server._search_budget import (
     SearchBudgetExceeded,
     run_within_budget,
     warmup_for_search,
@@ -225,7 +231,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
 
         # Same warm-up as the REST fan-out route: the global embedder (which
         # search_many embeds with) and the shared reranker, both bounded, so no cold
-        # ONNX build can block this request for its whole duration — it degrades to
+        # model build can block this request for its whole duration — it degrades to
         # the fused ranking (S288) or the FTS leg alone (S290).
         warmup = await warmup_for_search(pipeline)
 
@@ -252,8 +258,8 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
                 extra={"event_type": "search_timeout", "collections": list(col_names)},
             )
             return _openai_error(504, "Request timeout.", "server_error")
-        except MetadataLookupError as exc:
-            logger.error("chat_completions: metadata lookup failed during search: %s", exc, exc_info=True)
+        except MetadataLookupError:
+            logger.exception("chat_completions: metadata lookup failed during search")
             # Intentionally uses OpenAI error envelope — not ErrorDetail/metadata_store_error (different contract).
             return _openai_error(503, "Service temporarily unavailable.", "server_error")
 
@@ -274,8 +280,8 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
         # Empty collection name (model="archon-search/") → treat as not found
         try:
             meta = await pipeline.get_collection_meta(collection, namespace=ns)
-        except Exception as exc:
-            logger.error("chat_completions: meta lookup failed for collection %r: %s", collection, exc, exc_info=True)
+        except Exception:
+            logger.exception("chat_completions: meta lookup failed for collection %r", collection)
             return _openai_error(503, "Service temporarily unavailable.", "server_error")
 
         if meta is None:
@@ -288,7 +294,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
         embedder = await _resolve_embedder(meta)
         # Outside the budget below by design (S184/S288/S290): a cold cross-encoder
         # built inside rerank_candidates — or a cold embedder built inside embed_one —
-        # would park this request for the whole ONNX build. rerank=False degrades to
+        # would park this request for the whole model build. rerank=False degrades to
         # the fused vector+FTS ranking, fts_only=True to the FTS leg alone.
         warmup = await warmup_for_search(pipeline, embedder)
 
@@ -312,8 +318,8 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
                 extra={"event_type": "search_timeout", "collection": collection},
             )
             return _openai_error(504, "Request timeout.", "server_error")
-        except Exception as exc:
-            logger.error("chat_completions: search failed for collection %r: %s", collection, exc, exc_info=True)
+        except Exception:
+            logger.exception("chat_completions: search failed for collection %r", collection)
             return _openai_error(503, "Service temporarily unavailable.", "server_error")
 
         if not body.stream:

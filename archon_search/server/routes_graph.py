@@ -24,16 +24,21 @@ from archon_search.community_builder import (
     CommunityDependencyError,
     NoGraphNodesError,
 )
+from archon_search.constants import GRAPH_VIEW_TOKEN_TTL_SECONDS, VIEW_TOKEN_QUERY_PARAM
 from archon_search.graph_inspector import (
+    GRAPHML_DEPENDENCY_DETAIL,
     CollectionGraphView,
     CrossCollectionGraphView,
-    GRAPHML_DEPENDENCY_DETAIL,
     GraphMLDependencyError,
     inspect_collection,
     inspect_cross_collection,
     to_graphml,
 )
-from archon_search.graph_types import DEFAULT_IMPACT_DEPTH, ImpactDirection, ImpactResult
+from archon_search.graph_types import (
+    DEFAULT_IMPACT_DEPTH,
+    ImpactDirection,
+    ImpactResult,
+)
 from archon_search.jobs.model import job_to_dict
 from archon_search.server._collection_job import (
     SERVICE_NOT_READY_DETAIL,
@@ -41,6 +46,7 @@ from archon_search.server._collection_job import (
     refuse_active_job_or_fail_legacy,
 )
 from archon_search.server._ingest_lock import STORE_BUSY_503_DESCRIPTION
+from archon_search.server.graph_view_token import mint_view_token
 from archon_search.server.routes_jobs import INTERNAL_ERROR_DETAIL, _persist_job_status
 from archon_search.server.schemas import (
     CrossCollectionGraphInspectionResponse,
@@ -49,13 +55,10 @@ from archon_search.server.schemas import (
     GraphImpactResponse,
     GraphInspectionResponse,
     GraphNodeResponse,
+    GraphViewTokenResponse,
     ImpactEdgeResponse,
     ImpactGroupResponse,
     JobResponse,
-)
-from archon_search.server.middleware_auth import (
-    INVALID_NAMESPACE_SENTINEL,
-    validate_token_and_get_namespace,
 )
 from archon_search.types import JobStatus
 
@@ -103,12 +106,12 @@ _REBUILD_TASK_LOG_CONTEXT = "_community_rebuild_task"
 
 
 async def _community_rebuild_task(
-    job: "CommunityRebuildJob",
-    job_store: "JobStore",
-    graph_store: "GraphStore",
-    graph_config: "GraphConfig",
-    search_store: "SearchStore | None" = None,
-    enrichment_client: "LLMEnrichmentClientProtocol | None" = None,
+    job: CommunityRebuildJob,
+    job_store: JobStore,
+    graph_store: GraphStore,
+    graph_config: GraphConfig,
+    search_store: SearchStore | None = None,
+    enrichment_client: LLMEnrichmentClientProtocol | None = None,
 ) -> None:
     """Coroutine that drives a single CommunityRebuildJob to completion.
 
@@ -148,7 +151,7 @@ async def _community_rebuild_task(
     except CommunityDependencyError as exc:
         logger.warning("_community_rebuild_task: job %s failed: %s", job_id, exc)  # the install command: operator-only
         failure_error = COMMUNITY_DEPENDENCY_DETAIL
-    except Exception:  # noqa: BLE001
+    except Exception:
         # Catch everything: an exception escaping here would leave the job RUNNING forever.
         logger.exception("_community_rebuild_task: job %s failed", job_id)
         failure_error = COMMUNITY_REBUILD_FAILED_DETAIL
@@ -162,7 +165,7 @@ async def _community_rebuild_task(
             if meta is not None and meta.community_rebuild_job_id == job_id:
                 meta.community_rebuild_job_id = None
                 await search_store.update_collection_meta(meta)
-        except Exception:
+        except Exception:  # noqa: BLE001 — best-effort pointer cleanup in a background task; failure is logged, never raised
             logger.warning(
                 "_community_rebuild_task: failed to clear community_rebuild_job_id for job %s",
                 job_id,
@@ -202,9 +205,7 @@ async def rebuild_communities(
     (``job_to_dict(running_job)``), so the response reports RUNNING, not
     PENDING (S1).
 
-    Auth is handled solely by ``APIKeyMiddleware`` — this route does not
-    implement its own ``?token=`` fallback (unlike ``get_graph_view``, whose
-    branch exists only for HTML-iframe embedding). A token resolving to
+    Auth is handled solely by ``APIKeyMiddleware``. A token resolving to
     ``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware
     returns a bare 500 first (S14).
 
@@ -224,8 +225,8 @@ async def rebuild_communities(
     """
     config = request.app.state.config
     graph_store = request.app.state.graph_store
-    job_store: "JobStore" = request.app.state.job_store
-    search_store: "SearchStore | None" = request.app.state.search_store
+    job_store: JobStore = request.app.state.job_store
+    search_store: SearchStore | None = request.app.state.search_store
     ns: str = request.state.namespace
 
     # Guard 0: if the caller explicitly declared a ?namespace=, it must match
@@ -326,80 +327,67 @@ def _js_safe_json(value: str) -> str:
     return encoded.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
+async def _require_viewable_collection(request: Request, collection: str, namespace: str) -> None:
+    """Raise 422 when graph inspection is disabled, 404 when *collection* is not visible to *namespace*."""
+    if not request.app.state.config.graph.enabled:
+        raise HTTPException(
+            status_code=422,
+            detail="graph inspection requires [graph] enabled=true in server config",
+        )
+    collection_meta = await request.app.state.pipeline.get_collection_meta(collection, namespace=namespace)
+    if collection_meta is None:
+        raise HTTPException(status_code=404, detail="collection not found")
+
+
+@router.post(
+    "/graph/{collection}/view-token",
+    name="create_graph_view_token",
+    response_model=GraphViewTokenResponse,
+    responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 422: {"model": ErrorDetail}},
+)
+async def create_graph_view_token(collection: str, request: Request) -> GraphViewTokenResponse:
+    """Mint a short-lived token that opens the graph viewer for *collection* in a browser.
+
+    Open ``view_url`` in a browser: a page navigation cannot carry an ``Authorization`` header, and the real
+    API key must never be put in a URL (access logs, history, proxies). The token is valid for
+    ``expires_in`` seconds, grants read access to this collection's graph in the caller's namespace and
+    nothing else, and is accepted only by ``GET /graph/{collection}/view`` and ``GET /graph/{collection}``.
+
+    Returns:
+    - 200: the view token and the viewer URL that carries it.
+    - 401: missing or invalid auth (a view token cannot mint another one).
+    - 404: collection not found.
+    - 422: graph.enabled=false.
+    """
+    namespace: str = request.state.namespace
+    await _require_viewable_collection(request, collection, namespace)
+    view_token = mint_view_token(request.app.state.graph_view_secret, namespace, collection)
+    return GraphViewTokenResponse(
+        view_token=view_token,
+        view_url=f"/graph/{collection}/view?{VIEW_TOKEN_QUERY_PARAM}={view_token}",
+        expires_in=GRAPH_VIEW_TOKEN_TTL_SECONDS,
+    )
+
+
 @router.get("/graph/{collection}/view", name="get_graph_view", response_class=HTMLResponse)
-async def get_graph_view(
-    collection: str,
-    token: str | None = None,
-    *,
-    request: Request,
-) -> Response:
+async def get_graph_view(collection: str, *, request: Request) -> Response:
     """Serve a self-contained graph viewer HTML page for a collection — E2j BE-2.
 
-    Query parameters:
-    - ``token``: Optional Bearer token (used when no Authorization header is present).
-      The middleware exemption lets this request bypass the header-presence check.
+    Authentication (handled by ``APIKeyMiddleware``): an ``Authorization: Bearer`` header with any valid
+    key, or — for a browser navigation — the ``view_token`` query parameter minted by
+    ``POST /graph/{collection}/view-token``. The page never contains the caller's API key: it embeds a
+    freshly minted view token for its own data fetch, valid for ``GRAPH_VIEW_TOKEN_TTL_SECONDS`` and scoped
+    to this collection's graph.
 
     Returns:
     - 200: Self-contained HTML page with C4 placeholders substituted.
     - 401: Missing or invalid auth (WWW-Authenticate: Bearer header always present).
     - 404: Collection not found.
     - 422: graph.enabled=false.
-
-    Auth resolution order (C3 precedence):
-    1. Authorization header (middleware already validated; handler recovers token for embedding).
-    2. ?token= query param (handler validates via validate_token_and_get_namespace).
     """
-    pipeline = request.app.state.pipeline
+    namespace: str = request.state.namespace
+    await _require_viewable_collection(request, collection, namespace)
     config = request.app.state.config
-
-    # --- Resolve the middleware state --- 
-    # Middleware runs before this handler. Two cases:
-    #   A. Authorization header present: middleware validated and set request.state.namespace.
-    #      The raw token is recovered from the header for embedding in HTML.
-    #   B. ?token= path: middleware exemption lets the request through; handler does full auth.
-    auth_header = request.headers.get("Authorization", "")
-    header_parts = auth_header.split(" ", 1)
-    has_bearer_header = len(header_parts) == 2 and header_parts[0] == "Bearer"
-
-    if has_bearer_header:
-        # Case A: middleware already validated. Namespace is on request.state.
-        raw_token = header_parts[1]
-        ns = request.state.namespace
-    else:
-        # Case B: ?token= path. Run the full auth cascade here.
-        if not token:
-            return Response(
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        result = await validate_token_and_get_namespace(
-            token,
-            api_key=request.app.state.api_key,
-            namespaces=request.app.state.namespaces,
-            key_store=request.app.state.key_store,
-        )
-
-        if result is INVALID_NAMESPACE_SENTINEL or result is None:
-            return Response(
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        raw_token = token
-        ns = result
-        request.state.namespace = ns
-
-    # --- Guard 1: graph enabled ---
-    if not config.graph.enabled:
-        raise HTTPException(
-            status_code=422,
-            detail="graph inspection requires [graph] enabled=true in server config",
-        )
-
-    # --- Guard 2: collection exists ---
-    collection_meta = await pipeline.get_collection_meta(collection, namespace=ns)
-    if collection_meta is None:
-        raise HTTPException(status_code=404, detail="collection not found")
 
     # --- Build HTML with C4 placeholder substitution ---
     html_bytes = _load_viewer_html()
@@ -407,8 +395,9 @@ async def get_graph_view(
 
     # String values: json.dumps adds surrounding quotes and escapes special chars.
     # Integer values: str(int(value)) — bare number in JS.
+    view_token = mint_view_token(request.app.state.graph_view_secret, namespace, collection)
     html = html.replace("__ARCHON_COLLECTION__", _js_safe_json(collection))
-    html = html.replace("__ARCHON_TOKEN__", _js_safe_json(raw_token))
+    html = html.replace("__ARCHON_TOKEN__", _js_safe_json(view_token))
     html = html.replace("__ARCHON_MAX_NODES__", str(int(config.graph.max_inspection_nodes)))
     html = html.replace("__ARCHON_MAX_EDGES__", str(int(config.graph.max_inspection_edges)))
 
@@ -478,6 +467,14 @@ async def get_graph_cross_collection(
             detail="collections parameter must specify at least 2 distinct collections",
         )
 
+    # Guard 3b: bound the fan-out one call may ask for (the names are not echoed back)
+    max_collections = config.graph.max_cross_collection_collections
+    if len(collection_list) > max_collections:
+        raise HTTPException(
+            status_code=422,
+            detail=f"collections parameter may name at most {max_collections} collections ([graph].max_cross_collection_collections)",
+        )
+
     # Guard 4: Check if each collection exists
     total_chunk_counts: dict[str, int] = {}
     for col in collection_list:
@@ -512,6 +509,7 @@ async def get_graph_cross_collection(
         entity_presence=entity_presence,
         num_collections=num_collections,
         ns=ns,
+        visibility_source=request.app.state.search_store,
     )
 
     # Branch on format
@@ -600,6 +598,7 @@ async def get_graph(
         entity_presence=entity_presence,
         num_collections=num_collections,
         ns=ns,
+        visibility_source=request.app.state.search_store,
     )
 
     # Branch on format
@@ -678,6 +677,7 @@ async def get_graph_impact(
         extraction_method_filter,
         file_path,
         ns,
+        visibility=await request.app.state.search_store.get_chunk_visibility(collection, ns),
     )
     return _impact_result_to_response(result)
 

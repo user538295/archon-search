@@ -121,9 +121,8 @@ def _module_path(file_path: Path, collection_root: Path | None) -> str:
         joined = joined[: -(len(".__init__"))] if joined.endswith(".__init__") else ""
 
     # Step 7 — drop trailing index for TS/JS
-    if ext in {".ts", ".js"}:
-        if joined == "index" or joined.endswith(".index"):
-            joined = joined[: -(len(".index"))] if joined.endswith(".index") else ""
+    if ext in {".ts", ".js"} and (joined == "index" or joined.endswith(".index")):
+        joined = joined[: -(len(".index"))] if joined.endswith(".index") else ""
 
     return joined
 
@@ -144,48 +143,48 @@ def _get_grammar(ext: str) -> Any | None:
 
     lang = None
     try:
-        from tree_sitter import Language  # type: ignore[import-untyped]  # noqa: PLC0415
+        from tree_sitter import Language  # type: ignore[import-untyped]
 
         if ext == ".py":
-            import tree_sitter_python  # type: ignore[import-untyped]  # noqa: PLC0415
+            import tree_sitter_python  # type: ignore[import-untyped]
 
             lang = Language(tree_sitter_python.language())
         elif ext == ".ts":
-            import tree_sitter_typescript  # type: ignore[import-untyped]  # noqa: PLC0415
+            import tree_sitter_typescript  # type: ignore[import-untyped]
 
             lang = Language(tree_sitter_typescript.language_typescript())
         elif ext == ".js":
-            import tree_sitter_javascript  # type: ignore[import-untyped]  # noqa: PLC0415
+            import tree_sitter_javascript  # type: ignore[import-untyped]
 
             lang = Language(tree_sitter_javascript.language())
         elif ext == ".go":
-            import tree_sitter_go  # type: ignore[import-untyped]  # noqa: PLC0415
+            import tree_sitter_go  # type: ignore[import-untyped]
 
             lang = Language(tree_sitter_go.language())
         elif ext == ".rs":
-            import tree_sitter_rust  # type: ignore[import-untyped]  # noqa: PLC0415
+            import tree_sitter_rust  # type: ignore[import-untyped]
 
             lang = Language(tree_sitter_rust.language())
         elif ext == ".java":
-            import tree_sitter_java  # type: ignore[import-untyped]  # noqa: PLC0415
+            import tree_sitter_java  # type: ignore[import-untyped]
 
             lang = Language(tree_sitter_java.language())
         elif ext == ".sh":
-            import tree_sitter_bash  # type: ignore[import-untyped]  # noqa: PLC0415
+            import tree_sitter_bash  # type: ignore[import-untyped]
 
             lang = Language(tree_sitter_bash.language())
         elif ext == ".swift":
-            import tree_sitter_swift  # type: ignore[import-untyped]  # noqa: PLC0415
+            import tree_sitter_swift  # type: ignore[import-untyped]
 
             lang = Language(tree_sitter_swift.language())
         elif ext == ".cs":
-            import tree_sitter_c_sharp  # type: ignore[import-untyped]  # noqa: PLC0415
+            import tree_sitter_c_sharp  # type: ignore[import-untyped]
 
             lang = Language(tree_sitter_c_sharp.language())
         else:
             # Unknown extension — cache None silently
             pass
-    except (ImportError, Exception):
+    except Exception:  # noqa: BLE001, S110 — grammar import/construction may raise any error; absent grammar is logged below
         pass
 
     if lang is None and ext not in _GRAMMAR_LOGGED:
@@ -226,7 +225,7 @@ def _build_scope_table(source: str, lang: Any, ext: str) -> ScopeTable:
     Byte offsets from tree-sitter are converted to character offsets by
     pre-computing a byte-to-char map over *source*.
     """
-    from tree_sitter import Parser  # type: ignore[import-untyped]  # noqa: PLC0415
+    from tree_sitter import Parser  # type: ignore[import-untyped]
 
     # Build byte-to-char offset map (one pass over source)
     byte_to_char: dict[int, int] = {}
@@ -385,8 +384,7 @@ def _walk_node(
         for child in node.children:
             if child.type == "decorator":
                 d_start = byte_to_char[child.start_byte]
-                if d_start < earliest_decorator_start:
-                    earliest_decorator_start = d_start
+                earliest_decorator_start = min(earliest_decorator_start, d_start)
 
         entries.append(
             ScopeEntry(
@@ -471,7 +469,7 @@ def _resolve_scope(offset: int, scope_table: ScopeTable) -> ScopeEntry | None:
 
     Returns ``None`` if no scope contains *offset* (module-level code).
     """
-    import bisect  # noqa: PLC0415 (stdlib, always available)
+    import bisect
 
     starts = [e.start for e in scope_table]
     idx = bisect.bisect_right(starts, offset)
@@ -556,7 +554,7 @@ class CodeEnricher:
 
         try:
             return _build_scope_table(text, lang, ext)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — parser/library crashes must degrade to an empty scope table, not abort indexing
             count = _parse_failure_count.get(ext, 0) + 1
             _parse_failure_count[ext] = count
             if count <= _PARSE_FAILURE_CAP:
@@ -567,7 +565,7 @@ class CodeEnricher:
 
     def enrich_chunk(
         self,
-        chunk: "ChunkRecord",
+        chunk: ChunkRecord,
         scope_table: ScopeTable,
     ) -> dict[str, str]:
         """Resolve the innermost scope for *chunk* and return metadata.

@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from archon_search.constants import _validate_namespace
 from archon_search.key_manager import (
@@ -23,32 +23,51 @@ from archon_search.key_manager import (
     resolve_rotation_key_file,
     rotate_and_persist_default_key,
 )
+from archon_search.server.authz import (
+    ADMIN_ONLY_RESPONSES,
+    FOREIGN_NAMESPACE_DETAIL,
+    ForbiddenError,
+    authorize_key_create,
+    authorize_key_listing_namespace,
+    caller_identity,
+    caller_may_revoke,
+    can_manage_key,
+    require_admin_dependency,
+)
 from archon_search.server.schemas import (
     ErrorDetail,
     KeyCreateRequest,
     KeyCreateResponse,
     KeyListResponse,
     KeyResponse,
+    KeyRevokeResponse,
     KeyRotateRequest,
     KeyRotateResponse,
-    KeyRevokeResponse,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["keys"])
 
-_ERROR_401_422 = {
+# The ``responses=`` mapping FastAPI takes: status code (or ``"default"``) to a response description.
+_Responses = dict[int | str, dict[str, Any]]
+
+_ERROR_401_422: _Responses = {
     401: {"model": ErrorDetail},
     422: {"model": ErrorDetail},
 }
 
-_ERROR_401_404 = {
+# A non-admin key manages only non-admin keys of its own namespace (see ``archon_search.server.authz``).
+_ERROR_403_KEY_SCOPE: _Responses = {
+    403: {"model": ErrorDetail, "description": FOREIGN_NAMESPACE_DETAIL},
+}
+
+_ERROR_401_404: _Responses = {
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
 }
 
-_ERROR_500_KEY_STORE_UNREADABLE = {
+_ERROR_500_KEY_STORE_UNREADABLE: _Responses = {
     500: {"model": ErrorDetail, "description": "keys.json could not be read; no key changes were made"},
 }
 
@@ -69,6 +88,7 @@ def _key_record_to_response(record: KeyRecord) -> KeyResponse:
         created_at=record.created_at,
         expires_at=record.expires_at,
         status=record.status,
+        admin=record.admin,
     )
 
 
@@ -76,7 +96,7 @@ def _key_record_to_response(record: KeyRecord) -> KeyResponse:
     "/keys",
     status_code=201,
     response_model=KeyCreateResponse,
-    responses={**_ERROR_401_422, **_ERROR_500_KEY_STORE_UNREADABLE},
+    responses={**_ERROR_401_422, **_ERROR_403_KEY_SCOPE, **_ERROR_500_KEY_STORE_UNREADABLE},
 )
 async def create_key(body: KeyCreateRequest, request: Request) -> KeyCreateResponse:
     """Issue a new managed API key.
@@ -84,6 +104,11 @@ async def create_key(body: KeyCreateRequest, request: Request) -> KeyCreateRespo
     The raw bearer token is returned exactly once in the response ``token``
     field. It is never stored on disk — only its SHA-256 hash is persisted.
     """
+    try:
+        authorize_key_create(caller_identity(request), namespace=body.namespace, admin=body.admin)
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     # Validate namespace before any side-effects.
     try:
         _validate_namespace(body.namespace)
@@ -92,31 +117,33 @@ async def create_key(body: KeyCreateRequest, request: Request) -> KeyCreateRespo
 
     key_store: KeyStore = request.app.state.key_store
     try:
-        result = await key_store.create(
+        created = await key_store.create(
             ns=body.namespace,
             label=body.label,
             expires_at=body.expires_at,
+            admin=body.admin,
         )
     except KeyStoreUnreadableError:
         raise HTTPException(status_code=500, detail=KEY_STORE_UNREADABLE_DETAIL)
 
     return KeyCreateResponse(
-        id=result["id"],  # type: ignore[arg-type]  # str narrowed from str|datetime
-        token=result["token"],  # type: ignore[arg-type]
+        id=created.id,
+        token=created.token,
         namespace=body.namespace,
         label=body.label,
         # Use the exact created_at from the store record to prevent divergence
         # between the POST response and future GET /keys (which reads from disk).
-        created_at=result["created_at"],  # type: ignore[arg-type]
+        created_at=created.created_at,
         expires_at=body.expires_at,
         status="active",
+        admin=body.admin,
     )
 
 
 @router.get(
     "/keys",
     response_model=KeyListResponse,
-    responses=_ERROR_401_422,
+    responses={**_ERROR_401_422, **_ERROR_403_KEY_SCOPE},
 )
 async def list_keys(
     request: Request,
@@ -138,8 +165,14 @@ async def list_keys(
     - ``namespace`` — optional namespace scope applied before status filtering;
       ``hidden_revoked_count`` reflects only revoked keys within this namespace.
     """
+    identity = caller_identity(request)
+    try:
+        namespace = authorize_key_listing_namespace(identity, namespace)
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     key_store: KeyStore = request.app.state.key_store
-    all_records = await key_store.list_keys()
+    all_records = [r for r in await key_store.list_keys() if can_manage_key(identity, r)]
 
     # Apply optional namespace filter first so that hidden_revoked_count
     # reflects only keys hidden from THIS scoped view (not global counts).
@@ -181,11 +214,17 @@ async def revoke_key(key_id: str, request: Request) -> KeyRevokeResponse:
     a hint to edit ``archon-search.toml`` instead.
     """
     key_store: KeyStore = request.app.state.key_store
+    identity = caller_identity(request)
 
     # Special-case the literal string "null" — operators may try this after
     # seeing id=null in GET /keys for TOML synthetic records.
     if key_id == "null":
         raise HTTPException(status_code=404, detail=_TOML_KEY_HINT)
+
+    # A non-admin may revoke only the non-admin keys of its own namespace. Any other id is reported as
+    # unknown so a key's existence in another namespace is not revealed.
+    if not await caller_may_revoke(key_store, identity, key_id):
+        raise HTTPException(status_code=404, detail=f"Key not found: {key_id!r}")
 
     try:
         await key_store.revoke(key_id)
@@ -197,7 +236,7 @@ async def revoke_key(key_id: str, request: Request) -> KeyRevokeResponse:
     return KeyRevokeResponse(id=key_id, status="revoked")
 
 
-_ERROR_401_409_500 = {
+_ERROR_401_409_500: _Responses = {
     401: {"model": ErrorDetail},
     409: {"model": ErrorDetail},
     500: {"model": ErrorDetail, "description": "Rotation failed or incomplete; see the server log for details"},
@@ -207,10 +246,11 @@ _ERROR_401_409_500 = {
 @router.post(
     "/keys/rotate",
     response_model=KeyRotateResponse,
-    responses=_ERROR_401_409_500,
+    responses={**_ERROR_401_409_500, **ADMIN_ONLY_RESPONSES},
+    dependencies=[Depends(require_admin_dependency)],
 )
 async def rotate_key(body: KeyRotateRequest, request: Request) -> KeyRotateResponse:
-    """Rotate the default API key.
+    """Rotate the default API key (admin key required: it replaces the server-wide default key).
 
     Generates a new managed API key, writes the new raw token to ``.search.env``,
     and revokes (or grace-expires) the old default key in ``keys.json``.
@@ -274,9 +314,9 @@ async def rotate_key(body: KeyRotateRequest, request: Request) -> KeyRotateRespo
     except RotationIncompleteError:
         raise HTTPException(status_code=500, detail=ROTATE_KEYS_JSON_FAILED_DETAIL)
 
-    new_raw_token: str = result["new_token"]  # type: ignore[assignment]
-    new_key_id: str = result["new_key_id"]  # type: ignore[assignment]
-    old_record = result["old_record"]
+    new_raw_token = result.new_token
+    new_key_id = result.new_key_id
+    old_record = result.old_record
 
     # Log rotation event for audit trail.
     old_key_id_str = old_record.id if old_record is not None else None

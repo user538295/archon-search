@@ -38,7 +38,7 @@ class MultiCollectionRouter:
     def __init__(
         self,
         search_url: str,
-        embedder: "Embedder",
+        embedder: Embedder,
         shortlist_size: int,
         confidence_threshold: float,
         embedding_model: str,
@@ -294,10 +294,10 @@ class MultiCollectionRouter:
         effective_slots = max(1, available_slots)
         lines = [
             "<search_collections>",
-            f"Available collections (select 1\u2013{effective_slots} most relevant for this query,"
-            " output their names in",
-            "<search_selected_collections>name1, name2</search_selected_collections>"
-            " tags at the end of your routing decision):",
+            (f"Available collections (select 1\u2013{effective_slots} most relevant for this query,"
+            " output their names in"),
+            ("<search_selected_collections>name1, name2</search_selected_collections>"
+            " tags at the end of your routing decision):"),
         ]
         for col in collections:
             desc = col.description if col.description else "(no description)"

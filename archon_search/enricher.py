@@ -41,12 +41,12 @@ coordinate-transform code to avoid repeated ``len()`` calls.
 __all__ = [
     "PAGE_BREAK_MARKER",
     "PAGE_BREAK_MARKER_LEN",
+    "_SOURCE_SUBTYPE_MAP",
     "HeadingEntry",
     "HeadingTable",
     "MarkdownEnricher",
-    "_SOURCE_SUBTYPE_MAP",
-    "source_subtype_for",
     "is_docling_source",
+    "source_subtype_for",
 ]
 
 # ---------------------------------------------------------------------------
@@ -261,10 +261,10 @@ class MarkdownEnricher:
 
     def enrich_chunk(
         self,
-        chunk: "ChunkRecord",
+        chunk: ChunkRecord,
         *,
-        heading_table: "HeadingTable | None" = None,
-        page_table: "list[tuple[int, int]] | None" = None,
+        heading_table: HeadingTable | None = None,
+        page_table: list[tuple[int, int]] | None = None,
     ) -> dict[str, str]:
         """Return a ``dict[str, str]`` metadata fragment for *chunk*.
 
@@ -342,7 +342,7 @@ class MarkdownEnricher:
         """
         leading = text.startswith(PAGE_BREAK_MARKER)
         result: list[tuple[int, int]] = [] if leading else [(0, 1)]
-        page = 2 if leading else 2
+        page = 2
         pos = 0
         while True:
             idx = text.find(PAGE_BREAK_MARKER, pos)

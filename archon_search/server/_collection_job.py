@@ -16,14 +16,19 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from collections.abc import Callable
+from collections.abc import Set as AbstractSet
 from http import HTTPStatus
-from collections.abc import Callable, Set
 from typing import TYPE_CHECKING, Literal
 
 from fastapi.responses import JSONResponse
 
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
-from archon_search.server.routes_jobs import INTERNAL_ERROR_DETAIL, JOB_SUPERSEDED_DETAIL, _persist_job_status
+from archon_search.server.routes_jobs import (
+    INTERNAL_ERROR_DETAIL,
+    JOB_SUPERSEDED_DETAIL,
+    _persist_job_status,
+)
 from archon_search.store import CollectionLockNotHeldError
 from archon_search.types import IngestJob, JobStatus
 
@@ -48,7 +53,7 @@ def refuse_active_job_or_fail_legacy(
     job_store: JobStore,
     pointed_job_id: str | None,
     *,
-    active_statuses: Set[JobStatus],
+    active_statuses: AbstractSet[JobStatus],
     conflict_detail: str,
     log_context: str,
 ) -> JSONResponse | None:
@@ -137,7 +142,7 @@ async def create_collection_job[J: IngestJob](
             return meta
         try:
             job = create_job(meta)
-        except Exception:  # noqa: BLE001 — no job exists; any failure maps to one sanitized 500
+        except Exception:
             logger.exception("%s: failed to create the job for collection %r", log_context, collection)
             return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
         if pointer_field is not None:
@@ -149,7 +154,7 @@ async def create_collection_job[J: IngestJob](
                 # A bug (the lock above is held), never a failed write to answer or log away; no task runs the job.
                 _persist_job_status(job_store, job.job_id, JobStatus.FAILED, context=log_context, error=INTERNAL_ERROR_DETAIL)
                 raise
-            except Exception as exc:  # noqa: BLE001 — the caller's policy decides; no store failure escapes as a raw 500
+            except Exception as exc:
                 if on_pointer_write_failure is not None:
                     return on_pointer_write_failure(job, exc)
                 logger.warning(

@@ -11,8 +11,8 @@ import threading
 from collections.abc import Callable, Coroutine
 from pathlib import Path
 
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 _log = logging.getLogger(__name__)
 
@@ -224,7 +224,7 @@ class WatcherManager:
             self._active_syncs.add(task)
             try:
                 await task
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — a failed watch-triggered sync is logged and must not kill the watcher callback
                 _log.error("Watch-triggered sync for %r raised: %r", col_name, exc)
             finally:
                 self._active_syncs.discard(task)

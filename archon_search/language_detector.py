@@ -23,7 +23,7 @@ FASTTEXT_MODEL_FILENAME = "lid.176.ftz"
 # If the package is not installed, `fasttext` will be None and
 # LanguageDetector.__init__ will raise RuntimeError on construction.
 try:
-    import fasttext as fasttext  # type: ignore[import-untyped]  # noqa: PLC0414
+    import fasttext  # type: ignore[import-untyped]
 except ImportError:
     fasttext = None  # type: ignore[assignment]
 

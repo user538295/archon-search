@@ -7,28 +7,62 @@ import math
 import os
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, PrivateAttr, field_validator
 from starlette.datastructures import State
 
-from archon_search._path_safety import PathUnsafeError, validate_ingest_path
-from archon_search._types import IngestError, _file_exceeds_limit
+from archon_search._path_safety import (
+    PathUnsafeError,
+    unsafe_path_detail,
+    validate_ingest_path,
+    validate_ingest_source,
+)
+from archon_search._types import (
+    IngestError,
+    IngestTooManyFilesError,
+    _file_exceeds_limit,
+)
 from archon_search.config import SearchConfig, resolve_active_model
 from archon_search.constants import DEFAULT_NAMESPACE
-from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderCache, EmbedderNotReadyError
+from archon_search.embedder_cache import (
+    EMBEDDER_NOT_READY_DETAIL,
+    EmbedderCache,
+    EmbedderNotReadyError,
+)
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
-from archon_search.server._ingest_lock import STORE_BUSY_503_DESCRIPTION, acquire_collection_lock_or_503
-from archon_search.server._job_warmup import await_models_warm
+from archon_search.server._ingest_admission import (
+    INGEST_BUSY_503_DESCRIPTION,
+    IngestSlot,
+    ingest_busy_503,
+    reserve_ingest_slot,
+)
+from archon_search.server._ingest_lock import (
+    STORE_BUSY_503_DESCRIPTION,
+    acquire_collection_lock_or_503,
+)
 from archon_search.server._ingested_by import parse_ingested_by_header
-from archon_search.server.schemas import CodedErrorDetail, ErrorDetail, JobListResponse, JobResponse
-from archon_search.types import DeleteJob, ExportJob, ImportJob, IngestOptions, MigrationJob, ReindexJob, SyncJob
-
-if TYPE_CHECKING:
-    from archon_search.store import SearchStore
+from archon_search.server._job_warmup import await_models_warm
+from archon_search.server.authz import caller_identity
+from archon_search.server.schemas import (
+    CodedErrorDetail,
+    ErrorDetail,
+    JobListResponse,
+    JobResponse,
+)
+from archon_search.store import CollectionOwnershipError, SearchStore
+from archon_search.types import (
+    DeleteJob,
+    ExportJob,
+    ImportJob,
+    IngestOptions,
+    MigrationJob,
+    ReindexJob,
+    SyncJob,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +228,7 @@ async def _dispatch_ingest(
     body: IngestRequest,
     namespace: str,
     search_store: Any,
-    embedder_cache: "EmbedderCache",
+    embedder_cache: EmbedderCache,
     pipeline: Any,
     config: Any,
 ) -> tuple[list[str], list[dict]]:
@@ -244,8 +278,8 @@ async def _dispatch_ingest(
             # with docs=0 after the job transitions to FAILED — mirrors the guarantee
             # documented in 50_ingestion_and_collections.md:113 for POST /collections/.
             if meta is None:
-                from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
-                from archon_search.store import STORE_SCHEMA_VERSION  # noqa: PLC0415
+                from archon_search.collection_meta import CollectionMeta
+                from archon_search.store import STORE_SCHEMA_VERSION
                 try:
                     await search_store.update_collection_meta(CollectionMeta(
                         name=body.collection,
@@ -290,8 +324,8 @@ def _persist_job_status(job_store: JobStore, job_id: str, status: JobStatus, *, 
     """
     try:
         job_store.update(job_id, status=status, **fields)
-    except Exception:  # noqa: BLE001 — best-effort status write; logged with traceback
-        logger.error("%s: could not persist %s status for job %s", context, status.value, job_id, exc_info=True)
+    except Exception:
+        logger.exception("%s: could not persist %s status for job %s", context, status.value, job_id)
 
 
 def _is_cancelling(job_store: JobStore, job_id: str) -> bool:
@@ -362,7 +396,7 @@ async def _default_ingest_task(
     pipeline_fn: Callable[..., Awaitable[None]] | None = None,
     *,
     search_store: Any = None,
-    embedder_cache: "EmbedderCache | None" = None,
+    embedder_cache: EmbedderCache | None = None,
     pipeline: Any = None,
     config: Any = None,
 ) -> None:
@@ -390,11 +424,12 @@ async def _default_ingest_task(
         # make_retry_dispatcher; an inline or POST /collections/ ingest has no options and is never retried.
         logger.warning("Ingest task %s: embedder not ready — %s", job_id, exc)
         _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=EMBEDDER_NOT_READY_DETAIL)
-    except IngestPathNotFoundError as exc:
-        # Curated text echoing only the caller's own path: safe as the job error.
+    except (IngestPathNotFoundError, CollectionOwnershipError, IngestTooManyFilesError) as exc:
+        # Curated text: the caller's own path, or the fixed COLLECTION_UNAVAILABLE_DETAIL (another namespace owns
+        # the collection; nothing was parsed, embedded or written). Safe as the job error.
         logger.warning("Ingest task %s failed: %s", job_id, exc)
         _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=str(exc))
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("Ingest task %s failed", job_id)
         _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=INGEST_FAILED_DETAIL)
     else:
@@ -409,10 +444,10 @@ async def _default_ingest_task_with_lock(
     body: IngestRequest,
     namespace: str = DEFAULT_NAMESPACE,
     pipeline_fn: Callable[..., Awaitable[None]] | None = None,
-    held_lock: "asyncio.Lock | None" = None,
+    held_lock: asyncio.Lock | None = None,
     *,
     search_store: Any = None,
-    embedder_cache: "EmbedderCache | None" = None,
+    embedder_cache: EmbedderCache | None = None,
     pipeline: Any = None,
     config: Any = None,
 ) -> None:
@@ -450,11 +485,12 @@ async def _default_ingest_task_with_lock(
         # Not a genuine failure — see the sibling handler in _default_ingest_task.
         logger.warning("Ingest task %s: embedder not ready — %s", job_id, exc)
         _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=EMBEDDER_NOT_READY_DETAIL)
-    except IngestPathNotFoundError as exc:
-        # Curated text — see the sibling handler in _default_ingest_task.
+    except (IngestPathNotFoundError, CollectionOwnershipError, IngestTooManyFilesError) as exc:
+        # Curated text (the caller's own path, or the fixed COLLECTION_UNAVAILABLE_DETAIL) — see the sibling handler
+        # in _default_ingest_task.
         logger.warning("Ingest task %s failed: %s", job_id, exc)
         _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=str(exc))
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("Ingest task %s failed", job_id)
         _persist_job_status(store, job_id, JobStatus.FAILED, context=_INGEST_LOG_CONTEXT, error=INGEST_FAILED_DETAIL)
     else:
@@ -477,7 +513,7 @@ async def _clear_reindex_job_id(search_store: SearchStore, collection: str, name
         if meta is not None and meta.reindex_job_id == job_id:
             meta.reindex_job_id = None
             await search_store.update_collection_meta(meta)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("_reindex_task: failed to clear reindex_job_id for job %s", job_id)
 
 
@@ -513,7 +549,7 @@ async def _claim_reindex(
     try:
         if job_store.transition(job_id, {JobStatus.PENDING}, JobStatus.RUNNING) is not None:
             return True
-    except Exception:  # noqa: BLE001 — the claim did not happen; handled below, never raised
+    except Exception:
         logger.exception("_reindex_task: failed to persist job %s as RUNNING", job_id)
         await _end_reindex_cancelled_or_failed(
             search_store, job_store, collection, namespace, job_id, error=REINDEX_FAILED_DETAIL
@@ -589,7 +625,7 @@ async def _reindex_task(
             store, job_store, collection, namespace, job_id, error=EMBEDDER_NOT_READY_DETAIL
         )
         return
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("_reindex_task: embedder resolution failed for job %s", job_id)
         await _end_reindex_cancelled_or_failed(store, job_store, collection, namespace, job_id, error=REINDEX_FAILED_DETAIL)
         return
@@ -624,7 +660,7 @@ async def _reindex_task(
             )
         except asyncio.CancelledError:
             cancelled = True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — any reindex ingest failure is captured and recorded on the job as FAILED
             ingest_error = exc
 
     if cancelled or ingest_error is not None:
@@ -674,7 +710,7 @@ async def _reindex_task(
             await store.update_collection_meta(meta)
         else:
             logger.warning("_reindex_task: collection meta not found at success for job %s", job_id)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("_reindex_task: failed to update collection meta for job %s", job_id)
 
     # A DELETE may have landed during the promotion awaits: the model is promoted (the vectors were re-embedded with
@@ -696,7 +732,7 @@ _INGEST_ERRORS: dict[int | str, dict[str, Any]] = {
         "description": "A single-file path or an inline document exceeds the configured max_file_mb limit",
     },
     500: {"model": ErrorDetail, "description": f'Creating the ingest job failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})'},
-    503: {"model": ErrorDetail, "description": STORE_BUSY_503_DESCRIPTION},
+    503: {"model": ErrorDetail, "description": f"{STORE_BUSY_503_DESCRIPTION}; or {INGEST_BUSY_503_DESCRIPTION}"},
 }
 
 
@@ -707,9 +743,15 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
     body.ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     if body.path is not None:
         try:
-            body = body.with_resolved_path(str(validate_ingest_path(body.path)))
+            resolved_path = await asyncio.to_thread(
+                validate_ingest_source,
+                body.path,
+                request.app.state.ingest_path_policy,
+                admin=caller_identity(request).admin,
+            )
+            body = body.with_resolved_path(str(resolved_path))
         except PathUnsafeError as e:
-            raise HTTPException(status_code=400, detail=f"path is unsafe: {e.reason}")
+            raise HTTPException(status_code=400, detail=unsafe_path_detail(e.reason))
     # S293: `documents[].source_path` is client input that reaches the same pipeline,
     # so it gets the same path-safety rule as `body.path`.
     if body.documents is not None:
@@ -762,25 +804,35 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
                         status_code=413, detail={"code": err.code, "message": err.message}
                     )
 
-    # Pre-acquire the per-collection lock to return 503 synchronously on contention —
-    # before creating the job, so a 503 leaves no PENDING job that nothing ever runs.
-    search_store = getattr(request.app.state, "search_store", None)
-    lock_result = await acquire_collection_lock_or_503(search_store, body.collection)
-    if isinstance(lock_result, JSONResponse):
-        return lock_result
-
+    # Reserve one of the `[ingest].max_concurrent_tasks` slots before any side effect: a request over the cap is
+    # refused ingest_busy without taking a lock or creating a job. The slot passes to the task, or is released here.
+    slot = reserve_ingest_slot(request.app.state)
+    if slot is None:
+        return ingest_busy_503()
     try:
-        job = store.create(
-            namespace=ns, collection=body.collection, path=body.path or "", ingest_options=_ingest_options(body)
-        )
-    except Exception:  # noqa: BLE001 — any failure maps to one sanitized 500 and releases the lock
-        logger.exception("Failed to create the ingest job for collection %s", body.collection)
-        if lock_result is not None and lock_result.locked():
-            lock_result.release()
-        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
+        # Pre-acquire the per-collection lock to return 503 synchronously on contention —
+        # before creating the job, so a 503 leaves no PENDING job that nothing ever runs.
+        search_store = getattr(request.app.state, "search_store", None)
+        lock_result = await acquire_collection_lock_or_503(search_store, body.collection, ns)
+        if isinstance(lock_result, JSONResponse):
+            return lock_result
 
-    _track_background_task(request.app.state, _ingest_task(request.app.state, job.job_id, body, ns, lock_result))
-    return JobResponse(**job_to_dict(job))
+        try:
+            job = store.create(
+                namespace=ns, collection=body.collection, path=body.path or "", ingest_options=_ingest_options(body)
+            )
+        except Exception:
+            logger.exception("Failed to create the ingest job for collection %s", body.collection)
+            if lock_result is not None and lock_result.locked():
+                lock_result.release()
+            return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
+
+        _track_background_task(
+            request.app.state, _ingest_task(request.app.state, job.job_id, body, ns, lock_result), slot=slot
+        )
+        return JobResponse(**job_to_dict(job))
+    finally:
+        slot.release_unless_attached()
 
 
 def _ingest_options(body: IngestRequest) -> IngestOptions | None:
@@ -819,11 +871,18 @@ def _ingest_task(
     return _default_ingest_task(job_id, app_state.job_store, body, namespace=namespace, **deps)
 
 
-def _track_background_task(app_state: State, coro: Coroutine[Any, Any, None]) -> None:
-    """Run *coro* as a task kept in ``app_state._background_tasks`` until it finishes (the lifespan cancels them)."""
+def _track_background_task(app_state: State, coro: Coroutine[Any, Any, None], *, slot: IngestSlot | None = None) -> None:
+    """Run *coro* as a task kept in ``app_state._background_tasks`` until it finishes (the lifespan cancels them).
+
+    A *slot* (the ingest admission slot of the request that started the task) belongs to the task from here on and is
+    released when the task ends, however it ends — including a cancellation before its first step.
+    """
     task = asyncio.create_task(coro)
     app_state._background_tasks.add(task)
     task.add_done_callback(app_state._background_tasks.discard)
+    if slot is not None:
+        slot.attached = True
+        task.add_done_callback(lambda _task: slot.release())
 
 
 async def _run_maintenance_retry(app_state: State, job_id: str, body: IngestRequest, namespace: str) -> None:
@@ -887,13 +946,19 @@ _KIND_TYPE_MAP: dict[str, type] = {
     "sync": SyncJob,
 }
 
+# ``Query(...)`` in a default is flagged by B008, a module-level name is not. One instance per parameter: FastAPI binds a
+# ``FieldInfo`` to a single parameter, so sharing one across the three filters breaks them.
+_STATUS_FILTER_QUERY: Final = Query(default=[])
+_KIND_FILTER_QUERY: Final = Query(default=[])
+_SOURCE_FILTER_QUERY: Final = Query(default=[])
+
 
 @router.get("/jobs", response_model=JobListResponse, responses={401: {"model": ErrorDetail}})
 async def list_jobs(
     request: Request,
-    status: list[str] = Query(default=[]),
-    kind: list[str] = Query(default=[]),
-    source: list[str] = Query(default=[]),
+    status: list[str] = _STATUS_FILTER_QUERY,
+    kind: list[str] = _KIND_FILTER_QUERY,
+    source: list[str] = _SOURCE_FILTER_QUERY,
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None),
 ) -> JobListResponse:
@@ -999,14 +1064,13 @@ async def resume_job(job_id: str, request: Request) -> JobResponse | JSONRespons
         # tmp file missing AND there is a checkpoint → can't resume from where we left off
         if job.progress is not None and not Path(job.tmp_path).exists():
             return JSONResponse({"error": "source_not_found"}, status_code=422)
-    elif isinstance(job, ImportJob):
-        if not Path(job.archive_path).exists():
-            return JSONResponse({"error": "source_not_found"}, status_code=422)
+    elif isinstance(job, ImportJob) and not Path(job.archive_path).exists():
+        return JSONResponse({"error": "source_not_found"}, status_code=422)
 
     # Atomically transition FAILED → QUEUED
     try:
         updated = store.transition(job_id, {JobStatus.FAILED}, JobStatus.QUEUED)
-    except Exception:  # noqa: BLE001 — the job stays FAILED; any failure maps to one sanitized 500
+    except Exception:
         logger.exception("Failed to persist the resume of job %s", job_id)
         return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
     if updated is None:
@@ -1067,7 +1131,7 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
                 cancel_requested=True,
                 cancelled_before_start=job.status == JobStatus.PENDING,
             )
-        except Exception:  # noqa: BLE001 — the job keeps its status; any failure maps to one sanitized 500
+        except Exception:
             logger.exception("Failed to persist the cancel of job %s", job_id)
             return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
         if updated is None:

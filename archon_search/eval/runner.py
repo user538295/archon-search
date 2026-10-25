@@ -11,10 +11,14 @@ import logging
 import os
 import tempfile
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator, Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from archon_search.pipeline import SearchPipeline
 
 try:
     import tomllib  # Python 3.11+
@@ -127,7 +131,7 @@ def load_benchmark_thresholds(path: Path) -> BenchmarkThresholds:
             raise ValueError(f"{key} missing in [real_model_search]")
         val = section[key]
         if not isinstance(val, (int, float)):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004 — documented contract: callers/tests catch ValueError for config errors
                 f"{key} must be a positive number, got {val!r}"
             )
         if float(val) <= 0:
@@ -163,7 +167,7 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
                 f"Missing required key in [quality_floors]: {key!r}"
             )
         if not isinstance(raw_floors[key], (int, float)):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004 — documented contract: callers/tests catch ValueError for config errors
                 f"[quality_floors].{key} must be a float, got {type(raw_floors[key]).__name__!r}"
             )
 
@@ -287,7 +291,7 @@ def load_runtime_config(config_path: Path) -> EvalRuntimeConfig:
         if key not in raw_search:
             raise ValueError(f"Missing required key in [search]: {key!r}")
         if not isinstance(raw_search[key], int):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004 — documented contract: callers/tests catch ValueError for config errors
                 f"[search].{key} must be an integer, got {type(raw_search[key]).__name__!r}"
             )
 
@@ -340,6 +344,12 @@ def validate_routing_contract(
 # ---------------------------------------------------------------------------
 
 
+from archon_search.eval._hashing import (
+    compute_eval_hash,
+    compute_runtime_config_hash,
+    compute_thresholds_hash,
+)
+from archon_search.eval._tracing import collect_search_trace
 from archon_search.eval.fixtures import (
     EvalCorpus,
     EvalQuery,
@@ -347,12 +357,6 @@ from archon_search.eval.fixtures import (
     load_eval_corpus,
 )
 from archon_search.eval.types import EvalMetrics, EvalSearchResult, QueryEvalTrace
-from archon_search.eval._tracing import collect_search_trace
-from archon_search.eval._hashing import (
-    compute_eval_hash,
-    compute_runtime_config_hash,
-    compute_thresholds_hash,
-)
 
 
 @dataclass
@@ -410,20 +414,20 @@ def load_baseline(path: Path) -> EvalBaseline:
         raise ValueError(f"Cannot read baseline file {path}: {exc}") from exc
 
     if not isinstance(raw, dict):
-        raise ValueError(f"Baseline must be a JSON object, got {type(raw).__name__}")
+        raise ValueError(f"Baseline must be a JSON object, got {type(raw).__name__}")  # noqa: TRY004 — documented contract: ValueError on malformed baseline
 
     for key in _BASELINE_REQUIRED_FIELDS:
         if key not in raw:
             raise ValueError(f"Baseline missing required field {key!r}")
 
     if not isinstance(raw["eval_hash"], str):
-        raise ValueError("Baseline field 'eval_hash' must be a string")
+        raise ValueError("Baseline field 'eval_hash' must be a string")  # noqa: TRY004 — documented contract: ValueError on malformed baseline
     if not isinstance(raw["runtime_config_hash"], str):
-        raise ValueError("Baseline field 'runtime_config_hash' must be a string")
+        raise ValueError("Baseline field 'runtime_config_hash' must be a string")  # noqa: TRY004 — documented contract: ValueError on malformed baseline
     if not isinstance(raw["command"], str):
-        raise ValueError("Baseline field 'command' must be a string")
+        raise ValueError("Baseline field 'command' must be a string")  # noqa: TRY004 — documented contract: ValueError on malformed baseline
     if not isinstance(raw["metrics"], dict):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004 — documented contract: ValueError on malformed baseline
             f"Baseline field 'metrics' must be an object, got {type(raw['metrics']).__name__}"
         )
 
@@ -433,13 +437,13 @@ def load_baseline(path: Path) -> EvalBaseline:
 
     raw_waivers = raw.get("waiver_ids", {})
     if not isinstance(raw_waivers, dict):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004 — documented contract: ValueError on malformed baseline
             f"Baseline field 'waiver_ids' must be an object, got {type(raw_waivers).__name__}"
         )
     waiver_ids: dict[str, str] = {}
     for k, v in raw_waivers.items():
         if not isinstance(k, str) or not isinstance(v, str):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004 — documented contract: ValueError on malformed baseline
                 "Baseline field 'waiver_ids' must map string keys to string values"
             )
         waiver_ids[k] = v
@@ -815,8 +819,8 @@ async def _build_code_lane_pipeline(
     graph_expander = None
     if defref_enabled:
         from archon_search.config import GraphConfig
-        from archon_search.graph_store import GraphStore
         from archon_search.defref_extractor import DefRefExtractor
+        from archon_search.graph_store import GraphStore
 
         if external_graph_store is not None:
             graph_store = external_graph_store
@@ -844,7 +848,7 @@ async def _build_code_lane_pipeline(
     return pipeline, graph_store
 
 
-async def _build_code_lane_ingest_pipeline(db_path: Path, graph_store) -> "SearchPipeline":  # type: ignore[name-defined]  # noqa: F821
+async def _build_code_lane_ingest_pipeline(db_path: Path, graph_store) -> SearchPipeline:  # type: ignore[name-defined]
     """Build the real code-lane ingest pipeline for use FROM WITHIN ``run_eval_suite``.
 
     Delegates to :func:`_build_code_lane_pipeline` (C2-4: single source of
@@ -1238,7 +1242,7 @@ async def run_eval_suite(
         finally:
             try:
                 await pipeline.store.disconnect()
-            except Exception as exc:  # pragma: no cover — defensive
+            except Exception as exc:  # pragma: no cover — defensive  # noqa: BLE001 — best-effort disconnect in finally; must not mask the eval result
                 logger.debug("ignored disconnect error: %s", exc)
 
     # ----- metrics ----------------------------------------------------------
@@ -1657,15 +1661,17 @@ def assert_thresholds(
         # Floor-drop policy vs baseline
         if baseline_value is not None:
             drop = baseline_value - floor
-            if drop > thresholds.max_floor_drop_without_waiver:
-                if field_name not in baseline.waiver_ids:
-                    failures.append(
-                        f"{field_name}: floor={floor:.4f} is {drop:+.4f} below "
-                        f"baseline={baseline_value:.4f} which exceeds "
-                        f"max_floor_drop_without_waiver="
-                        f"{thresholds.max_floor_drop_without_waiver:.4f}. "
-                        f"Add a named waiver to baseline.waiver_ids[{field_name!r}]."
-                    )
+            if (
+                drop > thresholds.max_floor_drop_without_waiver
+                and field_name not in baseline.waiver_ids
+            ):
+                failures.append(
+                    f"{field_name}: floor={floor:.4f} is {drop:+.4f} below "
+                    f"baseline={baseline_value:.4f} which exceeds "
+                    f"max_floor_drop_without_waiver="
+                    f"{thresholds.max_floor_drop_without_waiver:.4f}. "
+                    f"Add a named waiver to baseline.waiver_ids[{field_name!r}]."
+                )
 
     # Latency ceilings ------------------------------------------------------
     ceilings = thresholds.latency_ceilings

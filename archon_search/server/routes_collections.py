@@ -5,26 +5,38 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
+import math
 from collections.abc import Callable
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-import math
-
-from archon_search._path_safety import PathUnsafeError, validate_ingest_path
+from archon_search._path_safety import (
+    PathUnsafeError,
+    unsafe_path_detail,
+    validate_ingest_source,
+)
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig, resolve_active_model, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
-from archon_search.model_validation import ModelValidationError, validate_embedding_model
+from archon_search.model_validation import (
+    ModelValidationError,
+    validate_embedding_model,
+)
 from archon_search.server._collection_job import (
     SERVICE_NOT_READY_DETAIL,
     create_collection_job,
     refuse_active_job_or_fail_legacy,
+)
+from archon_search.server._ingest_admission import (
+    INGEST_BUSY_503_DESCRIPTION,
+    IngestSlot,
+    ingest_busy_503,
+    reserve_ingest_slot,
 )
 from archon_search.server._ingest_lock import (
     COLLECTION_WRITER_IN_PROGRESS_DETAIL,
@@ -35,11 +47,53 @@ from archon_search.server._ingest_lock import (
     store_busy_503,
 )
 from archon_search.server._ingested_by import parse_ingested_by_header
-from archon_search.server.routes_jobs import _REINDEX_COLLECTION_LOG_CONTEXT, INTERNAL_ERROR_DETAIL, REINDEX_FAILED_DETAIL, IngestRequest, _ingest_task, _persist_job_status, _reindex_task, _track_background_task
-from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, ExpiringChunkItem, ExpiringChunksResponse, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
-from archon_search.store import STORE_SCHEMA_VERSION, ReindexResult, SearchStore, StoreBusyError
+from archon_search.server.authz import (
+    ADMIN_ONLY_RESPONSES,
+    caller_identity,
+    require_admin_dependency,
+)
+from archon_search.server.routes_jobs import (
+    _REINDEX_COLLECTION_LOG_CONTEXT,
+    INTERNAL_ERROR_DETAIL,
+    REINDEX_FAILED_DETAIL,
+    IngestRequest,
+    _ingest_task,
+    _persist_job_status,
+    _reindex_task,
+    _track_background_task,
+)
+from archon_search.server.schemas import (
+    CollectionDetail,
+    CollectionSummary,
+    DeleteResponse,
+    DocumentInfoItem,
+    DocumentListResponse,
+    ErrorDetail,
+    ExpiringChunkItem,
+    ExpiringChunksResponse,
+    JobResponse,
+    MigrateInPlaceResponse,
+    MigrateRequest,
+    MigrationPendingResponse,
+    MigrationSpecSchema,
+    PatchCollectionBody,
+)
+from archon_search.store import (
+    STORE_SCHEMA_VERSION,
+    ReindexResult,
+    SearchStore,
+    StoreBusyError,
+)
 from archon_search.sync import path_to_collection_name
-from archon_search.types import IngestJob, JobStatus, MetadataReindexJob, MigrationJob, MigrationKind, MigrationSpec, ReindexJob
+from archon_search.types import (
+    IngestJob,
+    JobStatus,
+    MetadataReindexJob,
+    MigrationJob,
+    MigrationKind,
+    MigrationSpec,
+    ReindexJob,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +155,7 @@ def _collection_status(config: SearchConfig, state_store, name: str) -> str:
         state = state_store.read()
         if state and name in state.collections:
             return str(state.collections[name].status)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110 — status is best-effort display data; any state-store read failure yields "not_yet_indexed"
         pass
     return "not_yet_indexed"
 
@@ -117,7 +171,7 @@ def _persist_config_or_500(config: SearchConfig, request: Request, rollback: Cal
     """Persist *config*; on any failure run *rollback* and return the sanitized 500 response, else ``None``."""
     try:
         _maybe_save_config(config, request)
-    except Exception:  # noqa: BLE001 — OSError, tomlkit ParseError, TypeError: all map to one sanitized 500
+    except Exception:
         rollback()
         logger.exception("Failed to persist collection change to the config file")
         return JSONResponse(
@@ -166,7 +220,7 @@ def _save_config_after_rollback(config: SearchConfig, request: Request, reason: 
     """Best-effort config save after an in-memory rollback; a failure is logged so the caller's status survives."""
     try:
         _maybe_save_config(config, request)
-    except Exception:  # noqa: BLE001 — must not mask the caller's own error response
+    except Exception:
         logger.exception("Failed to rollback config after %s", reason)
 
 
@@ -191,7 +245,7 @@ async def _rollback_add(
     _rollback_config_entry(config, request, resolved, reason)
     try:
         await search_store.delete_collection_meta(collection_name, ns)
-    except Exception:  # noqa: BLE001 — must not mask the caller's own error response
+    except Exception:
         logger.exception("Failed to rollback meta after %s", reason)
 
 
@@ -287,11 +341,11 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
         if col_meta is not None:
             try:
                 chunk_count = await search_store.count_chunks(name, namespace=namespace)
-            except Exception:  # noqa: BLE001 — one bad collection must not 500 the whole list
+            except Exception:  # noqa: BLE001 — count is best-effort listing data; any store failure falls back to 0
                 chunk_count = 0
             try:
                 doc_count = await search_store.count_documents(name)
-            except Exception:  # noqa: BLE001 — one bad collection must not 500 the whole list
+            except Exception:  # noqa: BLE001 — count is best-effort listing data; any store failure falls back to 0
                 doc_count = 0
         result.append(CollectionSummary(
             name=name,
@@ -347,10 +401,34 @@ _ERROR_500_ADD_COLLECTION = {
     "/",
     status_code=202,
     response_model=JobResponse,
-    responses={**_ERROR_400_401_409_503, 422: {"model": ErrorDetail}, **_ERROR_500_ADD_COLLECTION},
+    responses={
+        **_ERROR_400_401_409_503,
+        503: {"model": ErrorDetail, "description": f"Store busy — another write holds the collection; or {INGEST_BUSY_503_DESCRIPTION}"},
+        422: {"model": ErrorDetail},
+        **_ERROR_500_ADD_COLLECTION,
+        **ADMIN_ONLY_RESPONSES,
+    },
+    dependencies=[Depends(require_admin_dependency)],
 )
 async def add_collection(body: AddCollectionRequest, request: Request) -> JobResponse | JSONResponse:
-    """Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob."""
+    """Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob.
+
+    Admin key required: it appends the path to the shared ``archon-search.toml`` collection list, which the
+    startup sync and ``POST /sync`` process for every namespace.
+
+    Refused ``503 ingest_busy`` while ``[ingest].max_concurrent_tasks`` ingest jobs are running, before any side effect.
+    """
+    slot = reserve_ingest_slot(request.app.state)
+    if slot is None:
+        return ingest_busy_503()
+    try:
+        return await _add_collection(body, request, slot)
+    finally:
+        slot.release_unless_attached()
+
+
+async def _add_collection(body: AddCollectionRequest, request: Request, slot: IngestSlot) -> JobResponse | JSONResponse:
+    """The body of :func:`add_collection`; *slot* passes to the ingest task it starts."""
     config: SearchConfig = request.app.state.config
     store: JobStore = request.app.state.job_store
     search_store = request.app.state.search_store
@@ -364,9 +442,16 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
             raise HTTPException(status_code=422, detail=str(e))
 
     try:
-        resolved = str(validate_ingest_path(body.path))
+        resolved = str(
+            await asyncio.to_thread(
+                validate_ingest_source,
+                body.path,
+                request.app.state.ingest_path_policy,
+                admin=caller_identity(request).admin,
+            )
+        )
     except PathUnsafeError as e:
-        raise HTTPException(status_code=400, detail=f"path is unsafe: {e.reason}")
+        raise HTTPException(status_code=400, detail=unsafe_path_detail(e.reason))
 
     # Dedup check against resolved paths from both lists
     existing_resolved = {
@@ -416,7 +501,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         # TOCTOU race: name claimed by another namespace between check and write
         _rollback_config_entry(config, request, resolved, "stub meta write name race")
         return JSONResponse({"detail": "collection name already registered"}, status_code=409)
-    except Exception:  # noqa: BLE001 — any other store failure maps to one sanitized 500
+    except Exception:
         logger.exception("Failed to write the stub meta row for collection %s", collection_name)
         _rollback_config_entry(config, request, resolved, "stub meta write failure")
         return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
@@ -439,7 +524,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     try:
         job = store.create(namespace=ns, collection=collection_name)
-    except Exception:  # noqa: BLE001 — any failure must roll back and release the pre-acquired lock
+    except Exception:
         logger.exception("Failed to create the ingest job for collection %s", collection_name)
         try:
             await _rollback_add(
@@ -455,7 +540,9 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     ingest_body = IngestRequest(
         collection=collection_name, path=body.path, ingested_by=ingested_by
     ).with_resolved_path(resolved)
-    _track_background_task(request.app.state, _ingest_task(request.app.state, job.job_id, ingest_body, ns, lock_result))
+    _track_background_task(
+        request.app.state, _ingest_task(request.app.state, job.job_id, ingest_body, ns, lock_result), slot=slot
+    )
 
     return JobResponse(**job_to_dict(job))
 
@@ -586,8 +673,8 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
                 # KeyError: the table doesn't exist — that's fine. RuntimeError (store
                 # not connected, LanceDB failure) is a failed drop, handled below.
                 with contextlib.suppress(KeyError):
-                    await search_store.drop_collection(name, _locked_by_caller=True)
-            except Exception:  # noqa: BLE001 — the table data is intact, so the config removal is undone
+                    await search_store.drop_collection(name, namespace=ns, _locked_by_caller=True)
+            except Exception:
                 logger.exception("Failed to drop collection %s; rolling back the config change", name)
                 restore_config_lists()
                 _save_config_after_rollback(config, request, "collection drop failure")
@@ -598,7 +685,7 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
                 job_store.cancel_ingest_retries(name)
             try:
                 await search_store.delete_collection_meta(name, ns)
-            except Exception:  # noqa: BLE001 — the table is already gone, so the config removal stays
+            except Exception:
                 logger.exception("Failed to delete the meta row of dropped collection %s", name)
                 return _collection_drop_failed_response()
     finally:
@@ -642,7 +729,7 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
         if state and name in state.collections:
             cp = state.collections[name]
             last_indexed = getattr(cp, "completed_at", None)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110 — last_indexed is best-effort detail; any state-store read failure leaves it None
         pass
 
     # Fetch real doc_count and ACL stats from search store; reuse already-fetched meta for centroid.
@@ -654,15 +741,15 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
     if search_store is not None:
         try:
             doc_count = await search_store.count_documents(name)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
             doc_count = 0
         try:
             chunk_count = await search_store.count_chunks(name, namespace=ns)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
             chunk_count = 0
         try:
             acl_protected, acl_open = await search_store.get_acl_stats(name)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
             acl_protected, acl_open = 0, 0
 
     data = {
@@ -892,7 +979,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
         if state and name in state.collections:
             cp = state.collections[name]
             last_indexed = getattr(cp, "completed_at", None)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110 — last_indexed is best-effort detail; any state-store read failure leaves it None
         pass
 
     doc_count = 0
@@ -902,15 +989,15 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
     acl_open = 0
     try:
         doc_count = await search_store.count_documents(name)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
         doc_count = 0
     try:
         chunk_count = await search_store.count_chunks(name, namespace=ns)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
         chunk_count = 0
     try:
         acl_protected, acl_open = await search_store.get_acl_stats(name)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
         acl_protected, acl_open = 0, 0
 
     return CollectionDetail(
@@ -1099,7 +1186,7 @@ async def _migration_task(
         # Curated, expected outcome: no traceback.
         logger.warning("_migration_task: job %s failed: %s", job_id, exc)
         _mark_failed(str(exc))
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("_migration_task: job %s failed", job_id)
         _mark_failed(MIGRATION_FAILED_DETAIL)
 
@@ -1294,7 +1381,7 @@ async def migrate_collection(
                 namespace=ns,
                 status=JobStatus.RUNNING,
             )
-        except Exception:  # noqa: BLE001 — no job exists; any persist failure maps to one sanitized 500
+        except Exception:
             logger.exception("migrate_collection: failed to persist a rewrite MigrationJob for %r", name)
             return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
@@ -1392,7 +1479,7 @@ async def _reindex_metadata_task(
             dry_run=dry_run,
             normalize_timestamps=normalize_timestamps,
         )
-    except Exception:  # noqa: BLE001 — any reindex failure ends the job FAILED below, never escaping the task
+    except Exception:
         logger.exception("_reindex_metadata_task: job %s failed", job_id)
     finally:
         try:
@@ -1402,7 +1489,7 @@ async def _reindex_metadata_task(
             if meta is not None and meta.metadata_reindex_job_id == job_id:
                 meta.metadata_reindex_job_id = None
                 await search_store.update_collection_meta(meta)  # type: ignore[attr-defined]
-        except Exception:
+        except Exception:  # noqa: BLE001 — best-effort pointer cleanup in a background task; failure is logged, never raised
             logger.warning(
                 "_reindex_metadata_task: failed to clear metadata_reindex_job_id for job %s",
                 job_id,
@@ -1429,7 +1516,7 @@ def _record_metadata_reindex_done(job_store: JobStore, job_id: str, result: Rein
                 "warnings": result.warnings,
             },
         )
-    except Exception:  # noqa: BLE001 — a failed DONE write must not leave the job RUNNING: the caller marks it FAILED
+    except Exception:
         logger.exception("_reindex_metadata_task: could not record DONE for job %s", job_id)
         return False
     return True

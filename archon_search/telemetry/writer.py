@@ -18,6 +18,7 @@ Design constraints:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -26,6 +27,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from archon_search._durable_io import PRIVATE_FILE_MODE, ensure_private_dir
 from archon_search.telemetry.entry import TelemetryEntry
 
 _logger = logging.getLogger(__name__)
@@ -115,10 +117,8 @@ class TelemetryWriter:
             )
         # Cancel the drain task in either case.
         self._task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await self._task
-        except (asyncio.CancelledError, Exception):
-            pass
         # If the task crashed with a non-cancellation exception, surface it.
         if self._task.done() and not self._task.cancelled():
             exc = self._task.exception()
@@ -167,7 +167,7 @@ class TelemetryWriter:
 
     def _append(self, when: datetime, payload: bytes) -> None:
         if not self._dir_ensured:
-            self._log_dir.mkdir(parents=True, exist_ok=True)
+            ensure_private_dir(self._log_dir)
             self._dir_ensured = True
         current_date = when.date().isoformat()
         if self._fd_date != current_date:
@@ -191,10 +191,10 @@ class TelemetryWriter:
             # Rotate-only fsync per ADR-06; the persistent fd is the durability
             # boundary, so the O_CREAT open below is intentionally not per-line
             # synced (durable-write lint carve-out justified by that contract).
-            self._fd = os.open(  # noqa: durable-write
+            self._fd = os.open(  # durable-write-exempt
                 str(self._file_for(when)),
                 os.O_WRONLY | os.O_APPEND | os.O_CREAT,
-                0o644,
+                PRIVATE_FILE_MODE,
             )
             self._fd_date = current_date
         os.write(self._fd, payload)

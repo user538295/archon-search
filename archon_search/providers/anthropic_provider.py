@@ -58,7 +58,7 @@ class AnthropicQueryExpansionProvider:
         self._APIError: type[Exception] = Exception  # fallback
 
         try:
-            import anthropic  # noqa: PLC0415
+            import anthropic
 
             self._anthropic_available = True
             # Store the module reference for lazy client construction on first use.
@@ -78,9 +78,7 @@ class AnthropicQueryExpansionProvider:
 
     def is_key_available(self) -> bool:
         """Return ``True`` when ``ANTHROPIC_API_KEY`` is set in the environment."""
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            return False
-        return True
+        return os.environ.get("ANTHROPIC_API_KEY")
 
     async def generate_hypothetical_doc(
         self,
@@ -121,14 +119,14 @@ class AnthropicQueryExpansionProvider:
                 ),
                 timeout=timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _logger.warning(
                 "AnthropicQueryExpansionProvider: HyDE call timed out after %.1fs (fp=%s)",
                 timeout_seconds,
                 _query_fingerprint(query),
             )
             return None
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — provider must never raise; third-party SDK errors are classified below
             if isinstance(exc, self._APIError):
                 _logger.warning(
                     "AnthropicQueryExpansionProvider: Anthropic API error for HyDE (fp=%s): %s",
@@ -203,14 +201,14 @@ class AnthropicQueryExpansionProvider:
                 ),
                 timeout=timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _logger.warning(
                 "AnthropicQueryExpansionProvider: RAG Fusion call timed out after %.1fs (fp=%s)",
                 timeout_seconds,
                 _query_fingerprint(query),
             )
             return []
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — provider must never raise; third-party SDK errors are classified below
             if isinstance(exc, self._APIError):
                 _logger.warning(
                     "AnthropicQueryExpansionProvider: Anthropic API error for RAG Fusion (fp=%s): %s",

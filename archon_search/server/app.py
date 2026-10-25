@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import hashlib
 import logging
+import secrets
+from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from starlette.datastructures import State
@@ -21,6 +22,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
+from archon_search._durable_io import ensure_private_dir
+from archon_search._privacy import configure_query_fingerprint_salt
 from archon_search.chunker import ASTChunker, DocumentChunker
 from archon_search.config import (
     ConfigError,
@@ -30,6 +33,7 @@ from archon_search.config import (
     warn_gc_cpu_priority,
     warn_if_legacy_config_ignored,
 )
+from archon_search.constants import BYTES_PER_MIB, DEFAULT_NAMESPACE
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import (
     EMBEDDER_NOT_READY_CODE,
@@ -37,24 +41,40 @@ from archon_search.embedder_cache import (
     EmbedderCache,
     EmbedderNotReadyError,
 )
-from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.graph_store import check_and_warn_legacy_graph_tables
+from archon_search.ingest_path_policy import (
+    ingest_path_policy,
+    log_if_non_admin_path_ingest_is_refused,
+)
 from archon_search.jobs.backup_loop import BackupLoop
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.scheduler import JobScheduler
 from archon_search.jobs.store import JobStore
-from archon_search.key_manager import KeyRecord, KeyStore, KeyStoreUnreadableError, load_or_generate_key
-from archon_search.paths import get_data_dir, get_fasttext_models_dir
+from archon_search.key_manager import (
+    KeyRecord,
+    KeyStore,
+    KeyStoreUnreadableError,
+    hash_token,
+    load_or_generate_key,
+)
 from archon_search.logging_setup import build_uvicorn_log_config, configure_logging
+from archon_search.memory_budget import warn_if_models_exceed_memory
 from archon_search.model_validation import validate_models_async
 from archon_search.parser import DocumentParser
+from archon_search.paths import get_data_dir, get_fasttext_models_dir
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingStateStore
 from archon_search.reranker import ModelReranker, Reranker
-from archon_search.server.middleware_auth import APIKeyMiddleware, _EXEMPT_PATHS
+from archon_search.server.graph_view_token import GRAPH_VIEW_SECRET_BYTES
+from archon_search.server.middleware_auth import (
+    _EXEMPT_PATHS,
+    DOCS_PATHS,
+    APIKeyMiddleware,
+)
+from archon_search.server.middleware_body_limit import install_body_size_limit
 from archon_search.server.middleware_context import RequestContextMiddleware
 from archon_search.server.schemas import StartupSyncResult, WarmupResult
-from archon_search.server.warmup import run_model_warmup
-from archon_search.graph_store import check_and_warn_legacy_graph_tables
+from archon_search.server.warmup import run_model_warmup, run_warmup_recovery
 from archon_search.store import SearchStore
 from archon_search.sync_suppression import (
     get_sync_suppressed_file,
@@ -64,20 +84,22 @@ from archon_search.types import JobStatus
 from archon_search.uv_tool import extra_install_hint
 
 try:
-    from importlib.metadata import version as _pkg_version, PackageNotFoundError
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
     _VERSION = _pkg_version("archon-search")
 except PackageNotFoundError:
     _VERSION = "dev"
 
 from archon_search.server.routes_backup import router as backup_router
-from archon_search.server.routes_keys import router as keys_router
-from archon_search.server.routes_maintenance import router as maintenance_router
 from archon_search.server.routes_collections import router as collections_router
 from archon_search.server.routes_explain import router as explain_router
 from archon_search.server.routes_export import router as export_router
 from archon_search.server.routes_graph import router as graph_router
 from archon_search.server.routes_health import router as health_router
-from archon_search.server.routes_jobs import make_retry_dispatcher, router as jobs_router
+from archon_search.server.routes_jobs import make_retry_dispatcher
+from archon_search.server.routes_jobs import router as jobs_router
+from archon_search.server.routes_keys import router as keys_router
+from archon_search.server.routes_maintenance import router as maintenance_router
 from archon_search.server.routes_ready import router as ready_router
 from archon_search.server.routes_route import router as route_router
 from archon_search.server.routes_search import router as search_router
@@ -103,6 +125,11 @@ logger = logging.getLogger(__name__)
 # routes_ready.py) breaks that loop: the container reports healthy and the
 # operator still sees the failure on /ready and in the log.
 _STARTUP_SYNC_TIMEOUT_SECONDS: float = 1800.0
+
+# What a configured CORS origin (``[server].cors_origins``) may send: the methods the REST API uses and the headers
+# a Bearer-authenticated JSON client needs. Nothing broader is ever allowed.
+_CORS_ALLOWED_METHODS: list[str] = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
+_CORS_ALLOWED_HEADERS: list[str] = ["Authorization", "Content-Type", "X-Request-ID", "X-Ingested-By"]
 
 # Sanitized, wire-facing ``error`` values for the SyncJob that backs the startup
 # sync — it is readable through GET /jobs, so no exception text goes in here.
@@ -152,7 +179,7 @@ def _finish_startup_sync_job(job_store: JobStore, job_id: str | None, **fields: 
         return
     try:
         job_store.update(job_id, **fields)
-    except Exception:
+    except Exception:  # noqa: BLE001 — "never raises into the task": a failed status write is logged, not propagated
         logger.warning(
             "startup sync: could not persist the terminal status for job %s", job_id
         )
@@ -201,7 +228,7 @@ async def _sync_watched_collection(app: FastAPI, col_name: str, source_path: str
 
 async def _run_startup_sync(
     job_store: JobStore,
-    app_state: "State",
+    app_state: State,
     cols: list[str],
 ) -> None:
     """Run the lifespan's startup collection sync, job-backed and lock-held.
@@ -291,7 +318,7 @@ async def _run_startup_sync(
             status=JobStatus.FAILED,
             error=_STARTUP_SYNC_ERROR_TIMEOUT,
         )
-    except BaseException as exc:  # noqa: BLE001 — never let the task escape
+    except BaseException as exc:
         logger.warning("startup sync failed: %s", exc, exc_info=True)
         app_state._startup_sync_failed = True
         app_state.sync_result = StartupSyncResult.FAILED
@@ -311,14 +338,14 @@ def _multilingual_model_path() -> Path:
     ``FASTTEXT_MODEL_FILENAME`` lazily to avoid an eager ``language_detector``
     import at module load.
     """
-    from archon_search.language_detector import FASTTEXT_MODEL_FILENAME  # noqa: PLC0415
+    from archon_search.language_detector import FASTTEXT_MODEL_FILENAME
 
     return get_fasttext_models_dir() / FASTTEXT_MODEL_FILENAME
 
 
 def _import_fasttext() -> Any:
     """Import fasttext; raises ImportError if the package is not installed."""
-    import fasttext  # type: ignore[import-untyped]  # noqa: PLC0415
+    import fasttext  # type: ignore[import-untyped]
     return fasttext
 
 
@@ -376,7 +403,7 @@ def _check_provider_deps(config: SearchConfig) -> None:
     ):
         if provider == "ollama":
             try:
-                import ollama  # type: ignore[import-untyped]  # noqa: F401, PLC0415
+                import ollama  # type: ignore[import-untyped]  # noqa: F401
             except ImportError:
                 raise ConfigError(
                     f"[{label}] provider='ollama' but the 'ollama' package is not installed; "
@@ -391,7 +418,7 @@ def _check_provider_deps(config: SearchConfig) -> None:
                 )
         elif provider == "openai":
             try:
-                import openai  # type: ignore[import-untyped]  # noqa: F401, PLC0415
+                import openai  # type: ignore[import-untyped]  # noqa: F401
             except ImportError:
                 raise ConfigError(
                     f"[{label}] provider='openai' but the 'openai' package is not installed; "
@@ -410,7 +437,7 @@ def _check_provider_deps(config: SearchConfig) -> None:
             # package on every server start and break the optional-extras philosophy.
             # Only enforce it when the feature is actually turned on.
             try:
-                import anthropic  # noqa: F401, PLC0415
+                import anthropic  # noqa: F401
             except ImportError:
                 raise ConfigError(
                     f"[{label}] enabled=true with provider='anthropic' but the 'anthropic' "
@@ -427,7 +454,7 @@ def _check_provider_deps(config: SearchConfig) -> None:
 
 def _build_query_expansion_provider(
     provider: str, model: str, ollama_base_url: str, llama_cpp_base_url: str
-) -> "QueryExpansionProvider":
+) -> QueryExpansionProvider:
     """Build and return the appropriate QueryExpansionProvider from config.
 
     Returns an OllamaQueryExpansionProvider for provider='ollama',
@@ -441,27 +468,27 @@ def _build_query_expansion_provider(
     construct a default provider.
     """
     if provider == "llama_cpp":
-        from archon_search.providers.llama_cpp_provider import (  # noqa: PLC0415
+        from archon_search.providers.llama_cpp_provider import (
             LlamaCppQueryExpansionProvider,
         )
         return LlamaCppQueryExpansionProvider(model=model, base_url=llama_cpp_base_url)
     if provider == "ollama":
-        from archon_search.providers.ollama_provider import (  # noqa: PLC0415
+        from archon_search.providers.ollama_provider import (
             OllamaQueryExpansionProvider,
         )
         return OllamaQueryExpansionProvider(model=model, base_url=ollama_base_url)
     if provider == "claude_cli":
-        from archon_search.providers.claude_cli_provider import (  # noqa: PLC0415
+        from archon_search.providers.claude_cli_provider import (
             ClaudeCLIQueryExpansionProvider,
         )
         return ClaudeCLIQueryExpansionProvider(model=model)
     if provider == "openai":
-        from archon_search.providers.openai_provider import (  # noqa: PLC0415
+        from archon_search.providers.openai_provider import (
             OpenAIQueryExpansionProvider,
         )
         return OpenAIQueryExpansionProvider(model=model)
     # Default: anthropic
-    from archon_search.providers.anthropic_provider import (  # noqa: PLC0415
+    from archon_search.providers.anthropic_provider import (
         AnthropicQueryExpansionProvider,
     )
     return AnthropicQueryExpansionProvider(model=model)
@@ -478,7 +505,7 @@ def _check_graph_deps(config: SearchConfig) -> None:
     """
     # 2026-08-19-030: delegates to the single implementation shared with
     # `pipeline.create_pipeline`, so the two construction-time guards cannot drift.
-    from archon_search.graph_extractor import ensure_graph_engine_importable  # noqa: PLC0415
+    from archon_search.graph_extractor import ensure_graph_engine_importable
 
     ensure_graph_engine_importable(config.graph)
 
@@ -507,7 +534,7 @@ def _configure_openapi(app: FastAPI) -> None:
         for path, path_item in schema.get("paths", {}).items():
             if path in _EXEMPT_PATHS:
                 continue
-            for _method, operation in path_item.items():
+            for operation in path_item.values():
                 if isinstance(operation, dict):
                     operation["security"] = [{"BearerAuth": []}]
         app.openapi_schema = schema
@@ -527,6 +554,10 @@ def create_app(
     _check_graph_deps(config)
     _check_provider_deps(config)
     api_key, key_source = load_or_generate_key()
+    if api_key in config.namespaces:
+        # The managed-key path resolves a TOML token first, so it would shadow the default key and silently
+        # demote it from admin. The message names no token.
+        raise ConfigError("a [namespaces] token equals the default API key; give every namespace its own token")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -539,6 +570,7 @@ def create_app(
             await app.state.key_store.load_synthetic_records(_synthetic_records)
         except KeyStoreUnreadableError:
             logger.error("keys.json is unreadable — TOML namespace keys not persisted; keys.json left unchanged")
+        await log_if_non_admin_path_ingest_is_refused(config, app.state.key_store)
 
         # Startup: connect search store
         await app.state.search_store.connect()
@@ -553,7 +585,7 @@ def create_app(
         # graph.enabled = false.  Never raises — startup continues regardless.
         try:
             await check_and_warn_legacy_graph_tables(app.state.search_store._db)
-        except Exception:  # noqa: BLE001 — never block startup for a diagnostic check
+        except Exception:
             logger.warning("Legacy graph table scan failed; skipping", exc_info=True)
 
         # Startup: connect graph store (if graph is enabled)
@@ -567,8 +599,14 @@ def create_app(
                 )
                 app.state.graph_store = None
 
-        # Startup: create embedder cache and warm the models the first search needs.
-        embedder_cache = EmbedderCache(config.embedder_cache_size, device=config.device)
+        # Startup: create embedder cache and warm the models the first search needs. The default
+        # model is seeded with the global embedder, so the cache and the pipeline share one copy of
+        # its weights instead of each loading its own.
+        embedder_cache = EmbedderCache(
+            config.embedder_cache_size,
+            device=config.device,
+            preloaded={config.embedding_model: app.state.pipeline.global_embedder},
+        )
         app.state.embedder_cache = embedder_cache
         if config.eager_load_embedders:
             metas = await app.state.search_store.get_all_collections_meta()
@@ -576,11 +614,13 @@ def create_app(
             distinct_models: set[str] = {config.embedding_model} | {
                 resolve_active_model(m, config) for m in metas
             }
-            if len(distinct_models) > config.embedder_cache_size:
+            # The default model is pinned in the cache (it is the pipeline's own embedder), so only the others compete.
+            evictable_models = distinct_models - {config.embedding_model}
+            if len(evictable_models) > config.embedder_cache_size:
                 logger.warning(
-                    "eager_load_embedders: %d distinct models exceed embedder_cache_size=%d — "
-                    "some preloaded models will be evicted before first use",
-                    len(distinct_models),
+                    "eager_load_embedders: %d per-collection models other than the default exceed "
+                    "embedder_cache_size=%d — some preloaded models will be evicted before first use",
+                    len(evictable_models),
                     config.embedder_cache_size,
                 )
         else:
@@ -592,6 +632,8 @@ def create_app(
             # ``eager_load_embedders`` still decides the *scope*: every per-collection
             # model when on, only the global default when off.
             distinct_models = {config.embedding_model}
+
+        warn_if_models_exceed_memory(config, distinct_models)
 
         # Warm-up must never be awaited here: uvicorn binds the listening socket
         # only after lifespan startup returns, so a cold model cache (3-5 min)
@@ -617,29 +659,33 @@ def create_app(
         # Startup: spawn background model validation (D6 / BE-4). Never blocks
         # startup — the lazy-load contract is hard. The result is stored on
         # ``app.state.model_validation`` (None while pending) and surfaced via
-        # ``GET /status`` and ``GET /ready``. ``embedder_is_warm`` is read from
-        # the global default embedder: only True when it has been exercised
-        # directly. eager_load_embedders populates ``embedder_cache`` — including
-        # a separate instance for ``config.embedding_model`` — never this global
-        # instance, so it is typically False at startup.
+        # ``GET /status`` and ``GET /ready``. The probe runs the pipeline's own embedder
+        # and cross-encoder, after the warm-up has finished building them: a throwaway
+        # copy of each would hold the weights twice at the startup peak. A model the
+        # warm-up could not build is retried by the probe, which reports the failure.
         app.state.model_validation = None
+
+        async def _validate_pipeline_models() -> None:
+            pipeline = app.state.pipeline
+            app.state.model_validation = await validate_models_async(
+                config,
+                timeout_seconds=config.validation_timeout_seconds,
+                embedder=pipeline.global_embedder.backend,
+                reranker=pipeline.reranker.backend if pipeline.reranker is not None else None,
+            )
 
         async def _run_model_validation() -> None:
             try:
                 # Inside the try: a raise here would otherwise leave model_validation
                 # None — ``checks.models: pending`` and /ready 503 forever (S631).
-                embedder_is_warm = app.state.embedder.is_warm
-                app.state.model_validation = await validate_models_async(
-                    config,
-                    timeout_seconds=config.validation_timeout_seconds,
-                    embedder_is_warm=embedder_is_warm,
-                )
+                await asyncio.wait({warmup_task})
+                await _validate_pipeline_models()
             except asyncio.CancelledError:
                 logger.info("validation cancelled during shutdown")
                 raise
-            except BaseException as exc:  # noqa: BLE001 — never let the task escape
+            except BaseException as exc:
                 logger.warning("model validation task failed unexpectedly: %s", exc, exc_info=True)
-                from archon_search.model_validation import (  # noqa: PLC0415
+                from archon_search.model_validation import (
                     VALIDATION_TASK_FAILED_WARNING,
                     failed_result,
                 )
@@ -652,6 +698,28 @@ def create_app(
         app.state._background_tasks.add(validation_task)
         validation_task.add_done_callback(app.state._background_tasks.discard)
 
+        # Startup: a failed warm-up heals itself (H2). Without a timer-driven retry only a
+        # search or an ingest warmed the models again, so a replica an orchestrator kept
+        # traffic away from stayed 503 for the process lifetime. Runs after the warm-up and
+        # re-runs the model validation once the default models are warm: the stored result
+        # describes the failure, which would otherwise outlive it.
+        async def _recover_failed_warmup() -> None:
+            await asyncio.wait({warmup_task})
+            if app.state.warmup_result != WarmupResult.FAILED:
+                return
+            await run_warmup_recovery(
+                set_result=functools.partial(setattr, app.state, "warmup_result"),
+                pipeline=app.state.pipeline,
+                embedder_cache=embedder_cache,
+                config=config,
+                model_names=sorted(distinct_models),
+                on_recovered=_validate_pipeline_models,
+            )
+
+        recovery_task = asyncio.create_task(_recover_failed_warmup())
+        app.state._background_tasks.add(recovery_task)
+        recovery_task.add_done_callback(app.state._background_tasks.discard)
+
         # Startup: install the real export/import dispatch closure on the
         # scheduler and start it. The placeholder dispatch passed to
         # ``JobScheduler(...)`` in ``run_server()`` is replaced here, once
@@ -659,11 +727,11 @@ def create_app(
         # ready. Without this reassignment the scheduler would either fail
         # outright or mark every dispatched job FAILED.
         if scheduler is not None:
-            from archon_search.server.routes_export import (  # noqa: PLC0415
+            from archon_search.server.routes_export import (
                 _export_task,
                 _import_task,
             )
-            from archon_search.types import ExportJob, ImportJob, MigrationJob  # noqa: PLC0415
+            from archon_search.types import ExportJob, ImportJob, MigrationJob
 
             def _real_dispatch(job: ExportJob | ImportJob | MigrationJob) -> None:
                 if isinstance(job, ExportJob):
@@ -676,16 +744,16 @@ def create_app(
                         _j = job
 
                         async def _backup_export_with_rotation(
-                            __j: ExportJob = _j,
-                            __bl: BackupLoop = _bl,
+                            export_job: ExportJob = _j,
+                            backup_loop: BackupLoop = _bl,
                         ) -> None:
                             await _export_task(
-                                __j,
+                                export_job,
                                 app.state.job_store,
                                 app.state.search_store,
                                 config,
                             )
-                            __bl._drain_completed()
+                            backup_loop._drain_completed()
 
                         task = asyncio.create_task(_backup_export_with_rotation())
                     else:
@@ -709,7 +777,7 @@ def create_app(
                         )
                     )
                 elif isinstance(job, MigrationJob):
-                    from archon_search.server.routes_collections import _migration_task  # noqa: PLC0415
+                    from archon_search.server.routes_collections import _migration_task
                     task = asyncio.create_task(
                         _migration_task(
                             job=job,
@@ -782,7 +850,7 @@ def create_app(
         # Startup: initialise telemetry if enabled
         if config.telemetry.enabled:
             log_dir = Path(config.telemetry.log_dir).expanduser()
-            log_dir.mkdir(parents=True, exist_ok=True)
+            ensure_private_dir(log_dir)
             pruner = Pruner(log_dir, config.telemetry.retention_days)
             await asyncio.to_thread(pruner.prune_once)
             writer = TelemetryWriter(log_dir)
@@ -809,6 +877,9 @@ def create_app(
         )
         if app.state.salt_bytes is not None:
             app.state.doc_id_hasher = functools.partial(hash_doc_id, app.state.salt_bytes)
+        # The same salt keys the log fingerprints of query text (``_privacy._query_fingerprint``); without
+        # one, they stay keyed by a random per-process secret.
+        configure_query_fingerprint_salt(app.state.salt_bytes)
 
         # Startup: mount the MCP HTTP app at /mcp on the existing FastAPI app
         # (D9 / BE-2). Done here — inside the lifespan, after all REST objects are
@@ -825,7 +896,7 @@ def create_app(
             async with AsyncExitStack() as _mcp_stack:
                 if config.mcp.enabled:
                     try:
-                        from archon_search.server.mcp import create_mcp_http_app  # noqa: PLC0415
+                        from archon_search.server.mcp import create_mcp_http_app
                         mcp_starlette = create_mcp_http_app(
                             pipeline=app.state.pipeline,
                             default_collection=(
@@ -843,6 +914,7 @@ def create_app(
                             # One current default key for both transports: MCP auth and
                             # rotate_key read app.state.api_key; rotate_key publishes to it.
                             api_key_state=app.state,
+                            ingest_policy=app.state.ingest_path_policy,
                         )
                         await _mcp_stack.enter_async_context(
                             mcp_starlette.router.lifespan_context(app)
@@ -850,7 +922,7 @@ def create_app(
                         app.mount("/mcp", mcp_starlette)
                         logger.info("MCP HTTP endpoint mounted at /mcp")
                         app.state.mcp_bound = True
-                    except Exception:  # noqa: BLE001 — MCP must never block REST startup
+                    except Exception:
                         logger.warning(
                             "MCP server failed to start; continuing without MCP", exc_info=True
                         )
@@ -863,7 +935,7 @@ def create_app(
                 # reindex trigger, in which case it uses "reindex" (S276).
                 if config.watch:
                     try:
-                        from archon_search.watcher import WatcherManager  # noqa: PLC0415
+                        from archon_search.watcher import WatcherManager
                         all_collections = (
                             list(config.pinned_collections) + list(config.collections)
                         )
@@ -898,7 +970,7 @@ def create_app(
                                 len(_desired_snapshot),
                                 sorted(_desired_snapshot),
                             )
-                    except Exception:  # noqa: BLE001 — watcher must never block REST startup
+                    except Exception:
                         logger.warning(
                             "Filesystem watcher failed to start; continuing without watching",
                             exc_info=True,
@@ -953,7 +1025,7 @@ def create_app(
             if app.state.watcher_manager is not None:
                 try:
                     await app.state.watcher_manager.stop_all()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.warning("Filesystem watcher stop_all() raised", exc_info=True)
 
             # Shutdown ordering is load-bearing in two directions at once:
@@ -993,17 +1065,25 @@ def create_app(
     _synthetic_records = [
         KeyRecord(
             id=None,
-            token_hash=hashlib.sha256(raw_token.encode()).hexdigest(),
+            token_hash=hash_token(raw_token),
             namespace=ns,
             label=ns,  # label mirrors the TOML namespace name for operator identification
             created_at=datetime.now(UTC),
             expires_at=None,
             status="active",
+            admin=False,  # TOML [namespaces] tokens are never admin keys
         )
         for raw_token, ns in config.namespaces.items()
     ]
 
-    app = FastAPI(title="archon-search", lifespan=lifespan)
+    # ``/docs`` and ``/redoc`` exist only when ``[server].docs_enabled``; ``/openapi.json`` always exists but
+    # needs a bearer token unless docs are enabled (the Swagger UI page fetches it without credentials).
+    app = FastAPI(
+        title="archon-search",
+        lifespan=lifespan,
+        docs_url="/docs" if config.docs_enabled else None,
+        redoc_url="/redoc" if config.docs_enabled else None,
+    )
     # ``namespaces=config.namespaces`` is kept for backward compatibility. TOML
     # tokens are also registered as synthetic KeyRecord objects (path 1, above),
     # so the TOML namespace dict (path 2) is a defense-in-depth fallback that
@@ -1016,14 +1096,29 @@ def create_app(
         api_key=api_key,
         namespaces=config.namespaces,
         key_store=key_store,
+        exempt_paths=_EXEMPT_PATHS | DOCS_PATHS if config.docs_enabled else _EXEMPT_PATHS,
     )
     # OpenAI401Middleware must be added AFTER APIKeyMiddleware (Starlette LIFO —
     # last-added is outermost) so it wraps the 401 response before it leaves the
     # server.  Guard: only registered when openai_shim.enabled = true.
     if config.openai_shim.enabled:
-        from archon_search.server.routes_openai_shim import OpenAI401Middleware  # noqa: PLC0415
+        from archon_search.server.routes_openai_shim import OpenAI401Middleware
         app.add_middleware(OpenAI401Middleware)
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    # Outside authentication and routing (an oversized body is refused before either sees it), inside CORS (so the
+    # 413 carries the CORS headers and a browser client of a configured origin can read it) and inside
+    # RequestContextMiddleware (so it carries the request id).
+    install_body_size_limit(app, config.max_request_body_mb * BYTES_PER_MIB)
+    # Cross-origin browser access is opt-in: the API authenticates with a Bearer header (never cookies), so with no
+    # ``[server].cors_origins`` no CORS header is sent and a page on another origin cannot use it. Never ``*``,
+    # never credentials.
+    if config.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=config.cors_origins,
+            allow_methods=_CORS_ALLOWED_METHODS,
+            allow_headers=_CORS_ALLOWED_HEADERS,
+            allow_credentials=False,
+        )
     app.add_middleware(
         RequestContextMiddleware,
         header_name=config.observability.request_id_header,
@@ -1034,11 +1129,14 @@ def create_app(
     # read the key to retire from it and publish the new key to it after a successful
     # rotation; both auth middlewares accept it on the legacy path.
     app.state.api_key = api_key
-    # Stored for the graph-view route handler's validate_token_and_get_namespace call (BE-2).
-    app.state.namespaces = config.namespaces
+    # Keys the graph-viewer view tokens (see ``graph_view_token``); random per process, so tokens die on restart.
+    app.state.graph_view_secret = secrets.token_bytes(GRAPH_VIEW_SECRET_BYTES)
     app.state.config = config
     app.state.job_store = job_store
     app.state.config_path = Path(config_path) if config_path is not None else None
+    # What a client-supplied ingest path may read: never the server's own state or credential files, and inside
+    # ``[ingest].allowed_roots`` when that is set (SecReview #3).
+    app.state.ingest_path_policy = ingest_path_policy(config, app.state.config_path)
     app.state._background_tasks: set = set()
     # Set to a Task by the lifespan's model warm-up; the None default keeps the
     # attribute readable before the lifespan has run.
@@ -1058,14 +1156,14 @@ def create_app(
     # sync was ever run (mirrors warmup_result above).
     app.state.sync_result = None
     app.state.state_store = IndexingStateStore(config.db_path)
-    app.state.search_store = SearchStore(config.db_path)
+    app.state.search_store = SearchStore(config.db_path, config=config)
     app.state.watcher_manager = None
     app.state.embedder = Embedder(ModelEmbedder(config.embedding_model, device=config.device))
 
     # C2: instantiate LanguageDetector for production path when multilingual=True.
     # _check_multilingual_deps() has already passed at this point, so imports are safe.
     if config.multilingual:
-        from archon_search.language_detector import LanguageDetector  # noqa: PLC0415
+        from archon_search.language_detector import LanguageDetector
         _lang_detector = LanguageDetector(_multilingual_model_path())
     else:
         _lang_detector = None
@@ -1075,16 +1173,16 @@ def create_app(
     # calls when their methods are invoked) and CommunityBuilder is also reachable
     # via the rebuild-communities route independently of the extractor below.
     # Returns None when [graph].provider is None (air-gap default) or unset.
-    from archon_search.enrichment.factory import EnrichmentClientFactory  # noqa: PLC0415
+    from archon_search.enrichment.factory import EnrichmentClientFactory
     _enrichment_client = EnrichmentClientFactory.build(config.graph)
     app.state.enrichment_client = _enrichment_client
 
     if config.graph.enabled:
-        from archon_search.graph_store import GraphStore as _GraphStore  # noqa: PLC0415
-        from archon_search.graph_extractor import GraphExtractor as _GraphExtractor  # noqa: PLC0415
-        from archon_search.graph_expander import GraphExpander as _GraphExpander  # noqa: PLC0415
-        from archon_search.defref_extractor import DefRefExtractor as _DefRefExtractor  # noqa: PLC0415
-        from archon_search.ppr_walker import PPRWalker as _PPRWalker  # noqa: PLC0415
+        from archon_search.defref_extractor import DefRefExtractor as _DefRefExtractor
+        from archon_search.graph_expander import GraphExpander as _GraphExpander
+        from archon_search.graph_extractor import GraphExtractor as _GraphExtractor
+        from archon_search.graph_store import GraphStore as _GraphStore
+        from archon_search.ppr_walker import PPRWalker as _PPRWalker
         _graph_store = _GraphStore(config.db_path)
         _graph_extractor = _GraphExtractor(config.graph)
         _graph_expander = _GraphExpander(_graph_store, naive_max_expansion_terms=config.graph.naive_max_expansion_terms)
@@ -1111,7 +1209,7 @@ def create_app(
         ),
         chunker=DocumentChunker(config.chunk_size),
         ast_chunker=ASTChunker(config.chunk_size),
-        parser=DocumentParser(max_tasks_per_child=config.ingest.max_tasks_per_child),
+        parser=DocumentParser.from_config(config.ingest),
         top_k_retrieve=config.top_k_retrieve,
         top_k_return=config.top_k_return,
         max_fanout=config.max_fanout,
@@ -1120,6 +1218,8 @@ def create_app(
         language_detector=_lang_detector,
         language_detection_confidence_threshold=config.language_detection_confidence_threshold,
         max_file_mb=config.ingest.max_file_mb,
+        max_discovered_files=config.ingest.max_discovered_files,
+        path_policy=app.state.ingest_path_policy,
         context_window_max=config.context_window_max,
         graph_extractor=_graph_extractor,
         graph_store=_graph_store,
@@ -1128,7 +1228,7 @@ def create_app(
         defref_extractor=_defref_extractor,
         ppr_walker=_ppr_walker,
     )
-    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync
 
     # asyncio.Lock() is created here (in create_app's synchronous body, matching
     # the established app.state.* pattern). On Python 3.12+ the lock binds to
@@ -1145,8 +1245,8 @@ def create_app(
         configured_paths=lambda: (*config.pinned_collections, *config.collections),
     )
 
-    from archon_search.hyde import HyDEGenerator  # noqa: PLC0415
-    from archon_search.rag_fusion import RAGFusionGenerator  # noqa: PLC0415
+    from archon_search.hyde import HyDEGenerator
+    from archon_search.rag_fusion import RAGFusionGenerator
 
     _hyde_provider = _build_query_expansion_provider(
         config.hyde.provider, config.hyde.model, config.hyde.ollama_base_url, config.hyde.llama_cpp_base_url
@@ -1195,7 +1295,7 @@ def create_app(
         # (_ingest_lock.py, routes_collections.py) — same condition, same hint,
         # regardless of which surface (REST, OpenAI shim) maps it.
         if request.url.path.startswith("/v1/"):
-            from archon_search.server.routes_openai_shim import _openai_error  # noqa: PLC0415
+            from archon_search.server.routes_openai_shim import _openai_error
             response = _openai_error(503, "Service temporarily unavailable.", "server_error")
             response.headers["Retry-After"] = "30"
             return response
@@ -1226,9 +1326,11 @@ def create_app(
     # /v1/* routes are registered and the app behaves as if the feature does not
     # exist.
     if config.openai_shim.enabled:
-        from fastapi.exceptions import RequestValidationError  # noqa: PLC0415
-        from fastapi.exception_handlers import request_validation_exception_handler  # noqa: PLC0415
-        from archon_search.server.routes_openai_shim import _openai_error, router as openai_shim_router  # noqa: PLC0415
+        from fastapi.exception_handlers import request_validation_exception_handler
+        from fastapi.exceptions import RequestValidationError
+
+        from archon_search.server.routes_openai_shim import _openai_error
+        from archon_search.server.routes_openai_shim import router as openai_shim_router
 
         @app.exception_handler(RequestValidationError)
         async def _openai_validation_error_handler(request: Request, exc: RequestValidationError):
@@ -1269,7 +1371,7 @@ def run_server(config: SearchConfig, config_path: Path | str | None = None) -> N
     # reassigns ``scheduler.dispatch_fn`` to the real export/import closure as
     # soon as app state is ready. This placeholder should never run in practice
     # — if it does, something dispatched before startup completed.
-    from archon_search.types import ExportJob, ImportJob, MigrationJob  # noqa: PLC0415
+    from archon_search.types import ExportJob, ImportJob, MigrationJob
 
     def _placeholder_dispatch(job: ExportJob | ImportJob | MigrationJob) -> None:
         logger.warning(
@@ -1284,7 +1386,11 @@ def run_server(config: SearchConfig, config_path: Path | str | None = None) -> N
         dispatch_fn=_placeholder_dispatch,
     )
     app = create_app(config, job_store, scheduler=scheduler, config_path=effective_config_path)
-    uvicorn_kwargs: dict = {"host": config.host, "port": config.port}
+    uvicorn_kwargs: dict = {
+        "host": config.host,
+        "port": config.port,
+        "timeout_graceful_shutdown": config.graceful_shutdown_seconds,
+    }
     log_config = build_uvicorn_log_config(config)
     if log_config is not None:
         uvicorn_kwargs["log_config"] = log_config

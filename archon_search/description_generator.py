@@ -16,7 +16,7 @@ _ENV_LOCK: asyncio.Lock | None = None
 
 
 def _get_env_lock() -> asyncio.Lock:
-    global _ENV_LOCK  # noqa: PLW0603
+    global _ENV_LOCK
     if _ENV_LOCK is None:
         _ENV_LOCK = asyncio.Lock()
     return _ENV_LOCK
@@ -83,7 +83,7 @@ async def generate_description(chunks: list[str], collection_name: str) -> str |
 
     try:
         return await asyncio.wait_for(_call_haiku(prompt), timeout=_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.debug("Description generation timed out for collection %r", collection_name)
         return None
     except Exception:
@@ -97,7 +97,7 @@ async def generate_description(chunks: list[str], collection_name: str) -> str |
 
 async def _call_haiku(prompt: str) -> str | None:
     """Create a fresh Haiku session, send the prompt, return the response text."""
-    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage  # noqa: PLC0415
+    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 
     client = ClaudeSDKClient(
         options=ClaudeAgentOptions(
@@ -125,5 +125,5 @@ async def _call_haiku(prompt: str) -> str | None:
     finally:
         try:
             await client.disconnect()
-        except BaseException:
+        except BaseException:  # noqa: BLE001, S110 — best-effort disconnect must not mask the result or an in-flight cancellation
             pass

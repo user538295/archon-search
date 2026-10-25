@@ -11,6 +11,7 @@ from archon_search.server.schemas import (
     StartupSyncResult,
     WarmupResult,
 )
+from archon_search.server.warmup import default_models_warm
 
 router = APIRouter()
 
@@ -18,7 +19,7 @@ router = APIRouter()
 def _warmup_pending(request: Request) -> bool:
     """True while model warm-up is still running.
 
-    Warm-up builds the ONNX weights (minutes); until it finishes the models are
+    Warm-up builds the PyTorch models (minutes); until it finishes the models are
     not usable yet and search runs degraded (``_search_budget.warmup_for_search``),
     so ``_model_check_status`` reports ``PENDING`` and readiness is gated through it.
 
@@ -80,8 +81,8 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
     """Map ``app.state.model_validation`` to a ``CheckStatus`` for ``checks.models``.
 
     Priority is strict (D6 BE-6): FAIL (either model could not load) > WARN (both
-    loaded but a warning was emitted — e.g. a configured ONNX provider missing from
-    onnxruntime, so they loaded on the remaining providers or CPU, S635) > OK (both
+    loaded but a warning was emitted — e.g. the configured device is unavailable so they
+    loaded on CPU, S635, or the graph NER model is absent) > OK (both
     loaded, no warnings). The check is ``PENDING`` when the background task has not
     produced a result yet — either ``app.state.model_validation`` is ``None``, or a result
     exists but a probe flag is still unset (``None``). Each branch asserts its
@@ -92,7 +93,8 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
 
     Warm-up outranks everything: while it is pending the models are not
     usable yet no matter what ``model_validation`` already concluded.
-    ``PENDING`` — from either source — gates ``ready`` (S631); ``WARN``/``FAIL`` do not.
+    ``PENDING`` — from either source — gates ``ready`` (S631); ``WARN``/``FAIL`` gate it only
+    through ``_default_models_unavailable``.
     ``warmup_pending`` is a required argument — the caller evaluates
     ``_warmup_pending`` exactly once per request and passes the result in, so one
     read of ``app.state.warmup_result`` decides ``PENDING``: two reads are not atomic,
@@ -108,8 +110,8 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
     Without this branch such a failure is indistinguishable from a healthy warm-up once
     ``model_validation`` reports OK, because validation builds and runs its own
     throwaway probe instances — it never proves the instances search actually uses
-    were built. This does NOT gate ``ready`` — see the comment in ``ready()`` —
-    only the diagnostic.
+    were built. On its own this does not gate ``ready`` — ``_default_models_unavailable``
+    does, for the default embedder and a configured reranker only.
     """
     if warmup_pending:
         return CheckStatus.PENDING
@@ -127,6 +129,36 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
     return CheckStatus.PENDING
 
 
+def _default_models_unavailable(request: Request) -> bool:
+    """True once warm-up failed and the default embedder or a configured reranker is not loaded.
+
+    A replica whose default embedder cannot load cannot embed: every ingest fails and every
+    search runs FTS-only, so it must not receive traffic. The same holds for a configured
+    reranker (``reranker_model`` non-empty), whose absence silently degrades ranking.
+
+    Deliberately narrow:
+
+    * Only a *failed* warm-up can leave them unloaded. ``DONE`` means both are warm, and a
+      pending warm-up already gates through ``checks.models: pending``.
+    * The deciding signal is the live warm state of the instances search uses
+      (``embedder_is_warm`` / ``reranker_is_warm``, both side-effect-free), not
+      ``model_validation``: its probes load throwaway instances, and its timeout and
+      crash paths report both flags false on a merely slow host that warmed fine.
+    * ``WarmupResult.FAILED`` also covers a per-collection model that failed to preload
+      and a warm-up that timed out while the defaults were already warm. Neither makes
+      the replica unfit, so neither gates; only the defaults do.
+    * An empty ``reranker_model`` disables the reranker on purpose: it is never required,
+      so it cannot wedge readiness.
+    * Because the state is read live, a default model that finishes building after the
+      warm-up gave up clears the gate without a restart.
+    * ``run_warmup_recovery`` retries the default models in the background after a failed
+      warm-up, so the gate clears on its own once a transient failure is over (H2).
+    """
+    if getattr(request.app.state, "warmup_result", None) != WarmupResult.FAILED:
+        return False
+    return not default_models_warm(request.app.state.pipeline, request.app.state.config)
+
+
 @router.get(
     "/ready",
     responses={
@@ -135,19 +167,24 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
     },
 )
 async def ready(request: Request) -> JSONResponse:
-    """Readiness probe: ``200`` once the storage ping succeeds and neither the models
-    check nor the startup sync is ``pending``; ``503`` otherwise.
+    """Readiness probe: ``200`` once the storage ping succeeds, the models check is no
+    longer ``pending`` and the default models serve, and the startup sync is not
+    ``pending``; ``503`` otherwise.
 
     ``checks.models`` stays ``pending`` until model warm-up and the background model
-    validation finish (a failed warm-up ends it as ``fail``). ``warn``/``fail`` model
-    or sync results do not gate readiness — search still answers, degraded.
+    validation finish (a failed warm-up ends it as ``fail``). A finished warm-up that left
+    the default embedder, or a configured reranker, unloaded also answers ``503``: that
+    replica cannot embed, so a load balancer must not route to it. Other ``warn``/``fail``
+    model results and the sync ``fail``/``warn`` results do not gate readiness — search
+    still answers, degraded.
     """
     store = request.app.state.search_store
     storage_ok = await store.ping()
     warmup_pending = _warmup_pending(request)
     models_status = _model_check_status(request, warmup_pending)
     sync_pending = _startup_sync_pending(request)
-    # Readiness gates on storage, a pending models check and the startup sync.
+    # Readiness gates on storage, a pending models check, the default models after a failed
+    # warm-up, and the startup sync.
     # ``models: pending`` covers both a running warm-up (the models are not usable yet,
     # so search runs degraded) and a model validation that has not finished yet (S631) —
     # never report ready while our own check is pending. Validation never raises; its
@@ -155,11 +192,16 @@ async def ready(request: Request) -> JSONResponse:
     # check, and the extraction-model probe only when configured) plus
     # ``validation_timeout_seconds`` for the embedder/reranker probe
     # (``model_validation.validate_models_async``).
-    # A running startup sync means the index is still being (re)built. WARN/FAIL models
-    # stay informational: search still answers, degraded — FTS-only while the query
-    # embedder is cold, unreranked while the cross-encoder is
+    # A running startup sync means the index is still being (re)built. Any other WARN/FAIL
+    # models stay informational: search still answers, degraded — FTS-only while a
+    # per-collection query embedder is cold, unreranked while the cross-encoder is
     # (``_search_budget.warmup_for_search``).
-    ready_flag = storage_ok and models_status is not CheckStatus.PENDING and not sync_pending
+    ready_flag = (
+        storage_ok
+        and models_status is not CheckStatus.PENDING
+        and not _default_models_unavailable(request)
+        and not sync_pending
+    )
     body = ReadinessResponse(
         ready=ready_flag,
         checks=ReadinessChecks(

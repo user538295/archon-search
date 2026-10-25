@@ -22,17 +22,38 @@ import sys
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from archon_search._durable_io import DurabilityUnconfirmedError, atomic_write_bytes
-from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
+from archon_search._durable_io import (
+    PRIVATE_FILE_MODE,
+    DurabilityUnconfirmedError,
+    atomic_write_bytes,
+    ensure_private_dir,
+)
+from archon_search.constants import (
+    DEFAULT_NAMESPACE,
+    MAX_ROTATE_GRACE_SECONDS,
+    MIN_API_KEY_LENGTH,
+)
 from archon_search.paths import get_data_dir
 
 logger = logging.getLogger(__name__)
+
+#: Random bytes behind every generated API key: 32 bytes are 64 lowercase hex characters.
+API_KEY_ENTROPY_BYTES: Final = 32
+#: ``stat`` mode bits that are permissions (without the file-type bits).
+PERMISSION_BITS: Final = 0o777
+#: Tries at creating the key file when a concurrent writer is in the way, and the pause before the second.
+KEY_WRITE_ATTEMPTS: Final = 2
+KEY_WRITE_CONFLICT_RETRY_SECONDS: Final = 0.1
+
+# ``(st_mtime_ns, st_size, st_ino)`` of keys.json: the key under which KeyStore caches its parsed records.
+_FileSignature = tuple[int, int, int]
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +67,11 @@ class KeyRecord(BaseModel):
     Raw bearer tokens are never stored — only the SHA-256 hex digest
     (``token_hash``) is persisted. The raw token is printed once to
     stdout at creation time and is never recoverable from disk.
+
+    ``admin`` is the capability to manage keys across namespaces and to run the server-wide control
+    endpoints (see ``archon_search.server.authz``). It defaults to ``False``: a record built in code
+    is never admin unless the caller says so. Records read from an existing ``keys.json`` that has no
+    ``admin`` field are resolved by :func:`_parse_stored_record`.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -57,6 +83,23 @@ class KeyRecord(BaseModel):
     created_at: datetime
     expires_at: datetime | None = None
     status: Literal["active", "revoked"] = "active"
+    admin: bool = False
+
+
+def _parse_stored_record(item: object) -> KeyRecord:
+    """Validate one ``keys.json`` entry, resolving a missing ``admin`` field.
+
+    Compatibility rule for a ``keys.json`` written before the ``admin`` capability existed: a record
+    with no ``admin`` field is admin if and only if it is a managed key (``id`` is not null) of the
+    default namespace. Before the capability every key could do everything, so the default-namespace
+    keys (the rotated default key, keys issued for ``default``) keep their power and operators are not
+    locked out of key management after upgrading; keys of every other namespace, and TOML synthetic
+    records (``id`` null, re-written on every startup), become non-admin. The resolved value is
+    persisted the next time the file is written, so the rule applies once per record.
+    """
+    if isinstance(item, dict) and "admin" not in item:
+        item = {**item, "admin": item.get("id") is not None and item.get("namespace") == DEFAULT_NAMESPACE}
+    return KeyRecord.model_validate(item)
 
 
 class KeyRotationInputError(ValueError):
@@ -107,7 +150,42 @@ ROTATE_KEYS_JSON_FAILED_DETAIL = (
 
 
 class RotationIncompleteError(Exception):
-    """``.search.env`` holds the new key but ``keys.json`` was not updated. Wire text: ``ROTATE_KEYS_JSON_FAILED_DETAIL``."""
+    """``.search.env`` holds the new key but ``keys.json`` was not updated. Wire text: ``ROTATE_KEYS_JSON_FAILED_DETAIL``.
+
+    Operator-recoverable (``Documentation/OperatorGuide/70_key_management_and_rotation.md``, "Recovering from an
+    incomplete rotation"); no rollback is attempted.
+    """
+
+
+class KeyWriteConflictError(Exception):
+    """The key file could not be created because a concurrent writer's file never became readable."""
+
+
+def hash_token(token: str) -> str:
+    """The SHA-256 hex digest under which *token* is stored in ``keys.json`` and compared on a request."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class CreatedKey:
+    """A freshly issued managed key: its id, the raw bearer token (shown once, never stored) and its creation time."""
+
+    id: str
+    token: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class RotationOutcome:
+    """The result of recording a default-key rotation.
+
+    *old_record* is the retired record **after** mutation, the synthesized grace record, or ``None`` when no active
+    managed record matched and the grace period was ``0``. *new_token* is the raw token (never stored).
+    """
+
+    new_key_id: str
+    new_token: str
+    old_record: KeyRecord | None
 
 
 def validate_rotation_grace(grace_seconds: int) -> None:
@@ -133,14 +211,17 @@ class KeyStore:
     """Durable key store backed by ``keys.json``.
 
     Design:
-    - No in-memory key list is maintained. ``active_keys()`` and ``load()``
-      always re-read from disk (disk-read-on-demand), so a change written by
-      another process or ``KeyStore`` instance on the same file is seen on the
-      next call. The REST server creates one instance (``app.state.key_store``)
-      and shares it with the mounted MCP app.
+    - No in-memory key list is authoritative. ``active_keys()`` and ``load()`` re-validate their view
+      of ``keys.json`` against the file's ``(st_mtime_ns, st_size, st_ino)`` on every call and only
+      re-parse when it changed, so a change written by another process or ``KeyStore`` instance on
+      the same file (an atomic replace gives it a new inode and mtime) is seen on the next call, while
+      an unchanged file costs one ``stat`` instead of a read and a JSON parse per request. Every write
+      through this instance also drops the cached view. The REST server creates one instance
+      (``app.state.key_store``) and shares it with the mounted MCP app. ``load()`` hands out copies of the
+      cached records; mutations re-parse via :meth:`_load_for_update`, never through the cache.
     - An internal ``asyncio.Lock`` serialises every read-modify-write cycle
       (``create``; extended in later tasks). ``active_keys()`` / ``load()``
-      do NOT need the lock (each call gets a fresh snapshot from disk).
+      do NOT need the lock (each call gets a consistent snapshot of the file).
     - ``rotation_lock`` serialises the whole default-key rotation
       (:func:`rotate_and_persist_default_key`) across every transport sharing this
       instance (REST and the mounted MCP app share ``app.state.key_store``). It is
@@ -157,23 +238,47 @@ class KeyStore:
         self._lock = asyncio.Lock()
         self.rotation_lock = asyncio.Lock()
         self._logged_expired_ids: set[str] = set()
+        self._cache: tuple[_FileSignature, tuple[KeyRecord, ...]] | None = None
 
     # ------------------------------------------------------------------
     # Read-only helpers (no lock required)
     # ------------------------------------------------------------------
 
     async def load(self) -> list[KeyRecord]:
-        """Read ``keys.json`` from disk and return all records.
+        """Return all records, re-parsing ``keys.json`` only when its file signature changed.
 
-        Returns an empty list (and logs ERROR) if the file is missing,
+        Returns an empty list (and logs ERROR once per file state) if the file is missing,
         unreadable, non-array JSON, or contains any invalid record —
         implementing the all-or-nothing corruption policy (S17) for reads.
         Mutations use :meth:`_load_for_update`, which fails closed instead.
+
+        The records are copies: a caller mutating one cannot change what the next call sees. A failure caused by
+        an I/O error is not cached (it may be transient); a corrupt file is, so it is logged once per file state.
         """
+        # The signature is taken BEFORE the read: a file replaced in between is cached under the
+        # old signature and simply re-read on the next call; the reverse order could pin stale content
+        # to the new signature.
+        signature = self._file_signature()
+        cached = self._cache
+        if signature is not None and cached is not None and cached[0] == signature:
+            return [record.model_copy() for record in cached[1]]
         try:
-            return self._load_for_update()
-        except KeyStoreUnreadableError:
+            records = self._load_for_update()
+        except KeyStoreUnreadableError as exc:
+            if signature is not None and not isinstance(exc.__cause__, OSError):
+                self._cache = (signature, ())
             return []
+        if signature is not None:
+            self._cache = (signature, tuple(records))
+        return [record.model_copy() for record in records]
+
+    def _file_signature(self) -> _FileSignature | None:
+        """Return ``(st_mtime_ns, st_size, st_ino)`` of ``keys.json``, or ``None`` when it cannot be stat'ed."""
+        try:
+            stat = self._path.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size, stat.st_ino)
 
     def _load_for_update(self) -> list[KeyRecord]:
         """Return all records; raise ``KeyStoreUnreadableError`` (logged ERROR) if the file exists but is unusable.
@@ -205,7 +310,7 @@ class KeyStore:
             raise _unreadable("keys.json does not contain a JSON array — treating as corrupted key store")
 
         try:
-            return [KeyRecord.model_validate(item) for item in data]
+            return [_parse_stored_record(item) for item in data]
         except Exception as exc:
             raise _unreadable("keys.json contains invalid records — treating as corrupted key store: %s", exc) from exc
 
@@ -283,24 +388,24 @@ class KeyStore:
         ns: str,
         label: str | None,
         expires_at: datetime | None,
-    ) -> dict[str, str | datetime]:
-        """Generate a new API key, persist its hash, return ``{id, token, created_at}``.
+        *,
+        admin: bool = False,
+    ) -> CreatedKey:
+        """Generate a new API key, persist its hash, return it as a :class:`CreatedKey`.
 
         The raw bearer token is returned exactly once — it is never stored
         on disk. ``keys.json`` stores only the SHA-256 hex digest.
 
-        Returns:
-            dict with ``id`` (UUID4 str), ``token`` (raw 64-hex-char bearer token),
-            and ``created_at`` (UTC datetime used when persisting the record — callers
-            should use this value to avoid timestamp divergence between the response
-            and what ``GET /keys`` will return from disk).
+        ``created_at`` is the UTC datetime used when persisting the record — callers
+        should use this value to avoid timestamp divergence between the response
+        and what ``GET /keys`` will return from disk.
         """
         if expires_at is not None and expires_at.tzinfo is None:
             raise ValueError("expires_at must be timezone-aware")
 
         key_id = str(uuid.uuid4())
-        raw_token = secrets.token_hex(32)  # 64 hex chars
-        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        raw_token = secrets.token_hex(API_KEY_ENTROPY_BYTES)  # 64 hex chars
+        token_hash = hash_token(raw_token)
         created_at = datetime.now(UTC)
 
         record = KeyRecord(
@@ -311,6 +416,7 @@ class KeyStore:
             created_at=created_at,
             expires_at=expires_at,
             status="active",
+            admin=admin,
         )
 
         async with self._lock:
@@ -318,14 +424,14 @@ class KeyStore:
             records.append(record)
             self._write(records)
 
-        return {"id": key_id, "token": raw_token, "created_at": created_at}
+        return CreatedKey(id=key_id, token=raw_token, created_at=created_at)
 
     async def record_rotation(
         self,
         current_token: str,
         grace_seconds: int,
         new_token: str,
-    ) -> dict[str, str | KeyRecord | None]:
+    ) -> RotationOutcome:
         """Record an already-validated default-key rotation in ``keys.json``.
 
         Adds a managed ``KeyRecord`` for *new_token* and, if *current_token* matches an
@@ -341,15 +447,14 @@ class KeyStore:
         mutates ``keys.json``.
 
         Returns:
-            dict with ``new_key_id`` (str), ``new_token`` (str, the raw token; never stored)
-            and ``old_record`` (KeyRecord | None): the old record **after** mutation, the
+            The :class:`RotationOutcome`: ``old_record`` is the old record **after** mutation, the
             synthesized grace record, or ``None`` when no active managed record matched and
             ``grace_seconds == 0``.
 
         Raises:
             KeyStoreUnreadableError: ``keys.json`` exists but cannot be read or parsed.
         """
-        current_hash = hashlib.sha256(current_token.encode()).hexdigest()
+        current_hash = hash_token(current_token)
 
         async with self._lock:
             now = datetime.now(UTC)
@@ -390,35 +495,37 @@ class KeyStore:
                 old_record = KeyRecord(
                     id=str(uuid.uuid4()),
                     token_hash=current_hash,
-                    namespace="default",
+                    namespace=DEFAULT_NAMESPACE,
                     label=None,
                     created_at=now,
                     expires_at=now + timedelta(seconds=grace_seconds),
                     status="active",
+                    admin=True,
                 )
                 records.append(old_record)
 
             new_key_id = str(uuid.uuid4())
-            new_token_hash = hashlib.sha256(new_token.encode()).hexdigest()
+            new_token_hash = hash_token(new_token)
             new_record = KeyRecord(
                 id=new_key_id,
                 token_hash=new_token_hash,
-                namespace="default",
+                namespace=DEFAULT_NAMESPACE,
                 label=None,
                 created_at=now,
                 expires_at=None,
                 status="active",
+                admin=True,
             )
             records.append(new_record)
             self._write(records)
 
-        return {
-            "new_key_id": new_key_id,
-            "new_token": new_token,
-            # model_copy() returns a snapshot — prevents post-write mutation
-            # by the caller from diverging from the on-disk state.
-            "old_record": old_record.model_copy() if old_record is not None else None,
-        }
+        # model_copy() returns a snapshot — prevents post-write mutation
+        # by the caller from diverging from the on-disk state.
+        return RotationOutcome(
+            new_key_id=new_key_id,
+            new_token=new_token,
+            old_record=old_record.model_copy() if old_record is not None else None,
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -444,18 +551,19 @@ class KeyStore:
             self._write(merged)
 
     def _write(self, records: list[KeyRecord]) -> None:
-        """Atomically write records to ``keys.json`` with mode 0o600.
+        """Atomically write records to ``keys.json`` with the private file mode.
 
         Runs on the calling thread (the event loop, for every async mutation). A failed
         directory fsync after the rename means the records were written, so it is logged
         and the mutation succeeds rather than reporting a write that did happen as failed.
         """
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._cache = None
+        ensure_private_dir(self._path.parent)
         payload = json.dumps(
             [r.model_dump(mode="json") for r in records],
         ).encode()
         try:
-            atomic_write_bytes(self._path, payload, mode=0o600)
+            atomic_write_bytes(self._path, payload)
         except DurabilityUnconfirmedError:
             logger.warning("keys.json written but its rename durability is unconfirmed", exc_info=True)
 
@@ -489,7 +597,7 @@ async def rotate_and_persist_default_key(
     read_current_token: Callable[[], Awaitable[str]],
     grace_seconds: int,
     publish_new_token: Callable[[str], None] | None = None,
-) -> dict[str, str | KeyRecord | None]:
+) -> RotationOutcome:
     """Rotate the default key: write the new token to *key_file*, then record it in ``keys.json``.
 
     The rotate use case shared by REST ``POST /keys/rotate`` and MCP ``rotate_key``; each
@@ -514,7 +622,7 @@ async def rotate_and_persist_default_key(
     *grace_seconds* is validated before the current key is read; the current key once,
     after it is read. *publish_new_token* runs inside the lock, only after both writes.
 
-    Returns ``KeyStore.record_rotation``'s dict (``new_key_id``, ``new_token``, ``old_record``).
+    Returns ``KeyStore.record_rotation``'s :class:`RotationOutcome`.
 
     Raises:
         KeyRotationInputError: *grace_seconds* is out of range, raised before the current key
@@ -561,9 +669,9 @@ async def _commit_rotation(
     current_token: str,
     grace_seconds: int,
     publish_new_token: Callable[[str], None] | None,
-) -> dict[str, str | KeyRecord | None]:
+) -> RotationOutcome:
     """Write *key_file*, record the rotation in ``keys.json``, then publish; the post-read half of the use case."""
-    new_token = secrets.token_hex(32)  # 64 hex chars
+    new_token = secrets.token_hex(API_KEY_ENTROPY_BYTES)  # 64 hex chars
     await _write_key_file(key_file, new_token)
 
     try:
@@ -578,7 +686,7 @@ async def _commit_rotation(
 
     # Defensive: record_rotation must echo back the token we passed in.
     # If this ever diverges, .search.env and keys.json would be out of sync.
-    if result["new_token"] != new_token:
+    if result.new_token != new_token:
         logger.error("rotate: keys.json recorded an unexpected token after %s was written — BUG", key_file)
         raise RotationIncompleteError(ROTATE_KEYS_JSON_FAILED_DETAIL)
 
@@ -587,7 +695,7 @@ async def _commit_rotation(
     return result
 
 
-async def _finish_cancelled_rotation(commit: asyncio.Task[dict[str, str | KeyRecord | None]], key_file: Path) -> None:
+async def _finish_cancelled_rotation(commit: asyncio.Task[RotationOutcome], key_file: Path) -> None:
     """Wait (ignoring further cancels) for a rotation whose caller was cancelled, then log its outcome.
 
     The ``.search.env`` write runs in a thread a cancel cannot stop, so abandoning *commit*
@@ -608,7 +716,7 @@ async def _finish_cancelled_rotation(commit: asyncio.Task[dict[str, str | KeyRec
             "rotate: cancelled mid-rotation, but it completed: %s holds the new key (new_key_id=%s); "
             "the caller did not receive its token",
             key_file,
-            commit.result()["new_key_id"],
+            commit.result().new_key_id,
         )
 
 
@@ -621,7 +729,7 @@ async def _write_key_file(key_file: Path, new_token: str) -> None:
     payload = f"{ENV_VAR}={new_token}\n".encode()
     try:
         await asyncio.to_thread(key_file.parent.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(atomic_write_bytes, key_file, payload, mode=0o600)
+        await asyncio.to_thread(atomic_write_bytes, key_file, payload)
     except DurabilityUnconfirmedError:
         # os.replace already published the new key: treat it as written.
         logger.warning("rotate: %s written but its rename durability is unconfirmed", key_file, exc_info=True)
@@ -692,7 +800,17 @@ def load_or_generate_key() -> tuple[str, str]:
         return key, "env var"
 
     key_file = get_key_file()
-    key = _load_from_file(key_file)
+    key, problem = _parse_key_file(key_file)
+    if problem is not None:
+        # The operator's file holds a key that cannot be used. Generating a new one over it would lock every client
+        # out with only a log line to say why, so — like an invalid env var — refuse and leave the file untouched.
+        from archon_search.config import ConfigError
+
+        raise ConfigError(
+            f"{key_file} holds an invalid {ENV_VAR}: {problem}. "
+            "Fix the value (or the file's permissions), or delete the file to have the server generate a new key; "
+            "the file was left untouched."
+        )
     if key is not None:
         return key, f"file: {key_file}"
 
@@ -724,22 +842,37 @@ def persist_key(key: str) -> None:
     try:
         key_file = get_key_file()
         _generate_and_write(key_file, key=key)
-    except (ValueError, OSError, RuntimeError):  # noqa: BLE001 — best-effort convenience write
+    except (ValueError, OSError, KeyWriteConflictError):
         pass
 
 
 def _load_from_env() -> str | None:
+    """Return the default key from ``ARCHON_SEARCH_API_KEY``, ``None`` when unset.
+
+    Raises:
+        ConfigError: the variable is set but is not a usable key (see :func:`api_key_problem`). The server
+            refuses to start rather than silently ignore an explicitly configured key. The message never
+            contains the value.
+    """
     val = os.environ.get(ENV_VAR, "")
     if not val:
         return None
-    if not _validate_key(val):
-        logger.warning("%s is set but contains an invalid value (expected lowercase hex string)", ENV_VAR)
-        return None
+    problem = api_key_problem(val)
+    if problem is not None:
+        from archon_search.config import ConfigError
+
+        raise ConfigError(
+            f"{ENV_VAR} is not a valid API key: {problem}. "
+            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
     return val
 
 
-def _load_from_file(key_file: Path) -> str | None:
-    """Read and validate the API key from *key_file*.
+def _parse_key_file(key_file: Path) -> tuple[str | None, str | None]:
+    """Read the API key of *key_file*: ``(key, None)``, ``(None, None)`` when it holds none, or ``(None, problem)``.
+
+    *problem* (:func:`api_key_problem`, never the value) is set when the file has an ``ARCHON_SEARCH_API_KEY`` line
+    whose value cannot be the default key.
 
     *key_file* must be the path resolved by ``get_key_file()`` at the start
     of the current call to ``load_or_generate_key()``. Callers thread the
@@ -748,70 +881,123 @@ def _load_from_file(key_file: Path) -> str | None:
     change between resolve and report (TOCTOU).
     """
     if not key_file.exists():
-        return None
+        return None, None
 
     # Attempt to tighten permissions if too wide
     try:
-        mode = os.stat(key_file).st_mode & 0o777
-        if mode != 0o600:
+        mode = os.stat(key_file).st_mode & PERMISSION_BITS
+        if mode != PRIVATE_FILE_MODE:
             _chmod_600(key_file)
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.warning("Could not check the permissions of %s: %s", key_file, exc)
 
     try:
         content = key_file.read_text()
-    except OSError:
-        return None
+    except OSError as exc:
+        # An existing file that cannot be read is not "no key": treating it so would have the caller generate a new
+        # key over the operator's file.
+        logger.error("Key file %s exists but cannot be read: %s", key_file, exc)
+        return None, f"it could not be read ({exc.strerror or type(exc).__name__})"
 
     for line in content.splitlines():
         if line.startswith(f"{ENV_VAR}="):
             raw = line[len(f"{ENV_VAR}="):]
             val = raw.strip()
-            if not _validate_key(val):
-                logger.error("Key file contains invalid value for %s", ENV_VAR)
-                return None
-            return val
+            problem = api_key_problem(val)
+            if problem is not None:
+                return None, problem
+            return val, None
 
+    return None, None
+
+
+def _load_from_file(key_file: Path) -> str | None:
+    """Read and validate the API key from *key_file*; ``None`` (and an ERROR log for an invalid value) when unusable.
+
+    For callers that must not fail on a bad file (the CLI's :func:`load_key`, the concurrent-write retry of
+    :func:`_generate_and_write`); :func:`load_or_generate_key` refuses to start instead.
+    """
+    key, problem = _parse_key_file(key_file)
+    if problem is not None:
+        logger.error("Key file contains an invalid value for %s: %s", ENV_VAR, problem)
+    return key
+
+
+def api_key_problem(value: str) -> str | None:
+    """Return why *value* cannot be the default API key, or ``None`` when it can.
+
+    The default key must be lowercase hex and at least ``MIN_API_KEY_LENGTH`` characters (keys the
+    server generates are 64). The returned text names the rule and the length, never the value.
+    """
+    if not value:
+        return "it is empty"
+    if not _HEX_RE.fullmatch(value):
+        return "it must be a lowercase hex string"
+    if len(value) < MIN_API_KEY_LENGTH:
+        return f"it must be at least {MIN_API_KEY_LENGTH} characters long (got {len(value)})"
     return None
 
 
-def _validate_key(value: str) -> bool:
-    return bool(value) and bool(_HEX_RE.fullmatch(value))
+def namespace_token_problem(token: str) -> str | None:
+    """Return why *token* cannot be a TOML ``[namespaces]`` bearer token, or ``None`` when it can.
+
+    Such a token must be at least ``MIN_API_KEY_LENGTH`` characters of printable, non-whitespace ASCII
+    (an empty token would otherwise authenticate an empty ``Bearer`` value). The returned text never
+    contains the token.
+    """
+    if not token:
+        return "it is empty"
+    if not token.isascii() or not token.isprintable() or any(ch.isspace() for ch in token):
+        return "it must be printable ASCII without whitespace"
+    if len(token) < MIN_API_KEY_LENGTH:
+        return f"it must be at least {MIN_API_KEY_LENGTH} characters long (got {len(token)})"
+    return None
 
 
 def _generate_and_write(key_file: Path, key: str | None = None) -> str:
-    """Atomically write *key* (or a freshly generated one) to *key_file*.
+    """Atomically write *key* (or a freshly generated one) to *key_file*; return the key the file holds.
 
     *key_file* must be the path resolved by ``get_key_file()`` at the start
     of the current call to ``load_or_generate_key()`` — see
     ``_load_from_file`` for the same contract.
+
+    A freshly generated key is *created*, never swapped in over an existing file: when two processes start together
+    the loser finds the winner's key on disk and returns that one, so both run with the key the file holds. An
+    explicit *key* (the operator's env var) replaces the file, as does a leftover file that holds no key at all.
+
+    Raises:
+        KeyWriteConflictError: a concurrent writer's file never became readable.
     """
-    os.makedirs(key_file.parent, exist_ok=True)
+    ensure_private_dir(key_file.parent)
+    generated = key is None
     if key is None:
-        key = secrets.token_hex(32)  # 64 hex chars
+        key = secrets.token_hex(API_KEY_ENTROPY_BYTES)
     payload = f"{ENV_VAR}={key}\n".encode()
     tmp = key_file.with_suffix(key_file.suffix + ".tmp")
 
-    for attempt in range(2):
+    replace = not generated
+    for attempt in range(KEY_WRITE_ATTEMPTS):
         try:
-            atomic_write_bytes(key_file, payload, mode=0o600)
+            atomic_write_bytes(key_file, payload, replace=replace)
             return key
         except FileExistsError:
             if attempt == 0:
-                time.sleep(0.1)
+                time.sleep(KEY_WRITE_CONFLICT_RETRY_SECONDS)
                 existing = _load_from_file(key_file)
                 if existing is not None:
                     return existing
                 try:
                     os.unlink(str(tmp))
                 except OSError:
-                    pass
+                    logger.debug("could not remove the stale key temp file %s", tmp, exc_info=True)
+                # A file that is there but holds no key is replaced; a concurrent writer's key was adopted above.
+                replace = replace or key_file.exists()
                 continue
             existing = _load_from_file(key_file)
             if existing is not None:
                 return existing
-            raise RuntimeError("key generation failed: concurrent write conflict")
-    raise RuntimeError("key generation failed: concurrent write conflict")
+            raise KeyWriteConflictError("key generation failed: concurrent write conflict") from None
+    raise KeyWriteConflictError("key generation failed: concurrent write conflict")
 
 
 def _chmod_600(path: Path) -> None:
@@ -819,6 +1005,6 @@ def _chmod_600(path: Path) -> None:
         logger.info("permission check skipped on Windows")
         return
     try:
-        path.chmod(0o600)
+        path.chmod(PRIVATE_FILE_MODE)
     except PermissionError:
         logger.warning("Could not set permissions to 600 on %s", path)

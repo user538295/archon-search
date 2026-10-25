@@ -17,12 +17,19 @@ from types import TracebackType
 from typing import TYPE_CHECKING, NoReturn
 
 from archon_search.graph_types import EntityType, RelationshipType
+from archon_search.model_store import ensure_pinned_snapshot
 from archon_search.paths import (
+    GRAPH_NER_MODEL_FILES,
     GRAPH_NER_MODEL_NAME,
     GRAPH_NER_MODEL_REVISION,
     get_graph_models_dir,
 )
-from archon_search.torch_runtime import CPU_DEVICE, resolve_device
+from archon_search.torch_runtime import (
+    CPU_DEVICE,
+    TRANSFORMERS_LOCK,
+    accelerator_lock,
+    resolve_device,
+)
 
 if TYPE_CHECKING:
     # Type-checking only — the runtime import stays deferred inside load_gliner_model().
@@ -203,31 +210,38 @@ class _LatchedLoadFailure:
 
 
 def load_gliner_model(model_name: str, revision: str) -> GLiNER:
-    """Import gliner and construct the checkpoint from ``get_graph_models_dir()``.
+    """Import gliner and construct the checkpoint from its pinned, allow-listed snapshot.
 
     Blocking, and the ONE place gliner is imported and loaded — shared by
     ``ProseExtractionBackend`` and the install wizard's pre-warm, so both use the same
     cache dir and neither emits the upstream warnings handled here.
-    """
-    # Accepted trade-off: catch_warnings saves/restores the process-global filter list, so it
-    # is not thread-safe (unless Python >= 3.14 runs with context-aware warnings). It stays
-    # scoped to this one-time import (the backend loads under _sync_lock, the pre-warm once in
-    # the wizard) so the deprecation is never suppressed globally; worst case, another thread's
-    # filter change in this window is undone, or the ignore entry outlives it.
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=_TORCH_JIT_SCRIPT_DEPRECATION)
-        from gliner import GLiNER  # noqa: PLC0415 — lazy; not installed at import time
 
-    return GLiNER.from_pretrained(
-        model_name,
-        revision=revision,
-        cache_dir=str(get_graph_models_dir()),
-        # gliner (0.2.28-0.2.29, `main`) defaults this to False and forwards it to
-        # huggingface_hub.snapshot_download, which warns on any non-None value: the
-        # argument is deprecated and ignored, as downloads always resume. None is
-        # the hub's own "not passed".
-        resume_download=None,
-    )
+    The download is ours, not gliner's: ``ensure_pinned_snapshot`` fetches only ``GRAPH_NER_MODEL_FILES`` at
+    *revision*, and gliner then loads the local directory with ``local_files_only=True``, so it can fetch nothing
+    else — not the rest of the repo, not the backbone's tokenizer or config at an unpinned revision.
+
+    The import and the construction both run under ``TRANSFORMERS_LOCK``: gliner imports ``transformers``
+    and builds its backbone with ``from_pretrained``, and neither is thread-safe (see the lock). A caller that
+    places the model on an accelerator takes ``accelerator_lock`` around this call, never inside it, so the lock
+    order stays accelerator, then ``TRANSFORMERS_LOCK``.
+    """
+    snapshot = ensure_pinned_snapshot(model_name, revision, GRAPH_NER_MODEL_FILES, get_graph_models_dir())
+
+    with TRANSFORMERS_LOCK:
+        # Accepted trade-off: catch_warnings saves/restores the process-global filter list, so it
+        # is not thread-safe (unless Python >= 3.14 runs with context-aware warnings). It stays
+        # scoped to this one-time import (the backend loads under _sync_lock, the pre-warm once in
+        # the wizard) so the deprecation is never suppressed globally; worst case, another thread's
+        # filter change in this window is undone, or the ignore entry outlives it.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=_TORCH_JIT_SCRIPT_DEPRECATION)
+            from gliner import GLiNER
+
+        return GLiNER.from_pretrained(
+            str(snapshot),
+            cache_dir=str(get_graph_models_dir()),
+            local_files_only=True,
+        )
 
 
 class ProseExtractionBackend:
@@ -256,6 +270,8 @@ class ProseExtractionBackend:
         # [graph].device only — never [database].device (the embedder's and reranker's).
         self._device = device
         self._model: GLiNER | None = None
+        # The torch device the model was placed on (set with ``_model``); inference takes ``accelerator_lock`` of it.
+        self._model_device = CPU_DEVICE
         # Monotonic count of ACTUAL model constructions (C1 `EngineCapability.loadCount`,
         # S26/S48). Incremented only where `GLiNER.from_pretrained` really ran, so it
         # discriminates "the load path executed" from "config resolved a provider list" —
@@ -313,12 +329,18 @@ class ProseExtractionBackend:
             # real load(), off the event loop. No process-global torch thread pin: the
             # embedder and reranker share this process's intra-op pool, and pinning it
             # to one thread made PyTorch CPU embedding 3x slower.
-            model = load_gliner_model(self._model_name, self._revision)
-            # After `.to(device)` succeeds, not right after `from_pretrained` — a
-            # device-placement failure (e.g. CUDA OOM) must not count as a load: the
-            # property's contract is "the model really was built", and self._model is
-            # what `is_loaded`/inference actually gate on, so the two must agree.
-            self._model = model.to(self._resolve_device())
+            device = self._resolve_device()
+            # The whole load and placement run under the accelerator lock, as the embedder's and reranker's do: two
+            # threads building or first running a model on ``mps`` at once hang.
+            with accelerator_lock(device):
+                model = load_gliner_model(self._model_name, self._revision)
+                # After `.to(device)` succeeds, not right after `from_pretrained` — a
+                # device-placement failure (e.g. CUDA OOM) must not count as a load: the
+                # property's contract is "the model really was built", and self._model is
+                # what `is_loaded`/inference actually gate on, so the two must agree.
+                placed = model.to(device)
+            self._model_device = device
+            self._model = placed
             self._load_count += 1
 
     async def load(self) -> None:
@@ -368,7 +390,7 @@ class ProseExtractionBackend:
                 await asyncio.wait_for(
                     event.wait(), timeout=_LOAD_WAIT_TIMEOUT_SECONDS
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise ProseExtractionLoadTimeoutError(
                     "ProseExtractionBackend: timed out after "
                     f"{_LOAD_WAIT_TIMEOUT_SECONDS}s waiting for another caller's "
@@ -456,7 +478,7 @@ class ProseExtractionBackend:
     ) -> BatchExtraction:
         """Blocking sub-batched inference — runs off the event loop via
         asyncio.to_thread. Requires ``self._model`` to already be loaded."""
-        assert self._model is not None  # noqa: S101 — inference() enforces this
+        assert self._model is not None
 
         truncated_any = False
         prepared_texts: list[str] = []
@@ -473,15 +495,16 @@ class ProseExtractionBackend:
             # pair selection when the model has a `relations_rep_layer`, which this
             # one does not), so Q29's pinned ~0.6 was dropped rather than pinned —
             # see the tasks file's spike-gate Notes ("REMOVED, not pinned").
-            batch_entities, batch_relations = self._model.inference(
-                sub_batch,
-                _ENTITY_LABELS,
-                relations=_RELATION_LABELS,
-                threshold=ner_confidence,
-                relation_threshold=relation_confidence,
-                batch_size=GRAPH_NER_SUB_BATCH_SIZE,
-                return_relations=True,
-            )
+            with accelerator_lock(self._model_device):
+                batch_entities, batch_relations = self._model.inference(
+                    sub_batch,
+                    _ENTITY_LABELS,
+                    relations=_RELATION_LABELS,
+                    threshold=ner_confidence,
+                    relation_threshold=relation_confidence,
+                    batch_size=GRAPH_NER_SUB_BATCH_SIZE,
+                    return_relations=True,
+                )
             for raw_entities, raw_relations in zip(
                 batch_entities, batch_relations, strict=True
             ):

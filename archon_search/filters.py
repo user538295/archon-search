@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -83,7 +83,7 @@ class SearchFilters(BaseModel):
         raise ValueError("language must be a 2–3 letter ISO code or 'unknown'")
 
     @model_validator(mode="after")
-    def _coerce_and_validate_dates(self) -> "SearchFilters":
+    def _coerce_and_validate_dates(self) -> SearchFilters:
         self.indexed_after = _coerce_date(self.indexed_after, end_of_day=False)
         self.indexed_before = _coerce_date(self.indexed_before, end_of_day=True)
 
@@ -107,9 +107,9 @@ def _coerce_date(value: Any, *, end_of_day: bool) -> datetime | None:
             t = time(23, 59, 59, 999999)
         else:
             t = time(0, 0, 0, 0)
-        return datetime.combine(value, t, tzinfo=timezone.utc)
+        return datetime.combine(value, t, tzinfo=UTC)
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
+            return value.replace(tzinfo=UTC)
         return value
     return value  # pragma: no cover — unexpected type, let Pydantic handle it

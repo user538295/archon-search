@@ -84,7 +84,7 @@ class JobScheduler:
         for job in queued[:slots]:
             try:
                 promoted = self._store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
-            except Exception:  # noqa: BLE001 — the claim did not happen; the job stays QUEUED for a later tick
+            except Exception:  # noqa: BLE001 — a failing claim must not stop the scheduler tick; it is logged and counted
                 self._log_claim_failure(job.job_id)
                 continue
             self._claim_failures.discard(job.job_id)
@@ -93,11 +93,11 @@ class JobScheduler:
                 continue
             try:
                 self.dispatch_fn(promoted)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("JobScheduler: dispatch_fn raised for job %s — marking FAILED", job.job_id)
                 try:
                     self._store.update(job.job_id, status=JobStatus.FAILED, error=DISPATCH_FAILED_DETAIL)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.exception(
                         "JobScheduler: failed to mark job %s as FAILED after dispatch error",
                         job.job_id,

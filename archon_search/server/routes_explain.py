@@ -23,7 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from archon_search._types import IngestedBy
 from archon_search.config import resolve_active_model
 from archon_search.hyde import HyDEDependencyError
-from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
+from archon_search.observability import bind_stage_recorder
+from archon_search.observability import correlation_id as _correlation_id
 from archon_search.pipeline import (
     METADATA_STORE_UNAVAILABLE_CODE,
     METADATA_STORE_UNAVAILABLE_DETAIL,
@@ -35,7 +36,12 @@ from archon_search.pipeline import (
 )
 from archon_search.router import MultiCollectionRouter
 from archon_search.server._hyde import RequestHyDE
-from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS
+from archon_search.server._search_budget import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+)
+from archon_search.server._validators import (
+    validate_scope_filter as _check_scope_filter,
+)
 from archon_search.server.routes_search import dependency_error_response
 from archon_search.server.schemas import (
     GRAPH_COMMUNITIES_NOT_BUILT_CODE,
@@ -46,7 +52,6 @@ from archon_search.server.schemas import (
     ExcludedCollectionSchema,
     route_422_response,
 )
-from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.telemetry.entry import TelemetryEntry
 
 if TYPE_CHECKING:
@@ -106,7 +111,7 @@ class TraversalStepResponse(BaseModel):
     chunk_id: str | None = None
 
     @model_validator(mode="after")
-    def _at_least_one_optional_set(self) -> "TraversalStepResponse":
+    def _at_least_one_optional_set(self) -> TraversalStepResponse:
         if self.relationship is None and self.community_id is None and self.chunk_id is None:
             raise ValueError(
                 "TraversalStep must have at least one of relationship, community_id, or chunk_id set"
@@ -128,7 +133,7 @@ class GraphProvenanceResponse(BaseModel):
     steps: list[TraversalStepResponse]
 
     @classmethod
-    def from_provenance(cls, prov: "GraphProvenance") -> "GraphProvenanceResponse":
+    def from_provenance(cls, prov: GraphProvenance) -> GraphProvenanceResponse:
         """Build from a ``GraphProvenance`` dataclass instance.
 
         Uses ``TraversalStepResponse.model_validate`` (enabled by ``from_attributes=True``)
@@ -328,7 +333,7 @@ class ExplainRequest(BaseModel):
         return deduped
 
     @model_validator(mode="after")
-    def _validate_collection_selection(self) -> "ExplainRequest":
+    def _validate_collection_selection(self) -> ExplainRequest:
         if self.collection is not None and self.collections is not None:
             raise ValueError("supply either collection or collections, not both")
         # Neither set stays valid: explain falls back to centroid routing.
@@ -439,7 +444,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
     """
     # Late-bound import: archon_search.rag_fusion may be reloaded in tests,
     # so we import lazily to always get the current class from sys.modules.
-    from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
+    from archon_search.rag_fusion import RAGFusionDependencyError
 
     start = monotonic()
     pipeline = request.app.state.pipeline
@@ -467,7 +472,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     rag_fusion_queries_used=rag_fusion_queries_used,
                 )
             )
-        except Exception as tel_exc:
+        except Exception as tel_exc:  # noqa: BLE001 — telemetry must never break the request; failure is logged
             logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
 
     def _emit_err() -> None:
@@ -483,7 +488,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     correlation_id=_correlation_id.get(),
                 )
             )
-        except Exception as tel_exc:
+        except Exception as tel_exc:  # noqa: BLE001 — telemetry must never break the request; failure is logged
             logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
 
     # Config-wired fanout and top_k validation (moved from Pydantic layer).
@@ -596,8 +601,8 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 return JSONResponse(
                     {"detail": f"{exc.stage} error: {type(exc.original).__name__}"}, status_code=500
                 )
-            except Exception as exc:
-                logger.exception("multi-collection explain failed: %s", exc)
+            except Exception:
+                logger.exception("multi-collection explain failed")
                 _emit_err()
                 return JSONResponse({"detail": EXPLAIN_FAILED_DETAIL}, status_code=500)
 
@@ -740,8 +745,8 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             return JSONResponse(
                 {"detail": f"{exc.stage} error: {type(exc.original).__name__}"}, status_code=500
             )
-        except Exception as exc:
-            logger.exception("explain failed for %r: %s", chosen, exc)
+        except Exception:
+            logger.exception("explain failed for %r", chosen)
             _emit_err()
             return JSONResponse({"detail": EXPLAIN_FAILED_DETAIL}, status_code=500)
 

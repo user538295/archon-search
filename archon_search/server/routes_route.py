@@ -14,7 +14,8 @@ from pydantic import BaseModel
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder, ModelEmbedder
-from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
+from archon_search.observability import bind_stage_recorder
+from archon_search.observability import correlation_id as _correlation_id
 from archon_search.router import MultiCollectionRouter
 from archon_search.sync import path_to_collection_name
 from archon_search.telemetry.entry import ErrorKind, TelemetryEntry
@@ -155,12 +156,12 @@ async def route(body: RouteRequest, request: Request) -> Any:
                             correlation_id=_correlation_id.get(),
                         )
                     )
-                except Exception as tel_exc:
+                except Exception as tel_exc:  # noqa: BLE001 — telemetry must never break the request; failure is logged
                     logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
             _emit_timings()
             return resp
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _emit_timings()
             if writer is not None:
                 try:
@@ -173,7 +174,7 @@ async def route(body: RouteRequest, request: Request) -> Any:
                             correlation_id=_correlation_id.get(),
                         )
                     )
-                except Exception as tel_exc:
+                except Exception as tel_exc:  # noqa: BLE001 — telemetry must never break the request; failure is logged
                     logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
             raise HTTPException(status_code=504, detail="routing timed out")
 
@@ -189,7 +190,7 @@ async def route(body: RouteRequest, request: Request) -> Any:
                             correlation_id=_correlation_id.get(),
                         )
                     )
-                except Exception as tel_exc:
+                except Exception as tel_exc:  # noqa: BLE001 — telemetry must never break the request; failure is logged
                     logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
             raise
 
@@ -206,7 +207,7 @@ async def route(body: RouteRequest, request: Request) -> Any:
                             correlation_id=_correlation_id.get(),
                         )
                     )
-                except Exception as tel_exc:
+                except Exception as tel_exc:  # noqa: BLE001 — telemetry must never break the request; failure is logged
                     logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
             logger.error("route handler failed: %s", type(exc).__name__)
             raise

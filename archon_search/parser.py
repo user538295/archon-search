@@ -15,8 +15,12 @@ import asyncio
 import logging
 import multiprocessing
 import os
+import stat
+import sys
 import threading
 import time
+import zipfile
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
@@ -25,7 +29,16 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:
     from docling.document_converter import DocumentConverter
 
-from archon_search.constants import DEFAULT_DOCLING_MAX_TASKS_PER_CHILD
+    from archon_search.config import IngestConfig
+
+from archon_search.constants import (
+    BYTES_PER_MIB,
+    DEFAULT_DOCLING_MAX_TASKS_PER_CHILD,
+    DEFAULT_MAX_ZIP_ENTRIES,
+    DEFAULT_MAX_ZIP_UNCOMPRESSED_MB,
+    DEFAULT_PARSE_TIMEOUT_SECONDS,
+    DEFAULT_PARSE_TIMEOUT_SECONDS_PER_MB,
+)
 from archon_search.enricher import PAGE_BREAK_MARKER
 
 logger = logging.getLogger(__name__)
@@ -87,10 +100,27 @@ def _watch_for_orphaning() -> None:
     os._exit(1)  # no cleanup is possible or needed; the parent is already gone
 
 
+# docling's layout model runs through transformers' RT-DETR v2, whose position embedding
+# builds a float64 tensor on the model's device; Apple's MPS backend has no float64, so every
+# PDF/image conversion fails ("Cannot convert a MPS Tensor to float64 dtype", docling 2.132 and
+# 2.142.1 on transformers 5.10 and 5.13; docling 2.117 was unaffected). docling's own AUTO picks
+# MPS whenever it exists, i.e. on every Apple-silicon Mac; Intel Macs have no MPS and already
+# fall back to CPU. DOCLING_DEVICE is docling's documented override (AcceleratorOptions reads it
+# at construction), so an operator-set value still wins.
+_DOCLING_DEVICE_ENV: Final[str] = "DOCLING_DEVICE"
+_DOCLING_DEVICE_OFF_MPS: Final[str] = "cpu"
+
+
+def _pin_docling_off_mps() -> None:
+    if sys.platform == "darwin":
+        os.environ.setdefault(_DOCLING_DEVICE_ENV, _DOCLING_DEVICE_OFF_MPS)
+
+
 def _worker_initializer() -> None:
     """ProcessPoolExecutor `initializer`: runs once per spawned parse-worker process."""
     global _IS_PARSE_WORKER
     _IS_PARSE_WORKER = True
+    _pin_docling_off_mps()
     threading.Thread(target=_watch_for_orphaning, daemon=True).start()
 
 
@@ -115,6 +145,59 @@ PARSE_WORKER_LOST_DETAIL: Final[str] = (
 )
 # markitdown is a core dependency, so its absence means a broken install, not a missing extra.
 MARKITDOWN_MISSING_DETAIL: Final[str] = "markitdown is not installed; reinstall archon-search to restore it"
+# Parse timed out: the worker was killed and replaced (the document, not the server, failed).
+PARSE_TIMEOUT_DETAIL: Final[str] = (
+    "The document took too long to convert and was abandoned (`[ingest].parse_timeout_seconds`); "
+    "it may be too large or malformed."
+)
+# A zip-based Office file declaring more entries or more inflated bytes than the `[ingest]` zip limits allow.
+ZIP_LIMIT_DETAIL: Final[str] = (
+    "The document is a zip archive larger than the configured limits when unpacked "
+    "(`[ingest].max_zip_entries`, `[ingest].max_zip_uncompressed_mb`)."
+)
+# The path is a symlink, FIFO, device or directory: only regular files are read.
+NOT_REGULAR_FILE_DETAIL: Final[str] = "the path is not a regular file"
+
+# Office formats stored as zip archives, whose central directory is checked before markitdown opens them.
+_ZIP_EXTENSIONS: Final[frozenset[str]] = frozenset({".docx", ".pptx", ".xlsx", ".epub"})
+
+
+def _require_regular_file(path: Path) -> None:
+    """Raise ``ParseError`` unless *path* is a regular file that is not a symlink (``lstat``, so nothing is opened).
+
+    Reading a FIFO blocks the parse thread until a writer appears, a device such as ``/dev/zero`` never ends, and a
+    symlink may point at something the ingest policy never validated. The check and the later open are separate
+    calls; the plain-text readers re-check on the descriptor they open (:func:`_read_regular_text`).
+    """
+    try:
+        mode = os.lstat(path).st_mode
+    except OSError as exc:
+        raise ParseError(path, exc) from exc
+    if not stat.S_ISREG(mode):
+        raise ParseError(path, OSError(NOT_REGULAR_FILE_DETAIL), detail=NOT_REGULAR_FILE_DETAIL)
+
+
+def _read_regular_text(path: Path) -> str:
+    """Read *path* as UTF-8 (undecodable bytes replaced) through a descriptor verified to be a regular file.
+
+    Opened ``O_NOFOLLOW | O_NONBLOCK``: a symlink at *path* is refused and opening a FIFO cannot block, and the
+    ``fstat`` on the open descriptor closes the window between :func:`_require_regular_file` and the read.
+    """
+    # O_NOFOLLOW / O_NONBLOCK do not exist on Windows; ``_require_regular_file`` already refuses a symlink there.
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ParseError(path, OSError(NOT_REGULAR_FILE_DETAIL), detail=NOT_REGULAR_FILE_DETAIL)
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            return handle.read().decode("utf-8", errors="replace")
+    finally:
+        os.close(descriptor)
 
 
 class ParseError(Exception):
@@ -168,10 +251,10 @@ def _build_docling_converter() -> DocumentConverter:
     same engine, but installing e.g. ocrmac would split them. `test_build_docling_converter_*`
     asserts the PDF path stays `kind == "auto"` so that split cannot happen silently.
     """
-    from docling.datamodel.pipeline_options import (  # noqa: PLC0415 — heavy, worker-only import
+    from docling.datamodel.pipeline_options import (
         RapidOcrOptions,
     )
-    from docling.document_converter import (  # noqa: PLC0415
+    from docling.document_converter import (
         DocumentConverter,
         ImageFormatOption,
         InputFormat,
@@ -215,7 +298,7 @@ def _docling_to_markdown(path: str) -> tuple[bool, str]:
         text = converter.convert(path).document.export_to_markdown(
             page_break_placeholder=PAGE_BREAK_MARKER
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — docling can raise anything; the worker reports failure as (False, message)
         return False, f"{type(exc).__name__}: {exc}"
     return True, text.strip() if text else ""
 
@@ -223,7 +306,15 @@ def _docling_to_markdown(path: str) -> tuple[bool, str]:
 class DocumentParser:
     """Parses documents into plain text, routing by file extension."""
 
-    def __init__(self, max_tasks_per_child: int = DEFAULT_DOCLING_MAX_TASKS_PER_CHILD) -> None:
+    def __init__(
+        self,
+        max_tasks_per_child: int = DEFAULT_DOCLING_MAX_TASKS_PER_CHILD,
+        *,
+        parse_timeout_seconds: float = DEFAULT_PARSE_TIMEOUT_SECONDS,
+        parse_timeout_seconds_per_mb: float = DEFAULT_PARSE_TIMEOUT_SECONDS_PER_MB,
+        max_zip_entries: int = DEFAULT_MAX_ZIP_ENTRIES,
+        max_zip_uncompressed_mb: int = DEFAULT_MAX_ZIP_UNCOMPRESSED_MB,
+    ) -> None:
         # Fail at construction, not at the first PDF/image parse (possibly hours later): the
         # pool itself is lazy, and ProcessPoolExecutor only validates once it is finally built.
         # Mirror both of its checks, not just the range one — it raises TypeError for non-int
@@ -237,8 +328,24 @@ class DocumentParser:
         if max_tasks_per_child < 1:
             raise ValueError(f"max_tasks_per_child must be >= 1, got {max_tasks_per_child!r}")
         self._max_tasks_per_child = max_tasks_per_child
+        self._parse_timeout_seconds = parse_timeout_seconds
+        self._parse_timeout_seconds_per_mb = parse_timeout_seconds_per_mb
+        self._max_zip_entries = max_zip_entries
+        self._max_zip_uncompressed_bytes = max_zip_uncompressed_mb * BYTES_PER_MIB
         self._pool: ProcessPoolExecutor | None = None  # lazy-created on first docling call
         self._pool_lock = threading.Lock()
+        self._worker_lock = threading.Lock()
+
+    @classmethod
+    def from_config(cls, ingest: IngestConfig) -> DocumentParser:
+        """A parser bounded by the ``[ingest]`` section: worker recycling, the parse timeout and the zip limits."""
+        return cls(
+            max_tasks_per_child=ingest.max_tasks_per_child,
+            parse_timeout_seconds=ingest.parse_timeout_seconds,
+            parse_timeout_seconds_per_mb=ingest.parse_timeout_seconds_per_mb,
+            max_zip_entries=ingest.max_zip_entries,
+            max_zip_uncompressed_mb=ingest.max_zip_uncompressed_mb,
+        )
 
     async def parse(self, path: Path) -> str:
         """Parse *path* and return its text content.
@@ -259,6 +366,7 @@ class DocumentParser:
         else:
             fn = self._parse_plain
 
+        _require_regular_file(path)
         try:
             return await asyncio.to_thread(fn, path)
         except ParseError:
@@ -272,18 +380,22 @@ class DocumentParser:
 
     def _parse_plain(self, path: Path) -> str:
         try:
-            return path.read_text(encoding="utf-8", errors="replace")
+            return _read_regular_text(path)
+        except ParseError:
+            raise
         except Exception as exc:
             raise ParseError(path, exc) from exc
 
     def _parse_html(self, path: Path) -> str:
         try:
             import trafilatura  # lazy: optional search extra
-            raw = path.read_text(encoding="utf-8", errors="replace")
+            raw = _read_regular_text(path)
             extracted = trafilatura.extract(raw, include_tables=True, include_links=False)
             if extracted is None:
                 return raw
             return extracted
+        except ParseError:
+            raise
         except Exception as exc:
             raise ParseError(path, exc) from exc
 
@@ -327,33 +439,79 @@ class DocumentParser:
             return self._pool
 
     def _parse_with_docling(self, path: Path) -> str:
-        pool = self._docling_pool()
+        return self._run_in_worker(_docling_to_markdown, path)
+
+    def _parse_timeout_for(self, path: Path) -> float:
+        """The wall-clock bound for converting *path*: ``parse_timeout_seconds`` plus the per-MiB allowance for its size.
+
+        A file that cannot be measured gets the base bound alone.
+        """
         try:
-            ok, payload = pool.submit(_docling_to_markdown, str(path)).result()
-        # BrokenProcessPool subclasses RuntimeError, so this clause MUST stay above
-        # `except Exception` below — reordering it would silently disable recovery, since the
-        # broader clause would catch it first and never drop the broken pool.
-        except BrokenProcessPool as exc:
-            # A worker killed from outside (OOM killer) would otherwise fail every later parse
-            # for the life of the process; drop it so the next file gets a fresh one. `_terminate_
-            # broken` (concurrent/futures/process.py) has already terminated and joined the dead
-            # workers before this exception reaches us, so there is nothing left to shut down —
-            # only the reference needs dropping. Compare identity before clearing: a concurrent
-            # caller may already have raced past this same broken pool and installed a fresh one
-            # via `_docling_pool()`'s lock; clearing unconditionally would orphan that live
-            # replacement.
-            with self._pool_lock:
-                if self._pool is pool:
-                    self._pool = None
-            logger.warning("docling parse worker pool broken, dropping it: %s", exc)
-            raise ParseError(
-                path, RuntimeError(PARSE_WORKER_LOST_DETAIL), detail=PARSE_WORKER_LOST_DETAIL
-            ) from exc
-        except Exception as exc:
-            raise ParseError(path, exc) from exc
+            size_bytes = path.stat().st_size
+        except OSError:
+            return self._parse_timeout_seconds
+        return self._parse_timeout_seconds + self._parse_timeout_seconds_per_mb * (size_bytes / BYTES_PER_MIB)
+
+    def _run_in_worker(self, fn: Callable[[str], tuple[bool, str]], path: Path) -> str:
+        """Run ``fn(str(path))`` in the docling worker, bounded by :meth:`_parse_timeout_for` (``parse_timeout_seconds``
+        plus ``parse_timeout_seconds_per_mb`` per MiB of the file).
+
+        One parse at a time (``_worker_lock``): the pool has a single worker, so serialising here makes the
+        timeout cover the parse itself and never the wait behind another caller's parse. A parse that outlives the
+        timeout fails *this* document with :data:`PARSE_TIMEOUT_DETAIL`, and the pool is discarded with its worker
+        process killed, so the next document gets a fresh worker instead of queueing behind a wedged one forever.
+        """
+        timeout_seconds = self._parse_timeout_for(path)
+        with self._worker_lock:
+            pool = self._docling_pool()
+            try:
+                ok, payload = pool.submit(fn, str(path)).result(timeout=timeout_seconds)
+            # BrokenProcessPool subclasses RuntimeError, so this clause MUST stay above
+            # `except Exception` below — reordering it would silently disable recovery, since the
+            # broader clause would catch it first and never drop the broken pool.
+            except BrokenProcessPool as exc:
+                # A worker killed from outside (OOM killer) would otherwise fail every later parse
+                # for the life of the process; drop it so the next file gets a fresh one. `_terminate_
+                # broken` (concurrent/futures/process.py) has already terminated and joined the dead
+                # workers before this exception reaches us, so there is nothing left to shut down —
+                # only the reference needs dropping. Compare identity before clearing: a concurrent
+                # caller may already have raced past this same broken pool and installed a fresh one
+                # via `_docling_pool()`'s lock; clearing unconditionally would orphan that live
+                # replacement.
+                with self._pool_lock:
+                    if self._pool is pool:
+                        self._pool = None
+                logger.warning("docling parse worker pool broken, dropping it: %s", exc)
+                raise ParseError(
+                    path, RuntimeError(PARSE_WORKER_LOST_DETAIL), detail=PARSE_WORKER_LOST_DETAIL
+                ) from exc
+            except TimeoutError as exc:
+                self._discard_pool(pool)
+                logger.warning(
+                    "docling parse of %s exceeded %.0fs; its worker was killed and will be replaced",
+                    path, timeout_seconds,
+                )
+                raise ParseError(path, TimeoutError(PARSE_TIMEOUT_DETAIL), detail=PARSE_TIMEOUT_DETAIL) from exc
+            except Exception as exc:
+                raise ParseError(path, exc) from exc
         if not ok:
             raise ParseError(path, RuntimeError(payload))
         return payload
+
+    def _discard_pool(self, pool: ProcessPoolExecutor) -> None:
+        """Drop *pool* and kill its worker processes: a task that is already running cannot be cancelled.
+
+        ``ProcessPoolExecutor.shutdown`` cannot interrupt a running task, and exposes no handle on its workers; the
+        worker processes are reached through ``_processes`` (the same attribute CPython's own broken-pool handling
+        terminates). The reference is cleared only if it still names *pool*, as in the broken-pool path.
+        """
+        with self._pool_lock:
+            if self._pool is pool:
+                self._pool = None
+        workers = list(getattr(pool, "_processes", {}).values())
+        pool.shutdown(wait=False, cancel_futures=True)
+        for worker in workers:
+            worker.terminate()
 
     def _parse_pdf(self, path: Path) -> str:
         return self._parse_with_docling(path)
@@ -361,9 +519,27 @@ class DocumentParser:
     def _parse_image(self, path: Path) -> str:
         return self._parse_with_docling(path)
 
+    def _check_zip_bounds(self, path: Path) -> None:
+        """Refuse a zip-based file whose central directory declares too many entries or too many inflated bytes.
+
+        markitdown's readers inflate entries through Python's ``zipfile``, which stops at an entry's declared size, so
+        the declared sizes are a real bound on what is read. A file that is not a zip is left to markitdown.
+        """
+        if path.suffix.lower() not in _ZIP_EXTENSIONS or not zipfile.is_zipfile(path):
+            return
+        with zipfile.ZipFile(path) as archive:
+            entries = archive.infolist()
+            declared = sum(entry.file_size for entry in entries)
+        if len(entries) > self._max_zip_entries or declared > self._max_zip_uncompressed_bytes:
+            logger.warning(
+                "refusing %s: %d zip entries, %d bytes inflated (limits %d and %d)",
+                path, len(entries), declared, self._max_zip_entries, self._max_zip_uncompressed_bytes,
+            )
+            raise ParseError(path, ValueError(ZIP_LIMIT_DETAIL), detail=ZIP_LIMIT_DETAIL)
+
     def _parse_office(self, path: Path) -> str:
         try:
-            from markitdown import MarkItDown  # noqa: PLC0415
+            from markitdown import MarkItDown
         except ImportError as exc:
             raise ParseError(
                 path,
@@ -371,6 +547,9 @@ class DocumentParser:
                 detail=MARKITDOWN_MISSING_DETAIL,
             ) from exc
         try:
+            self._check_zip_bounds(path)
             return MarkItDown().convert(str(path)).text_content or ""
+        except ParseError:
+            raise
         except Exception as exc:
             raise ParseError(path, exc) from exc

@@ -25,7 +25,11 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from archon_search._durable_io import atomic_write_json
+from archon_search._durable_io import (
+    DurabilityUnconfirmedError,
+    atomic_write_json,
+    ensure_private_dir,
+)
 from archon_search.paths import get_data_dir
 
 logger = logging.getLogger(__name__)
@@ -58,8 +62,13 @@ def write_sync_suppressed_sentinel() -> None:
     """
     path = get_sync_suppressed_file()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(path.parent)
         atomic_write_json(path, {"suppressed_at": datetime.now(UTC).isoformat()})
+    except DurabilityUnconfirmedError:
+        # os.replace already published the sentinel: it is written, only its rename's crash durability is unconfirmed.
+        logger.warning(
+            "sync-suppression sentinel %s written but its rename durability is unconfirmed", path, exc_info=True
+        )
     except OSError:
         logger.warning(
             "could not write sync-suppression sentinel %s; suppression will not "

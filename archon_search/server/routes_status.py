@@ -146,7 +146,7 @@ async def status(request: Request) -> StatusResponse:
         chunk_count = 0
         try:
             chunk_count = await search_store.count_chunks(name, namespace=ns)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("chunk count unavailable for collection %r; reporting 0", name, exc_info=True)
 
         collection_entries.append(

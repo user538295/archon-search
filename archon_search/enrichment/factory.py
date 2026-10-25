@@ -27,7 +27,7 @@ class EnrichmentClientFactory:
     """Builds the concrete ``LLMEnrichmentClientProtocol`` adapter for ``[graph].provider``."""
 
     @staticmethod
-    def build(config: "GraphConfig") -> "LLMEnrichmentClientProtocol | None":
+    def build(config: GraphConfig) -> LLMEnrichmentClientProtocol | None:
         """Return the enrichment client for ``config.provider``, or ``None``.
 
         Args:
@@ -46,22 +46,22 @@ class EnrichmentClientFactory:
         model = config.extraction_model or ""
 
         if config.provider == "llama_cpp":
-            from archon_search.enrichment.llama_cpp import (  # noqa: PLC0415
+            from archon_search.enrichment.llama_cpp import (
                 LlamaCppEnrichmentClient,
             )
             return LlamaCppEnrichmentClient(model=model, config=config)
         if config.provider == "ollama":
-            from archon_search.enrichment.ollama import (  # noqa: PLC0415
+            from archon_search.enrichment.ollama import (
                 OllamaEnrichmentClient,
             )
             return OllamaEnrichmentClient(model=model, config=config)
         if config.provider == "openai":
-            from archon_search.enrichment.openai import (  # noqa: PLC0415
+            from archon_search.enrichment.openai import (
                 OpenAIEnrichmentClient,
             )
             return OpenAIEnrichmentClient(model=model, config=config)
         if config.provider == "anthropic":
-            from archon_search.enrichment.anthropic import (  # noqa: PLC0415
+            from archon_search.enrichment.anthropic import (
                 AnthropicEnrichmentClient,
             )
             return AnthropicEnrichmentClient(model=model, config=config)
