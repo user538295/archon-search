@@ -262,6 +262,41 @@ def test_prefetch_script_writes_a_scanned_pdf_and_a_png(tmp_path: Path) -> None:
     assert png.read_bytes().startswith(b"\x89PNG")
 
 
+def test_prefetch_script_parses_with_a_timeout_far_above_the_runtime_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The arm64 image is built under QEMU, where the first docling parse took over the 300 s runtime default
+    and failed the release build; the prefetch parser must be built with a much larger bound."""
+    import asyncio
+
+    from archon_search.parser import DEFAULT_PARSE_TIMEOUT_SECONDS
+
+    spec = importlib.util.spec_from_file_location(
+        "prefetch_parse_models", REPO_ROOT / "scripts" / "prefetch-parse-models.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    built: list[dict[str, object]] = []
+    parsed: list[str] = []
+
+    class RecordingParser:
+        def __init__(self, **kwargs: object) -> None:
+            built.append(kwargs)
+
+        async def parse(self, path: Path) -> str:
+            parsed.append(path.name)
+            return ""
+
+    monkeypatch.setattr(module, "DocumentParser", RecordingParser)
+
+    asyncio.run(module._prefetch())
+
+    assert parsed == ["sample.pdf", "sample.png"]
+    (kwargs,) = built
+    assert kwargs["parse_timeout_seconds"] >= 10 * DEFAULT_PARSE_TIMEOUT_SECONDS  # type: ignore[operator]
+
+
 # ---------------------------------------------------------------------------
 # Env vars (spec invariants on ENV block)
 # ---------------------------------------------------------------------------
