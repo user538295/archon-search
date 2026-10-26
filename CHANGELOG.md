@@ -1,6 +1,14 @@
 # Changelog
 
 
+## [26.10.2265] - 2026-10-26
+
+**Test reliability fixes**
+
+- Graph route tests now register an empty corpus instead of `tmp_path`, preventing unnecessary ~1.2 GB GLiNER checkpoint downloads that were causing CI timeouts on systems without cached models
+- Fixed wizard CUDA tests on x86_64 Linux to properly account for the torch-swap step, preventing false failures from incorrect accelerator state detection
+
+
 ## [26.10.2262] - 2026-10-26
 
 **PyTorch embedder + reranker, security hardening, namespace ownership enforcement, and docker optimization**
