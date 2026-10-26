@@ -1,6 +1,67 @@
 # Changelog
 
 
+## [26.10.2262] - 2026-10-26
+
+**PyTorch embedder + reranker, security hardening, namespace ownership enforcement, and docker optimization**
+
+**PyTorch Runtime**
+- Replaced `fastembed` and ONNX Runtime with `transformers`-based embedder and reranker using 19 pinned embedders and 5 rerankers, giving access to more models, precision modes, and device control than ONNX allowed
+- Added `[database].device` and `[graph].device` config keys (`auto|cpu|mps|cuda`) replacing removed `providers` keys; wizard drops legacy keys and prints which ones
+- Fixed concurrent model loading on PyTorch: `TRANSFORMERS_LOCK` guards transformers imports and `accelerator_lock` serializes Apple GPU (`mps`) loads and forwards (solved hangs that kept `/ready` at 503)
+- Added `warmup_coordinator.py` for single-flight warm-up shared by embedder and reranker, with per-model error logging that doesn't latch failed attempts
+- Pinned the embedder in `EmbedderCache` to prevent eviction; dropped models now release memory so Apple Silicon peak dropped from 5.7 GB to 3.3 GB on bge models
+- Added Lance session caps (64 MiB metadata, 512 MiB index) and model validation against the server's own warm instances at startup
+- Graceful `/ready` healing: returns 503 while default embedder or configured reranker is cold, with `run_warmup_recovery` retrying failed warm-up with exponential backoff (5 s to 300 s)
+
+**Security & Authorization**
+- Enforced namespace ownership: any namespace can only manage its own collections and keys; `SearchStore` rejects cross-namespace ingest, delete, drop and import before the collection lock
+- Added admin capability gating for key rotation, `/sync`, `/backup/trigger`, `/maintenance/trigger`, `/telemetry/*`, and `POST /collections/`; non-admin keys manage only their own namespace's non-admin keys
+- Path ingest now requires `[ingest].allowed_roots` for non-admin users; added always-deny list covering data dir, secrets, `/proc`, and credential files (FIFO-safe key probe)
+- Added request limits: 32 MiB body cap (413 response), `max_file_mb` 100, zip entry and size limits, parse timeout with pool replacement, ingest admission (503 ingest_busy), cross-collection cap
+- Set data dir mode to 0700 and state files to 0600; query fingerprint now uses HMAC
+- Graph viewer replaced `?token=` query strings with 60 s view tokens; access log redacts credential query values
+- MCP tools fail closed without authentication; non-ASCII bearer tokens answer 401 instead of 500; `/health` returns status only and `/openapi.json` requires a key
+- Export and import archives are now namespace-bound (manifest includes `namespace`, exports live under `exports/<ns>/`); backups made before this change restore from the caller's own directory
+
+**Docker & Image Hardening**
+- Prefetch OCR and docling models at build into `/opt/hf-cache` (dropped scanned-PDF ingest latency from 71 s to 6 s); added `cv2` libraries and build-time import guard
+- Pruned test directories from image; added port-aware `HEALTHCHECK` and read-only support (requires writable `/data`, `/tmp`, and optionally `/pip-packages`)
+- Updated compose to bind to `127.0.0.1` only, use a named volume for `/pip-packages`, and removed `FASTEMBED_CACHE_PATH`
+- Added `.dockerignore` and `.gitignore` entries for `.env*`, `.search.env`, `.secrets.env`, `keys.json`, and `*.pem`; fixed libGL unpacking order to avoid apt dependency failures on CUDA base
+
+**Configuration & CLI**
+- `wizard` now drops removed keys from legacy configs, prints which ones, and writes `device`; `config set` validates through the loader and reports parse errors on one line
+- API keys now require 32+ lowercase hex characters; TOML namespace tokens require 32+ printable characters; weak keys stop startup with readable error
+- Documented new config keys in `archon-search.toml.example`: `[ingest]` limits and `allowed_roots`, `[server]` body limit, CORS origins, docs, graceful shutdown, `[maintenance]` version retention
+- CLI export loses `--output-dir` (exports now live under `exports/<ns>/`); `serve` binds 127.0.0.1 by default unless `ARCHON_SEARCH_CONTAINER=1`
+
+**Dependencies & Performance**
+- Upgraded locked packages: pillow 13.0.0, docling/docling-slim 2.142.1, pyjwt 2.15.1, filelock 4.2.4, urllib3 2.8.0, fastmcp 3.4.11, certifi 2026.10.23, transformers 5.13.1; `pip-audit` reports no known vulnerabilities
+- Pinned torch and torchvision to CPU index on all Linux architectures (no `nvidia-*` packages); dropped torch 2.2–2.3 (incompatible with ModernBERT on Python 3.12)
+- Pinned ruff lint rules to 407 codes (0.17.2 defaults) so CI and contributors get consistent results
+
+**Operations**
+- Added `/ready` rule, graceful-shutdown timeout, and POSIX guards; reduced log noise (first-ingest `optimize_fts`, stale-centroid warnings)
+- Lance version retention (`[maintenance].version_retention_hours`) prevents unbounded metadata growth
+- Graph GC now holds the collection lock and clears emptied collections
+- Docling runs on CPU on macOS (MPS lacks float64)
+
+**Documentation & Breaking Changes**
+- `BREAKING.md` records six 2026-10-25 entries covering authorization, ingest, network exposure, data layout, readiness, and dependencies with migration steps (index rows NR-43 to NR-48)
+- ADR 18 (Accepted) documents the PyTorch runtime decision, arm64 gate measurements (3 of 10 models under 0.9x), and per-platform pass rules
+- Security, Operator, Architecture, and User Manual guides updated for new modules, config keys, REST/MCP changes, and limits
+- Repointed 14 broken links; README, `AGENTS.md`, and `CLAUDE.md` list new commands and modules
+
+**Tests**
+- New suites cover admin scope (38 tests), cross-namespace write, store ownership, export-archive security, ingest path policy, key strength and cache, view tokens, body and concurrency limits, file modes, graph GC, version retention, and POSIX guards
+- `tests/_collection_access_stub.py` provides `assert_collection_access` helper for mock tests; `make_real_app` isolates data dir from corpus
+- OpenAPI snapshots regenerated (admin field, view-token route, slimmer `/health`, 403 and 503 responses)
+- Runtime parity freezes fastembed 0.9.0 outputs; real-weight tests verify worst embedder cosine at 0.99994 and reranker diff at 1.6e-5
+- Concurrent PyTorch load and mps hang tests added; model validation probes server's own warm instances
+- CI: all `uses:` refs pinned to commit SHA; new daily parity lane and manual bench lane (`scripts/bench_runtime.py`); 0.9x rule unchanged
+
+
 ## [26.10.2251] - 2026-10-23
 
 **Collection DELETE safety, job lifecycle fixes, import --timeout and exit codes**
