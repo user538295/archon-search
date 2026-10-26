@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [26.10.2267] - 2026-10-26
+
+**Docker build timeout fix for ARM64 images**
+
+- Increased the docling model prefetch timeout from 300s to 3600s on arm64 Docker image builds. The initial model downloads and OCR parsing on QEMU-emulated arm64 runners was exceeding the default timeout and causing build failures.
+
+
 ## [26.10.2265] - 2026-10-26
 
 **Test reliability fixes**
