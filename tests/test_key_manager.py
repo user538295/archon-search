@@ -219,6 +219,7 @@ class TestAutoGenerate:
     def test_orphaned_tmp(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Orphaned .search.env.tmp causes FileExistsError on attempt 0 → unlink tmp, retry, succeed."""
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
+        monkeypatch.setattr(km, "KEY_WRITE_CONFLICT_WAIT_SECONDS", 0.0)  # an orphan is not waited for here
         key_file = tmp_path / ".search.env"
         tmp_file = tmp_path / ".search.env.tmp"
         monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
@@ -306,20 +307,66 @@ class TestAutoGenerate:
         ):
             km._generate_and_write(key_file)
 
-    def test_two_starters_adopt_one_key(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """Two concurrent first starts end with the key the file holds, not one key each (lost update)."""
+    def test_a_loser_waits_for_a_live_writer_instead_of_removing_its_temp_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A temp file whose writer is still running (a slow fsync) is not an orphan: the loser must not delete it
+        and publish a key of its own, or the writer's key is lost."""
         import threading
+        import time
+
+        monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
+        key_file = tmp_path / ".search.env"
+        tmp_file = tmp_path / ".search.env.tmp"
+        writers_key = "a" * 64
+        tmp_file.write_text(f"{km.ENV_VAR}={writers_key}\n")
+        publish_after = km.KEY_WRITE_CONFLICT_RETRY_SECONDS * 3  # well past the loser's first look
+
+        def publish() -> None:
+            time.sleep(publish_after)
+            key_file.write_text(f"{km.ENV_VAR}={writers_key}\n")
+            tmp_file.unlink()
+
+        writer = threading.Thread(target=publish)
+        writer.start()
+        try:
+            adopted = km._generate_and_write(key_file)
+        finally:
+            writer.join()
+
+        assert adopted == writers_key
+        assert key_file.read_text() == f"{km.ENV_VAR}={writers_key}\n"
+
+    @pytest.mark.parametrize("fsync_seconds", [0.0, 0.25], ids=["fast-disk", "slow-fsync"])
+    def test_two_starters_adopt_one_key(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fsync_seconds: float
+    ) -> None:
+        """Concurrent first starts all return the key the file ends up holding: none lost, none replaced.
+
+        The slow fsync stretches the winner's publish past the losers' first look, as a loaded CI disk does."""
+        import threading
+        import time
 
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
         starters = 8
         barrier = threading.Barrier(starters)
         keys: list[str] = []
+        failures: list[BaseException] = []
+        real_fsync = os.fsync
+
+        def slow_fsync(fd: int) -> None:
+            time.sleep(fsync_seconds)
+            real_fsync(fd)
 
         def start() -> None:
             barrier.wait()
-            keys.append(km._generate_and_write(key_file))
+            try:
+                keys.append(km._generate_and_write(key_file))
+            except BaseException as exc:  # noqa: BLE001 — a thread's failure must reach the assertion below
+                failures.append(exc)
 
+        monkeypatch.setattr(os, "fsync", slow_fsync)
         threads = [threading.Thread(target=start) for _ in range(starters)]
         for thread in threads:
             thread.start()
@@ -327,6 +374,7 @@ class TestAutoGenerate:
             thread.join()
 
         on_disk = key_file.read_text().strip().removeprefix(f"{km.ENV_VAR}=")
+        assert not failures
         assert len(keys) == starters
         assert set(keys) == {on_disk}
 

@@ -48,9 +48,12 @@ logger = logging.getLogger(__name__)
 API_KEY_ENTROPY_BYTES: Final = 32
 #: ``stat`` mode bits that are permissions (without the file-type bits).
 PERMISSION_BITS: Final = 0o777
-#: Tries at creating the key file when a concurrent writer is in the way, and the pause before the second.
+#: Tries at creating the key file when a concurrent writer is in the way.
 KEY_WRITE_ATTEMPTS: Final = 2
+#: Pause between looks at a concurrent writer's key file while it is being published.
 KEY_WRITE_CONFLICT_RETRY_SECONDS: Final = 0.1
+#: How long a loser waits for a live writer's temp file to become the key file before treating it as an orphan.
+KEY_WRITE_CONFLICT_WAIT_SECONDS: Final = 2.0
 
 # ``(st_mtime_ns, st_size, st_ino)`` of keys.json: the key under which KeyStore caches its parsed records.
 _FileSignature = tuple[int, int, int]
@@ -954,6 +957,26 @@ def namespace_token_problem(token: str) -> str | None:
     return None
 
 
+def _await_concurrent_key(key_file: Path, tmp: Path) -> tuple[str | None, bool]:
+    """Wait for the key a concurrent writer is publishing: ``(key, False)`` once *key_file* holds one.
+
+    While *tmp* exists its writer is live, so the wait lasts as long as *tmp* does, up to
+    ``KEY_WRITE_CONFLICT_WAIT_SECONDS``; a *tmp* that outlives that is an orphan, and the caller removes it. Without
+    a key the result is ``(None, leftover)``: *leftover* is true when *key_file* existed, keyless, when it was last
+    read. That is checked *before* the key is read, so a file that appears after the read, a writer's finished key,
+    is never mistaken for a leftover and replaced.
+    """
+    deadline = time.monotonic() + KEY_WRITE_CONFLICT_WAIT_SECONDS
+    while True:
+        leftover = key_file.exists()
+        existing = _load_from_file(key_file)
+        if existing is not None:
+            return existing, False
+        if not tmp.exists() or time.monotonic() >= deadline:
+            return None, leftover
+        time.sleep(KEY_WRITE_CONFLICT_RETRY_SECONDS)
+
+
 def _generate_and_write(key_file: Path, key: str | None = None) -> str:
     """Atomically write *key* (or a freshly generated one) to *key_file*; return the key the file holds.
 
@@ -962,8 +985,9 @@ def _generate_and_write(key_file: Path, key: str | None = None) -> str:
     ``_load_from_file`` for the same contract.
 
     A freshly generated key is *created*, never swapped in over an existing file: when two processes start together
-    the loser finds the winner's key on disk and returns that one, so both run with the key the file holds. An
-    explicit *key* (the operator's env var) replaces the file, as does a leftover file that holds no key at all.
+    the loser finds the winner's key on disk and returns that one, so both run with the key the file holds. A loser
+    never removes a temp file whose writer is still running (see :func:`_await_concurrent_key`). An explicit *key*
+    (the operator's env var) replaces the file, as does a leftover file that holds no key at all.
 
     Raises:
         KeyWriteConflictError: a concurrent writer's file never became readable.
@@ -976,27 +1000,19 @@ def _generate_and_write(key_file: Path, key: str | None = None) -> str:
     tmp = key_file.with_suffix(key_file.suffix + ".tmp")
 
     replace = not generated
-    for attempt in range(KEY_WRITE_ATTEMPTS):
+    for _ in range(KEY_WRITE_ATTEMPTS):
         try:
             atomic_write_bytes(key_file, payload, replace=replace)
             return key
         except FileExistsError:
-            if attempt == 0:
-                time.sleep(KEY_WRITE_CONFLICT_RETRY_SECONDS)
-                existing = _load_from_file(key_file)
-                if existing is not None:
-                    return existing
-                try:
-                    os.unlink(str(tmp))
-                except OSError:
-                    logger.debug("could not remove the stale key temp file %s", tmp, exc_info=True)
-                # A file that is there but holds no key is replaced; a concurrent writer's key was adopted above.
-                replace = replace or key_file.exists()
-                continue
-            existing = _load_from_file(key_file)
+            existing, leftover = _await_concurrent_key(key_file, tmp)
             if existing is not None:
                 return existing
-            raise KeyWriteConflictError("key generation failed: concurrent write conflict") from None
+            try:
+                os.unlink(str(tmp))
+            except OSError:
+                logger.debug("could not remove the stale key temp file %s", tmp, exc_info=True)
+            replace = replace or leftover
     raise KeyWriteConflictError("key generation failed: concurrent write conflict")
 
 
