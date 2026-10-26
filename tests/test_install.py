@@ -1536,6 +1536,7 @@ class TestRunFlow:
         assert mock_configure.call_args_list == [call("cpu")]
         assert "Warning: Apple GPU validation failed — falling back to CPU." in capsys.readouterr().out
 
+    @pytest.mark.usefixtures("off_swap_platform")
     @pytest.mark.parametrize(
         ("cuda_ok", "device"), [(True, "auto"), (False, "cpu")], ids=["probe-passes", "probe-fails"]
     )

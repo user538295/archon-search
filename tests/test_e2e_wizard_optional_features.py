@@ -3750,6 +3750,7 @@ def test_e2e_declining_the_offer_is_what_the_operator_typed(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("off_swap_platform")
 @pytest.mark.integration
 @pytest.mark.parametrize(
     ("extra", "detected_gpu", "accelerator_ok", "device"),

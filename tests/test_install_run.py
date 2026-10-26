@@ -2266,6 +2266,7 @@ def test_wizard_metal_validates_once_before_prewarm(tmp_path: Path) -> None:
     assert order == ["validate", "prewarm"]
 
 
+@pytest.mark.usefixtures("off_swap_platform")
 @pytest.mark.parametrize(
     ("gpu", "probe_ok", "use_default_path", "expected_device"),
     [

@@ -335,6 +335,21 @@ def col_name() -> str:
     return f"test-{uuid.uuid4().hex[:8]}"
 
 
+@pytest.fixture
+def off_swap_platform() -> Generator[None, None, None]:
+    """Run as macOS/arm64, so a CUDA install never takes the linux/x86_64 torch-swap path.
+
+    On linux/x86_64 the wizard's CUDA step swaps in the ``+cu126`` torch and asks a fresh interpreter whether CUDA
+    is visible, instead of calling ``_accelerator_validated``. A test that stubs only the latter would pass on a
+    macOS or ARM host and probe the real machine on an x86_64 Linux CI runner.
+    """
+    with (
+        patch("archon_search.install.installer.sys.platform", "darwin"),
+        patch("archon_search.install.installer.platform.machine", return_value="arm64"),
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Install-method prefixes: what `sys.prefix` looks like for a `uv tool install
 # archon-search` environment versus any other (pip venv, pipx, checkout).

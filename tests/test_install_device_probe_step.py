@@ -23,15 +23,6 @@ _VALIDATE = "archon_search.model_validation.validate_device"
 _RESOLVE = "archon_search.install.installer.resolve_device"
 
 
-@pytest.fixture
-def off_swap_platform():
-    """Run as macOS/arm64, so a CUDA install never takes the linux/x86_64 torch-swap path."""
-    with (
-        patch("archon_search.install.installer.sys.platform", "darwin"),
-        patch("archon_search.install.installer.platform.machine", return_value="arm64"),
-    ):
-        yield
-
 
 def _make_toml(tmp_path: Path, body: str = '[server]\nhost = "127.0.0.1"\n') -> Path:
     toml_file = tmp_path / "archon-search.toml"
