@@ -18,9 +18,6 @@ jobs:
   runtime-parity:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      # The data directory whose models/ holds the pinned snapshots; missing ones are downloaded on first use.
-      ARCHON_RUNTIME_PARITY_DATA_DIR: ${{ runner.temp }}/runtime-parity
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,6 +39,11 @@ jobs:
         run: uv sync --dev
 
       - name: Run runtime parity lane (CPU)
+        # ARCHON_RUNTIME_PARITY_DATA_DIR is the data directory whose models/ holds the pinned snapshots; missing ones
+        # are downloaded on first use. It is set here from $RUNNER_TEMP, not in a job-level `env`: the `runner`
+        # context is unavailable there, and GitHub rejects the whole file ("Unrecognized named-value: 'runner'").
         # -o addopts= drops the default -n 8 / coverage / -m filter; -rP prints the measured worst
         # cosine per model.
-        run: uv run pytest -m runtime_parity tests/runtime_parity/ --no-cov -q -p no:cacheprovider -o addopts= -rP
+        run: >-
+          ARCHON_RUNTIME_PARITY_DATA_DIR="$RUNNER_TEMP/runtime-parity"
+          uv run pytest -m runtime_parity tests/runtime_parity/ --no-cov -q -p no:cacheprovider -o addopts= -rP
