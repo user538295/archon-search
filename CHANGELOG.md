@@ -1,6 +1,29 @@
 # Changelog
 
 
+## [26.10.2285] - 2026-10-28
+
+**11 security and robustness bug fixes: ingestion hardening, configuration safety, and graceful model handling**
+
+**Ingestion security**
+- Model cache directories and files under `<data dir>/models` now respect the data-directory permission guarantee (directories `0700`, files `0600`). Pre-existing caches are tightened on startup, and `umask 077` is applied in the Docker entrypoint to ensure all data-directory writers stay private (S882).
+- Symlinks to files are now refused as ingest paths with the reason `symlink_path`, while symlinks to directories and symlinked ancestors continue to work. The distinct error prevents existence leaks (S848).
+- Hard links to credential files (`.env`, `.secrets.env`, `keys.json`, `*.key` files) and state files in denied locations are now blocked by device+inode matching instead of name alone. Directory listings are cached and failures deny to prevent information leaks. Hard links in a different directory cannot be found by name, which is documented as a known limit (S844).
+- Hidden credential files (`.env`, `.netrc`, files under `.ssh/`, `.aws/`, `.gnupg/`) are now counted in the directory-ingest skipped-files INFO line. Hidden directories are opened only when the policy denies a probe path inside them; credential-named multi-component directories like `.config/gcloud` remain unopened and uncounted (S840).
+
+**Configuration and error reporting**
+- Namespace token errors now name the affected namespace (e.g., `[namespaces] the token for namespace '<name>' is not usable`) instead of omitting it, matching security hardening practices (S806).
+- Non-UTF-8 key files are now reported as a single `Error:` line without a traceback, and key files with a UTF-8 BOM are decoded correctly instead of being treated as keyless (S805).
+- Directory entries at a key-file path are left unmodified instead of having their permissions tightened, preventing inadvertent access loss (S805).
+
+**Server robustness and operations**
+- Unsupported `embedding_model` or `reranker_model` values no longer crash the server on startup. The server stays up, `/ready` answers `503` with `checks.models: "fail"`, and the log names the unsupported model. Per-collection bad names still return `422 Unprocessable Entity` at creation time (S750).
+- Streamed request bodies exceeding `max_request_body_mb` now answer `413 Request Entity Too Large` before authentication checks, with the body drained without buffering (S740).
+- Imports cancelled during the ingesting phase can now be re-run without `--force-overwrite`, returning `202 Accepted` and ending `FAILED`. Complete collections still return `409 Conflict`; the server recognizes the caller's own cancelled job by collection, phase, and claim (S798).
+- Installer dry-run summaries now flag GPU device checks as pending (e.g., `Device: Apple GPU (mps) — checked after you confirm`) to match confirmation-time behavior (S768).
+- Eager warm-up over-capacity warnings now report the documented count including the pinned default model (S486).
+
+
 ## [26.10.2267] - 2026-10-26
 
 **Docker build timeout fix for ARM64 images**
