@@ -895,12 +895,16 @@ def _parse_key_file(key_file: Path) -> tuple[str | None, str | None]:
         logger.warning("Could not check the permissions of %s: %s", key_file, exc)
 
     try:
-        content = key_file.read_text()
+        content = key_file.read_text(encoding="utf-8-sig")  # a BOM (Windows editors) must not hide the key line
     except OSError as exc:
         # An existing file that cannot be read is not "no key": treating it so would have the caller generate a new
         # key over the operator's file.
         logger.error("Key file %s exists but cannot be read: %s", key_file, exc)
         return None, f"it could not be read ({exc.strerror or type(exc).__name__})"
+    except UnicodeDecodeError:
+        # Never echo the decode error: it carries the offending bytes of a credential file.
+        logger.error("Key file %s exists but is not valid UTF-8", key_file)
+        return None, "it is not valid UTF-8 text"
 
     for line in content.splitlines():
         if line.startswith(f"{ENV_VAR}="):

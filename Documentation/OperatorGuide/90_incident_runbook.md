@@ -216,7 +216,7 @@ curl -i -X POST http://127.0.0.1:8765/keys/rotate \
 **Symptoms**: `archon-search serve|start|install` exits 1 with one line `Error: …` (no traceback), or the service crash-loops.
 
 - `ARCHON_SEARCH_API_KEY is not a valid API key`: the env var is set but is not lowercase hex of at least 32 characters. Unset it, or set a value from `python -c "import secrets; print(secrets.token_hex(32))"`. It no longer falls back to the key file.
-- `<key file> holds an invalid ARCHON_SEARCH_API_KEY: …`: the key file has a short or non-hex value (a hand-written or old key) or cannot be read. The file is left untouched; fix its value or permissions, or delete it to have the server generate a new key (clients must then be rekeyed).
+- `<key file> holds an invalid ARCHON_SEARCH_API_KEY: …`: the key file has a short or non-hex value (a hand-written or old key), cannot be read, or is not valid UTF-8 text (the message then ends `it is not valid UTF-8 text`; the file's bytes are never echoed). The file is left untouched; fix its value, encoding or permissions, or delete it to have the server generate a new key (clients must then be rekeyed).
 - `[namespaces]` token problems (shorter than 32 printable ASCII characters, whitespace, or equal to the default key): the error names the namespace, never the token. Replace the token in `archon-search.toml`.
 - `[database].providers was replaced by [database].device` and similar removed-key errors after an upgrade: see [100_upgrading.md](100_upgrading.md#pytorch-runtime-upgrade).
 

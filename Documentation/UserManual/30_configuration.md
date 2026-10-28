@@ -289,7 +289,7 @@ Optional `string = string` mapping of raw token → namespace. Entries must be s
 The API key is **not** stored in the TOML. The key manager (`archon_search/key_manager.py:load_or_generate_key`) resolves in this order:
 
 1. **`ARCHON_SEARCH_API_KEY`** (highest priority) — a lowercase hex string of at least 32 characters. Any other non-empty value (uppercase, non-hex, shorter) makes the server **refuse to start** with a `ConfigError` that names the rule and never echoes the key.
-2. **`ARCHON_SEARCH_KEY_FILE`** if set, otherwise `<data-dir>/.search.env` (`~/.archon-search/.search.env` by default). The first `ARCHON_SEARCH_API_KEY=` line is used; the loader forces the file mode to `600`. A key file that exists but cannot be read, or holds an invalid key, also refuses startup and is left untouched.
+2. **`ARCHON_SEARCH_KEY_FILE`** if set, otherwise `<data-dir>/.search.env` (`~/.archon-search/.search.env` by default). The first `ARCHON_SEARCH_API_KEY=` line is used; the loader forces the file mode to `600`. A key file that exists but cannot be read, is not valid UTF-8 text, or holds an invalid key, also refuses startup and is left untouched.
 3. **Auto-generation** — on first start with no env var and no file, a 64-char hex token is generated, written atomically (mode `600`, never over an existing file), and used.
 
 `[namespaces]` tokens must be at least 32 printable ASCII characters without whitespace, and a token may not equal the default key, or startup fails with a `ConfigError`. The default key is the only admin key (see [`../SecurityGuide/03_authorization_and_acl.md`](../SecurityGuide/03_authorization_and_acl.md)).

@@ -208,8 +208,8 @@ def _mask_api_key(api_key_file: str) -> str:
         return "(not yet generated)"
     key_path = Path(api_key_file)
     try:
-        content = key_path.read_text()
-    except OSError:
+        content = key_path.read_text(encoding="utf-8-sig")
+    except (OSError, ValueError):
         return "(not yet generated)"
     for line in content.splitlines():
         if line.startswith("ARCHON_SEARCH_API_KEY="):
