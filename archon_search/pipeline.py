@@ -261,9 +261,14 @@ _BINARY_EXTENSIONS = frozenset(
 )
 
 
-# Directories a directory ingest never walks (besides every hidden one): dependency and bytecode trees that hold
-# thousands of files nobody indexed on purpose. They are pruned before they are listed, so they cost nothing.
+# Directories a directory ingest never walks (besides every hidden one that is not a denied location): dependency and
+# bytecode trees that hold thousands of files nobody indexed on purpose. They are pruned before they are listed, so
+# they cost nothing.
 _PRUNED_DIRECTORY_NAMES = frozenset({"node_modules", "__pycache__", "venv", "site-packages"})
+# A name no credential file pattern matches: ``check_secrets`` on ``<directory>/<this>`` is denied only when the
+# directory itself is a denied location (``.ssh``, a server state directory), not for a directory that merely carries
+# a credential file name (a virtualenv called ``.env``).
+_DENIED_DIRECTORY_PROBE_NAME = "probe"
 _RECURSIVE_GLOB_SEGMENT = "**"
 
 
@@ -283,30 +288,52 @@ def _matches_glob(parts: tuple[str, ...], segments: tuple[str, ...]) -> bool:
     return bool(parts) and fnmatch.fnmatch(parts[0], head) and _matches_glob(parts[1:], rest)
 
 
+def _is_walked_directory(path: Path, policy: IngestPathPolicy) -> bool:
+    """Whether a directory ingest opens *path*: every visible directory, and a hidden one only when *policy* denies it.
+
+    A denied hidden directory (``.ssh``) is opened to count its files, not to index them. Denial is read off a
+    probe child so that a directory merely named like a credential file (a virtualenv called ``.env``) stays unopened.
+    """
+    if not path.name.startswith("."):
+        return True
+    try:
+        policy.check_secrets(path / _DENIED_DIRECTORY_PROBE_NAME)
+    except PathUnsafeError:
+        return True
+    return False
+
+
 def _discover_ingest_files(
     root: Path, glob_pattern: str, policy: IngestPathPolicy, max_files: int
 ) -> list[Path]:
     """The sorted files of *root* matching *glob_pattern* that a directory ingest indexes. Blocking: run it in a thread.
 
-    Not walked at all: hidden directories (``.git``, ``.venv``) and ``node_modules``, ``__pycache__``, ``venv`` and
-    ``site-packages``. Skipped: symlinks, non-files, hidden files, binary extensions, ``.acl`` sidecars and files in a
-    location *policy* never ingests (credential names, the server's own state); those last are counted in one INFO
-    line for the whole run.
+    Not walked at all: ``node_modules``, ``__pycache__``, ``venv``, ``site-packages`` and every hidden directory
+    (``.git``, ``.venv``) except those *policy* denies as a whole (``.ssh``, ``.aws``, ``.gnupg``, a server state
+    directory): those are opened only so their files can be counted, never indexed. A hidden directory that is denied
+    only through a deeper component (``.config`` for ``.config/gcloud``) is not opened, so its files are not counted.
+    Denied directories are walked in full to be counted (the count is not bounded by *max_files*; ``.archon-search`` and
+    the like cost one ``check_secrets`` per file).
+    Skipped: symlinks, non-files, hidden files, binary extensions, ``.acl`` sidecars and files in a location
+    *policy* never ingests (credential names, the server's own state, hidden ones included); those last are counted
+    in one INFO line for the whole run and never count toward *max_files*. A file with a hidden component in its
+    path below *root* is never returned, whatever the policy says of it.
 
     Raises:
         IngestTooManyFilesError: more than *max_files* files qualify. The walk stops at the first one over the limit,
-            so a request for ``/`` costs at most *max_files* qualifying files, never an unbounded list.
+            so a request for ``/`` lists at most *max_files* qualifying files, never an unbounded list.
     """
     segments = tuple(glob_pattern.split("/"))
     files: list[Path] = []
     denied = 0
     for directory, subdirectories, names in os.walk(root):
         subdirectories[:] = [
-            name for name in subdirectories if not name.startswith(".") and name not in _PRUNED_DIRECTORY_NAMES
+            name for name in subdirectories
+            if name not in _PRUNED_DIRECTORY_NAMES and _is_walked_directory(Path(directory, name), policy)
         ]
         relative_directory = Path(directory).relative_to(root).parts
         for name in names:
-            if name.startswith(".") or not _matches_glob((*relative_directory, name), segments):
+            if not _matches_glob((*relative_directory, name), segments):
                 continue
             file_path = Path(directory, name)
             if file_path.is_symlink() or not file_path.is_file():
@@ -317,6 +344,8 @@ def _discover_ingest_files(
                 policy.check_secrets(file_path)
             except PathUnsafeError:
                 denied += 1
+                continue
+            if any(part.startswith(".") for part in (*relative_directory, name)):
                 continue
             if len(files) == max_files:
                 raise IngestTooManyFilesError(max_files)

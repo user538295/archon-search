@@ -201,7 +201,7 @@ elif resp.status_code == 503 and resp.json().get("code") == "ingest_busy":
     time.sleep(int(resp.headers["Retry-After"]))
 ```
 
-Files over `[ingest].max_file_mb` (now 100) are refused per file. Directory ingest stops at `[ingest].max_discovered_files` (100000) and no longer walks hidden directories, `node_modules`, `__pycache__`, `venv` or `site-packages`.
+Files over `[ingest].max_file_mb` (now 100) are refused per file. Directory ingest stops at `[ingest].max_discovered_files` (100000), indexes nothing under hidden directories (it only opens credential ones such as `.ssh` to count their files as skipped) and no longer walks `node_modules`, `__pycache__`, `venv` or `site-packages`.
 
 ## NR-46 — export and import without paths
 

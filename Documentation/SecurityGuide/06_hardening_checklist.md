@@ -97,7 +97,7 @@ grep -A2 '^\[ingest\]' ~/.archon-search/archon-search.toml
 # Expected: allowed_roots = ["/srv/docs", ...]
 ```
 
-Directory ingest skips hidden directories, `node_modules`, `__pycache__`, `venv` and `site-packages`, and stops at `[ingest].max_discovered_files` (100000); the parser reads only regular files (no symlinks, FIFOs or devices).
+Directory ingest skips hidden directories (denied credential or server-state ones are opened only to count their files, never indexed), `node_modules`, `__pycache__`, `venv` and `site-packages`, and stops at `[ingest].max_discovered_files` (100000); the parser reads only regular files (no symlinks, FIFOs or devices).
 
 **Backed by**: `archon_search/_path_safety.py` (`IngestPathPolicy`); `[ingest]` in `archon-search.toml.example`.
 
