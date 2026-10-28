@@ -6,7 +6,7 @@ import threading
 from types import ModuleType
 from typing import TYPE_CHECKING, NamedTuple, Protocol, runtime_checkable
 
-from archon_search.model_specs import get_embedder_spec
+from archon_search.model_specs import UnsupportedModelError, get_embedder_spec
 from archon_search.model_store import ensure_model
 from archon_search.observability import record_stage
 from archon_search.text_batching import map_in_token_batches
@@ -134,6 +134,27 @@ class ModelEmbedder:
                     pooled = torch.nn.functional.normalize(pooled, dim=-1)
             vectors: list[list[float]] = pooled.cpu().tolist()
             return vectors
+
+
+class UnsupportedModelEmbedder:
+    """Backend for a model name outside the registry: stays cold and fails every ``encode``.
+
+    Lets the server start with such a name and report ``checks.models == "fail"`` instead of
+    aborting; ``encode`` raises the ``UnsupportedModelError`` that ``ModelEmbedder`` raised at construction.
+    """
+
+    def __init__(self, error: UnsupportedModelError) -> None:
+        self.model_name = error.name
+        self._supported = error.supported
+
+    @property
+    def is_warm(self) -> bool:
+        return False
+
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        # A fresh error per call: re-raising one instance would grow its ``__traceback__`` on every encode.
+        # (Unlike ``ModelEmbedder.encode``, an empty batch fails too: nothing here can ever succeed.)
+        raise UnsupportedModelError(self.model_name, self._supported)
 
 
 def _pool(torch: ModuleType, hidden: Tensor, attention_mask: Tensor, pooling: Pooling) -> Tensor:

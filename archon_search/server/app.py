@@ -34,7 +34,12 @@ from archon_search.config import (
     warn_if_legacy_config_ignored,
 )
 from archon_search.constants import BYTES_PER_MIB, DEFAULT_NAMESPACE
-from archon_search.embedder import Embedder, ModelEmbedder
+from archon_search.embedder import (
+    Embedder,
+    EmbedderBackend,
+    ModelEmbedder,
+    UnsupportedModelEmbedder,
+)
 from archon_search.embedder_cache import (
     EMBEDDER_NOT_READY_CODE,
     EMBEDDER_NOT_READY_DETAIL,
@@ -59,12 +64,18 @@ from archon_search.key_manager import (
 )
 from archon_search.logging_setup import build_uvicorn_log_config, configure_logging
 from archon_search.memory_budget import warn_if_models_exceed_memory
+from archon_search.model_specs import UnsupportedModelError
 from archon_search.model_validation import validate_models_async
 from archon_search.parser import DocumentParser
 from archon_search.paths import get_data_dir, get_fasttext_models_dir
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingStateStore
-from archon_search.reranker import ModelReranker, Reranker
+from archon_search.reranker import (
+    ModelReranker,
+    Reranker,
+    RerankerBackend,
+    UnsupportedModelReranker,
+)
 from archon_search.server.graph_view_token import GRAPH_VIEW_SECRET_BYTES
 from archon_search.server.middleware_auth import (
     _EXEMPT_PATHS,
@@ -541,6 +552,28 @@ def _configure_openapi(app: FastAPI) -> None:
         return schema
 
     app.openapi = custom_openapi  # type: ignore[method-assign]
+
+
+def _embedder_backend(model_name: str, device: str) -> EmbedderBackend:
+    """The configured embedder; a name outside the registry yields a backend that fails every encode.
+
+    The failure surfaces through warm-up / model validation as ``checks.models == "fail"`` with the
+    ``unsupported model ...; supported: ...`` text logged, so startup is not aborted (S750).
+    """
+    try:
+        return ModelEmbedder(model_name, device=device)
+    except UnsupportedModelError as exc:
+        logger.warning("%s", exc)
+        return UnsupportedModelEmbedder(exc)
+
+
+def _reranker_backend(model_name: str, device: str) -> RerankerBackend:
+    """The configured reranker; a name outside the registry yields a backend that fails every predict (S750)."""
+    try:
+        return ModelReranker(model_name, device=device)
+    except UnsupportedModelError as exc:
+        logger.warning("%s", exc)
+        return UnsupportedModelReranker(exc)
 
 
 def create_app(
@@ -1158,7 +1191,7 @@ def create_app(
     app.state.state_store = IndexingStateStore(config.db_path)
     app.state.search_store = SearchStore(config.db_path, config=config)
     app.state.watcher_manager = None
-    app.state.embedder = Embedder(ModelEmbedder(config.embedding_model, device=config.device))
+    app.state.embedder = Embedder(_embedder_backend(config.embedding_model, config.device))
 
     # C2: instantiate LanguageDetector for production path when multilingual=True.
     # _check_multilingual_deps() has already passed at this point, so imports are safe.
@@ -1200,10 +1233,7 @@ def create_app(
         store=app.state.search_store,
         embedder=app.state.embedder,
         reranker=(
-            Reranker(ModelReranker(
-                config.reranker_model,
-                device=config.device,
-            ))
+            Reranker(_reranker_backend(config.reranker_model, config.device))
             if config.reranker_model
             else None
         ),

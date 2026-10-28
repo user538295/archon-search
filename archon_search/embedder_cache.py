@@ -12,7 +12,9 @@ from archon_search.torch_runtime import AUTO_DEVICE, release_model_memory
 logger = logging.getLogger(__name__)
 
 # make_embedder() resolves the model spec eagerly, so it raises UnsupportedModelError for a
-# name outside the registry before any weights are touched. model_validation.validate_embedding_model()
+# name outside the registry before any weights are touched. The one exception is the pinned default
+# model: it is the pipeline's own embedder, which for such a name is an UnsupportedModelEmbedder whose
+# embed() raises (S750). model_validation.validate_embedding_model()
 # is the cheap up-front check for callers that must reject an unknown name before using the cache.
 
 # Upper bound on how long a deduplicated waiter blocks on the active loader. A

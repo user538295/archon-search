@@ -7,7 +7,7 @@ import threading
 from typing import TYPE_CHECKING, NamedTuple, Protocol, runtime_checkable
 
 from archon_search._diagnostics import ScoredSearchCandidate
-from archon_search.model_specs import get_reranker_spec
+from archon_search.model_specs import UnsupportedModelError, get_reranker_spec
 from archon_search.model_store import ensure_model
 from archon_search.observability import record_stage
 from archon_search.reranker_loading import load_cross_encoder
@@ -126,6 +126,26 @@ class ModelReranker:
                 logits = cross_encoder.model(**inputs).logits
             scores: list[float] = logits[:, 0].float().cpu().tolist()
             return scores
+
+
+class UnsupportedModelReranker:
+    """Backend for a model name outside the registry: stays cold and fails every ``predict``.
+
+    Lets the server start with such a name and report ``checks.models == "fail"`` instead of
+    aborting; ``predict`` raises the ``UnsupportedModelError`` that ``ModelReranker`` raised at construction.
+    """
+
+    def __init__(self, error: UnsupportedModelError) -> None:
+        self.model_name = error.name
+        self._supported = error.supported
+
+    @property
+    def is_warm(self) -> bool:
+        return False
+
+    def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+        # A fresh error per call: re-raising one instance would grow its ``__traceback__`` on every predict.
+        raise UnsupportedModelError(self.model_name, self._supported)
 
 
 class Reranker:

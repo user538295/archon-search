@@ -31,7 +31,6 @@ from archon_search.config import SearchConfig
 from archon_search.embedder import ModelEmbedder
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.jobs.store import JobStore
-from archon_search.model_specs import UnsupportedModelError
 from archon_search.model_validation import ModelValidationResult
 from archon_search.reranker import ModelReranker
 from archon_search.server import app as app_module
@@ -252,15 +251,6 @@ def test_warmup_with_an_unloadable_model_reports_failed_naming_it_once(
     assert run.ready_status == 503
     assert run.ready["ready"] is False
     assert run.ready["checks"]["models"] == "fail"
-
-
-@pytest.mark.parametrize("config_field", ["embedding_model", "reranker_model"])
-def test_app_creation_rejects_a_model_outside_the_registry(config: SearchConfig, tmp_path: Path, config_field: str) -> None:
-    """A configured model the registry does not know fails fast at startup, naming the supported set."""
-    setattr(config, config_field, "nonexistent-org/no-such-model-s632")
-
-    with pytest.raises(UnsupportedModelError, match="unsupported model 'nonexistent-org/no-such-model-s632'"):
-        create_app(config, JobStore(path=tmp_path / "jobs.json"))
 
 
 def test_eager_warmup_with_an_unsupported_collection_model_reports_only_that_model(

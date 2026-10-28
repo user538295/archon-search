@@ -434,12 +434,13 @@ async def _add_collection(body: AddCollectionRequest, request: Request, slot: In
     search_store = request.app.state.search_store
     ns: str = request.state.namespace
 
-    # Validate embedding_model early, before any side-effects
-    if body.embedding_model is not None:
-        try:
-            await validate_embedding_model(body.embedding_model)
-        except ModelValidationError as e:
-            raise HTTPException(status_code=422, detail=str(e))
+    # Validate the model the collection will pin (the request's, else the server default) early,
+    # before any side-effects: an unsupported default must not leave a stub pinned to it (S750).
+    active_model = body.embedding_model if body.embedding_model is not None else config.embedding_model
+    try:
+        await validate_embedding_model(active_model)
+    except ModelValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     try:
         resolved = str(
@@ -474,7 +475,6 @@ async def _add_collection(body: AddCollectionRequest, request: Request, slot: In
 
     # Write stub meta — update_collection_meta acquires the per-collection lock internally.
     # StoreBusyError → 503; ValueError → 409 TOCTOU race; other → 500.
-    active_model = body.embedding_model if body.embedding_model is not None else config.embedding_model
     try:
         await search_store.update_collection_meta(
             CollectionMeta(
