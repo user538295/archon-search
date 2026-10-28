@@ -590,7 +590,10 @@ def create_app(
     if api_key in config.namespaces:
         # The managed-key path resolves a TOML token first, so it would shadow the default key and silently
         # demote it from admin. The message names no token.
-        raise ConfigError("a [namespaces] token equals the default API key; give every namespace its own token")
+        raise ConfigError(
+            f"[namespaces] the token for namespace {config.namespaces[api_key]!r} is not usable: "
+            "it equals the default API key; give every namespace its own token"
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
