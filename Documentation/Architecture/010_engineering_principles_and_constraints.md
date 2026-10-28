@@ -86,7 +86,7 @@ All modules in `archon_search/` must use `logging.getLogger(__name__)` — excep
 
 ### Auth: every data-plane endpoint is bearer-gated
 
-The middleware exempts only `/health`, `/docs`, `/openapi.json`, `/redoc` (`server/middleware_auth.py::_EXEMPT_PATHS`); the latter three expose schema, not data. The API key is resolved by `key_manager.py` in priority order: `ARCHON_SEARCH_API_KEY` env var, then a key file at `ARCHON_SEARCH_KEY_FILE` (or default `<data-dir>/.search.env`), then auto-generated with file mode `600` on POSIX.
+The middleware exempts only `/health` and `/ready` (`server/middleware_auth.py::_EXEMPT_PATHS`); `/docs`, `/redoc` and `/openapi.json` are exempt only when `[server].docs_enabled = true` (default `false`) — they expose schema, not data. The API key is resolved by `key_manager.py` in priority order: `ARCHON_SEARCH_API_KEY` env var, then a key file at `ARCHON_SEARCH_KEY_FILE` (or default `<data-dir>/.search.env`), then auto-generated with file mode `600` on POSIX.
 
 The REST middleware and the MCP endpoint share the same auth layer (`server/middleware_auth.py`).
 
@@ -117,7 +117,7 @@ flowchart LR
     Eval -.gates ranking changes.-> Code
 ```
 
-- **REST/MCP shape**: `GET /openapi.json` is the authoritative machine-readable schema. `GET /docs` serves the Swagger UI. Schemas live in `archon_search/server/schemas.py` and `schemas_telemetry.py`.
+- **REST/MCP shape**: `GET /openapi.json` is the authoritative machine-readable schema. `GET /docs` serves the Swagger UI only when `[server].docs_enabled = true`. Schemas live in `archon_search/server/schemas.py` and `schemas_telemetry.py`.
 - **Compatibility**: `BREAKING.md` is the compatibility contract. Every release that removes or changes an existing API contract MUST add an entry describing the change, the migration path, and the announce-from release.
 - **Retrieval quality**: `tests/eval/thresholds.toml` plus `tests/eval/baselines/baseline.{md,json}` gate ranking changes. The maintenance guide (fixture schemas, threshold-lowering policy, waivers) is `tests/eval/README.md`.
 

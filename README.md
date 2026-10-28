@@ -148,8 +148,8 @@ Once it's up:
 
 - `GET /health` — unauthenticated liveness probe
 - `GET /ready` — unauthenticated readiness probe
-- `GET /docs` — interactive Swagger UI
-- `GET /openapi.json` — machine-readable OpenAPI schema
+- `GET /openapi.json` — machine-readable OpenAPI schema (needs a Bearer token unless `[server].docs_enabled = true`)
+- `GET /docs` — interactive Swagger UI (only when `[server].docs_enabled = true`; off by default)
 
 Then hit `/search` as shown at the top of this file.
 
@@ -204,7 +204,7 @@ The full annotated reference — every key, every default — is `archon-search.
 
 ## REST API
 
-`GET /openapi.json` is the contract — endpoint shapes, request/response types, error codes, all of it. This README is not. `GET /docs` serves the same thing as an interactive explorer.
+`GET /openapi.json` is the contract — endpoint shapes, request/response types, error codes, all of it. This README is not. With `[server].docs_enabled = true`, `GET /docs` serves the same thing as an interactive explorer.
 
 Breaking changes to REST or MCP land in [`BREAKING.md`](BREAKING.md), not buried in a changelog entry.
 

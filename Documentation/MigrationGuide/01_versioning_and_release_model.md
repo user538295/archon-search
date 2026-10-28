@@ -67,7 +67,7 @@ python -c "from importlib.metadata import version; print(version('archon-search'
 pip show archon-search | grep ^Version
 ```
 
-The HTTP `GET /health` response also exposes the running server's version; see [`Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md). Use this when you want to confirm the version of a **running** process rather than the installed wheel.
+The authenticated `GET /status` response exposes the running server's version (`GET /health` returns only `{"status": "running"}`); see [`Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md). Use this when you want to confirm the version of a **running** process rather than the installed wheel.
 
 ## How to read `BREAKING.md`
 

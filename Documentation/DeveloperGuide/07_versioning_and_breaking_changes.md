@@ -16,13 +16,13 @@
 
 ## Reading the version
 
-The running server reports its version on `GET /health`:
+The running server reports its version on the authenticated `GET /status` (`GET /health` returns only `{"status": "running"}`):
 
 ```json
-{"status": "running", "version": "26.5.123"}
+{"version": "26.5.123", "...": "..."}
 ```
 
-The package version is resolved via `importlib.metadata` at import time (`server/routes_health.py:15`) and re-used as the OpenAPI `info.version`. The string never reflects compatibility — only the release count.
+The package version is resolved via `importlib.metadata` at import time (`server/routes_status.py`) and re-used as the OpenAPI `info.version`. The string never reflects compatibility — only the release count.
 
 ## Reading `BREAKING.md`
 
@@ -48,7 +48,7 @@ When upgrading, diff `BREAKING.md` between the version you have and the version 
 
 For libraries with a stable user base:
 
-1. **Pin a minimum server version.** Read the running server's `/health` at startup, compare against your floor, and fail fast if too old.
+1. **Pin a minimum server version.** Read the running server's `GET /status` at startup, compare against your floor, and fail fast if too old.
 2. **Snapshot `/openapi.json` in CI.** Save the schema as a fixture and diff it on each server upgrade. Anything new is opportunity; anything removed is breakage.
 3. **Treat MCP tool names as part of the contract.** A renamed tool is a breaking change even if no schema field moves.
 4. **Don't pin to CalVer segments in dependency declarations.** Pin to a tag or commit; CalVer values do not communicate compatibility to package managers.
@@ -56,6 +56,8 @@ For libraries with a stable user base:
 ### Example: startup compatibility check
 
 ```python
+import os
+
 import httpx
 
 REQUIRED_MIN = (26, 5, 0)  # year, month, rev-count
@@ -66,7 +68,11 @@ def parse_calver(v: str) -> tuple[int, int, int]:
     yy, mm, rev = v.split(".")
     return int(yy), int(mm), int(rev)
 
-r = httpx.get("http://127.0.0.1:8765/health", timeout=2.0)
+r = httpx.get(
+    "http://127.0.0.1:8765/status",
+    headers={"Authorization": f"Bearer {os.environ['ARCHON_SEARCH_API_KEY']}"},
+    timeout=2.0,
+)
 r.raise_for_status()
 running = parse_calver(r.json()["version"])
 if running < REQUIRED_MIN:

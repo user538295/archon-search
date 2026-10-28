@@ -12,7 +12,7 @@
 
 1. **Layered pipeline, single orchestrator.** Ingest and query flow through a fixed sequence of stages owned by `SearchPipeline`; modules below it are replaceable, modules above only depend on the pipeline.
 2. **Two-stage retrieval is non-negotiable.** Every query is `(vector + FTS) hybrid retrieval -> cross-encoder rerank`. The rerank stage is part of the contract, not an optimisation.
-3. **One auth boundary, two transports.** REST and MCP share `APIKeyMiddleware`. Exempt paths are `/health`, `/docs`, `/openapi.json`, and `/redoc` (see `_EXEMPT_PATHS` in `server/middleware_auth.py`).
+3. **One auth boundary, two transports.** REST and MCP share `APIKeyMiddleware`. Exempt paths are `/health` and `/ready` (`_EXEMPT_PATHS` in `server/middleware_auth.py`); `/docs`, `/openapi.json` and `/redoc` are exempt only when `[server].docs_enabled = true`.
 4. **Filesystem is source of truth.** Corpora on disk drive the index, not the other way around. Watchers + the sync engine reconcile drift.
 5. **State is local, opt-in, and inspectable.** LanceDB, the JSON job store, the API-key file, and telemetry JSONL all live under `~/.archon-search/`. Nothing leaves the host by default.
 

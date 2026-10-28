@@ -52,7 +52,7 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
 `server/middleware_auth.py::APIKeyMiddleware`:
 
 - Missing `Authorization` header, wrong scheme, or token that fails `secrets.compare_digest` against both the per-namespace key map and the default API key → `401`, header `WWW-Authenticate: Bearer`, empty body.
-- Exempt paths (`/health`, `/ready`, `/docs`, `/openapi.json`, `/redoc`) bypass the middleware entirely.
+- Exempt paths (`/health`, `/ready`; also `/docs`, `/openapi.json`, `/redoc` when `[server].docs_enabled = true`) bypass the middleware entirely.
 - If a resolved namespace fails `_validate_namespace`, the middleware logs and returns `500` (defensive — should not occur if config validates).
 
 The middleware iterates the full namespace map without short-circuit (`resolved_namespace = ns  # no break` — `middleware_auth.py:73`) to prevent timing-based token discovery.

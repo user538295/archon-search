@@ -23,7 +23,7 @@ For background, see [`01_threat_model.md`](./01_threat_model.md). For controls i
 ```bash
 ls -ld ~/.archon-search ~/.archon-search/search ~/.archon-search/search-logs ~/.archon-search/logs
 # Expected: drwx------  (mode 0700)
-ls -l ~/.archon-search/.search.env ~/.archon-search/keys.json ~/.archon-search/jobs.json
+ls -l ~/.archon-search/.search.env ~/.archon-search/keys.json ~/.archon-search/archon-search-jobs.json
 # Expected: -rw-------  (mode 0600)
 stat -c '%a' ~/.archon-search/.search.env   # Linux
 stat -f '%Lp' ~/.archon-search/.search.env  # macOS

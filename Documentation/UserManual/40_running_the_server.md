@@ -56,12 +56,12 @@ Use `/health` for a restart-if-dead liveness probe and `/ready` to gate traffic 
 
 ## Endpoints exposed (overview)
 
-Auth is `Bearer` on all routes except the two probes and the docs paths below. This is a compact map — `GET /openapi.json` is the authoritative contract; see [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) for the exhaustive surface.
+Auth is `Bearer` on all routes except the two probes. This is a compact map — `GET /openapi.json` is the authoritative contract; see [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) for the exhaustive surface.
 
 | Area | Routes | Auth |
 | --- | --- | --- |
 | Liveness / readiness | `GET /health`, `GET /ready` | none |
-| FastAPI docs | `GET /docs`, `GET /openapi.json`, `GET /redoc` | none |
+| FastAPI docs | `GET /openapi.json`; `GET /docs` and `GET /redoc` only when `[server].docs_enabled = true` (default `false`) | bearer; none for all three when `docs_enabled = true` |
 | Status | `GET /status`, `GET /indexing-state` | bearer |
 | Search / route / explain | `POST /search`, `POST /route`, `POST /explain` | bearer |
 | Ingest / jobs | `POST /ingest` (202), `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/resume`, `DELETE /jobs/{id}` | bearer |

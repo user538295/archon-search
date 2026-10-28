@@ -10,7 +10,7 @@
 
 ## Principles
 
-1. **OpenAPI is authoritative.** The schema at `GET /openapi.json` is the source of truth for request and response shapes. `GET /docs` is the human explorer over the same schema. When code and OpenAPI disagree, the bug is in the code (or in the route signatures that generate the schema).
+1. **OpenAPI is authoritative.** The schema at `GET /openapi.json` is the source of truth for request and response shapes. `GET /docs` (only with `[server].docs_enabled = true`) is the human explorer over the same schema. When code and OpenAPI disagree, the bug is in the code (or in the route signatures that generate the schema).
 2. **MCP and REST share internal services, but neither mirrors the other.** Both surfaces wrap the same internal pipeline, but their tool/route lists overlap rather than match. Five MCP tools have no REST counterpart (`search_with_context`, `ingest_file`, `ingest_directory`, `list_documents`, `delete_document`); REST exposes `/route`, `/jobs/*`, `/status`, `/indexing-state`, and `/telemetry/*` with no MCP equivalent. The `explain` tool is *not* among the MCP-only set — it pairs with REST `POST /explain`. The full MCP tool list is `search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document`. New capability should be exposed on whichever surface its callers actually need; do not invent control-plane behaviour on only one surface when both make sense.
 3. **Bearer auth on everything except `GET /health`.** There is exactly one exempt path, and the OpenAPI schema reflects that exemption explicitly.
 4. **Schemas are Pydantic, schemas are typed, schemas have no logic.** Request and response models live in `server/schemas.py` and `server/schemas_telemetry.py`. They are pure data; behaviour lives in routes and services.
@@ -21,7 +21,7 @@
 `server/app.py` overrides FastAPI's default OpenAPI generation with `_configure_openapi`. The customisation does two things:
 
 - Declares a single `BearerAuth` security scheme (`type: http`, `scheme: bearer`).
-- Walks every path operation and attaches `security: [{BearerAuth: []}]` — except for paths in `_EXEMPT_PATHS`. `_EXEMPT_PATHS` is a `frozenset[str]` of paths (`/health`, `/docs`, `/openapi.json`, `/redoc`), so the exemption is path-scoped, not method-scoped: every HTTP method on `/health` is exempt, not only `GET`. The remaining three are defensive entries that FastAPI never includes in the schema anyway.
+- Walks every path operation and attaches `security: [{BearerAuth: []}]` — except for paths in `_EXEMPT_PATHS`. `_EXEMPT_PATHS` is a `frozenset[str]` of paths (`/health`, `/ready`), so the exemption is path-scoped, not method-scoped: every HTTP method on `/health` is exempt, not only `GET`. `/docs`, `/redoc` and `/openapi.json` are not in the set; with `[server].docs_enabled = true` the middleware exempts them through `DOCS_PATHS`, and FastAPI never includes them in the schema anyway.
 
 The `version` field of the OpenAPI document is the package version resolved through `importlib.metadata`. It tracks the CalVer release; it is not separately maintained.
 

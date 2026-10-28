@@ -94,16 +94,16 @@ curl http://127.0.0.1:8765/health
 
 `/health` answers `200` as soon as the process is up, but `/ready` answers `503` until storage is connected, the startup model warm-up and the background model validation finished and the startup sync finished — poll `/ready` until it answers `200` before sending traffic.
 
-Interactive API explorer:
+Interactive API explorer (only when `[server].docs_enabled = true`; off by default):
 
 ```
 http://127.0.0.1:8765/docs
 ```
 
-Machine-readable schema (the authoritative REST contract):
+Machine-readable schema (the authoritative REST contract; needs the bearer token unless `[server].docs_enabled = true`):
 
-```
-http://127.0.0.1:8765/openapi.json
+```bash
+curl -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" http://127.0.0.1:8765/openapi.json
 ```
 
 ## 6. Hit `/search`

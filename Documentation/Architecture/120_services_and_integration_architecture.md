@@ -10,7 +10,7 @@
 
 ## Principles
 
-1. **One middleware class, two transports.** REST and MCP each instantiate `APIKeyMiddleware` (`server/middleware_auth.py`). `_EXEMPT_PATHS` is `{"/health", "/docs", "/openapi.json", "/redoc"}`; per `server/app.py` comments, only `/health` is a real schema exemption — the other three are defensive listings (FastAPI never includes them in the OpenAPI schema). As of D9 both factories are wired with `namespaces=config.namespaces`, so per-namespace TOML keys authenticate identically over REST and MCP.
+1. **One middleware class, two transports.** REST and MCP each instantiate `APIKeyMiddleware` (`server/middleware_auth.py`). `_EXEMPT_PATHS` is `{"/health", "/ready"}`; `/docs`, `/openapi.json` and `/redoc` (`DOCS_PATHS`) join the exempt set only when `[server].docs_enabled = true`. As of D9 both factories are wired with `namespaces=config.namespaces`, so per-namespace TOML keys authenticate identically over REST and MCP.
 2. **Sync edges write to the same state as async edges.** A watcher-triggered reindex and a `POST /collections/{name}/reindex` end up calling the same pipeline code paths.
 3. **OpenAPI is the contract.** `GET /openapi.json` is authoritative for REST; breaking changes are recorded in `BREAKING.md`. See [600_api_reference_or_public_interface.md](600_api_reference_or_public_interface.md).
 4. **Long-running work is jobified.** Anything that can exceed an HTTP timeout (ingest, add-collection, reindex) returns `202 Accepted` with a `job_id` instead of blocking.
