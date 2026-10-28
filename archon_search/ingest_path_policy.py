@@ -6,8 +6,11 @@ from pathlib import Path
 
 from archon_search._path_safety import IngestPathPolicy
 from archon_search.config import SearchConfig, get_default_config_path
-from archon_search.key_manager import KeyStore, get_key_file
+from archon_search.jobs.model import get_jobs_file
+from archon_search.key_manager import KeyStore, get_key_file, get_keys_file
 from archon_search.paths import get_data_dir
+from archon_search.platform.service import get_secrets_env_file
+from archon_search.sync_suppression import get_sync_suppressed_file
 
 logger = logging.getLogger(__name__)
 
@@ -17,13 +20,23 @@ def ingest_path_policy(config: SearchConfig, config_path: Path | None = None) ->
 
     Denied: the data directory and the directories the server keeps its own state in (the LanceDB directory, the
     telemetry log directory and the backup directory — they may sit outside the data directory), and the exact
-    files holding secrets or the configuration (the key file, the config file at *config_path* or its default
-    location, the log file). ``[ingest].allowed_roots`` becomes the scope a client-supplied path must lie in.
+    files holding secrets, the configuration or the server's state (the key file, ``keys.json``, ``.secrets.env``,
+    the config file at *config_path* or its default location, the job store file, the sync-suppression sentinel,
+    the log file). The data-directory files are listed one by one because a hard link to one of them, placed
+    outside every denied directory, is not under *deny_roots* but is still that file's inode.
+    ``[ingest].allowed_roots`` becomes the scope a client-supplied path must lie in.
     """
     state_dirs = [get_data_dir(), Path(config.db_path).expanduser(), Path(config.telemetry.log_dir).expanduser()]
     if config.backup.output_dir:
         state_dirs.append(Path(config.backup.output_dir).expanduser())
-    state_files = [get_key_file(), config_path if config_path is not None else get_default_config_path()]
+    state_files = [
+        get_key_file(),
+        get_keys_file(),
+        get_secrets_env_file(),
+        get_jobs_file(),
+        get_sync_suppressed_file(),
+        config_path if config_path is not None else get_default_config_path(),
+    ]
     if config.log_file:
         state_files.append(Path(config.log_file).expanduser())
     return IngestPathPolicy(

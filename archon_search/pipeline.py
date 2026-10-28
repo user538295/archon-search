@@ -326,6 +326,7 @@ def _discover_ingest_files(
     segments = tuple(glob_pattern.split("/"))
     files: list[Path] = []
     denied = 0
+    directory_cache: dict[Path, frozenset[tuple[int, int]] | None] = {}
     for directory, subdirectories, names in os.walk(root):
         subdirectories[:] = [
             name for name in subdirectories
@@ -341,7 +342,7 @@ def _discover_ingest_files(
             if file_path.suffix.lower() in _BINARY_EXTENSIONS or file_path.name.endswith(".acl"):
                 continue
             try:
-                policy.check_secrets(file_path)
+                policy.check_secrets(file_path, directory_cache=directory_cache)
             except PathUnsafeError:
                 denied += 1
                 continue
@@ -699,6 +700,7 @@ class SearchPipeline:
         chunk_ttl_seconds: int | None = None,
         chunk_scopes: list[str] | None = None,
         _access_checked: bool = False,
+        _directory_cache: dict[Path, frozenset[tuple[int, int]] | None] | None = None,
     ) -> IngestResult:
         # Ownership before anything else (the parse and the embed are the expensive part, and a foreign namespace
         # must not get either, nor touch the owner's lock): a batch caller checked once for all its files already.
@@ -713,7 +715,7 @@ class SearchPipeline:
         # Never read the server's own state or credentials, whoever configured the path (operator-trusted collection
         # paths included); only the client-path scope (``allowed_roots``) is skipped for them.
         try:
-            self._path_policy.check_secrets(path)
+            self._path_policy.check_secrets(path, directory_cache=_directory_cache)
         except PathUnsafeError:
             logger.warning("refusing to ingest a file in a denied location: %s", path)
             return IngestResult(
@@ -1260,6 +1262,7 @@ class SearchPipeline:
             collection, chunk_ttl_seconds, namespace=namespace
         )
 
+        directory_cache: dict[Path, frozenset[tuple[int, int]] | None] = {}
         for done_count, file_path in enumerate(files, start=1):
             result = await self.ingest_file(
                 file_path,
@@ -1272,6 +1275,7 @@ class SearchPipeline:
                 chunk_ttl_seconds=effective_batch_ttl,
                 chunk_scopes=chunk_scopes,
                 _access_checked=True,
+                _directory_cache=directory_cache,
             )
             results.append(result)
             if on_file_complete is not None and result.status == "ok":

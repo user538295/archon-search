@@ -785,6 +785,11 @@ def get_key_file() -> Path:
     return get_data_dir() / ".search.env"
 
 
+def get_keys_file() -> Path:
+    """Return the ``keys.json`` path of the durable key store, resolved fresh on every call from ``get_data_dir()``."""
+    return get_data_dir() / "keys.json"
+
+
 def load_or_generate_key() -> tuple[str, str]:
     """Return (key, source). Source is 'env var', 'file: ...', or 'auto-generated'.
 

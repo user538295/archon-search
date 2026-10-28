@@ -139,6 +139,63 @@ _PEM_ARMOUR_PREFIX: Final[bytes] = b"-----BEGIN"
 _PEM_PROBE_BYTES: Final[int] = 128
 
 
+def _is_secret_name(name: str) -> bool:
+    """Whether the file name *name* (any case) matches one of :data:`_SECRET_FILE_PATTERNS`."""
+    folded = name.casefold()
+    return any(fnmatch.fnmatchcase(folded, pattern) for pattern in _SECRET_FILE_PATTERNS)
+
+
+_DirectoryCache = dict[Path, "frozenset[tuple[int, int]] | None"]
+
+
+def _secret_identities(directory: Path) -> frozenset[tuple[int, int]] | None:
+    """``(st_dev, st_ino)`` of every regular file in *directory* named like a credential or being a PEM ``*.key``.
+
+    One listing, no recursion; only a credential-named or ``*.key`` entry is stat'ed or opened. ``None`` when the
+    directory cannot be listed.
+    """
+    identities: set[tuple[int, int]] = set()
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if not (_is_secret_name(entry.name) or entry.name.casefold().endswith(_KEY_FILE_SUFFIX)):
+                    continue
+                try:
+                    info = os.lstat(entry.path)  # not ``entry.stat()``: that has no inode or device on Windows
+                except FileNotFoundError:
+                    continue  # the entry vanished between the listing and the stat (an editor's temp file)
+                if stat.S_ISREG(info.st_mode) and (_is_secret_name(entry.name) or _is_pem_key_file(directory / entry.name)):
+                    identities.add((info.st_dev, info.st_ino))
+    except OSError:
+        return None
+    return frozenset(identities)
+
+
+def _has_secret_named_hard_link(path: Path, cache: _DirectoryCache | None = None) -> bool:
+    """Whether *path* is a regular file with a hard link, in its own directory, whose name is a credential name.
+
+    A hard link is only a second directory entry for one inode, so no name check on *path* can see that ``hard.md``
+    is ``.env``. Costs one ``stat``, and, only for a regular file whose link count is above 1, one listing of
+    *path*'s directory (no recursion), made once per directory when the caller passes a *cache* shared across the
+    files of one walk: an entry with the same device and inode whose name matches :data:`_SECRET_FILE_PATTERNS`,
+    or is a PEM ``*.key``, counts. A hard link in a *different* directory is not looked for. ``False`` for a path
+    that is missing or not a regular file; ``True`` when the directory cannot be listed to find out.
+    """
+    try:
+        info = os.stat(path)
+    except OSError:
+        return False
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink <= 1:
+        return False
+    if cache is None:
+        identities = _secret_identities(path.parent)
+    else:
+        if path.parent not in cache:
+            cache[path.parent] = _secret_identities(path.parent)
+        identities = cache[path.parent]
+    return identities is None or (info.st_dev, info.st_ino) in identities
+
+
 def _is_pem_key_file(path: Path) -> bool:
     """Whether *path* is a ``*.key`` file that is, or may be, a PEM private key.
 
@@ -210,25 +267,33 @@ class IngestPathPolicy:
     Locations are compared by file identity (device and inode), not by spelling: a symlink, a hard link, a
     different letter case on a case-insensitive filesystem or a bind mount of a denied location is still that
     location. Paths are resolved first, so a symlink cannot smuggle a denied target in under an allowed name.
+    A credential-named file (``.env``, ``id_rsa``) is denied by name, not by identity, so a hard link to it is
+    recognised only when the credential-named link sits in the same directory (see :meth:`check_secrets`).
     """
 
     deny_roots: tuple[Path, ...] = ()
     deny_files: tuple[Path, ...] = ()
     allowed_roots: tuple[Path, ...] = ()
 
-    def check_secrets(self, path: Path, *, probe_content: bool = True) -> None:
+    def check_secrets(self, path: Path, *, probe_content: bool = True, directory_cache: _DirectoryCache | None = None) -> None:
         """Raise ``PathUnsafeError("denied_location")`` when *path* is, or lies under, a location that is never ingested.
 
-        *probe_content* opens a ``*.key`` file to tell a PEM key from a Keynote deck; callers whose path is not yet
-        confined to the allowed roots pass ``False`` so the probe is no existence/content oracle.
+        A hard link to a file in *deny_files* (or a system file) is caught by device and inode wherever it lies. A
+        hard link to a credential-named file (``.env``, ``id_rsa``, ...) is known only by name, so it is caught only
+        when the other name is in the **same directory** as *path* (one listing, made only for a regular file with
+        a link count above 1); a link to such a file from a different directory is not detected.
+
+        *probe_content* opens a ``*.key`` file to tell a PEM key from a Keynote deck and looks for such a
+        same-directory hard link; callers whose path is not yet confined to the allowed roots pass ``False`` so
+        neither is an existence/content oracle. *directory_cache* lets a walk over many files share one listing
+        per directory (pass the same dict for every file; it is not refreshed, so keep it per walk).
         """
         resolved = path.resolve(strict=False)
         if _has_secret_directory(resolved.parts):
             raise PathUnsafeError(DENIED_LOCATION)
-        name = resolved.name.casefold()
-        if any(fnmatch.fnmatchcase(name, pattern) for pattern in _SECRET_FILE_PATTERNS) or (
-            probe_content and _is_pem_key_file(resolved)
-        ):
+        if _is_secret_name(resolved.name) or (probe_content and _is_pem_key_file(resolved)):
+            raise PathUnsafeError(DENIED_LOCATION)
+        if probe_content and _has_secret_named_hard_link(resolved, directory_cache):
             raise PathUnsafeError(DENIED_LOCATION)
         denied_dirs = _identities((*self.deny_roots, *_SYSTEM_DENY_DIRS))
         if any(identity in denied_dirs for identity in map(_file_identity, (resolved, *resolved.parents)) if identity):

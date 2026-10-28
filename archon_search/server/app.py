@@ -59,6 +59,7 @@ from archon_search.key_manager import (
     KeyRecord,
     KeyStore,
     KeyStoreUnreadableError,
+    get_keys_file,
     hash_token,
     load_or_generate_key,
 )
@@ -1094,7 +1095,7 @@ def create_app(
     # The mounted MCP app receives this same instance (app.state.key_store), so REST and
     # MCP rotations share its rotation_lock; cross-process visibility is achieved because
     # active_keys() re-reads from disk on every call.
-    key_store = KeyStore(get_data_dir() / "keys.json")
+    key_store = KeyStore(get_keys_file())
 
     # Build synthetic KeyRecord objects from the TOML [namespaces] map once at
     # construction time. The actual write to keys.json happens inside the lifespan
