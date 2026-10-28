@@ -614,7 +614,7 @@ async def test_eager_load_warns_when_models_exceed_cache_size(
         with TestClient(app):
             pass
 
-    assert "exceed embedder_cache_size=1" in caplog.text
+    assert "distinct models exceed embedder_cache_size (embedder_cache_size=1" in caplog.text
 
 
 @pytest.mark.asyncio

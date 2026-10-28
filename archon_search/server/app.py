@@ -654,9 +654,10 @@ def create_app(
             evictable_models = distinct_models - {config.embedding_model}
             if len(evictable_models) > config.embedder_cache_size:
                 logger.warning(
-                    "eager_load_embedders: %d per-collection models other than the default exceed "
-                    "embedder_cache_size=%d — some preloaded models will be evicted before first use",
-                    len(evictable_models),
+                    "eager_load_embedders: %d distinct models exceed embedder_cache_size "
+                    "(embedder_cache_size=%d non-default slots; the default model is pinned and counted in N) "
+                    "— some preloaded models will be evicted before first use",
+                    len(distinct_models),
                     config.embedder_cache_size,
                 )
         else:
