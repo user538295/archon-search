@@ -584,6 +584,27 @@ def _claim_collection(job: ImportJob, store: JobStore, resume: _ResumePoint, doc
     )
 
 
+def is_ingesting_cancel_leftover(store: JobStore, name: str, namespace: str) -> bool:
+    """Whether *name*'s stored collection is the partial one an import cancelled during ``ingesting`` left behind.
+
+    Its meta row cannot tell it from a complete collection: the import's first batch claims the collection and writes
+    a meta row with real counts and centroid, exactly as an ingest does. The cancelled job is the record: an import
+    of *name* in *namespace* that ended ``CANCELLED`` in its ``ingesting`` phase, whose claim no later import of the
+    collection has revoked (a ``force_overwrite`` re-import does, via ``_claim_collection``). A cancel during the
+    ``indexing`` warm-up leaves a complete collection and is not matched.
+    """
+    return any(
+        isinstance(job, ImportJob)
+        and job.collection == name
+        and job.namespace == namespace
+        and job.status == JobStatus.CANCELLED
+        and job.collection_claimed
+        and not job.collection_claim_revoked
+        and (job.progress or {}).get("phase") == "ingesting"
+        for job in store.list()
+    )
+
+
 async def _store_batch_reporting_overlap(
     search_store: SearchStore,
     collection: str,
@@ -1003,7 +1024,13 @@ async def import_collection(
     # Step 5: Check collection existence vs force_overwrite. Only the caller's own collection is visible here: a name
     # another namespace owns is refused by the import job itself, with a fixed text that names no owner.
     existing_meta = await search_store.get_collection_meta(name, ns)
-    if existing_meta is not None and not body.force_overwrite:
+    # A partial collection left by a mid-``ingesting`` cancel is let through: the import job refuses it with the
+    # documented ``already exists`` error (``_ensure_collection_absent``).
+    if (
+        existing_meta is not None
+        and not body.force_overwrite
+        and not is_ingesting_cancel_leftover(store, name, ns)
+    ):
         return JSONResponse(
             {"error": "collection_exists", "detail": f"Collection {name!r} already exists; use force_overwrite=true to overwrite"},
             status_code=409,

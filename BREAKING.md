@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — `POST /collections/{name}/import` and MCP `import_collection` accept a re-run after an import cancelled during `ingesting` (2026-10-28)
+
+**Surface**: `POST /collections/{name}/import` (status `409` → `202`), MCP `import_collection` (`collection_exists` error → a job), and `archon-search import --wait` (exit `1` → `2`), only for a collection left by an import that was cancelled during `ingesting`, without `force_overwrite`.
+
+**What changed:** a re-run without `force_overwrite` was refused up front with `409` `collection_exists` because the cancelled import had already written a meta row. The documented contract is that this re-run is accepted (`202`) and its job ends `FAILED` with `collection '<name>' already exists; use force_overwrite=true to overwrite`, so `import --wait` exits `2`. The route now recognises the leftover from the cancelled import's job record (same collection and namespace, `CANCELLED`, phase `ingesting`, claim not revoked) and lets the request through; the job-time guard still refuses to touch an existing collection. A complete collection, and a collection left by an import cancelled during the warm-up, still get `409`. The job record is evicted 7 days after its last update; after that the re-run gets `409` again.
+
+**Migration**: a script that re-runs an import after cancelling it and expects `409` must read the job's `FAILED` `error` instead; either way, pass `force_overwrite=true` (`--force-overwrite`) to restore a complete copy.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — authorization: admin scope for key, sync, backup, maintenance, telemetry and collection-create routes; a collection name belongs to one namespace; API-key format rules; MCP tools fail closed (2026-10-25)
 
 **Surface**: `POST /keys`, `GET /keys`, `DELETE /keys/{key_id}`, `POST /keys/rotate`, `POST /sync`, `POST /backup/trigger`, `POST /maintenance/trigger`, `GET /telemetry/*`, `POST /collections/` (status `403`); the MCP `create_key` (new `admin` parameter), `revoke_key` and `rotate_key` tools (`forbidden`); `POST /ingest`, `POST /collections/{name}/import` and the MCP `ingest_file`, `ingest_directory`, `delete_document` tools on a collection another namespace owns; `ARCHON_SEARCH_API_KEY`, the key file and the `[namespaces]` tokens (startup `ConfigError`); every MCP tool call without an authenticated request; the graph routes and `GET /collections/{name}/documents` (ACL filtering); the Python names `validate_token_and_get_namespace` and `KeyRecord`.

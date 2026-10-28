@@ -147,6 +147,7 @@ from archon_search.server.routes_explain import (
     RoutingCandidate,
     RoutingExplain,
 )
+from archon_search.server.routes_export import is_ingesting_cancel_leftover
 from archon_search.server.schemas import (
     GRAPH_COMMUNITIES_NOT_BUILT_CODE,
     INVALID_SCOPE_FILTER_CODE,
@@ -1844,8 +1845,13 @@ def create_app(
         except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("import_collection: collection lookup failed")
         # Only the caller's own collection is visible here: a name another namespace owns is refused by the import
-        # job itself, with a fixed text that names no owner.
-        if existing_meta is not None and not force_overwrite:
+        # job itself, with a fixed text that names no owner. A partial collection left by a mid-``ingesting`` cancel
+        # is let through like on REST: the import job refuses it with the documented ``already exists`` error.
+        if (
+            existing_meta is not None
+            and not force_overwrite
+            and not is_ingesting_cancel_leftover(job_store, collection, _import_ns)
+        ):
             return McpErrorResponse(
                 error=f"collection {collection!r} already exists; use force_overwrite=True to overwrite",
                 code="collection_exists",
