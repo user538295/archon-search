@@ -56,7 +56,7 @@ The guard fires **before** parsing at two levels (`archon_search/config.py`, `pi
 
 The CLI performs no local size check — it prints the server's 413 message and exits `1`.
 
-**Other per-file limits.** A PDF or image conversion is bounded by `[ingest].parse_timeout_seconds` (300) plus `parse_timeout_seconds_per_mb` (10) per MiB of the file; on timeout that one document fails with a sanitized error and the parse worker is replaced. A zip-based Office file (docx, pptx, xlsx, epub) is refused before it is opened when its central directory lists more than `max_zip_entries` (10000) entries or more than `max_zip_uncompressed_mb` (512) MiB uncompressed. Only regular files are read: a symlink, FIFO or device is refused. On macOS docling runs on the CPU, so a large scanned PDF is slow (about 3.8 s per MiB measured on an Apple M-series Mac).
+**Other per-file limits.** A PDF or image conversion is bounded by `[ingest].parse_timeout_seconds` (300) plus `parse_timeout_seconds_per_mb` (10) per MiB of the file; on timeout that one document fails with a sanitized error and the parse worker is replaced. A zip-based Office file (docx, pptx, xlsx, epub) is refused before it is opened when its central directory lists more than `max_zip_entries` (10000) entries or more than `max_zip_uncompressed_mb` (512) MiB uncompressed. Only regular files are read: a symlink to a file given as the ingest `path`, a FIFO or a device is refused (a FIFO or device is reported as not a file or directory). On macOS docling runs on the CPU, so a large scanned PDF is slow (about 3.8 s per MiB measured on an Apple M-series Mac).
 
 **What a directory ingest walks.** Directory ingest does not index hidden directories (names starting with `.`; it only opens credential ones such as `.ssh` to count their files as skipped), `node_modules`, `__pycache__`, `venv` or `site-packages`, and files in them are not indexed (this changed on 2026-10-25; point `path` at the file itself or at a directory outside them to index such files). A tree with more than `[ingest].max_discovered_files` (100000) candidate files is refused. One INFO line reports how many files were skipped because they sit in a location the server never reads.
 
@@ -107,6 +107,7 @@ To let a team ingest from `/srv/docs/team-a` on a fresh install:
    | `allowed_roots` empty | `400` `{"detail": "path is unsafe: path-based ingest by this API key needs the operator to set [ingest].allowed_roots; send the content as inline documents instead"}` | `{"error": "<same text>", "code": "path_unsafe"}` |
    | Path outside the roots | `400` `"path is unsafe: outside_allowed_roots"` | `{"error": "path is unsafe: the path is outside the directories this server is allowed to ingest from", "code": "path_unsafe"}` |
    | Denied location | `400` `"path is unsafe: denied_location"` | `{"error": "path is unsafe: this location is never ingested (server state, credentials, system files)", "code": "path_unsafe"}` |
+   | Symlink as `path` (a symlink to a file or a dangling link; checked after the two rules above, only the last component, so a symlinked parent or a symlinked directory is fine) | `400` `"path is unsafe: symlink_path"` | `{"error": "path is unsafe: the path is a symlink — give the real file or directory path", "code": "path_unsafe"}` |
 
    The same text and code apply to a file *inside* a root that is a denied location. Paths named in `[collections]` are operator-trusted: they skip `allowed_roots`, but the deny list still applies.
 
@@ -131,7 +132,7 @@ archon-search ingest --path /Users/me/docs --collection docs --wait
 
 | Flag | Default | Effect |
 | --- | --- | --- |
-| `--path PATH` | **required** | File or directory to ingest (resolved to an absolute path). Omitting it exits `1`. |
+| `--path PATH` | **required** | File or directory to ingest (resolved to an absolute path; a symlink is resolved by the CLI before it is sent, so `ingest` follows it, unlike a raw `POST /ingest` whose `path` is a symlink to a file, which is refused). Omitting it exits `1`. |
 | `--collection NAME` | `path_to_collection_name(path)` | Override the derived collection name. |
 | `--wait` | off | Poll `GET /jobs/{id}` until terminal and print progress. Exits `1` on a non-DONE terminal state. |
 | `--api-url URL` | `http://localhost:8765` | Base URL of the server. |
@@ -168,6 +169,7 @@ archon-search collection add /Users/me/docs --wait
 
 - `--wait` — poll `GET /jobs/{id}` until terminal; prints `Collection '<name>' ingested successfully.` on DONE, exits `1` on FAILED. Ctrl-C during `--wait` cancels the local poll only; the server job keeps running.
 - If the path/name is already registered the server returns **409** and the CLI exits `1`.
+- A symlink to a file as `<path>` is refused: the CLI sends the path as typed, and the server answers `400` `path is unsafe: symlink_path` (exit `1`). A symlink to a directory is accepted.
 - If the path does not exist, the server still accepts the request (**202**) and creates a collection entry, but the background ingest job transitions to **FAILED** with `"path does not exist or is not a file/directory: <path>"`, `<path>` being the request's `path` as the server received it (the server's own `~` expansion and symlink resolution are not applied to the message) (other ingest failures report `"ingest failed; see the server log for details"`). The collection remains registered (with `docs=0`); use `collection remove` to clean it up.
 - There is no "pin" flag — add pinned collections to `pinned_collections` in TOML manually. The request body accepts only `path` and optional `embedding_model` (name is always server-derived).
 

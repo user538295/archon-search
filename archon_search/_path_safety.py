@@ -38,6 +38,8 @@ MANIFEST_MEMBER: Final[str] = "manifest.json"
 DOCUMENTS_MEMBER: Final[str] = "documents.jsonl"
 ARCHIVE_READ_MODE: Final = "r:gz"
 OUTSIDE_ALLOWED_ROOTS: Final[str] = "outside_allowed_roots"
+# The ingest path itself (its last component) is a symlink to a non-directory: only regular files are read.
+SYMLINK_PATH: Final[str] = "symlink_path"
 ALLOWED_ROOTS_REQUIRED: Final[str] = "allowed_roots_required"
 # The wire text for ``ALLOWED_ROOTS_REQUIRED``: fixed (it names no path) and pointing at the operator's remedy.
 ALLOWED_ROOTS_REQUIRED_DETAIL: Final[str] = (
@@ -339,12 +341,28 @@ def validate_ingest_source(raw: str, policy: IngestPathPolicy, *, admin: bool) -
     needs only :func:`validate_ingest_path`. *admin* is whether the caller's key is an admin key.
 
     Raises:
-        PathUnsafeError: ``denied_location``, ``outside_allowed_roots`` or ``allowed_roots_required``, or any reason
-            of :func:`validate_ingest_path`.
+        PathUnsafeError: ``denied_location``, ``outside_allowed_roots``, ``allowed_roots_required``, ``symlink_path``
+            (the path is a symlink to a non-directory), or any reason of :func:`validate_ingest_path`.
     """
     resolved = validate_ingest_path(raw)
     policy.check_client_path(resolved, admin=admin)
+    # After the policy, so a link to a denied or out-of-roots file keeps its documented reason.
+    if _is_file_symlink(Path(raw).expanduser()):
+        raise PathUnsafeError(SYMLINK_PATH)
     return resolved
+
+
+def _is_file_symlink(path: Path) -> bool:
+    """Whether *path*'s final component is a symlink to anything but a directory (a dangling link counts).
+
+    A symlinked ancestor (``/var -> /private/var``) and a symlinked directory root (``/tmp``, ``~/notes``) are fine:
+    the target is already policed and the directory walk never follows a symlinked entry. An unreadable path
+    (``EACCES``, ``ENAMETOOLONG``) is not a symlink here; the later read reports it.
+    """
+    try:
+        return path.is_symlink() and not path.is_dir()
+    except OSError:
+        return False
 
 
 def validate_glob_pattern(pattern: str) -> str:

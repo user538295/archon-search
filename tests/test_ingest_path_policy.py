@@ -12,6 +12,7 @@ from archon_search._path_safety import (
     ALLOWED_ROOTS_REQUIRED,
     DENIED_LOCATION,
     OUTSIDE_ALLOWED_ROOTS,
+    SYMLINK_PATH,
     IngestPathPolicy,
     PathUnsafeError,
     unsafe_path_detail,
@@ -467,3 +468,46 @@ def test_unsafe_glob_patterns_are_refused(pattern: str, reason: str) -> None:
         validate_glob_pattern(pattern)
 
     assert raised.value.reason == reason
+
+
+def test_a_symlink_to_a_file_is_refused_after_the_policy(scoped: IngestPathPolicy, tmp_path: Path) -> None:
+    inside = _write(tmp_path / "corpus" / "real.md")
+    link = tmp_path / "corpus" / "link.md"
+    link.symlink_to(inside)
+    outside_link = tmp_path / "outside-link.md"
+    outside_link.symlink_to(_write(tmp_path / "other" / "real.md"))
+
+    with pytest.raises(PathUnsafeError) as refused:
+        validate_ingest_source(str(link), scoped, admin=True)
+    assert refused.value.reason == SYMLINK_PATH
+    with pytest.raises(PathUnsafeError) as outside:
+        validate_ingest_source(str(outside_link), scoped, admin=True)
+    assert outside.value.reason == OUTSIDE_ALLOWED_ROOTS
+
+
+def test_a_dangling_symlink_is_refused(scoped: IngestPathPolicy, tmp_path: Path) -> None:
+    link = tmp_path / "corpus" / "dangling.md"
+    link.symlink_to(tmp_path / "corpus" / "missing.md")
+
+    with pytest.raises(PathUnsafeError) as refused:
+        validate_ingest_source(str(link), scoped, admin=True)
+    assert refused.value.reason == SYMLINK_PATH
+
+
+@pytest.mark.parametrize("suffix", ["", "/"])
+def test_a_symlink_to_a_directory_is_accepted(scoped: IngestPathPolicy, tmp_path: Path, suffix: str) -> None:
+    real = tmp_path / "corpus" / "real"
+    real.mkdir()
+    link = tmp_path / "corpus" / "linked"
+    link.symlink_to(real, target_is_directory=True)
+
+    assert validate_ingest_source(str(link) + suffix, scoped, admin=True) == real.resolve()
+
+
+def test_a_non_admin_symlink_without_roots_keeps_allowed_roots_required(policy: IngestPathPolicy, tmp_path: Path) -> None:
+    link = tmp_path / "link.md"
+    link.symlink_to(_write(tmp_path / "real.md"))
+
+    with pytest.raises(PathUnsafeError) as refused:
+        validate_ingest_source(str(link), policy, admin=False)
+    assert refused.value.reason == ALLOWED_ROOTS_REQUIRED

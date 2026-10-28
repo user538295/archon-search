@@ -203,8 +203,8 @@ def test_ingest_route_202_documents_payload_no_413(tmp_path: Path) -> None:
     assert response.status_code == 202
 
 
-def test_ingest_route_413_symlink_follows_target_size(tmp_path: Path) -> None:
-    """Symlink to an oversized file → 413 (route pre-check follows symlink via os.path.getsize)."""
+def test_ingest_route_symlink_path_is_refused_before_size_check(tmp_path: Path) -> None:
+    """A symlink as ``path`` → 400 ``symlink_path`` (S848): it is neither followed nor sized, so never 413."""
     target = tmp_path / "big.pdf"
     target.write_bytes(b"x")
     symlink = tmp_path / "link.pdf"
@@ -215,7 +215,8 @@ def test_ingest_route_413_symlink_follows_target_size(tmp_path: Path) -> None:
     with patch("os.path.getsize", return_value=2 * ONE_MB):
         response = client.post("/ingest", json={"collection": "docs", "path": str(symlink)})
 
-    assert response.status_code == 413
+    assert response.status_code == 400
+    assert response.json()["detail"] == "path is unsafe: symlink_path"
 
 
 # ---------------------------------------------------------------------------

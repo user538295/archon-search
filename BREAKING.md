@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — a symlink given as an ingest `path` is refused (2026-10-28)
+
+**Surface**: `POST /ingest`, `POST /collections/` (with `path`), MCP `ingest_file` and `ingest_directory`.
+
+**What changed:** a `path` whose last component is a symlink to a file used to be resolved and its target ingested. It is now refused with `400` `path is unsafe: symlink_path` (MCP `path_unsafe`, `path is unsafe: the path is a symlink — give the real file or directory path`). A symlink to a directory is still accepted (a symlinked directory root such as macOS `/tmp` or an `allowed_roots` entry stays usable; the directory walk never follows a symlinked entry). The `denied_location` and `outside_allowed_roots` checks still run first on the link's target. Symlinked parent directories and symlinks to directories are unaffected, and paths named in `[collections]` do not go through this check.
+
+**Migration**: send the real path of the file. `archon-search ingest --path` resolves the path on the client before sending, so the CLI `ingest` is not affected; `archon-search collection add` sends the path as typed.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — `POST /collections/{name}/import` and MCP `import_collection` accept a re-run after an import cancelled during `ingesting` (2026-10-28)
 
 **Surface**: `POST /collections/{name}/import` (status `409` → `202`), MCP `import_collection` (`collection_exists` error → a job), and `archon-search import --wait` (exit `1` → `2`), only for a collection left by an import that was cancelled during `ingesting`, without `force_overwrite`.

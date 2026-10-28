@@ -189,7 +189,7 @@ The view token is valid for 60 seconds, scoped to one namespace and one collecti
 ```python
 resp = httpx.post(f"{base}/ingest", headers=headers, json={"collection": "docs", "path": "/srv/docs/handbook"})
 if resp.status_code == 400:
-    # "path is unsafe: denied_location" / "outside_allowed_roots" /
+    # "path is unsafe: denied_location" / "outside_allowed_roots" / "symlink_path" (the path is a symlink to a file: send the real path) /
     # "path is unsafe: path-based ingest by this API key needs the operator to set [ingest].allowed_roots; ..."
     # -> ask the operator to set [ingest].allowed_roots, or send the text as inline `documents`
     ...
