@@ -156,18 +156,16 @@ def test_run_summaryBeforeProbe_theOutcomeLineNamesWhatTheCheckSettledOn(
 
 
 @pytest.mark.parametrize(
-    ("gpu", "enable_gpu", "dry_run", "expected"),
+    ("gpu", "enable_gpu", "expected"),
     [
-        (GpuType.METAL, True, False, [f"{_APPLE_GPU_LABEL} — checked after you confirm; CPU if it fails"]),
-        (GpuType.CUDA, True, False, ["CUDA — checked after you confirm; CPU if it fails"]),
-        (GpuType.CUDA, True, True, ["CUDA"]),
-        (GpuType.METAL, True, True, [_APPLE_GPU_LABEL]),
-        (GpuType.METAL, False, False, ["CPU"]),
-        (GpuType.CUDA, False, False, ["CPU"]),
-        (GpuType.NONE, True, False, ["CPU"]),
+        (GpuType.METAL, True, [f"{_APPLE_GPU_LABEL} — checked after you confirm; CPU if it fails"]),
+        (GpuType.CUDA, True, ["CUDA — checked after you confirm; CPU if it fails"]),
+        (GpuType.METAL, False, ["CPU"]),
+        (GpuType.CUDA, False, ["CPU"]),
+        (GpuType.NONE, True, ["CPU"]),
     ],
 )
 def test_plannedDeviceLabels_namesOnlyWhatWillBeChecked(
-    gpu: GpuType, enable_gpu: bool, dry_run: bool, expected: list[str]
+    gpu: GpuType, enable_gpu: bool, expected: list[str]
 ) -> None:
-    assert _planned_device_labels(gpu, enable_gpu, dry_run) == expected
+    assert _planned_device_labels(gpu, enable_gpu) == expected

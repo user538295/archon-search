@@ -2323,7 +2323,7 @@ def test_wizard_prints_the_device_label_for_an_accepted_accelerator(
         rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
     assert rc == 0
-    assert "  Device:     Apple GPU (mps)" in capsys.readouterr().out
+    assert "  Device:     Apple GPU (mps)\n" in capsys.readouterr().out
 
 
 def test_wizard_disable_gpu_prewarms_cpu_over_a_previous_accelerator_config(tmp_path: Path) -> None:

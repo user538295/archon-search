@@ -149,17 +149,16 @@ _ACCELERATOR_DEVICES = frozenset({"mps", "cuda"})
 _GPU_CHECK_PENDING_NOTE = "— checked after you confirm; CPU if it fails"
 
 
-def _planned_device_labels(gpu: GpuType, enable_gpu: bool, dry_run: bool) -> list[str]:
+def _planned_device_labels(gpu: GpuType, enable_gpu: bool) -> list[str]:
     """The summary's `Device:` labels before Step 9 has probed anything.
 
-    A real Metal/CUDA install names the accelerator it will check, flagged as pending.
-    A dry run probes nothing, so it names the accelerator it would write, unflagged.
-    Anything else runs on CPU.
+    A Metal/CUDA install names the accelerator it will check, flagged as pending
+    (a dry run runs no check, so it is still pending). Anything else runs on CPU.
     """
     label = _ACCELERATOR_LABELS.get(gpu) if enable_gpu else None
     if label is None:
         return [_CPU_LABEL]
-    return [label if dry_run else f"{label} {_GPU_CHECK_PENDING_NOTE}"]
+    return [f"{label} {_GPU_CHECK_PENDING_NOTE}"]
 
 
 def _require_device_setting(device: str) -> None:
@@ -917,7 +916,7 @@ class BaseInstaller(ABC):
             from archon_search import key_manager as _key_manager
             print(_render_summary(
                 profile_name, prof, is_multilingual,
-                _planned_device_labels(gpu, enable_gpu, self.dry_run), features,
+                _planned_device_labels(gpu, enable_gpu), features,
                 db_path=str(Path(cfg.db_path).expanduser()),
                 host=features.host if features.host is not None else cfg.host,
                 port=features.port if features.port is not None else cfg.port,
