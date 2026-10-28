@@ -4,6 +4,8 @@ Without a cap the server buffers whatever a client sends: one inline ``documents
 that much memory before any validation runs. The cap is checked twice: the declared ``Content-Length`` is refused
 before a single body byte is read, and the bytes actually received are counted for bodies that declare no (or a
 wrong) length, such as chunked uploads.
+A streamed body the application has not read when it starts to answer (authentication refuses without reading) is
+counted and discarded up to the cap first, so an over-cap body is a 413 before a 401, without being buffered.
 
 A body that outgrows the cap mid-stream is reported to the application as a client disconnect, so no framework
 layer between this middleware and the route (Starlette's ``BaseHTTPMiddleware`` wraps errors raised while reading
@@ -25,6 +27,7 @@ REQUEST_TOO_LARGE_STATUS: Final[int] = 413
 REQUEST_BODY_TOO_LARGE_DETAIL: Final[str] = "request body too large"
 REQUEST_BODY_TOO_LARGE_CODE: Final[str] = "request_body_too_large"
 _CONTENT_LENGTH: Final[bytes] = b"content-length"
+_EXPECT: Final[bytes] = b"expect"
 _DISCONNECT: Final[dict[str, str]] = {"type": "http.disconnect"}
 
 
@@ -47,6 +50,11 @@ def _declared_length(scope: Scope) -> int | None:
     return None
 
 
+def _awaits_continue(scope: Scope) -> bool:
+    """True when the client announced ``Expect: 100-continue``: it uploads only after the server reads the body."""
+    return any(name == _EXPECT for name, _ in scope.get("headers", []))
+
+
 class BodySizeLimitMiddleware:
     """Refuses a request whose body exceeds *max_bytes* with a sanitized 413."""
 
@@ -67,6 +75,10 @@ class BodySizeLimitMiddleware:
         received = 0
         exceeded = False
         answered = False
+        body_complete = False
+        # A request without a usable Content-Length (chunked) is only measured as the application reads it, and an
+        # application that answers without reading (authentication) would otherwise let any amount through.
+        measure_unread = declared is None and not _awaits_continue(scope)
 
         async def refuse() -> None:
             nonlocal answered
@@ -75,7 +87,7 @@ class BodySizeLimitMiddleware:
                 await _too_large_response()(scope, receive, send)
 
         async def counting_receive() -> Message:
-            nonlocal received, exceeded
+            nonlocal received, exceeded, body_complete
             if exceeded:
                 return dict(_DISCONNECT)
             message = await receive()
@@ -84,13 +96,26 @@ class BodySizeLimitMiddleware:
                 if received > self._max_bytes:
                     exceeded = True
                     return dict(_DISCONNECT)
+                body_complete = not message.get("more_body", False)
+            else:
+                body_complete = True
             return message
 
+        async def measure_rest_of_body() -> None:
+            """Counts and discards the unread remainder; stops at the end of the body or once the cap is exceeded."""
+            while not body_complete and not exceeded:
+                await counting_receive()
+
         async def guarded_send(message: Message) -> None:
+            nonlocal answered
+            if message["type"] == "http.response.start" and measure_unread and not exceeded:
+                await measure_rest_of_body()
             if exceeded:
                 if message["type"] == "http.response.start":
                     await refuse()
                 return
+            if message["type"] == "http.response.start":
+                answered = True
             await send(message)
 
         try:
