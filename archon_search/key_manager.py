@@ -886,10 +886,10 @@ def _parse_key_file(key_file: Path) -> tuple[str | None, str | None]:
     if not key_file.exists():
         return None, None
 
-    # Attempt to tighten permissions if too wide
+    # Attempt to tighten permissions if too wide (a regular file only: chmod 600 on a directory would lock it)
     try:
         mode = os.stat(key_file).st_mode & PERMISSION_BITS
-        if mode != PRIVATE_FILE_MODE:
+        if mode != PRIVATE_FILE_MODE and key_file.is_file():
             _chmod_600(key_file)
     except OSError as exc:
         logger.warning("Could not check the permissions of %s: %s", key_file, exc)

@@ -42,6 +42,7 @@ def test_serve_refuses_an_unreadable_key_file_with_one_error_line(
     monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "archon-search.toml"))
     make_unreadable(key_file)
     before = sorted(p.name for p in tmp_path.iterdir())  # ``logs/`` appears later: configure_logging creates it
+    mode_before = key_file.stat().st_mode
 
     with patch("uvicorn.run") as uvicorn_run:
         result = CliRunner().invoke(main, ["serve"])
@@ -55,6 +56,7 @@ def test_serve_refuses_an_unreadable_key_file_with_one_error_line(
     uvicorn_run.assert_not_called()
     assert sorted(p.name for p in tmp_path.iterdir() if p.name != "logs") == before, "no backup, no new key file"
     if key_file.is_dir():
+        assert key_file.stat().st_mode == mode_before, "a directory at the key path is reported, never chmod'ed"
         assert [p.name for p in key_file.iterdir()] == ["keep.txt"]
     else:
         assert key_file.read_bytes() == NON_UTF8_BYTES
