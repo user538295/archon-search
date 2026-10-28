@@ -7,7 +7,7 @@ import math
 import os
 from collections.abc import Callable, Iterable
 from contextlib import nullcontext
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 from unittest import mock
@@ -1524,7 +1524,9 @@ def _make_mock_search_store_for_delete(collection_name: str, ns: str = "default"
     return mock_store
 
 
-_INGEST_JOB_TIMESTAMP = "2026-10-21T00:00:00Z"
+#: Taken at import time: the job store evicts terminal jobs 7 days after their last update, so a literal date turns
+#: every FAILED job built from it into a missing one once a week has passed.
+_INGEST_JOB_TIMESTAMP = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 #: Bound on each awaited step of the concurrent-request tests below: a hang fails the test instead of the run.
 _ASYNC_STEP_TIMEOUT_S = 5.0
 _TENANT_X_KEY = "x" * 64
