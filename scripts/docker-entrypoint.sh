@@ -185,4 +185,7 @@ else
 fi
 
 log "=== setup complete — handing off to: $* ==="
+# Everything the server (and the libraries it loads) writes under /data — models, xet chunk cache under $HOME,
+# logs, state — is owner-only. Set after the pip install so /pip-packages keeps its normal modes.
+umask 077
 exec "$@"

@@ -30,7 +30,7 @@ stat -f '%Lp' ~/.archon-search/.search.env  # macOS
 # Expected: 600
 ```
 
-The server creates the data directory and its subdirectories `0700` (and tightens existing ones inside the data directory) and writes the key file, `keys.json`, the job store, telemetry, logs and export/backup archives `0600`. A directory you point a setting at outside the data directory (`[logging].log_file`, `[telemetry].log_dir`, `[backup].output_dir`) keeps its own mode: check it. If the key file's mode has drifted, the loader retightens it on the next read (`archon_search/key_manager.py::_parse_key_file`), but verify explicitly during review.
+The server creates the data directory and its subdirectories `0700` (and tightens existing ones inside the data directory) and writes the key file, `keys.json`, the job store, telemetry, logs and export/backup archives `0600`. A directory you point a setting at outside the data directory (`[logging].log_file`, `[telemetry].log_dir`, `[backup].output_dir`) keeps its own mode: check it. The model cache (`<data dir>/models`) is filled by `huggingface_hub` under the process umask, so `model_store.py::_ensure_snapshot` makes it `0700` with its files `0600` (`_durable_io.restrict_tree_to_owner`) after every download and, on a cache hit, the first time a model loads while the directory is group- or world-accessible, so a volume or data directory created by an earlier version is fixed on the first start. If the key file's mode has drifted, the loader retightens it on the next read (`archon_search/key_manager.py::_parse_key_file`), but verify explicitly during review.
 
 **Backed by**: [`02_authentication_and_keys.md`](./02_authentication_and_keys.md) "File permissions"; `archon_search/_durable_io.py`.
 

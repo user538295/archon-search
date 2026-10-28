@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from archon_search._durable_io import PRIVATE_FILE_MODE
 from archon_search.install import (
     FASTTEXT_MODEL_URL,
     InstallError,
@@ -375,7 +376,7 @@ def test_download_fasttext_model_leaves_no_tmp_file_behind(tmp_path: Path):
 
 def test_download_fasttext_model_calls_atomic_write_bytes(tmp_path: Path):
     """Explicit proof the publish path routes through atomic_write_bytes with the
-    verified content, correct target, and mode=0o644 — the lint gate alone cannot
+    verified content, correct target, and the private file mode — the lint gate alone cannot
     prove this (it cannot catch a raw open()/write() replacement)."""
     fake_content = b"fake fasttext model" * 100
     target = tmp_path / "lid.176.ftz"
@@ -387,7 +388,7 @@ def test_download_fasttext_model_calls_atomic_write_bytes(tmp_path: Path):
     ) as mock_atomic_write:
         _download_fasttext_model(tmp_path)
 
-    mock_atomic_write.assert_called_once_with(target, fake_content, mode=0o644)
+    mock_atomic_write.assert_called_once_with(target, fake_content, mode=PRIVATE_FILE_MODE)
 
 
 def test_provisioner_satisfies_the_durable_write_lint_gate():

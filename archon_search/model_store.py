@@ -14,6 +14,7 @@ from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
+from archon_search._durable_io import ensure_private_dir, restrict_tree_to_owner
 from archon_search.model_specs import (
     CONFIG_FILE,
     TOKENIZER_FILE,
@@ -43,6 +44,8 @@ _INCOMPLETE_DETAIL = "the downloaded snapshot is missing required files"
 #: Longest exception text a download-failure log line carries.
 _LOG_MESSAGE_MAX_CHARS = 500
 _REDACTED = "<redacted>"
+#: Mode bits that give the group or others any access.
+_GROUP_OTHER_BITS = 0o077
 #: What must never be logged from a hub error: URL credentials and query strings (signed URLs),
 #: Hugging Face tokens, bearer tokens and ``key=value`` secrets.
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -101,6 +104,30 @@ def _snapshot_dir(cache_dir: Path, repo: str, revision: str) -> Path:
     return cache_dir / repo_dir / _HUB_SNAPSHOTS_DIR / revision
 
 
+def _is_loose(cache_dir: Path) -> bool:
+    """True when *cache_dir* gives group or others any access (never on Windows, which has no such mode bits)."""
+    if not hasattr(os, "geteuid"):
+        return False
+    try:
+        return bool(cache_dir.stat().st_mode & _GROUP_OTHER_BITS)
+    except OSError:
+        return False
+
+
+def _restrict_cache(cache_dir: Path) -> None:
+    """Make *cache_dir*, its ancestors inside the data dir and everything under it owner-only.
+
+    Best effort: a failure (read-only cache, chmod refused) is logged, never raised, so it can neither fail a
+    cache hit nor replace the error of a failed download that this runs after. Entries owned by another uid are
+    skipped without a message; each step runs even when the other failed.
+    """
+    for tighten in (ensure_private_dir, restrict_tree_to_owner):
+        try:
+            tighten(cache_dir)
+        except OSError as exc:
+            logger.warning("could not restrict the model cache %s to its owner: %s", cache_dir, exc)
+
+
 def _ensure_snapshot(repo: str, revision: str, files: tuple[str, ...], cache_dir: Path) -> Path:
     """Return the snapshot of *repo* at *revision* holding every one of *files*, downloading just those when absent.
 
@@ -111,16 +138,21 @@ def _ensure_snapshot(repo: str, revision: str, files: tuple[str, ...], cache_dir
     """
     snapshot = _snapshot_dir(cache_dir, repo, revision)
     if _has_files(snapshot, files):
+        if _is_loose(cache_dir):  # a cache an older version filled under the umask
+            _restrict_cache(cache_dir)
         return snapshot
     if _is_offline():
         raise ModelDownloadError(repo, _OFFLINE_MISS_DETAIL)
     try:
+        ensure_private_dir(cache_dir)
         snapshot = Path(
             snapshot_download(repo_id=repo, revision=revision, allow_patterns=list(files), cache_dir=cache_dir)
         )
     except Exception as exc:  # hub raises many unrelated types; all map to one error
         _log_download_failure(repo, exc)
         raise ModelDownloadError(repo, _DOWNLOAD_FAILED_DETAIL) from exc
+    finally:
+        _restrict_cache(cache_dir)  # the hub writes under the umask, also on a partial download
     if not _has_files(snapshot, files):
         raise ModelDownloadError(repo, _INCOMPLETE_DETAIL)
     return snapshot

@@ -4,6 +4,7 @@ primitives that make a rename-based publish durable.
 Callers must serialize writes to the same path. The helper is not internally
 synchronized.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -11,6 +12,7 @@ import json
 import os
 import stat
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +92,57 @@ def _tighten(directory: Path) -> None:
     info = directory.stat()
     if info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) != PRIVATE_DIR_MODE:
         directory.chmod(PRIVATE_DIR_MODE)
+
+
+def _restrict_entry(path: str, euid: int) -> None:
+    """chmod one entry to the private mode of its kind; symlinks, foreign-owned entries and special files are skipped."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return  # removed concurrently
+    if info.st_uid != euid:
+        return
+    if stat.S_ISDIR(info.st_mode):
+        want = PRIVATE_DIR_MODE
+    elif stat.S_ISREG(info.st_mode):
+        want = PRIVATE_FILE_MODE
+    else:
+        return
+    if stat.S_IMODE(info.st_mode) != want:
+        try:
+            os.chmod(path, want)
+        except FileNotFoundError:
+            return  # removed concurrently
+
+
+def restrict_tree_to_owner(root: Path) -> None:
+    """Make *root* and every directory under it ``0o700`` and every regular file ``0o600``.
+
+    For trees a third-party library fills under the umask (the Hugging Face model cache). Symlinks are
+    neither followed nor chmod-ed (``huggingface_hub`` links ``snapshots/<rev>/<file>`` to its blob, and the
+    blob is visited as a file of its own); entries owned by someone else are left alone. A no-op on Windows.
+    """
+    if not hasattr(os, "geteuid"):
+        return
+    if os.path.islink(root):
+        return  # os.walk would follow it and re-permission a tree that is not ours to manage
+    euid = os.geteuid()
+    first_error: OSError | None = None
+    for path in _walk_paths(root):
+        try:
+            _restrict_entry(path, euid)
+        except OSError as exc:  # keep tightening the rest; report once afterwards
+            first_error = first_error or exc
+    if first_error is not None:
+        raise first_error
+
+
+def _walk_paths(root: Path) -> Iterator[str]:
+    """*root* then every path under it, symlinks listed but not followed."""
+    yield str(root)
+    for current, dirnames, filenames in os.walk(root):
+        for name in (*dirnames, *filenames):
+            yield os.path.join(current, name)
 
 
 def ensure_private_dir(path: Path) -> None:

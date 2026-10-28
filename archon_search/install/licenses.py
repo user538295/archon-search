@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from archon_search._durable_io import atomic_write_bytes
+from archon_search._durable_io import PRIVATE_FILE_MODE, atomic_write_bytes
 from archon_search.profiles import JINA_RERANKER_MODEL, InstallProfile
 
 from .errors import InstallError
@@ -247,7 +247,7 @@ def _download_fasttext_model(models_dir: Path) -> None:
     target.with_suffix(target.suffix + ".tmp").unlink(missing_ok=True)
 
     try:
-        atomic_write_bytes(target, content, mode=0o644)
+        atomic_write_bytes(target, content, mode=PRIVATE_FILE_MODE)
     except OSError as exc:
         logger.warning("fasttext model publish to %s failed: %s", target, exc)
         raise InstallError(
