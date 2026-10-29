@@ -272,3 +272,31 @@ def test_eager_load_surface_matches_documented_wording() -> None:
         "the --eager-load help must say the reranker is pre-loaded too, as "
         "10_installation.md documents"
     )
+
+
+def test_wizard_step2_transcript_matches_rendered_profile_table() -> None:
+    """S953: every line of the 20_wizard.md Step 2 transcript (bar the prompt)
+    must be a line the real profile-table renderer prints.
+
+    Compares against `_render_profile_table` output rather than pinning
+    wording; whitespace runs are collapsed so column padding does not matter.
+    """
+    from archon_search.install.render import _render_profile_table
+
+    def norm(text: str) -> str:
+        return " ".join(text.split())
+
+    rendered = {norm(line) for line in _render_profile_table(multilingual=False).splitlines()}
+
+    wizard_doc = (
+        REPO_ROOT / "Documentation" / "UserManual" / "20_wizard.md"
+    ).read_text(encoding="utf-8")
+    section = wizard_doc[wizard_doc.index("### Step 2 — Profile selection") :]
+    section = section[: section.index("**Default**")]
+    transcript = section.split("```")[1]
+    for line in filter(str.strip, transcript.splitlines()):
+        if line.startswith("Choice ["):
+            continue
+        assert norm(line) in rendered, (
+            f"20_wizard.md Step 2 transcripts a line the wizard never prints: {line!r}"
+        )
