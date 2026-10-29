@@ -44,7 +44,8 @@ services:
       - sh
       - -c
       - >-
-          uv sync --dev --extra hyde --extra rag-fusion --extra graph;
+          uv sync --dev --extra hyde --extra rag-fusion --extra graph --no-install-package fasttext-predict;
+          uv pip install --python /venv/bin/python --no-deps /wheelhouse/*.whl;
           uv run pytest;
           uv run pytest tests/smoke/ --no-cov
 
@@ -72,7 +73,8 @@ services:
       - -c
       - >-
           if [ ! -f /venv/bin/activate ]; then
-          uv sync --dev --extra hyde --extra rag-fusion --extra graph;
+          uv sync --dev --extra hyde --extra rag-fusion --extra graph --no-install-package fasttext-predict;
+          uv pip install --python /venv/bin/python --no-deps /wheelhouse/*.whl;
           fi;
           exec sleep infinity
 

@@ -135,7 +135,8 @@ def _wait_for_ready(url: str, timeout_s: int, container_id: str | None = None) -
             with urllib.request.urlopen(url, timeout=2) as resp:
                 return resp.status
         except urllib.error.HTTPError as exc:
-            last_error = f"HTTP {exc.code}: {exc.read(2048).decode('utf-8', 'replace')}"
+            with exc:  # closing the response frees its temp file; an unclosed one is a ResourceWarning
+                last_error = f"HTTP {exc.code}: {exc.read(2048).decode('utf-8', 'replace')}"
             time.sleep(1)
         except (urllib.error.URLError, ConnectionError, OSError) as exc:
             last_error = exc
@@ -848,7 +849,8 @@ def test_docker_smoke_suite_exits_0(test_runner_image: str) -> None:
             "run", "--rm", "archon-test-runner",
             "sh", "-c",
             (
-                "uv sync --dev --extra hyde --extra rag-fusion --quiet && "
+                "uv sync --dev --extra hyde --extra rag-fusion --no-install-package fasttext-predict --quiet && "
+                "uv pip install --python /venv/bin/python --no-deps --quiet /wheelhouse/*.whl && "
                 "uv run pytest tests/smoke/docker/ --no-cov -o addopts= -v"
             ),
         ],

@@ -67,6 +67,15 @@ RUN set -eux; \
         apt-get purge -y curl; \
         apt-get autoremove -y; \
     fi; \
+    # fasttext-predict (the multilingual extra, installed by the entrypoint at start-up) has no
+    # CPython 3.14 wheel on PyPI, only an sdist (0.9.2.4, checked 2026-10-29), and the entrypoint's
+    # pip would need a C++ compiler to build it. Build the wheel once here into /opt/wheelhouse
+    # (PIP_FIND_LINKS below points the entrypoint's pip at it) and purge the compiler in the same
+    # layer, so the image ships no toolchain. Remove this once PyPI carries a cp314 wheel.
+    apt-get install -y --no-install-recommends g++; \
+    /usr/local/bin/python3 -m pip wheel --no-deps --wheel-dir /opt/wheelhouse "fasttext-predict>=0.9.2.4"; \
+    apt-get purge -y g++; \
+    apt-get autoremove -y; \
     # opencv-python (a dependency of rapidocr and docling) links libGL.so.1 at load time. `apt-get
     # install libgl1` drags in Mesa's software renderer through libglx0 (LLVM, ~190 MB); nothing here
     # renders, so the three glvnd packages are unpacked alone and their Mesa dependency is skipped.
@@ -78,6 +87,9 @@ RUN set -eux; \
         && rm -f libgl1_*.deb libglvnd0_*.deb libglx0_*.deb); \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
+
+# The entrypoint's runtime `pip install` of the extras resolves fasttext-predict to the wheel built above.
+ENV PIP_FIND_LINKS=/opt/wheelhouse
 
 WORKDIR /app
 
