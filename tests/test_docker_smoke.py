@@ -849,8 +849,7 @@ def test_docker_smoke_suite_exits_0(test_runner_image: str) -> None:
             "run", "--rm", "archon-test-runner",
             "sh", "-c",
             (
-                "uv sync --dev --extra hyde --extra rag-fusion --no-install-package fasttext-predict --quiet && "
-                "uv pip install --python /venv/bin/python --no-deps --quiet /wheelhouse/*.whl && "
+                "uv sync --dev --extra hyde --extra rag-fusion --quiet && "
                 "uv run pytest tests/smoke/docker/ --no-cov -o addopts= -v"
             ),
         ],

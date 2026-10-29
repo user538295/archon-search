@@ -155,9 +155,9 @@ def test_docker_job_logs_in_to_ghcr(docker_steps: list[dict]) -> None:
 
 
 def test_docker_job_builds_cpu_image_with_base_image_python(workflow_text: str) -> None:
-    """CPU build step must pass --build-arg BASE_IMAGE=python:3.14-slim."""
-    assert "--build-arg BASE_IMAGE=python:3.14-slim" in workflow_text, (
-        "docker job must build the CPU image with BASE_IMAGE=python:3.14-slim"
+    """CPU build step must pass --build-arg BASE_IMAGE=python:3.13-slim."""
+    assert "--build-arg BASE_IMAGE=python:3.13-slim" in workflow_text, (
+        "docker job must build the CPU image with BASE_IMAGE=python:3.13-slim"
     )
 
 

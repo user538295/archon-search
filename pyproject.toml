@@ -5,7 +5,7 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 description = "Standalone hybrid retrieval + routing server: LanceDB, PyTorch embedder, cross-encoder reranker, FastAPI"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.162",
     "uvicorn[standard]>=0.54",
@@ -22,8 +22,8 @@ dependencies = [
     # below binds (uv applies sources to declared deps, not transitive-only
     # ones). The ceiling and torchvision mirror docling's own `torch<3.0.0` /
     # `torchvision<1`. The floors are the latest releases (torch 2.15, torchvision 0.29.2);
-    # for reference, 2.9.0 is the oldest torch with CPython 3.14 wheels (PyPI file lists,
-    # checked 2026-10-29) and `requires-python` is >=3.14. S269: on linux/amd64 the
+    # for reference, 2.5.0 is the oldest torch with CPython 3.13 wheels (PyPI file lists,
+    # checked 2026-10-29) and `requires-python` is >=3.13. S269: on linux/amd64 the
     # default PyPI torch drags the ~6 GB CUDA runtime a CPU host cannot run.
     "torch>=2.15,<3.0.0",
     "torchvision>=0.29.2,<1",

@@ -5,21 +5,21 @@
 # The CPU / GPU variant is selected via the BASE_IMAGE build-arg:
 #
 #   docker build .                                                          # CPU (default)
-#   docker build --build-arg BASE_IMAGE=python:3.14-slim .                   # CPU (explicit)
+#   docker build --build-arg BASE_IMAGE=python:3.13-slim .                   # CPU (explicit)
 #   docker build --build-arg BASE_IMAGE=nvidia/cuda:13.4.3-base-ubuntu22.04 .  # GPU (release tag: GPU_BASE_IMAGE in .github/workflows/archon-search-release.yml)
 #
-# The CPU base ships Python 3.14 already; the NVIDIA CUDA base ships only the
-# CUDA runtime and is Ubuntu-based, so we conditionally install Python 3.14
+# The CPU base ships Python 3.13 already; the NVIDIA CUDA base ships only the
+# CUDA runtime and is Ubuntu-based, so we conditionally install Python 3.13
 # from deadsnakes when the base does not provide it. The GPU variant runs on
 # PyPI's CUDA build of PyTorch: its CUDA 13 / cuDNN 9 wheels carry the libraries
 # torch preloads itself, so the GPU base is the slim CUDA 13 `-base` tag (no
 # system cuDNN to clash with the wheels'); CUDA 13 needs an NVIDIA driver >= 580.
 
-ARG BASE_IMAGE=python:3.14-slim
+ARG BASE_IMAGE=python:3.13-slim
 FROM ${BASE_IMAGE}
 
 # Re-declare ARGs after FROM so they are visible to RUN instructions.
-ARG BASE_IMAGE=python:3.14-slim
+ARG BASE_IMAGE=python:3.13-slim
 ARG GIT_COMMIT=unknown
 # Release tag passed by the release workflow. `.git` is dockerignored, so
 # hatch-vcs cannot derive the version at build time; we stamp it explicitly.
@@ -39,24 +39,24 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DEFAULT_TIMEOUT=100 \
     PIP_RETRIES=10
 
-# Install base OS dependencies. On the python:3.14-slim base, Python is
+# Install base OS dependencies. On the python:3.13-slim base, Python is
 # already present and apt is Debian-based; on the NVIDIA CUDA Ubuntu base,
-# Python 3.14 must be added via the deadsnakes PPA (Ubuntu 22.04 ships 3.10).
+# Python 3.13 must be added via the deadsnakes PPA (Ubuntu 22.04 ships 3.10).
 # The `tini` package provides the init-style PID 1 used by ENTRYPOINT.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates tini libxcb1 libx11-6 libxext6 libglib2.0-0; \
-    if ! command -v python3.14 >/dev/null 2>&1; then \
+    if ! command -v python3.13 >/dev/null 2>&1; then \
         apt-get install -y --no-install-recommends software-properties-common gnupg; \
         add-apt-repository -y ppa:deadsnakes/ppa; \
         apt-get update; \
         apt-get install -y --no-install-recommends \
-            python3.14 python3.14-venv python3.14-dev; \
+            python3.13 python3.13-venv python3.13-dev; \
     fi; \
-    # Ensure a working `python3` shim points to 3.14 on the GPU base. The
-    # CPU base already ships `python3` as 3.14, so this is a no-op there.
-    if [ ! -e /usr/local/bin/python3 ] || ! /usr/local/bin/python3 -c 'import sys; assert sys.version_info[:2]==(3,14)' >/dev/null 2>&1; then \
-        ln -sf "$(command -v python3.14)" /usr/local/bin/python3; \
+    # Ensure a working `python3` shim points to 3.13 on the GPU base. The
+    # CPU base already ships `python3` as 3.13, so this is a no-op there.
+    if [ ! -e /usr/local/bin/python3 ] || ! /usr/local/bin/python3 -c 'import sys; assert sys.version_info[:2]==(3,13)' >/dev/null 2>&1; then \
+        ln -sf "$(command -v python3.13)" /usr/local/bin/python3; \
     fi; \
     # pip is required to bootstrap the project install.
     if ! /usr/local/bin/python3 -m pip --version >/dev/null 2>&1; then \
@@ -67,29 +67,17 @@ RUN set -eux; \
         apt-get purge -y curl; \
         apt-get autoremove -y; \
     fi; \
-    # fasttext-predict (the multilingual extra, installed by the entrypoint at start-up) has no
-    # CPython 3.14 wheel on PyPI, only an sdist (0.9.2.4, checked 2026-10-29), and the entrypoint's
-    # pip would need a C++ compiler to build it. Build the wheel once here into /opt/wheelhouse
-    # (PIP_FIND_LINKS below points the entrypoint's pip at it) and purge the compiler in the same
-    # layer, so the image ships no toolchain. Remove this once PyPI carries a cp314 wheel.
-    apt-get install -y --no-install-recommends g++; \
-    /usr/local/bin/python3 -m pip wheel --no-deps --wheel-dir /opt/wheelhouse "fasttext-predict>=0.9.2.4"; \
-    apt-get purge -y g++; \
-    apt-get autoremove -y; \
     # opencv-python (a dependency of rapidocr and docling) links libGL.so.1 at load time. `apt-get
     # install libgl1` drags in Mesa's software renderer through libglx0 (LLVM, ~190 MB); nothing here
     # renders, so the three glvnd packages are unpacked alone and their Mesa dependency is skipped.
     # `--force-depends` leaves libglx0's Mesa dependency unmet in dpkg's database, and apt refuses
     # every later install/purge/autoremove while one is unmet: this unpack MUST be the last package
-    # operation of this RUN (the GPU base installs python3.14 and curl above through apt).
+    # operation of this RUN (the GPU base installs python3.13 and curl above through apt).
     (cd /tmp && apt-get download libgl1 libglvnd0 libglx0 \
         && dpkg --force-depends -i libgl1_*.deb libglvnd0_*.deb libglx0_*.deb \
         && rm -f libgl1_*.deb libglvnd0_*.deb libglx0_*.deb); \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
-
-# The entrypoint's runtime `pip install` of the extras resolves fasttext-predict to the wheel built above.
-ENV PIP_FIND_LINKS=/opt/wheelhouse
 
 WORKDIR /app
 

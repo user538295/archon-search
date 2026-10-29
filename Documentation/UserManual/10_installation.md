@@ -8,13 +8,13 @@
 ## Principles
 
 1. **One process, one user.** `archon-search` runs as your own user account; all state lives under `~/.archon-search/`.
-2. **Python 3.14+ only.** The package declares `requires-python = ">=3.14"`; older interpreters will refuse to install.
+2. **Python 3.13+ only.** The package declares `requires-python = ">=3.13"`; older interpreters will refuse to install.
 3. **Two supported install paths.** `pip install archon-search` from PyPI for end users, or a `uv sync --dev` checkout for self-built users.
 4. **Optional service install.** The `archon-search install` subcommand registers a launchd plist (macOS) or a systemd user unit (Linux) so the server starts on login. This is optional — you can also run it in the foreground.
 
 ## Requirements
 
-- Python `>=3.14`.
+- Python `>=3.13`.
 - macOS, Linux, or Windows (service install is supported on macOS and Linux only — see `archon_search/platform/`). Measured platforms: macOS arm64 (CPU and Apple GPU `mps`) and Linux arm64 (CPU, in Docker). Linux x86_64, Windows, NVIDIA CUDA and Intel Macs have not been measured; the Windows-specific code paths (private file modes, directory fsync, `O_NOFOLLOW`) are guarded and unit-tested but have not been run on Windows.
 - A few hundred MB of disk for the index under `~/.archon-search/search/` (grows with corpus size).
 - Network access on the first run to download the embedding and reranker model weights from Hugging Face. They are stored under `~/.archon-search/models/`. With `HF_HUB_OFFLINE=1` in the server's environment a model that is not already there is an error instead of a download (`archon_search/model_store.py`).
@@ -146,7 +146,7 @@ The wizard detects the accelerator with `archon_search/platform/runtime.py:detec
 Embedding and reranking run on an NVIDIA GPU when PyTorch is a CUDA build and `torch.cuda.is_available()` is true. Requirements:
 
 - A CUDA build of PyTorch. On Linux, PyPI's `torch` is one already: torch 2.15.0 is the CUDA 13.2 build (its metadata requires `cuda-toolkit==13.2.2` and `nvidia-cudnn-cu13`). The CPU-only build from [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build) has no CUDA support. PyPI's Windows and macOS builds are CPU-only too.
-- A driver the build supports. CUDA 13.x needs NVIDIA driver 580 or later ([CUDA 13.0 release notes](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html)); check with `nvidia-smi`. The `+cu132` build the wizard installs targets CUDA 13.2 and needs driver 580 or later too: on Linux x86_64 with Python 3.14, PyTorch publishes no CUDA 12 build of torch 2.15 (the newest `cu126` torch is 2.14.1), so a host with an older driver runs the CPU-only build.
+- A driver the build supports. CUDA 13.x needs NVIDIA driver 580 or later ([CUDA 13.0 release notes](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html)); check with `nvidia-smi`. The `+cu132` build the wizard installs targets CUDA 13.2 and needs driver 580 or later too: on Linux x86_64 with Python 3.13, PyTorch publishes no CUDA 12 build of torch 2.15 (the newest `cu126` torch is 2.14.1), so a host with an older driver runs the CPU-only build.
 - No system CUDA toolkit: PyTorch's CUDA wheels bring the CUDA and cuDNN libraries as `nvidia-*` packages.
 
 Check what your environment has, then re-run the wizard (`archon-search wizard`) and accept CUDA:

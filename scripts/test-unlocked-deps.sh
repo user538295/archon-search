@@ -43,7 +43,7 @@ PY="$VENV/bin/python"
 # Post-install `uv pip freeze`. Inside the venv, so `uv venv --clear` drops a stale one and a
 # failed install never leaves a snapshot behind for the lane steps to trust.
 SNAPSHOT="$VENV/unlocked-freeze.txt"
-PYTHON_VERSION="3.14"  # the version every workflow and the Dockerfile pin
+PYTHON_VERSION="3.13"  # the version every workflow and the Dockerfile pin
 PREFETCH_ATTEMPTS=3
 
 # Same `-o addopts=` prefix as the release workflow's lane steps.

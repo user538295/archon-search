@@ -36,10 +36,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python 3.14
+      - name: Set up Python 3.13
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.14"
+          python-version: "3.13"
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -201,10 +201,10 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Releasing tag: $TAG"
 
-      - name: Set up Python 3.14
+      - name: Set up Python 3.13
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.14"
+          python-version: "3.13"
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -241,10 +241,10 @@ jobs:
   # Builds two image variants from the tagged source tree and pushes them to
   # GHCR:
   #   - CPU: `archon-search:<tag>` and `archon-search:latest`
-  #         base = python:3.14-slim (CPU-only PyTorch wheels)
+  #         base = python:3.13-slim (CPU-only PyTorch wheels)
   #   - GPU: `archon-search:<tag>-gpu` and `archon-search:gpu`
   #         base = the job's `GPU_BASE_IMAGE` (the CUDA 13 `-base` tag)
-  #         (Python 3.14 added via the deadsnakes PPA; PyPI's CUDA build of
+  #         (Python 3.13 added via the deadsnakes PPA; PyPI's CUDA build of
   #          torch, whose CUDA 13 / cuDNN 9 libraries come from the pip
   #          wheels it depends on, so the base ships only the CUDA runtime
   #          and env — see the Dockerfile)
@@ -323,13 +323,13 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Building images for tag: $TAG"
 
-      - name: Build and push CPU image (BASE_IMAGE=python:3.14-slim)
+      - name: Build and push CPU image (BASE_IMAGE=python:3.13-slim)
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           docker buildx build --push \
             --platform linux/amd64,linux/arm64 \
-            --build-arg BASE_IMAGE=python:3.14-slim \
+            --build-arg BASE_IMAGE=python:3.13-slim \
             --build-arg GIT_COMMIT=${{ github.sha }} \
             --build-arg RELEASE_VERSION=$TAG \
             -t ghcr.io/${{ github.repository_owner }}/archon-search:$TAG \

@@ -14,11 +14,11 @@ This document lists the non-negotiable engineering constraints. The product visi
 2. **Structural invariants over reviewer vigilance.** Where a guarantee matters (no raw query logging), the code shape prevents the violation — a missing parameter on a factory method, not a checklist.
 3. **The default `pytest` run is the contract.** It excludes `live`, `eval`, `benchmark`, `integration` markers and enforces `--cov-fail-under=85`. Marker-gated suites exist for the other dimensions.
 4. **Breaking changes are explicit.** CalVer segments do not signal compatibility; a `BREAKING.md` entry does.
-5. **Reproducibility over convenience.** `uv`-managed Python `>=3.14`, floor-pinned tooling (lower-bound version specifiers in `pyproject.toml`; the `uv.lock` provides the exact reproducible resolution), deterministic eval backends.
+5. **Reproducibility over convenience.** `uv`-managed Python `>=3.13`, floor-pinned tooling (lower-bound version specifiers in `pyproject.toml`; the `uv.lock` provides the exact reproducible resolution), deterministic eval backends.
 
 ## Language and Tooling
 
-- **Python**: `>=3.14` (see `pyproject.toml [project] requires-python`).
+- **Python**: `>=3.13` (see `pyproject.toml [project] requires-python`).
 - **Package manager**: `uv`. `uv sync --dev` installs runtime + dev groups; `uv run <cmd>` executes inside the project environment.
 - **Build backend**: `hatchling` + `hatch-vcs`. Wheels are built from a tagged commit and contain a version string derived from that tag.
 - **Distribution vs. import name**: PyPI distribution is `archon-search` (hyphen); the importable package is `archon_search` (underscore). This split is encoded in `[tool.hatch.build.targets.wheel].packages = ["archon_search"]`. Do not change either name.

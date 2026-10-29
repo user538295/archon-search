@@ -44,7 +44,7 @@ End-user / operator documentation. Audience is medior-technical operators runnin
 | File | Purpose |
 | --- | --- |
 | [`UserManual/00_index.md`](../UserManual/00_index.md) | Table of contents and reading order for the User Manual; scope and intended audience. |
-| [`UserManual/10_installation.md`](../UserManual/10_installation.md) | Install from PyPI or a `uv sync --dev` checkout; Python 3.14+ requirement; optional launchd/systemd service install. |
+| [`UserManual/10_installation.md`](../UserManual/10_installation.md) | Install from PyPI or a `uv sync --dev` checkout; Python 3.13+ requirement; optional launchd/systemd service install. |
 | [`UserManual/20_wizard.md`](../UserManual/20_wizard.md) | `archon-search wizard`: every prompt and CLI flag, what it configures, and what it does not. |
 | [`UserManual/30_configuration.md`](../UserManual/30_configuration.md) | `archon-search.toml` sections, `ARCHON_SEARCH_CONFIG`, defaults, and auth-key resolution. |
 | [`UserManual/40_running_the_server.md`](../UserManual/40_running_the_server.md) | `start`/`stop`/`status`/`serve`, bind address, exposed endpoints, uniform Bearer auth. |

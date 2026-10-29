@@ -287,7 +287,7 @@ class ChunkVisibility:
     @classmethod
     def from_chunk_acls(
         cls, rows: Iterable[tuple[str, str, list[str] | None]], namespace: str
-    ) -> ChunkVisibility:
+    ) -> "ChunkVisibility":
         """Build from ``(doc_id, chunk_id, acl)`` rows, one per stored chunk."""
         hidden_chunks: set[str] = set()
         hidden_docs: set[str] = set()

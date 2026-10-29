@@ -10,7 +10,7 @@ and in `Documentation/`; see the map at the bottom. Testing rules live in `tests
 embeddings, a cross-encoder reranker, a multi-collection router, FastAPI HTTP control plane, and an MCP
 endpoint sharing the same auth. Runtime state lives under `~/.archon-search/`.
 
-- Python `>=3.14`, managed with `uv`.
+- Python `>=3.13`, managed with `uv`.
 - Package directory `archon_search/` (underscore), distribution `archon-search` (hyphen).
   `pyproject.toml` `[tool.hatch.build.targets.wheel].packages` is explicit about this — don't "fix" it.
 - Version comes from git tags via `hatch-vcs` (CalVer `YY.M.<rev-count>`); never hardcode versions.

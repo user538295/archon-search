@@ -6,7 +6,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 `archon-search` is a standalone hybrid retrieval + routing server: LanceDB vector store, PyTorch dense embeddings, a cross-encoder reranker, a multi-collection router, FastAPI HTTP control plane, and an MCP endpoint sharing the same auth. Runtime state lives under `~/.archon-search/`.
 
-- Python `>=3.14`, managed with `uv`.
+- Python `>=3.13`, managed with `uv`.
 - Package name: `archon-search` (PyPI), import name: `archon_search`.
 - Version is derived from git tags via `hatch-vcs` (CalVer `YY.M.<rev-count>`); never hardcode versions.
 

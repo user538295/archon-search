@@ -14,7 +14,7 @@ The Docker image is the only deployment unit that does not require a host-level 
 3. **Stderr is the only log sink by default.** `ARCHON_SEARCH_CONTAINER=1` is baked into the image; `logging_setup.configure_logging()` attaches a `StreamHandler(sys.stderr)` so `docker logs` (and Kubernetes log collectors) capture every line.
 4. **Non-root by default.** The image runs as UID 1000 (`appuser`). `/data` is pre-`chown`ed so anonymous-volume runs (`docker run` without `-v`) work. If you bind-mount a host directory, make sure UID 1000 can write to it (`chown 1000:1000 /path/to/data` or `chmod 0777`).
 5. **Single writer.** LanceDB is single-writer per `db_path`. Do not mount the same volume into more than one running container. This includes the `/pip-packages` volume: every container's entrypoint may replace that volume's content when it starts, so give each running container its own.
-6. **Optional extras are installed at runtime, not bake-time.** The base image ships only the core package. For the optional feature sets (`graph`, `code`, `multilingual`) the entrypoint script installs only the packages they add to the image into a `/pip-packages` named volume — on first start, and again whenever `ARCHON_EXTRAS` or the image's installed packages change — so the image stays lean and the extras are cached across restarts. The one exception is `fasttext-predict` (the `multilingual` extra): PyPI has no CPython 3.14 wheel for it, so the image build compiles it once into `/opt/wheelhouse` (`PIP_FIND_LINKS`) and removes the compiler again. The image contains no C++ toolchain, and the runtime install needs none.
+6. **Optional extras are installed at runtime, not bake-time.** The base image ships only the core package. For the optional feature sets (`graph`, `code`, `multilingual`) the entrypoint script installs only the packages they add to the image into a `/pip-packages` named volume — on first start, and again whenever `ARCHON_EXTRAS` or the image's installed packages change — so the image stays lean and the extras are cached across restarts.
 
 ## Entrypoint and runtime extras installation
 
@@ -59,7 +59,7 @@ The CPU / GPU variant is chosen at **build time** via the `BASE_IMAGE` build-arg
 
 | Tag | Base image | Use when |
 | --- | --- | --- |
-| `:latest`, `:<version>` | `python:3.14-slim` | Any host without an NVIDIA GPU. CPU inference only. |
+| `:latest`, `:<version>` | `python:3.13-slim` | Any host without an NVIDIA GPU. CPU inference only. |
 | `:gpu`, `:<version>-gpu` | `nvidia/cuda:13.4.3-base-ubuntu22.04` (amd64 only) | NVIDIA host with driver 580 or later and the NVIDIA Container Toolkit; start it with `--gpus all`. Runs PyTorch's CUDA build, so embedding and reranking use the GPU. See [Running the GPU image](#running-the-gpu-image). |
 
 The `:latest` CPU image ships the **CPU-only** PyTorch build: the image's pip configuration (`/etc/pip.conf`) adds the PyTorch CPU wheel index, so pip installs `torch==<ver>+cpu`. Embedding, reranking and PDF and image-OCR parsing (docling) run on it, on CPU; it pulls no NVIDIA CUDA runtime, so the image carries no GPU libraries it cannot execute. For a GPU in a container, use the `:gpu` image.

@@ -165,7 +165,7 @@ def test_dockerfile_has_healthcheck(dockerfile_logical: list[str]) -> None:
         None,
     )
     assert healthcheck_line is not None, "Dockerfile must declare a HEALTHCHECK"
-    # Spec invariant #4: must not invoke curl (python:3.14-slim does not
+    # Spec invariant #4: must not invoke curl (python:3.13-slim does not
     # ship curl and installing it would add ~5MB plus apt overhead). The
     # logical line is the full continuation-joined instruction so this
     # check also catches `curl` on the CMD payload.
@@ -496,8 +496,8 @@ _CPU_TARGET_ENV = {
     "platform_system": "Linux",
     "os_name": "posix",
     "platform_machine": "x86_64",
-    "python_version": "3.14",
-    "python_full_version": "3.14.0",
+    "python_version": "3.13",
+    "python_full_version": "3.13.0",
     "implementation_name": "cpython",
     "platform_python_implementation": "CPython",
     "extra": "",
@@ -800,7 +800,7 @@ def test_dockerfile_prunes_installed_test_suites_in_the_install_layer(dockerfile
 
 def test_dockerfile_installs_the_shared_libraries_opencv_links(dockerfile_text: str) -> None:
     """``opencv-python`` (a dependency of rapidocr and docling) links libGL, libX11, libxcb and
-    libglib at load time, and ``python:3.14-slim`` ships none of them: in the container
+    libglib at load time, and ``python:3.13-slim`` ships none of them: in the container
     ``import cv2`` raised ``libxcb.so.1: cannot open shared object file``, so RapidOCR (image and
     scanned-PDF OCR) and docling's table-structure model could not even be imported."""
     base_os_run = re.search(r"^RUN set -eux; \\\n\s+apt-get update; .*?^\s*rm -rf /var/lib/apt/lists/\*\n", dockerfile_text, re.DOTALL | re.MULTILINE)
@@ -820,7 +820,7 @@ def test_dockerfile_does_not_install_mesa_for_libgl(dockerfile_text: str) -> Non
 
 def test_dockerfile_unpacks_libgl_after_the_last_apt_install_purge_or_autoremove(dockerfile_text: str) -> None:
     """``dpkg --force-depends`` leaves libglx0's Mesa dependency unmet in dpkg's database, and apt then refuses
-    every later ``install``/``purge``/``autoremove`` ("Unmet dependencies"). The CUDA base installs python3.14
+    every later ``install``/``purge``/``autoremove`` ("Unmet dependencies"). The CUDA base installs python3.13
     (deadsnakes) and, for pip, curl through apt in the same ``RUN``, so the unpack must come after them."""
     base_os_run = re.search(r"^RUN set -eux; \\\n\s+apt-get update; .*?^\s*rm -rf /var/lib/apt/lists/\*\n", dockerfile_text, re.DOTALL | re.MULTILINE)
     assert base_os_run is not None, "the base-OS `apt-get` RUN block was not found"

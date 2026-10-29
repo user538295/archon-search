@@ -34,7 +34,7 @@ If you are new, work top to bottom — each step builds on the previous one:
 
 | Doc | What it covers |
 |---|---|
-| [10_installation.md](10_installation.md) | Install archon-search from PyPI or a `uv` checkout; Python 3.14+ and state layout. |
+| [10_installation.md](10_installation.md) | Install archon-search from PyPI or a `uv` checkout; Python 3.13+ and state layout. |
 | [20_wizard.md](20_wizard.md) | The interactive `archon-search wizard` — every prompt, every flag, and what it writes. |
 | [30_configuration.md](30_configuration.md) | The `archon-search.toml` sections and environment variables; where the auth key lives. |
 | [40_running_the_server.md](40_running_the_server.md) | Start/stop/status, `serve` vs `start`, bind address, and reaching the endpoints. |
