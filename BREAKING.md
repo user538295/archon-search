@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — exporting a collection another namespace owns is refused with `409` `collection_unavailable` (2026-10-29)
+
+**Surface**: `POST /collections/{name}/export` (status `404` → `409`) and the MCP `export_collection` tool (`not_found` → `collection_unavailable`), only for a name another namespace owns.
+
+**What changed:** exporting a collection owned by another namespace, the admin key included, answered `404` `Collection '<name>' not found` (MCP `not_found`), unlike every other write path, which refuses with the fixed text `collection name is not available to this namespace`. REST now answers `409` `{"error": "collection_unavailable", "detail": "collection name is not available to this namespace"}` and MCP answers `{"error": "collection name is not available to this namespace", "code": "collection_unavailable"}`. No job and no archive is created. A name that exists in no namespace still answers `404` (MCP `not_found`), so a caller can now tell a foreign name from an unused one; the text names no owner.
+
+**Migration**: a client that treated the export `404` as "the collection is not mine" must also handle `409` `collection_unavailable`. Exports of a collection the caller's namespace owns are unchanged.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — a symlink given as an ingest `path` is refused (2026-10-28)
 
 **Surface**: `POST /ingest`, `POST /collections/` (with `path`), MCP `ingest_file` and `ingest_directory`.

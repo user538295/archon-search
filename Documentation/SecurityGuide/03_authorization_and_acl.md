@@ -12,7 +12,7 @@ For how the namespace is established, see [`02_authentication_and_keys.md`](./02
 
 ## Principles
 
-1. **A namespace owns what it creates, and the store enforces it.** Each collection belongs to the namespace that first wrote to it, recorded in its metadata row; every write path (ingest, document delete, collection drop, import, export, sync) refuses another namespace's collection with a fixed error, the admin key included. It is an access rule between cooperating clients, not a vault: all namespaces share one process and one set of LanceDB files, so anyone with filesystem access bypasses it.
+1. **A namespace owns what it creates, and the store enforces it.** Each collection belongs to the namespace that first wrote to it, recorded in its metadata row; every write path (ingest, document delete, collection drop, import, export, sync) refuses another namespace's collection with a fixed error, the admin key included (export answers `409`, see below). It is an access rule between cooperating clients, not a vault: all namespaces share one process and one set of LanceDB files, so anyone with filesystem access bypasses it.
 2. **ACL is per-chunk, default-open.** Chunks without an `_acl` declaration are visible to every namespace.
 3. **A declared restriction that cannot be read fails closed, with a warning.** An `_acl` value or `.acl` sidecar that exists but is unusable denies the chunk rather than opening it; only an absent or blank declaration is open.
 4. **Comparison is exact and case-sensitive.** No prefix matching, no wildcards.
@@ -35,6 +35,7 @@ Ownership is the `namespace` of a collection's metadata row. `SearchStore` check
 - **Another namespace's collection** is refused for every key, admin included. Through REST, `POST /ingest` still answers `202` and the job ends `FAILED` with that text; through MCP, `ingest_file` and `ingest_directory` return `{"error": …, "code": "collection_unavailable"}` and `delete_document` answers exactly as for a missing collection. A foreign ingest is refused before it parses, embeds or takes the collection lock. Sync and the file watcher act as the collection's recorded owner.
 - **Orphans.** A table that has rows but no metadata row is treated as `default`-namespace data (which is how `list_collections` already reports it); other namespaces are refused. An empty or absent table can be claimed by anyone. The server logs one WARNING at startup that lists collections without a metadata row.
 - **Names are global.** One LanceDB table exists per collection name, so "this name is taken" is observable across namespaces (no owner or content leaks). Namespacing the table names is not done.
+- **Export of another namespace's collection** is refused too, with a different status than `DELETE`/`GET`: REST `POST /collections/{name}/export` answers `409 {"error": "collection_unavailable", "detail": "collection name is not available to this namespace"}` (no job and no archive are created); MCP `export_collection` returns `{"error": "collection name is not available to this namespace", "code": "collection_unavailable"}`. A name that exists in no namespace is still `404` (REST) / `not_found` (MCP).
 - **Archives are bound to their exporter.** Exports are written to `<data dir>/exports/<namespace>/` (`output_path` no longer exists on REST, MCP or the CLI), scheduled backups to `<[backup].output_dir>/<namespace>/`, and the manifest records the namespace. An import reads only from the caller's own two directories; any other path, existing or not, answers the same `400 outside_allowed_dirs`, and a manifest naming another namespace answers `422 archive_namespace_mismatch`. The admin key has no cross-namespace archive access. An archive from before the manifest carried a namespace is accepted only from the caller's own directory; a flat `<data dir>/exports/*.tar.gz` file is importable only by the `default` namespace.
 
 ## What the ACL is
@@ -112,6 +113,7 @@ The ACL surface is narrower than its name suggests. It does **not**:
   - `GET /collections` returns only collections whose `CollectionMeta.namespace` matches the caller (`routes_collections.py`).
   - `DELETE /collections/{name}` returns 404 for cross-namespace deletes.
   - `GET /collections/{name}` returns 404 for cross-namespace access.
+  - `POST /collections/{name}/export` is different: another namespace's collection answers `409` `collection_unavailable` (MCP `export_collection`: `code: "collection_unavailable"`), not 404; only a name that exists nowhere answers 404 (MCP `not_found`). The status code therefore differs from the 404 of `DELETE` and `GET`.
   - `GET /indexing-state` is filtered to the caller's namespace (`routes_state.py`).
   - `GET /status` is filtered to the caller's namespace (`routes_status.py`).
   - `POST /route` filters routing candidates to the caller's namespace (`routes_route.py`).

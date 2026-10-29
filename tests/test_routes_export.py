@@ -27,6 +27,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.paths import get_data_dir
 from archon_search.server import routes_export
 from archon_search.server.app import create_app
+from archon_search.store import COLLECTION_UNAVAILABLE_DETAIL, CollectionOwnershipError
 from archon_search.types import JobStatus
 
 # ---------------------------------------------------------------------------
@@ -51,6 +52,7 @@ def _make_mock_search_store(collection_meta: CollectionMeta | None = None) -> Ma
     mock.migrate_per_collection_model = AsyncMock()
     mock.get_all_collections_meta = AsyncMock(return_value=[])
     mock.get_collection_meta = AsyncMock(return_value=collection_meta)
+    mock.assert_collection_access = AsyncMock()
     return mock
 
 
@@ -122,6 +124,19 @@ def test_post_export_collection_not_found(client_no_collection: TestClient) -> N
     assert response.status_code == 404
     data = response.json()
     assert data["error"] == "not_found"
+
+
+@pytest.mark.integration
+def test_post_export_of_another_namespaces_collection_is_refused_with_the_fixed_text(
+    client_no_collection: TestClient,
+) -> None:
+    """No meta row for the caller but another namespace owns the name: 409, the fixed text, no job queued."""
+    store = client_no_collection.app.state.search_store
+    store.assert_collection_access = AsyncMock(side_effect=CollectionOwnershipError("foreign-col", DEFAULT_NAMESPACE))
+    response = client_no_collection.post("/collections/foreign-col/export", json={})
+    assert response.status_code == 409
+    assert response.json() == {"error": "collection_unavailable", "detail": COLLECTION_UNAVAILABLE_DETAIL}
+    assert client_no_collection.app.state.job_store.list() == []
 
 
 @pytest.mark.integration

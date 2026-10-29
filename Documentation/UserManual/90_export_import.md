@@ -146,7 +146,7 @@ curl -X POST https://host:8765/collections/handbook/export \
 ```
 
 The request body takes no fields: a client that still sends `output_path` gets `422`
-(the field was removed on 2026-10-25). An unknown collection returns `404`.
+(the field was removed on 2026-10-25). An unknown collection returns `404`. A collection name that another namespace owns (admin key included) returns `409` with `{"error": "collection_unavailable", "detail": "collection name is not available to this namespace"}`; no job or archive is created.
 
 **Import** — `POST /collections/{name}/import`
 
@@ -175,7 +175,7 @@ The MCP surface mirrors REST with two non-blocking tools that return the QUEUED 
 - `import_collection(collection, path, force_overwrite=False, ignore_schema_version=False, on_error="fail")`
 
 Both apply the same embedding-model and schema-version checks as REST and return a
-structured error (`code` = `path_unsafe`, `not_found`, `collection_exists`,
+structured error (`code` = `path_unsafe`, `not_found`, `collection_unavailable` (export of a name another namespace owns; an import over one ends as a `FAILED` job with that text), `collection_exists`,
 `embedding_model_mismatch`, …) on rejection. Poll `GET /jobs/{job_id}` for progress.
 
 Path safety is the same as REST: `import_collection` accepts archives inside the caller's own

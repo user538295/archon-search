@@ -153,7 +153,11 @@ from archon_search.server.schemas import (
     GRAPH_COMMUNITIES_NOT_BUILT_CODE,
     INVALID_SCOPE_FILTER_CODE,
 )
-from archon_search.store import CollectionOwnershipError, StoreBusyError
+from archon_search.store import (
+    COLLECTION_UNAVAILABLE_DETAIL,
+    CollectionOwnershipError,
+    StoreBusyError,
+)
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 from archon_search.types import JobStatus
@@ -1740,6 +1744,11 @@ def create_app(
 
         try:
             meta = await pipeline.store.get_collection_meta(collection, _export_ns)
+            if meta is None:
+                # Another namespace's collection reads as the fixed refusal, a name nobody owns as not_found.
+                await pipeline.store.assert_collection_access(collection, _export_ns)
+        except CollectionOwnershipError:
+            return McpErrorResponse(error=COLLECTION_UNAVAILABLE_DETAIL, code=COLLECTION_UNAVAILABLE_CODE)
         except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
             return _internal_error("export_collection: collection lookup failed")
         if meta is None:

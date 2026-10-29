@@ -866,7 +866,7 @@ class ExportRequest(BaseModel):
     "/{name}/export",
     status_code=202,
     response_model=JobResponse,
-    responses=_ERROR_401_404,
+    responses={**_ERROR_401_404, 409: {"model": ErrorDetail, "description": "Collection name is not available to this namespace"}},
 )
 async def export_collection(
     name: str,
@@ -888,6 +888,14 @@ async def export_collection(
     # Verify collection exists
     meta = await search_store.get_collection_meta(name, ns)
     if meta is None:
+        # No meta row in this namespace: either nothing by that name exists (404) or another namespace owns it
+        # (the fixed refusal, same text as an import over it; nothing is queued or written).
+        try:
+            await search_store.assert_collection_access(name, ns)
+        except CollectionOwnershipError:
+            return JSONResponse(
+                {"error": "collection_unavailable", "detail": COLLECTION_UNAVAILABLE_DETAIL}, status_code=409
+            )
         return JSONResponse({"error": "not_found", "detail": f"Collection {name!r} not found"}, status_code=404)
 
     # Compute paths for the job

@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search.store import COLLECTION_UNAVAILABLE_DETAIL, CollectionOwnershipError
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 pytestmark = pytest.mark.integration
@@ -46,6 +47,7 @@ def _make_config(embedding_model: str = "BAAI/bge-small-en-v1.5") -> Any:
 def _make_pipeline(collection_meta: Any = None) -> MagicMock:
     pipeline = MagicMock()
     store = MagicMock()
+    store.assert_collection_access = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=collection_meta)
     pipeline.store = store
     return pipeline
@@ -204,6 +206,20 @@ async def test_mcp_export_collection_not_found(tmp_path: Path) -> None:
     assert isinstance(result, dict)
     assert "error" in result
     assert result.get("code") == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_mcp_export_of_another_namespaces_collection_is_refused_with_the_fixed_text(tmp_path: Path) -> None:
+    """A name another namespace owns answers the fixed refusal, never the owner, and queues no job."""
+    pipeline = _make_pipeline(collection_meta=None)
+    pipeline.store.assert_collection_access = AsyncMock(side_effect=CollectionOwnershipError("foreign-col", "default"))
+    job_store = _make_job_store(tmp_path)
+    app = _make_mcp_app(pipeline, config=_make_config(), job_store=job_store)
+
+    result = await app.tools["export_collection"](collection="foreign-col")
+
+    assert result == {"error": COLLECTION_UNAVAILABLE_DETAIL, "code": "collection_unavailable"}
+    assert job_store.list() == []
 
 
 # ---------------------------------------------------------------------------

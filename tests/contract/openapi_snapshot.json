@@ -4891,6 +4891,16 @@
             },
             "description": "Not Found"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Collection name is not available to this namespace"
+          },
           "422": {
             "content": {
               "application/json": {
