@@ -36,6 +36,7 @@ T-1 manual spot-check checklist (human verification):
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -294,11 +295,24 @@ def test_status_without_server_clean_exit_0(tmp_path):
     returns ``None`` via the ``ConnectError`` path.  In container mode the
     service-section line is suppressed and the telemetry section is silently
     omitted — the result is empty stdout, exit 0, no traceback.
+
+    The host service managers are shadowed by stubs that report "not installed"
+    so a real ``com.archon.search`` launchd / systemd user service on the
+    developer machine cannot leak a ``running`` line into the container-mode
+    output.
     """
     from tests.smoke.conftest import _free_port
 
+    stub_dir = tmp_path / "service-manager-stubs"
+    stub_dir.mkdir()
+    for manager in ("launchctl", "systemctl"):
+        stub = stub_dir / manager
+        stub.write_text("#!/bin/sh\nexit 1\n")
+        stub.chmod(0o755)
+
     dead_port = _free_port()
     env = _make_docker_env(data_dir=tmp_path, port=dead_port)
+    env["PATH"] = f"{stub_dir}{os.pathsep}{env['PATH']}"
     result = subprocess.run(
         [
             "uv", "run", "archon-search", "status",
