@@ -303,6 +303,115 @@ def test_configure_logging_json_includes_correlation_id(tmp_path):
     assert parsed.get("correlation_id") == "req-xyz"
 
 
+_SECRET_URL = "http://hubuser:p4ss-s3cret@127.0.0.1:9/api/models/x"
+
+
+def _log_with_traceback(tmp_path, log_format: str) -> str:
+    configure_logging(_make_config(tmp_path, log_format=log_format))
+    logger = logging.getLogger("archon_search")
+    try:
+        try:
+            raise OSError(f"Client error '404' for url '{_SECRET_URL}'")
+        except OSError as cause:
+            raise RuntimeError("could not fetch model") from cause
+    except RuntimeError:
+        logger.warning("failed against %s", _SECRET_URL, exc_info=True)
+        logger.debug("stack", stack_info=True)
+    for handler in logger.handlers:
+        handler.flush()
+    return (tmp_path / "test.log").read_text()
+
+
+@pytest.mark.parametrize("log_format", ["text", "json"])
+def test_handlers_redact_url_credentials_from_message_and_exception_chain(tmp_path, log_format):
+    text = _log_with_traceback(tmp_path, log_format)
+
+    assert "p4ss-s3cret" not in text
+    assert "hubuser" not in text
+    assert "OSError" in text, "the exception class stays"
+    assert "RuntimeError" in text, "the whole chain stays"
+    assert "127.0.0.1:9/api/models/x" in text, "the rest of the URL stays"
+    assert "Traceback" in text
+
+
+def test_json_lines_stay_valid_json_after_redaction(tmp_path):
+    text = _log_with_traceback(tmp_path, "json")
+
+    parsed = [json.loads(line) for line in text.splitlines() if line.strip()]
+    assert "OSError" in parsed[0]["exc_info"]
+    assert parsed[0]["message"].startswith("failed against http://127.0.0.1:9/")
+
+
+def test_redaction_leaves_the_record_other_handlers_see_untouched(tmp_path):
+    configure_logging(_make_config(tmp_path))
+    seen = []
+
+    class Capture(logging.Handler):
+        def emit(self, record):
+            seen.append(record)
+
+    logger = logging.getLogger("archon_search")
+    logger.addHandler(Capture())
+    logger.warning("failed against %s", _SECRET_URL)
+
+    assert seen[0].getMessage() == f"failed against {_SECRET_URL}"
+    assert "p4ss-s3cret" not in (tmp_path / "test.log").read_text()
+
+
+def test_container_stderr_handler_redacts_too(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    configure_logging(_make_config(tmp_path))
+    logging.getLogger("archon_search").warning("failed against %s", _SECRET_URL)
+
+    err = capsys.readouterr().err
+    assert "failed against http://127.0.0.1:9/api/models/x" in err
+    assert "p4ss-s3cret" not in err
+
+
+@pytest.mark.parametrize("log_format", ["text", "json"])
+def test_handlers_redact_string_extra_fields(tmp_path, log_format):
+    configure_logging(_make_config(tmp_path, log_format=log_format))
+    logging.getLogger("archon_search").warning("fetch failed", extra={"endpoint": _SECRET_URL})
+
+    text = (tmp_path / "test.log").read_text()
+    assert "p4ss-s3cret" not in text
+    if log_format == "json":
+        assert json.loads(text.splitlines()[0])["endpoint"] == "http://127.0.0.1:9/api/models/x"
+
+
+@pytest.mark.parametrize("log_format", ["text", "json"])
+def test_handlers_redact_dict_args_and_object_args_and_keep_percent_text(tmp_path, log_format):
+    class Endpoint:
+        def __str__(self) -> str:
+            return _SECRET_URL
+
+    configure_logging(_make_config(tmp_path, log_format=log_format))
+    logger = logging.getLogger("archon_search")
+    logger.warning("%(url)s at 100%% load", {"url": _SECRET_URL})
+    logger.warning("object %s", Endpoint())
+
+    text = (tmp_path / "test.log").read_text()
+    assert "p4ss-s3cret" not in text
+    assert "at 100% load" in text
+
+
+def test_redaction_keeps_prose_question_marks(tmp_path):
+    configure_logging(_make_config(tmp_path))
+    logging.getLogger("archon_search").warning("IDF clamped (upstream presence over-count?) for %s", "a")
+
+    assert "over-count?)" in (tmp_path / "test.log").read_text()
+
+
+def test_uvicorn_json_formatter_keeps_request_query_strings(tmp_path):
+    from archon_search.logging_setup import build_uvicorn_log_config
+
+    cfg = _make_config(tmp_path, log_format="json")
+    formatter = build_uvicorn_log_config(cfg)["formatters"]["json"]["()"](log_format="json")
+    record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, "GET /search?q=cats HTTP/1.1", (), None)
+
+    assert "/search?q=cats" in formatter.format(record)
+
+
 def test_configure_logging_json_omits_correlation_id_when_absent(tmp_path):
     cfg = _make_config(tmp_path, log_format="json")
     configure_logging(cfg)

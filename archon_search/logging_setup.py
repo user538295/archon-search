@@ -10,6 +10,7 @@ import time
 from io import TextIOWrapper
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
+from types import TracebackType
 from typing import cast
 
 from pythonjsonlogger.jsonlogger import JsonFormatter
@@ -21,7 +22,10 @@ from archon_search._durable_io import (
 )
 from archon_search.config import SearchConfig
 from archon_search.constants import LOG_FILE_DISABLED_WARNING, VIEW_TOKEN_QUERY_PARAM
+from archon_search.log_redaction import redact_secrets
 from archon_search.observability import correlation_id
+
+ExcInfo = tuple[type[BaseException], BaseException, TracebackType | None] | tuple[None, None, None]
 
 
 class CorrelationIdFilter(logging.Filter):
@@ -65,18 +69,57 @@ class QueryCredentialRedactionFilter(logging.Filter):
         return True
 
 
-def _build_formatter(log_format: str) -> logging.Formatter:
-    """Build a formatter matching the configured log_format (text or JSON)."""
+#: Attribute names every ``LogRecord`` has; anything else on a record came from ``extra=`` (or a filter).
+_STANDARD_RECORD_ATTRS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {"message", "asctime"}
+
+
+class _RedactingFormatter(logging.Formatter):
+    """A formatter that redacts credentials from everything it renders: message, traceback and stack text.
+
+    The redaction runs on the rendered text of a copy of the record, so every call site is covered at once,
+    including string ``extra`` fields and ``exc_info`` chains whose raw hub errors embed the credentialed
+    ``HF_ENDPOINT`` URL. The record other handlers (a test's ``caplog``) see stays untouched.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        redacted = copy.copy(record)
+        redacted.msg = redact_secrets(record.getMessage())
+        redacted.args = None
+        for name, value in vars(record).items():
+            if name not in _STANDARD_RECORD_ATTRS and isinstance(value, str):
+                setattr(redacted, name, redact_secrets(value))
+        redacted.exc_text = redact_secrets(record.exc_text) if record.exc_text else None
+        return super().format(redacted)
+
+    def formatException(self, ei: ExcInfo) -> str:
+        return redact_secrets(super().formatException(ei))
+
+    def formatStack(self, stack_info: str) -> str:
+        return redact_secrets(super().formatStack(stack_info))
+
+
+class _RedactingJsonFormatter(_RedactingFormatter, JsonFormatter):
+    """The JSON counterpart of :class:`_RedactingFormatter`."""
+
+
+def _build_formatter(log_format: str, *, redact: bool = False) -> logging.Formatter:
+    """Build a formatter matching the configured log_format (text or JSON).
+
+    ``redact=True`` scrubs credentials from every rendered record (see :func:`redact_secrets`); the
+    ``archon_search`` handlers use it. uvicorn's request lines do not: their request targets legitimately
+    hold query strings, which ``QueryCredentialRedactionFilter`` already redacts selectively.
+    """
     datefmt = "%Y-%m-%dT%H:%M:%SZ"
     fmt = "%(asctime)s %(levelname)s %(name)s %(message)s"
     if log_format == "json":
-        formatter: logging.Formatter = JsonFormatter(
+        json_cls = _RedactingJsonFormatter if redact else JsonFormatter
+        formatter: logging.Formatter = json_cls(
             fmt,
             rename_fields={"levelname": "level", "name": "logger", "asctime": "timestamp"},
             datefmt=datefmt,
         )
     else:
-        formatter = logging.Formatter(fmt, datefmt=datefmt)
+        formatter = (_RedactingFormatter if redact else logging.Formatter)(fmt, datefmt=datefmt)
     formatter.converter = time.gmtime  # type: ignore[method-assign]
     return formatter
 
@@ -162,7 +205,7 @@ def _attach_file_handler(logger: logging.Logger, config: SearchConfig) -> None:
         return
 
     handler.addFilter(CorrelationIdFilter())
-    handler.setFormatter(_build_formatter(config.log_format))
+    handler.setFormatter(_build_formatter(config.log_format, redact=True))
     logger.addHandler(handler)
     # Prevent duplicate output on stderr via root logger.
     logger.propagate = False
@@ -216,7 +259,7 @@ def configure_logging(config: SearchConfig) -> None:
     if container_mode:
         stderr_handler = logging.StreamHandler(sys.stderr)
         stderr_handler.addFilter(CorrelationIdFilter())
-        stderr_handler.setFormatter(_build_formatter(config.log_format))
+        stderr_handler.setFormatter(_build_formatter(config.log_format, redact=True))
         logger.addHandler(stderr_handler)
         # Prevent duplicate output through the root logger.
         logger.propagate = False

@@ -65,7 +65,7 @@ Concrete rules for the proxy:
 - **Pass the `Authorization` header through unchanged.** The bearer token must reach `archon-search`; the proxy must not strip or replace it.
 - **Do not forward `/docs`, `/redoc` and `/openapi.json`** unless you set `docs_enabled = true` on purpose: with it on they are served without a token.
 - **Add rate limiting.** `archon-search` has none built in. Choose a budget that aligns with `[search].max_fanout` and reranker capacity. The server's own limits are the 32 MiB body cap and `[ingest].max_concurrent_tasks` (503 `ingest_busy`).
-- **Log at the proxy.** Server-side access logs are uvicorn's default and do not include the request body; `view_token`, `token`, `api_key` and `access_token` query values are redacted in them. If you need centralized audit, do it at the proxy.
+- **Log at the proxy.** Server-side access logs are uvicorn's default and do not include the request body; `view_token`, `token`, `api_key` and `access_token` query values are redacted in them. Application logs (`archon_search` loggers, file and container stderr) also have URL credentials, query strings, `hf_…`/bearer tokens and `key=value` secrets redacted, including a credential in `HF_ENDPOINT` echoed by a hub error; the install wizard, which does not call `configure_logging`, is not covered. If you need centralized audit, do it at the proxy.
 
 ### Minimal nginx example
 

@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
 from archon_search._durable_io import ensure_private_dir, restrict_tree_to_owner
+from archon_search.log_redaction import redact_secrets
 from archon_search.model_specs import (
     CONFIG_FILE,
     TOKENIZER_FILE,
@@ -43,18 +43,8 @@ _DOWNLOAD_FAILED_DETAIL = "download failed; check the network connection and fre
 _INCOMPLETE_DETAIL = "the downloaded snapshot is missing required files"
 #: Longest exception text a download-failure log line carries.
 _LOG_MESSAGE_MAX_CHARS = 500
-_REDACTED = "<redacted>"
 #: Mode bits that give the group or others any access.
 _GROUP_OTHER_BITS = 0o077
-#: What must never be logged from a hub error: URL credentials and query strings (signed URLs),
-#: Hugging Face tokens, bearer tokens and ``key=value`` secrets.
-_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"(?<=//)[^/\s@]+@"), ""),
-    (re.compile(r"\?[^\s'\"]*"), f"?{_REDACTED}"),
-    (re.compile(r"\bhf_[A-Za-z0-9]+"), f"hf_{_REDACTED}"),
-    (re.compile(r"\bBearer\s+\S+", re.IGNORECASE), f"Bearer {_REDACTED}"),
-    (re.compile(r"\b(token|api[_-]?key|password|secret|authorization)\s*[=:]\s*\S+", re.IGNORECASE), rf"\1={_REDACTED}"),
-)
 
 
 class ModelDownloadError(RuntimeError):
@@ -82,17 +72,16 @@ def _is_offline() -> bool:
 
 
 def _scrub(text: str) -> str:
-    """Drop credentials from a hub exception message before it reaches a log line."""
-    for pattern, replacement in _SECRET_PATTERNS:
-        text = pattern.sub(replacement, text)
+    """Drop credentials from a hub exception message and cap its length for a one-line log message."""
+    text = redact_secrets(text)
     return text if len(text) <= _LOG_MESSAGE_MAX_CHARS else text[:_LOG_MESSAGE_MAX_CHARS] + "..."
 
 
 def _log_download_failure(repo: str, exc: Exception) -> None:
-    """Log why a download failed: WARNING with the exception class and a scrubbed message.
+    """Log why a download failed: WARNING with the exception class and a scrubbed, length-capped message.
 
-    The wire text (:class:`ModelDownloadError`) stays fixed. The raw cause and traceback remain
-    at DEBUG only: hub errors can embed tokens, signed URLs and cache paths.
+    The wire text (:class:`ModelDownloadError`) stays fixed. The raw cause and traceback go to DEBUG;
+    credentials in them are redacted by the ``archon_search`` log handlers (``logging_setup``), not here.
     """
     logger.warning("model download failed for %r: %s: %s", repo, type(exc).__name__, _scrub(str(exc)))
     logger.debug("model download failed for %r: %s", repo, exc, exc_info=exc)
