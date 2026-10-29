@@ -24,4 +24,4 @@ def registered_tools(key_store: KeyStore | None) -> dict[str, Tool]:
 
 def input_properties(tool: Tool) -> set[str]:
     """Return the input property names the tool's advertised JSON schema carries."""
-    return set(tool.to_mcp_tool().inputSchema.get("properties", {}))
+    return set(tool.to_mcp_tool().input_schema.get("properties", {}))

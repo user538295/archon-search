@@ -50,7 +50,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from pythonjsonlogger.jsonlogger import JsonFormatter
+from pythonjsonlogger.json import JsonFormatter
 
 import archon_search.server.app as app_module
 from archon_search.config import SearchConfig

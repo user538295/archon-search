@@ -470,7 +470,7 @@ def test_build_live_report_with_baseline() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_live_report() -> "LiveEvalReport":
+def _make_live_report() -> LiveEvalReport:
     """Build a synthetic LiveEvalReport for serialisation tests."""
     from datetime import UTC, datetime
 

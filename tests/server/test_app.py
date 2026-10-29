@@ -30,7 +30,7 @@ class TestCheckMultilingualDeps:
         mock_import.assert_not_called()
 
     def test_check_multilingual_deps_package_missing(self, tmp_path):
-        """When multilingual=True and fasttext-wheel is not installed, RuntimeError with 'fasttext-wheel' in message."""
+        """When multilingual=True and fasttext-predict is not installed, RuntimeError with 'fasttext-predict' in message."""
         cfg = _make_config(multilingual=True)
         model_path = tmp_path / "models" / "lid.176.ftz"
         model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -42,7 +42,7 @@ class TestCheckMultilingualDeps:
             pytest.raises(RuntimeError) as exc_info,
         ):
             _check_multilingual_deps(cfg)
-        assert "fasttext-wheel" in str(exc_info.value)
+        assert "fasttext-predict" in str(exc_info.value)
 
     @pytest.mark.parametrize(
         ("prefix_fixture", "command"),
@@ -57,7 +57,7 @@ class TestCheckMultilingualDeps:
         ):
             _check_multilingual_deps(_make_config(multilingual=True))
         assert str(exc_info.value) == (
-            f"multilingual=true but fasttext-wheel is not installed; run: {command} 'archon-search[multilingual]'"
+            f"multilingual=true but fasttext-predict is not installed; run: {command} 'archon-search[multilingual]'"
         )
 
     def test_check_multilingual_deps_model_missing(self, tmp_path):

@@ -13,7 +13,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import cast
 
-from pythonjsonlogger.jsonlogger import JsonFormatter
+from pythonjsonlogger.json import JsonFormatter
 
 from archon_search._durable_io import (
     PRIVATE_FILE_MODE,

@@ -5,76 +5,59 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 description = "Standalone hybrid retrieval + routing server: LanceDB, PyTorch embedder, cross-encoder reranker, FastAPI"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
-    "lancedb>=0.30.0",
-    "tomlkit>=0.12",
-    "click>=8.1",
-    "claude-agent-sdk>=0.1.46",
-    "httpx>=0.25",
-    "chonkie>=0.5.0",
-    "docling>=2.80.0",
-    # rapidocr comes from docling (docling-slim[standard]: rapidocr>=3.9.1,<4.0.0). 3.10.0
-    # removed `PP_OCRV6_LANGS` from `rapidocr.utils.model_resolver`, which docling 2.135.0
-    # imports (docling/models/stages/ocr/rapid_ocr_model.py:190), so every RapidOCR image /
-    # scanned-PDF OCR raised ImportError (docling-project/docling#4702). Declared here, in
-    # the wheel metadata, because only that reaches pip / `uv tool install` users. Remove
-    # the cap once the `docling` floor above is a release that no longer imports
-    # PP_OCRV6_LANGS (the unlocked lane, scripts/test-unlocked-deps.sh, proves it).
-    "rapidocr>=3.9.1,<3.10",
+    "fastapi>=0.162",
+    "uvicorn[standard]>=0.54",
+    "lancedb>=0.41",
+    "tomlkit>=0.15",
+    "click>=8.5",
+    "claude-agent-sdk>=0.2.174",
+    "httpx>=0.28",
+    "chonkie>=1.7",
+    "docling>=2.144.0",
     # PyTorch runs the embedder and the cross-encoder reranker (torch_runtime.py,
     # reranker_loading.py). torch/torchvision are also pulled by docling; they are
     # declared here as direct dependencies so the [tool.uv.sources] CPU-index pin
     # below binds (uv applies sources to declared deps, not transitive-only
     # ones). The ceiling and torchvision mirror docling's own `torch<3.0.0` /
-    # `torchvision<1`. The floor is 2.4, above docling's `torch>=2.2.2`: with Python
-    # >= 3.12, torch 2.2.2 and 2.3.1 cannot load ModernBERT (a registry embedder; its
-    # `torch.compile` raises "Dynamo is not supported on Python 3.12+") and transformers
-    # 5.13 treats torch < 2.4 as absent; 2.4.1 passed the unit and parity lanes on
-    # transformers 4.57.1 and 5.13.1. S269: on linux/amd64 the default PyPI torch drags
-    # the ~6 GB CUDA runtime a CPU host cannot run.
-    "torch>=2.4,<3.0.0",
-    "torchvision<1",
+    # `torchvision<1`. The floors are the latest releases (torch 2.15, torchvision 0.29.2);
+    # for reference, 2.9.0 is the oldest torch with CPython 3.14 wheels (PyPI file lists,
+    # checked 2026-10-29) and `requires-python` is >=3.14. S269: on linux/amd64 the
+    # default PyPI torch drags the ~6 GB CUDA runtime a CPU host cannot run.
+    "torch>=2.15,<3.0.0",
+    "torchvision>=0.29.2,<1",
     # transformers builds the encoder and sequence-classification models
-    # (torch_runtime.py, reranker_loading.py). Ceiling matches constraint-dependencies.
-    "transformers>=4.57,<5.14",
+    # (torch_runtime.py, reranker_loading.py). The latest release (5.21) is above the
+    # `<5.17.0` cap of gliner (graph extra); see override-dependencies in [tool.uv].
+    "transformers>=5.21,<6",
     # Tokenizer.from_file loads each snapshot's tokenizer.json (torch_runtime.py, reranker_loading.py).
-    "tokenizers",
+    "tokenizers>=0.23",
     # safe_open reads the XLM-R classifier head from model.safetensors (reranker_loading.py).
-    "safetensors",
+    "safetensors>=0.8",
     # snapshot_download fetches the pinned model snapshots (model_store.py).
-    "huggingface-hub",
-    "markitdown[docx,pptx,xls,xlsx,outlook]>=0.1.6,<0.2",
-    "watchdog>=3.0",
-    "pydantic>=2.0",
-    "python-json-logger>=2.0,<3",
-    "fastmcp>=3.4,<4",
-    # mcp comes from fastmcp (fastmcp-slim 3.4.x: mcp>=1.24.0,<2.0). mcp <=1.29.x closed the
-    # SSE response stream of a Streamable HTTP POST only on error, so every normally answered
-    # POST leaked one unclosed anyio MemoryObjectReceiveStream (ResourceWarning); fixed in 1.30.0
-    # (modelcontextprotocol/python-sdk#3426). Declared here, in the wheel metadata, because
-    # only that reaches pip / `uv tool install` users. Does not over-constrain: every
-    # fastmcp(-slim) 3.4.0–3.4.8 requires mcp>=1.24.0,<2.0, so the floor excludes no fastmcp
-    # release. Remove once the fastmcp floor requires mcp>=1.30.0 itself.
-    "mcp>=1.30.0",
+    "huggingface-hub>=2.3,<3",
+    "markitdown[docx,pptx,xls,xlsx,outlook]>=0.1.9,<0.2",
+    "watchdog>=6.0",
+    "pydantic>=2.14",
+    "python-json-logger>=4.2,<5",
+    "fastmcp>=4.1.4,<5",
 ]
 
 [project.optional-dependencies]
-multilingual = ["fasttext-wheel>=0.9.2"]
-hyde = ["anthropic>=0.40"]
-rag_fusion = ["anthropic>=0.40"]
-ollama = ["ollama>=0.3"]
-openai-provider = ["openai>=1.0"]
+multilingual = ["fasttext-predict>=0.9.2.4"]
+hyde = ["anthropic>=2.3"]
+rag_fusion = ["anthropic>=2.3"]
+ollama = ["ollama>=0.6"]
+openai-provider = ["openai>=3.41"]
 graph = [
-    "gliner>=0.2.26",
-    "networkx>=3.0",
+    "gliner>=0.2.29",
+    "networkx>=3.7",
     "leidenalg>=0.12",
-    "igraph>=0.11",
+    "igraph>=1.0",
 ]
 code = [
-    "tree-sitter>=0.25.0,<0.26",
+    "tree-sitter>=0.26.0,<0.27",
     "tree-sitter-python>=0.25.0,<0.26",
     "tree-sitter-typescript>=0.23.2,<0.24",
     "tree-sitter-javascript>=0.25.0,<0.26",
@@ -82,7 +65,7 @@ code = [
     "tree-sitter-rust>=0.24.2,<0.25",
     "tree-sitter-java>=0.23.5,<0.24",
     "tree-sitter-bash>=0.25.1,<0.26",
-    "tree-sitter-swift>=0.7.3,<0.8",
+    "tree-sitter-swift>=0.7.4,<0.8",
     "tree-sitter-c-sharp>=0.23.5,<0.24",
 ]
 
@@ -91,22 +74,22 @@ archon-search = "archon_search.cli.main:main"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "pytest-cov>=5.0",
-    "pytest-xdist>=3.0",
-    "hypothesis>=6.0",
-    "reportlab>=4.5.1",
-    "openai>=1.0",
-    "ollama>=0.3",
-    "textual>=0.80",
+    "pytest>=9.2",
+    "pytest-asyncio>=1.4",
+    "pytest-cov>=7.1",
+    "pytest-xdist>=3.8",
+    "hypothesis>=6.170",
+    "reportlab>=5.1",
+    "openai>=3.41",
+    "ollama>=0.6",
+    "textual>=8.2",
     "xlwt>=1.3",
     # Pull all feature extras into the default `uv sync` so no test skips for a
     # missing optional dep (uv 0.11 has no config to auto-install extras).
     "archon-search[multilingual,hyde,rag_fusion,ollama,openai-provider,graph,code]",
     # FastAPI/Starlette TestClient backend (starlette.testclient imports httpx2 first and
     # warns on the httpx fallback). Runtime code keeps using httpx.
-    "httpx2>=2.0.0",
+    "httpx2>=2.16",
 ]
 
 [build-system]
@@ -136,9 +119,9 @@ packages = ["archon_search"]
 extend-exclude = ["tests/eval/corpus"]
 
 [tool.ruff.lint]
-# Pinned copy of ruff 0.17.2's default rule set (`ruff check --show-settings --isolated`), so every
+# Pinned copy of ruff 0.17.3's default rule set (`ruff check --show-settings --isolated`), so every
 # contributor and CI get the same result regardless of the ruff version that is installed. CI runs
-# `uvx ruff@0.17.2 check .`. Rules outside this set (E402, PLC0415, ANN, ARG, SLF, ...) are NOT
+# `uvx ruff@0.17.3 check .`. Rules outside this set (E402, PLC0415, ANN, ARG, SLF, ...) are NOT
 # enforced; do not add `# noqa` codes for them (RUF100 flags those as unused).
 select = [
     "YTT101", "YTT102", "YTT103", "YTT201", "YTT202", "YTT203", "YTT204", "YTT301", "YTT302", "YTT303", "ASYNC100", "ASYNC105",
@@ -255,11 +238,20 @@ markers = [
 [tool.uv]
 package = true
 
-# gliner>=0.2.26 (resolves 0.2.28) caps transformers below 5.14.0, but this repo's
-# non-darwin lock resolves transformers to 5.14.1 without a pin. A single
-# cross-platform ceiling (not marker-scoped) converges both platforms onto one
-# shared transformers version instead of splitting per-platform.
-constraint-dependencies = ["transformers>=4.51.3,<5.14.0"]
+# Four latest releases sit above caps declared by other packages, checked on PyPI 2026-10-29:
+# gliner 0.2.29 (graph extra) caps transformers below 5.17.0; docling-ibm-models 4.0.4
+# (via docling) caps huggingface-hub below 2; sympy 1.14.0 (via torch) caps mpmath below 1.4;
+# docling-core 2.105.0 (chunking extra) caps semchunk below 4. This project targets
+# transformers 5.21, huggingface-hub 2.3, mpmath 1.4 and semchunk 4.1, so these overrides
+# replace the four caps for `uv lock` / `uv sync`. They are uv project settings, not wheel
+# metadata: pip and `uv tool install` users who add the graph extra or install docling still
+# resolve those packages' own caps.
+override-dependencies = [
+    "transformers>=5.21,<6",
+    "huggingface-hub>=2.3,<3",
+    "mpmath>=1.4.1,<2",
+    "semchunk>=4.1,<5",
+]
 
 # PyTorch CPU wheel index (S269). On Linux the default PyPI `torch` wheel
 # declares ~18 nvidia-*/cuda* dependencies gated on Linux — the multi-GB CUDA

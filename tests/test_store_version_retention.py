@@ -22,6 +22,13 @@ from archon_search.constants import DEFAULT_VERSION_RETENTION_HOURS
 from archon_search.graph_store import GraphStore
 from archon_search.store import _META_TABLE, SearchStore
 
+# These tests prune with zero retention on purpose, to observe every superseded version going away.
+# LanceDB (>= 0.41) warns about exactly that call; the warning is the library's caution for
+# concurrent readers, which these tests control. Production passes DEFAULT_VERSION_RETENTION_HOURS.
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:optimize\(cleanup_older_than=0\) removes every version:UserWarning"
+)
+
 _DIM = 4
 _COLLECTION = "retention_col"
 _DOCS = 6

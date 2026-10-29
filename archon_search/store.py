@@ -518,7 +518,7 @@ class SearchStore:
         later ``lock_for`` a second lock — two concurrent holders. ``asyncio.Lock`` exposes no public
         waiter count; ``_waiters`` (None or a deque that keeps each waiter's future until that waiter
         resumes) is the stdlib's own bookkeeping — private, verified on the supported CPython versions
-        (3.12 in CI, 3.13, 3.14) and guarded by
+        (3.14 in CI, 3.15) and guarded by
         ``test_discard_lock_keeps_a_lock_a_woken_waiter_has_not_yet_acquired`` in ``tests/test_store_lock.py``.
         """
         lock = self._collection_locks.get(collection)

@@ -5,21 +5,21 @@
 # The CPU / GPU variant is selected via the BASE_IMAGE build-arg:
 #
 #   docker build .                                                          # CPU (default)
-#   docker build --build-arg BASE_IMAGE=python:3.12-slim .                   # CPU (explicit)
-#   docker build --build-arg BASE_IMAGE=nvidia/cuda:13.0.3-base-ubuntu22.04 .  # GPU (release tag: GPU_BASE_IMAGE in .github/workflows/archon-search-release.yml)
+#   docker build --build-arg BASE_IMAGE=python:3.14-slim .                   # CPU (explicit)
+#   docker build --build-arg BASE_IMAGE=nvidia/cuda:13.4.3-base-ubuntu22.04 .  # GPU (release tag: GPU_BASE_IMAGE in .github/workflows/archon-search-release.yml)
 #
-# The CPU base ships Python 3.12 already; the NVIDIA CUDA base ships only the
-# CUDA runtime and is Ubuntu-based, so we conditionally install Python 3.12
+# The CPU base ships Python 3.14 already; the NVIDIA CUDA base ships only the
+# CUDA runtime and is Ubuntu-based, so we conditionally install Python 3.14
 # from deadsnakes when the base does not provide it. The GPU variant runs on
 # PyPI's CUDA build of PyTorch: its CUDA 13 / cuDNN 9 wheels carry the libraries
 # torch preloads itself, so the GPU base is the slim CUDA 13 `-base` tag (no
 # system cuDNN to clash with the wheels'); CUDA 13 needs an NVIDIA driver >= 580.
 
-ARG BASE_IMAGE=python:3.12-slim
+ARG BASE_IMAGE=python:3.14-slim
 FROM ${BASE_IMAGE}
 
 # Re-declare ARGs after FROM so they are visible to RUN instructions.
-ARG BASE_IMAGE=python:3.12-slim
+ARG BASE_IMAGE=python:3.14-slim
 ARG GIT_COMMIT=unknown
 # Release tag passed by the release workflow. `.git` is dockerignored, so
 # hatch-vcs cannot derive the version at build time; we stamp it explicitly.
@@ -39,24 +39,24 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DEFAULT_TIMEOUT=100 \
     PIP_RETRIES=10
 
-# Install base OS dependencies. On the python:3.12-slim base, Python is
+# Install base OS dependencies. On the python:3.14-slim base, Python is
 # already present and apt is Debian-based; on the NVIDIA CUDA Ubuntu base,
-# Python 3.12 must be added via the deadsnakes PPA (Ubuntu 22.04 ships 3.10).
+# Python 3.14 must be added via the deadsnakes PPA (Ubuntu 22.04 ships 3.10).
 # The `tini` package provides the init-style PID 1 used by ENTRYPOINT.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates tini libxcb1 libx11-6 libxext6 libglib2.0-0; \
-    if ! command -v python3.12 >/dev/null 2>&1; then \
+    if ! command -v python3.14 >/dev/null 2>&1; then \
         apt-get install -y --no-install-recommends software-properties-common gnupg; \
         add-apt-repository -y ppa:deadsnakes/ppa; \
         apt-get update; \
         apt-get install -y --no-install-recommends \
-            python3.12 python3.12-venv python3.12-dev; \
+            python3.14 python3.14-venv python3.14-dev; \
     fi; \
-    # Ensure a working `python3` shim points to 3.12 on the GPU base. The
-    # CPU base already ships `python3` as 3.12, so this is a no-op there.
-    if [ ! -e /usr/local/bin/python3 ] || ! /usr/local/bin/python3 -c 'import sys; assert sys.version_info[:2]==(3,12)' >/dev/null 2>&1; then \
-        ln -sf "$(command -v python3.12)" /usr/local/bin/python3; \
+    # Ensure a working `python3` shim points to 3.14 on the GPU base. The
+    # CPU base already ships `python3` as 3.14, so this is a no-op there.
+    if [ ! -e /usr/local/bin/python3 ] || ! /usr/local/bin/python3 -c 'import sys; assert sys.version_info[:2]==(3,14)' >/dev/null 2>&1; then \
+        ln -sf "$(command -v python3.14)" /usr/local/bin/python3; \
     fi; \
     # pip is required to bootstrap the project install.
     if ! /usr/local/bin/python3 -m pip --version >/dev/null 2>&1; then \
@@ -72,7 +72,7 @@ RUN set -eux; \
     # renders, so the three glvnd packages are unpacked alone and their Mesa dependency is skipped.
     # `--force-depends` leaves libglx0's Mesa dependency unmet in dpkg's database, and apt refuses
     # every later install/purge/autoremove while one is unmet: this unpack MUST be the last package
-    # operation of this RUN (the GPU base installs python3.12 and curl above through apt).
+    # operation of this RUN (the GPU base installs python3.14 and curl above through apt).
     (cd /tmp && apt-get download libgl1 libglvnd0 libglx0 \
         && dpkg --force-depends -i libgl1_*.deb libglvnd0_*.deb libglx0_*.deb \
         && rm -f libgl1_*.deb libglvnd0_*.deb libglx0_*.deb); \

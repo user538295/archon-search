@@ -145,14 +145,14 @@ class LanguageDetector:
     Raises
     ------
     RuntimeError
-        If ``fasttext-wheel`` is not installed.
+        If ``fasttext-predict`` is not installed.
     FileNotFoundError
         If ``model_path`` does not exist.
     """
 
     def __init__(self, model_path: Path) -> None:
         if fasttext is None:
-            raise RuntimeError(f"fasttext-wheel not installed; run: {extra_install_hint('multilingual')}")
+            raise RuntimeError(f"fasttext-predict not installed; run: {extra_install_hint('multilingual')}")
         if not model_path.exists():
             raise FileNotFoundError(
                 f"fasttext model not found at {model_path}; "

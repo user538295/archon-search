@@ -77,7 +77,7 @@ def test_missing_fasttext_names_the_install_command(
     model_path.touch()
     with patch.object(ld_module, "fasttext", None), pytest.raises(RuntimeError) as excinfo:
         ld_module.LanguageDetector(model_path)
-    assert str(excinfo.value) == f"fasttext-wheel not installed; run: {command} 'archon-search[multilingual]'"
+    assert str(excinfo.value) == f"fasttext-predict not installed; run: {command} 'archon-search[multilingual]'"
 
 
 @_INSTALL_METHODS

@@ -1035,7 +1035,7 @@ class TestRevertMultilingualFlag:
         config_path = tmp_path / "archon-search.toml"
         config_path.write_text("[database]\nmultilingual = true\n")
 
-        # Simulate fasttext-wheel absent: `import fasttext` raises ImportError.
+        # Simulate fasttext-predict absent: `import fasttext` raises ImportError.
         monkeypatch.setitem(sys.modules, "fasttext", None)
 
         with pytest.raises(RuntimeError):

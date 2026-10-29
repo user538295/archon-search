@@ -93,7 +93,7 @@ async def _stream_completion(
     completion_id: str,
     model: str,
     inject_citations: bool,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """Async generator yielding SSE frames for a streaming chat completion.
 
     Yields:

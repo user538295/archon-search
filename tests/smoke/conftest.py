@@ -104,7 +104,7 @@ def _subprocess_env(*, port: int, data_dir: Path, api_key: str) -> dict[str, str
         # ARCHON_SEARCH_CONFIG exported in the developer's shell never reaches the
         # subprocess (load_config() treats a missing file as "use defaults") —
         # without this, an operator TOML enabling e.g. [database].multilingual =
-        # true with fasttext-wheel uninstalled would make the smoke server fail
+        # true with fasttext-predict uninstalled would make the smoke server fail
         # to start on that machine.
         "ARCHON_SEARCH_CONFIG": str(data_dir / "archon-search.toml"),
         "ARCHON_SEARCH_API_KEY": api_key,

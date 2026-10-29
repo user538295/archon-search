@@ -4,6 +4,7 @@ These tests parse the YAML and assert structural invariants of the CI
 configuration — no mocking, no network calls.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -15,8 +16,8 @@ WORKFLOW_PATH = (
     / "workflows"
     / "archon-search-release.yml"
 )
-# The NVIDIA CUDA tag the GPU image is verified on (Dockerfile, Documentation/UserManual/140_running_with_docker.md).
-GPU_BASE_IMAGE = "nvidia/cuda:13.0.3-base-ubuntu22.04"
+# The GPU image base is an NVIDIA CUDA 13 `-base` tag on Ubuntu 22.04 (Dockerfile, Documentation/UserManual/140_running_with_docker.md).
+GPU_BASE_IMAGE_PATTERN = re.compile(r"nvidia/cuda:13\.\d+\.\d+-base-ubuntu22\.04")
 
 
 @pytest.fixture(scope="module")
@@ -154,9 +155,9 @@ def test_docker_job_logs_in_to_ghcr(docker_steps: list[dict]) -> None:
 
 
 def test_docker_job_builds_cpu_image_with_base_image_python(workflow_text: str) -> None:
-    """CPU build step must pass --build-arg BASE_IMAGE=python:3.12-slim."""
-    assert "--build-arg BASE_IMAGE=python:3.12-slim" in workflow_text, (
-        "docker job must build the CPU image with BASE_IMAGE=python:3.12-slim"
+    """CPU build step must pass --build-arg BASE_IMAGE=python:3.14-slim."""
+    assert "--build-arg BASE_IMAGE=python:3.14-slim" in workflow_text, (
+        "docker job must build the CPU image with BASE_IMAGE=python:3.14-slim"
     )
 
 
@@ -167,11 +168,12 @@ def _gpu_build_step(docker_steps: list[dict]) -> dict:
 
 def test_docker_job_defines_the_gpu_base_image_once(docker_job: dict, workflow_text: str) -> None:
     """The GPU base tag is the docker job's ``GPU_BASE_IMAGE``, written nowhere else in the workflow."""
-    assert docker_job.get("env", {}).get("GPU_BASE_IMAGE") == GPU_BASE_IMAGE, (
-        f"docker job must define env GPU_BASE_IMAGE: {GPU_BASE_IMAGE} (the verified NVIDIA CUDA tag)"
+    gpu_base_image = docker_job.get("env", {}).get("GPU_BASE_IMAGE", "")
+    assert GPU_BASE_IMAGE_PATTERN.fullmatch(gpu_base_image), (
+        f"docker job must define env GPU_BASE_IMAGE as an NVIDIA CUDA 13 -base ubuntu22.04 tag, got: {gpu_base_image!r}"
     )
-    assert workflow_text.count(GPU_BASE_IMAGE) == 1, (
-        f"{GPU_BASE_IMAGE} must appear only in the docker job's env; reference it as GPU_BASE_IMAGE elsewhere"
+    assert workflow_text.count(gpu_base_image) == 1, (
+        f"{gpu_base_image} must appear only in the docker job's env; reference it as GPU_BASE_IMAGE elsewhere"
     )
 
 

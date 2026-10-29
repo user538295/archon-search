@@ -59,8 +59,8 @@ The CPU / GPU variant is chosen at **build time** via the `BASE_IMAGE` build-arg
 
 | Tag | Base image | Use when |
 | --- | --- | --- |
-| `:latest`, `:<version>` | `python:3.12-slim` | Any host without an NVIDIA GPU. CPU inference only. |
-| `:gpu`, `:<version>-gpu` | `nvidia/cuda:13.0.3-base-ubuntu22.04` (amd64 only) | NVIDIA host with driver 580 or later and the NVIDIA Container Toolkit; start it with `--gpus all`. Runs PyTorch's CUDA build, so embedding and reranking use the GPU. See [Running the GPU image](#running-the-gpu-image). |
+| `:latest`, `:<version>` | `python:3.14-slim` | Any host without an NVIDIA GPU. CPU inference only. |
+| `:gpu`, `:<version>-gpu` | `nvidia/cuda:13.4.3-base-ubuntu22.04` (amd64 only) | NVIDIA host with driver 580 or later and the NVIDIA Container Toolkit; start it with `--gpus all`. Runs PyTorch's CUDA build, so embedding and reranking use the GPU. See [Running the GPU image](#running-the-gpu-image). |
 
 The `:latest` CPU image ships the **CPU-only** PyTorch build: the image's pip configuration (`/etc/pip.conf`) adds the PyTorch CPU wheel index, so pip installs `torch==<ver>+cpu`. Embedding, reranking and PDF and image-OCR parsing (docling) run on it, on CPU; it pulls no NVIDIA CUDA runtime, so the image carries no GPU libraries it cannot execute. For a GPU in a container, use the `:gpu` image.
 

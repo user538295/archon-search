@@ -10,7 +10,7 @@ and in `Documentation/`; see the map at the bottom. Testing rules live in `tests
 embeddings, a cross-encoder reranker, a multi-collection router, FastAPI HTTP control plane, and an MCP
 endpoint sharing the same auth. Runtime state lives under `~/.archon-search/`.
 
-- Python `>=3.12`, managed with `uv`.
+- Python `>=3.14`, managed with `uv`.
 - Package directory `archon_search/` (underscore), distribution `archon-search` (hyphen).
   `pyproject.toml` `[tool.hatch.build.targets.wheel].packages` is explicit about this — don't "fix" it.
 - Version comes from git tags via `hatch-vcs` (CalVer `YY.M.<rev-count>`); never hardcode versions.
@@ -23,7 +23,7 @@ uv run archon-search           # entry point archon_search.cli.main:main
 uv run archon-search serve     # foreground (container / direct-run); binds 127.0.0.1 natively, 0.0.0.0 only
                                # when ARCHON_SEARCH_CONTAINER=1; never touches launchd/systemd, blocks until SIGTERM/Ctrl-C
 uv run pytest                  # full suite — see tests/CLAUDE.md before running
-uvx ruff@0.17.2 check .        # lint, zero findings (rule set pinned in pyproject.toml; CI runs the same)
+uvx ruff@0.17.3 check .        # lint, zero findings (rule set pinned in pyproject.toml; CI runs the same)
 bash release.sh                # tag + push; CI runs eval + publishes to PyPI via OIDC
                                # `-y` non-interactive, `--dry-run` preview
 ```

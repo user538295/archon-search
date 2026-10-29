@@ -525,7 +525,7 @@ def test_configure_logging_formatter_uses_utc(tmp_path, log_format):
 
 
 def test_json_formatter_importable():
-    from pythonjsonlogger.jsonlogger import JsonFormatter  # noqa: F401
+    from pythonjsonlogger.json import JsonFormatter  # noqa: F401
 
 
 def test_configure_logging_sets_propagate_false_when_file_handler_attached(tmp_path):
@@ -742,7 +742,7 @@ def test_container_env_stderr_handler_uses_text_formatter(tmp_path, monkeypatch)
     formatter = handler.formatter
     assert formatter is not None
     # Text formatter is a plain logging.Formatter (not JsonFormatter)
-    from pythonjsonlogger.jsonlogger import JsonFormatter
+    from pythonjsonlogger.json import JsonFormatter
     assert not isinstance(formatter, JsonFormatter)
     assert isinstance(formatter, logging.Formatter)
     # Format string contains a timestamp or level placeholder
@@ -758,7 +758,7 @@ def test_container_env_stderr_handler_uses_json_formatter(tmp_path, monkeypatch)
     stderr_handlers = _get_stderr_stream_handlers(logger)
     assert stderr_handlers
     handler = stderr_handlers[0]
-    from pythonjsonlogger.jsonlogger import JsonFormatter
+    from pythonjsonlogger.json import JsonFormatter
     assert isinstance(handler.formatter, JsonFormatter)
 
 

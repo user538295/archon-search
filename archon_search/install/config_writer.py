@@ -567,7 +567,7 @@ def _revert_multilingual_flag(config_path: Path, dry_run: bool) -> None:
     ``[multilingual]`` extra is installed. If a later step aborts or fails
     before that install succeeds, leaving ``multilingual=true`` on disk would
     hard-fail the next server start via app.py's ``_check_multilingual_deps``
-    (fasttext-wheel absent). Reverting lets the server start English-only
+    (fasttext-predict absent). Reverting lets the server start English-only
     instead of crashing. Mirrors :func:`_revert_graph_enabled_flag`. Note the
     ``multilingual=true`` flag reverted here is written by the profile config
     writer (``_write_profile_config``/``_profile_toml``), NOT by the

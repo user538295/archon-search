@@ -34,7 +34,7 @@ pytestmark = pytest.mark.integration
 # ---------------------------------------------------------------------------
 
 @contextlib.contextmanager
-def _noop_install_lock() -> Generator[None, None, None]:
+def _noop_install_lock() -> Generator[None]:
     """No-op replacement for _acquire_install_lock.
 
     Currently inert: every wizard run in this module is ``--dry-run``, and

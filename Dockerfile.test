@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # Test runner image — source is mounted at /workspace via compose volume.
 # Not for production: ships uv, runs as non-root to match permission-test expectations.
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 1000 --create-home --shell /bin/sh runner && \
     mkdir -p /cache/uv /venv /tmp/archon-test/models && \

@@ -87,7 +87,7 @@ class StageRecorder:
 
 
 @contextmanager
-def record_stage(name: str) -> Generator[None, None, None]:
+def record_stage(name: str) -> Generator[None]:
     recorder = _stage_recorder.get()
     if recorder is None:
         yield
@@ -100,7 +100,7 @@ def record_stage(name: str) -> Generator[None, None, None]:
 
 
 @contextmanager
-def paused_stage_recorder() -> Generator[None, None, None]:
+def paused_stage_recorder() -> Generator[None]:
     """Run a block that is not a retrieval stage off the bound recorder.
 
     Nothing inside the block is recorded (HyDE's hypothesis ``embed`` included), and
@@ -121,7 +121,7 @@ def paused_stage_recorder() -> Generator[None, None, None]:
 
 
 @contextmanager
-def bind_stage_recorder() -> Generator[StageRecorder, None, None]:
+def bind_stage_recorder() -> Generator[StageRecorder]:
     recorder = StageRecorder()
     token = _stage_recorder.set(recorder)
     try:

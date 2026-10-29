@@ -36,13 +36,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Set up Python 3.14
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
 
@@ -201,13 +201,13 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Releasing tag: $TAG"
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Set up Python 3.14
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - name: Install hatch
         run: uv tool install hatch
 
@@ -231,7 +231,7 @@ jobs:
           fi
 
       - name: Publish to PyPI (OIDC, no stored secrets)
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           skip-existing: true
 
@@ -241,10 +241,10 @@ jobs:
   # Builds two image variants from the tagged source tree and pushes them to
   # GHCR:
   #   - CPU: `archon-search:<tag>` and `archon-search:latest`
-  #         base = python:3.12-slim (CPU-only PyTorch wheels)
+  #         base = python:3.14-slim (CPU-only PyTorch wheels)
   #   - GPU: `archon-search:<tag>-gpu` and `archon-search:gpu`
   #         base = the job's `GPU_BASE_IMAGE` (the CUDA 13 `-base` tag)
-  #         (Python 3.12 added via the deadsnakes PPA; PyPI's CUDA build of
+  #         (Python 3.14 added via the deadsnakes PPA; PyPI's CUDA build of
   #          torch, whose CUDA 13 / cuDNN 9 libraries come from the pip
   #          wheels it depends on, so the base ships only the CUDA runtime
   #          and env — see the Dockerfile)
@@ -288,7 +288,7 @@ jobs:
     env:
       # The GPU image's base, named once for the build step, its name and the
       # failure annotation.
-      GPU_BASE_IMAGE: nvidia/cuda:13.0.3-base-ubuntu22.04
+      GPU_BASE_IMAGE: nvidia/cuda:13.4.3-base-ubuntu22.04
     permissions:
       contents: read
       packages: write
@@ -301,9 +301,9 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -323,13 +323,13 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Building images for tag: $TAG"
 
-      - name: Build and push CPU image (BASE_IMAGE=python:3.12-slim)
+      - name: Build and push CPU image (BASE_IMAGE=python:3.14-slim)
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           docker buildx build --push \
             --platform linux/amd64,linux/arm64 \
-            --build-arg BASE_IMAGE=python:3.12-slim \
+            --build-arg BASE_IMAGE=python:3.14-slim \
             --build-arg GIT_COMMIT=${{ github.sha }} \
             --build-arg RELEASE_VERSION=$TAG \
             -t ghcr.io/${{ github.repository_owner }}/archon-search:$TAG \

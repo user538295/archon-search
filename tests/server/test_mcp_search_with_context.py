@@ -451,10 +451,10 @@ def test_search_with_context_docstring_states_the_bound() -> None:
 
 
 def test_search_with_context_published_schema_states_the_bound() -> None:
-    """The real FastMCP inputSchema documents the bound without minimum/maximum keys,
+    """The real FastMCP input schema documents the bound without minimum/maximum keys,
     so out-of-range values reach the tool and return code="validation_error"."""
     tool = registered_tools(None)["search_with_context"]
-    prop = tool.to_mcp_tool().inputSchema["properties"]["context_window"]
+    prop = tool.to_mcp_tool().input_schema["properties"]["context_window"]
 
     assert prop["type"] == "integer"
     assert prop["default"] == DEFAULT_CONTEXT_WINDOW

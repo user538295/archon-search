@@ -23,7 +23,7 @@ def test_detect_model_not_installed(tmp_path: Path) -> None:
         with patch.object(ld_module, "fasttext", None):
             from archon_search.language_detector import LanguageDetector as LD
 
-            with pytest.raises(RuntimeError, match="fasttext-wheel not installed"):
+            with pytest.raises(RuntimeError, match="fasttext-predict not installed"):
                 LD(model_path)
 
 
@@ -315,3 +315,28 @@ def test_module_constants() -> None:
 
     assert FASTTEXT_MODEL_FILENAME == "lid.176.ftz"
     assert get_fasttext_models_dir() == Path.home() / ".archon-search" / "models"
+
+
+# ---------------------------------------------------------------------------
+# Test: the installed fasttext package works under the installed NumPy
+# ---------------------------------------------------------------------------
+
+def test_installed_fasttext_predict_is_compatible_with_installed_numpy() -> None:
+    """The real ``fasttext`` ``predict`` wrapper must not raise under the shipped NumPy.
+
+    ``fasttext-wheel`` 0.9.2 converted predictions with ``np.array(probs, copy=False)``, which
+    NumPy 2 turns into ``ValueError: Unable to avoid copy`` — so every language detection
+    failed. Only the pybind layer is stubbed; the Python wrapper under test is the real one.
+    """
+    from types import SimpleNamespace
+
+    pytest.importorskip("fasttext")
+    from fasttext.FastText import _FastText
+
+    model = _FastText()
+    model.f = SimpleNamespace(predict=lambda text, k, threshold, on_unicode_error: [(0.97, "__label__en")])
+
+    labels, probabilities = model.predict("hello world", 1)
+
+    assert labels[0] == "__label__en"
+    assert probabilities[0] == pytest.approx(0.97)

@@ -78,7 +78,7 @@ ARCHON_RUNTIME_PARITY_DATA_DIR=/tmp/rt_data uv run pytest -m runtime_parity test
 ARCHON_SEARCH_RUN_DOCKER_SMOKE=1 uv run pytest tests/test_docker_smoke.py -n0 -o addopts= --no-cov   # builds and runs the image
 ```
 
-CI also runs `uvx ruff@0.17.2 check .` (zero findings, rule set pinned in `pyproject.toml`) before the tests; run it locally before pushing.
+CI also runs `uvx ruff@0.17.3 check .` (zero findings, rule set pinned in `pyproject.toml`) before the tests; run it locally before pushing.
 
 The test pyramid, marker semantics, parallelism configuration, and the role of the eval harness are documented in [`Documentation/Architecture/200_testing_strategy.md`](Documentation/Architecture/200_testing_strategy.md). The eval fixture and threshold maintenance guide is [`tests/eval/README.md`](tests/eval/README.md).
 

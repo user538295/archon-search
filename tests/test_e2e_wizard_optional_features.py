@@ -58,7 +58,7 @@ _HAND_EDIT_WARNING = "[warn] Existing config has custom values"
 
 
 @contextmanager
-def _no_anthropic_key() -> Generator[None, None, None]:
+def _no_anthropic_key() -> Generator[None]:
     """Clear ANTHROPIC_API_KEY from the env for the duration of the test.
 
     Used by tests that need a predictable environment without a real Anthropic
@@ -77,13 +77,13 @@ pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("install")]
 # ---------------------------------------------------------------------------
 
 @contextlib.contextmanager
-def _noop_install_lock() -> Generator[None, None, None]:
+def _noop_install_lock() -> Generator[None]:
     """No-op replacement for _acquire_install_lock to avoid lock collisions in parallel tests."""
     yield
 
 
 @contextmanager
-def _patched_wizard(**extra_module_patches: Any) -> Generator[None, None, None]:
+def _patched_wizard(**extra_module_patches: Any) -> Generator[None]:
     """Patch all infrastructure that touches real filesystem or services.
 
     Fresh MagicMock instances are created on each invocation to prevent call-count
@@ -1387,7 +1387,7 @@ def test_e2e_multilingual_install_failure_reverts_flag(runner: CliRunner, tmp_pa
     """_install_multilingual_extra raising InstallError → exit 0, config reverted to multilingual=false.
 
     Otherwise the next server start hard-fails in _check_multilingual_deps when
-    fasttext-wheel is absent. Reverting lets the server start English-only.
+    fasttext-predict is absent. Reverting lets the server start English-only.
     """
     config_path = tmp_path / "archon-search.toml"
     install_multilingual_mock = MagicMock(side_effect=InstallError("pip failed"))
@@ -1409,7 +1409,7 @@ def test_e2e_multilingual_install_failure_reverts_flag(runner: CliRunner, tmp_pa
     doc = tomlkit.parse(config_path.read_text())
     assert doc["database"]["multilingual"] is False, (
         "multilingual must be reverted to false when the [multilingual] extra fails "
-        "to install — otherwise the next server start hard-fails on missing fasttext-wheel"
+        "to install — otherwise the next server start hard-fails on missing fasttext-predict"
     )
 
 
@@ -1458,7 +1458,7 @@ def test_e2e_multilingual_declineProceedPrompt_reverts_flag(runner: CliRunner, t
     multilingual prompt (so the config is written with multilingual=true
     early), but then declines the final Proceed? confirmation. That early
     return must still roll back the flag so the next server start does not
-    hard-fail on missing fasttext-wheel. Mirrors
+    hard-fail on missing fasttext-predict. Mirrors
     test_wizard_declineProceedPrompt_revertsGraphEnabled.
     """
     config_path = tmp_path / "archon-search.toml"
@@ -1499,7 +1499,7 @@ def test_e2e_multilingual_declineProceedPrompt_reverts_flag(runner: CliRunner, t
     assert doc["database"]["multilingual"] is False, (
         "multilingual must be reverted to false when the user declines the "
         "Proceed? prompt after the config write — otherwise the next server "
-        "start hard-fails on missing fasttext-wheel"
+        "start hard-fails on missing fasttext-predict"
     )
 
 
@@ -3014,7 +3014,7 @@ def _served_response(content: bytes) -> MagicMock:
 
 
 @contextmanager
-def _real_fasttext_provisioning(data_dir: Path, **extra: Any) -> Generator[Path, None, None]:
+def _real_fasttext_provisioning(data_dir: Path, **extra: Any) -> Generator[Path]:
     """Wizard with the REAL fasttext license gate and download, rooted at *data_dir*.
 
     Yields the path lid.176.ftz must be published to, read from the same accessor
@@ -3263,7 +3263,7 @@ _ENGINE_NAME = GRAPH_MODEL_SIZE_ESTIMATE.name.lower()
 
 
 @contextmanager
-def _recorded_wizard(events: list[tuple[str, str]], **extra: Any) -> Generator[None, None, None]:
+def _recorded_wizard(events: list[tuple[str, str]], **extra: Any) -> Generator[None]:
     """``_patched_wizard`` with every prompt and byte-moving step appended to *events*.
 
     Entries are ``("prompt", prompt_text)`` and ``("bytes", step_name)``, in the
@@ -3584,7 +3584,7 @@ _CUDA_DEVICE = "cuda"
 
 
 @contextmanager
-def _unconfigured_cli_logging() -> Generator[None, None, None]:
+def _unconfigured_cli_logging() -> Generator[None]:
     """Strip the handlers pytest attaches, so WARNINGs reach stderr as they do for an operator.
 
     A real `archon-search wizard` run never calls `configure_logging`, so a WARNING

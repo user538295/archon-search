@@ -96,7 +96,7 @@ def _uv_tool_install_extra(receipt_path: Path, extra: str, package: str) -> None
     and excludes (fed on stdin) plus the extra (never ``--reinstall``/``--force``:
     those recreate the env under the running wizard), so uv syncs the env in
     place and records the extra. ``--torch-backend`` follows the installed
-    torch build, which keeps a ``+cpu`` or wizard-installed ``+cu126`` torch
+    torch build, which keeps a ``+cpu`` or wizard-installed ``+cu132`` torch
     through the re-resolve. There is no pip fallback: uv tool environments ship
     no pip.
 
@@ -147,13 +147,15 @@ def _fallback_option_flags(receipt: dict[str, object] | None) -> list[str]:
 
 # PyTorch CUDA wheel index for the GPU torch swap. The `+<tag>` local build the
 # swap pins (below) is derived from this URL's last path segment, so the index
-# and the pinned build can never drift apart. cu126 is the lowest CUDA toolkit
-# still shipping the S269-pinned torch/torchvision cp312 wheels, so it has the
-# widest NVIDIA-driver compatibility (cu129/cu130 demand much newer drivers).
-# Verified against download.pytorch.org/whl/cu126/{torch,torchvision}/ on
-# 2026-08-02. Only used on linux/x86_64 (see the gating in installer.py).
-_CUDA_TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu126"
-# The local-version tag ("cu126") for the pinned CUDA build — parsed from the
+# and the pinned build can never drift apart. cu132 is the only CUDA toolkit whose
+# index carries torch 2.15.0 and torchvision 0.29.2 (cp314 / py3-none wheels): the newest
+# cu126 and cu130 torch is 2.14.1. Verified against
+# download.pytorch.org/whl/cu132/{torch,torchvision}/ on 2026-10-29. The CUDA 13
+# toolkits need an NVIDIA driver >= 580 (CUDA minor-version compatibility, NVIDIA CUDA
+# Toolkit 13.2 release notes, table 2). Only used on linux/x86_64 (see the gating in
+# installer.py).
+_CUDA_TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu132"
+# The local-version tag ("cu132") for the pinned CUDA build — parsed from the
 # index URL so the two stay coupled by construction.
 _CUDA_LOCAL_TAG = _CUDA_TORCH_INDEX_URL.rsplit("/", 1)[-1]
 
@@ -161,16 +163,16 @@ _CUDA_LOCAL_TAG = _CUDA_TORCH_INDEX_URL.rsplit("/", 1)[-1]
 def _install_cuda_torch(dry_run: bool = False) -> None:
     """Best-effort reinstall of torch/torchvision as the CUDA build.
 
-    Reinstalls torch/torchvision as the ``+cu126`` build of the SAME public
+    Reinstalls torch/torchvision as the ``+cu132`` build of the SAME public
     version that is installed, so docling's PDF/OCR parsing runs on an NVIDIA
     GPU. The installed build is ``+cpu`` for a ``uv sync`` checkout (S269 pin,
     linux/x86_64 only) or a CPU-only install, and PyPI's CUDA build for a plain
     pip / ``uv tool`` install on Linux. The version is derived from the
     installed build (``importlib.metadata``, stripping the local tag) and
-    re-pinned to the exact CUDA local build, e.g. ``torch==2.13.0+cu126``.
+    re-pinned to the exact CUDA local build, e.g. ``torch==2.15.0+cu132``.
 
-    The local ``+cu126`` tag is REQUIRED: a bare public specifier ``==2.13.0``
-    is satisfied by the installed ``2.13.0+cpu`` (PEP 440 ignores the local label
+    The local ``+cu132`` tag is REQUIRED: a bare public specifier ``==2.15.0``
+    is satisfied by the installed ``2.15.0+cpu`` (PEP 440 ignores the local label
     when the requirement has none), so pip/uv would report "already satisfied"
     and the swap would silently do nothing. Pinning the local build forces the
     reinstall. ``--extra-index-url`` (not ``--index-url``) keeps PyPI available
@@ -285,7 +287,7 @@ def _install_graph_extra(dry_run: bool = False) -> None:
 
 
 def _install_multilingual_extra(dry_run: bool = False) -> None:
-    """Install ``archon-search[multilingual]`` (fasttext-wheel language detection).
+    """Install ``archon-search[multilingual]`` (fasttext-predict language detection).
 
     Thin wrapper around :func:`_install_extra`.  Required by the server whenever
     ``[database].multilingual = true``; without it ``_check_multilingual_deps``

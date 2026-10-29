@@ -64,11 +64,11 @@ class TestInstallCudaTorch:
         """The pinned local tag must equal the CUDA toolkit the index serves.
 
         `_CUDA_LOCAL_TAG` is derived from `_CUDA_TORCH_INDEX_URL`'s last path
-        segment, so this pins the expected value ("cu126") — a drift guard: if
+        segment, so this pins the expected value ("cu132") — a drift guard: if
         the index URL is bumped to a different toolkit, this fails until the
         wheel availability is re-verified for the new tag.
         """
-        assert _CUDA_LOCAL_TAG == "cu126"
+        assert _CUDA_LOCAL_TAG == "cu132"
 
     def test_dry_run_no_subprocess(self):
         """dry_run=True must not call any subprocess or read metadata."""
@@ -86,16 +86,16 @@ class TestInstallCudaTorch:
     @pytest.mark.parametrize(
         ("installed", "expected_torch", "expected_vision", "bare_torch"),
         [
-            ({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"}, "torch==2.13.0+cu126", "torchvision==0.28.0+cu126", "torch==2.13.0"),
-            ({"torch": "2.14.1", "torchvision": "0.29.1"}, "torch==2.14.1+cu126", "torchvision==0.29.1+cu126", "torch==2.14.1"),
+            ({"torch": "2.15.0+cpu", "torchvision": "0.29.2+cpu"}, "torch==2.15.0+cu132", "torchvision==0.29.2+cu132", "torch==2.15.0"),
+            ({"torch": "2.15.0", "torchvision": "0.29.2"}, "torch==2.15.0+cu132", "torchvision==0.29.2+cu132", "torch==2.15.0"),
         ],
         ids=["cpu-local-tag", "pypi-no-local-tag"],
     )
     def test_pins_exact_local_cuda_build_not_bare_public_version(self, installed, expected_torch, expected_vision, bare_torch):
-        """The swap MUST pin the local +cu126 build, not the bare public version.
+        """The swap MUST pin the local +cu132 build, not the bare public version.
 
-        A bare ``torch==2.13.0`` is satisfied by the installed ``2.13.0+cpu``
-        (PEP 440 ignores the local label) or by PyPI's plain ``2.14.1`` CUDA
+        A bare ``torch==2.15.0`` is satisfied by the installed ``2.15.0+cpu``
+        (PEP 440 ignores the local label) or by PyPI's plain ``2.15.0`` CUDA
         build, so pip/uv would skip the reinstall and the swap would be a silent
         no-op. The command must carry the local tag, whatever build is installed.
         """
@@ -116,15 +116,15 @@ class TestInstallCudaTorch:
     def test_uv_absent_falls_back_to_pip_with_local_pin(self):
         """FileNotFoundError from uv triggers a pip fallback keeping the local pin."""
         with (
-            patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})),
+            patch(_VERSION, side_effect=_versions({"torch": "2.15.0+cpu", "torchvision": "0.29.2+cpu"})),
             patch(_RUN, side_effect=[FileNotFoundError("uv not found"), MagicMock(returncode=0)]) as mock_run,
         ):
             _install_cuda_torch()
         assert mock_run.call_count == 2
         pip_cmd = mock_run.call_args_list[1][0][0]
         assert pip_cmd[1:4] == ["-m", "pip", "install"]
-        assert "torch==2.13.0+cu126" in pip_cmd
-        assert "torchvision==0.28.0+cu126" in pip_cmd
+        assert "torch==2.15.0+cu132" in pip_cmd
+        assert "torchvision==0.29.2+cu132" in pip_cmd
         assert "--extra-index-url" in pip_cmd
 
     def test_uv_permission_error_falls_back_to_pip(self):

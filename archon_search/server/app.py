@@ -367,7 +367,7 @@ def _check_multilingual_deps(config: SearchConfig) -> None:
     Called synchronously in ``create_app()`` before ``SearchPipeline`` is
     constructed.  Raises ``RuntimeError`` with an actionable message when:
 
-    - ``fasttext-wheel`` is not installed, or
+    - ``fasttext-predict`` is not installed, or
     - ``lid.176.ftz`` model file is absent.
 
     No-ops when ``config.multilingual`` is ``False``.
@@ -380,7 +380,7 @@ def _check_multilingual_deps(config: SearchConfig) -> None:
         _import_fasttext()
     except ImportError:
         raise RuntimeError(
-            "multilingual=true but fasttext-wheel is not installed; "
+            "multilingual=true but fasttext-predict is not installed; "
             f"run: {extra_install_hint('multilingual')}"
         )
 
@@ -597,7 +597,7 @@ def create_app(
         )
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # Startup: persist TOML synthetic KeyRecord objects into keys.json so that
         # GET /keys (BE-6) can surface them and active_keys() includes them.
         # This replaces synthetic records from previous runs with the current TOML state.

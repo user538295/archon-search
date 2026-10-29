@@ -8,13 +8,13 @@
 ## Principles
 
 1. **One process, one user.** `archon-search` runs as your own user account; all state lives under `~/.archon-search/`.
-2. **Python 3.12+ only.** The package declares `requires-python = ">=3.12"`; older interpreters will refuse to install.
+2. **Python 3.14+ only.** The package declares `requires-python = ">=3.14"`; older interpreters will refuse to install.
 3. **Two supported install paths.** `pip install archon-search` from PyPI for end users, or a `uv sync --dev` checkout for self-built users.
 4. **Optional service install.** The `archon-search install` subcommand registers a launchd plist (macOS) or a systemd user unit (Linux) so the server starts on login. This is optional — you can also run it in the foreground.
 
 ## Requirements
 
-- Python `>=3.12`.
+- Python `>=3.14`.
 - macOS, Linux, or Windows (service install is supported on macOS and Linux only — see `archon_search/platform/`). Measured platforms: macOS arm64 (CPU and Apple GPU `mps`) and Linux arm64 (CPU, in Docker). Linux x86_64, Windows, NVIDIA CUDA and Intel Macs have not been measured; the Windows-specific code paths (private file modes, directory fsync, `O_NOFOLLOW`) are guarded and unit-tested but have not been run on Windows.
 - A few hundred MB of disk for the index under `~/.archon-search/search/` (grows with corpus size).
 - Network access on the first run to download the embedding and reranker model weights from Hugging Face. They are stored under `~/.archon-search/models/`. With `HF_HUB_OFFLINE=1` in the server's environment a model that is not already there is an error instead of a download (`archon_search/model_store.py`).
@@ -62,7 +62,7 @@ uv tool install --upgrade --torch-backend cpu "archon-search[graph,code]"
 
 Do not use `uv tool upgrade archon-search` for this install: it has no `--torch-backend` option and ignores `UV_TORCH_BACKEND` (uv 0.12.23), so it replaces the CPU-only build with PyPI's CUDA build as soon as a newer `torch` is out. Sources: PyTorch's [install selector](https://pytorch.org/get-started/locally/) (Linux, Pip, CPU), uv's [PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/) and the [`uv tool install` reference](https://docs.astral.sh/uv/reference/cli/#uv-tool-install). The guide still says `--torch-backend` works only in the `uv pip` interface; the CLI reference lists it for `uv tool install`, and uv 0.12.23 accepts it there.
 
-The same applies to the CUDA 12.6 build the wizard installs on a Linux x86_64 GPU host (`torch==<version>+cu126`, see [`20_wizard.md`](./20_wizard.md)). The uv tool receipt does not record `--torch-backend`, so `uv tool upgrade archon-search` can replace that build with PyPI's default Linux build, which is CUDA 13. Upgrade with `uv tool install --upgrade --torch-backend cu126 "archon-search[graph,code]"` instead, listing your extras. When the wizard adds an extra to a uv tool install, it passes `--torch-backend` matching the installed torch build (`+cpu` → `cpu`, `+cu126` → `cu126`, `+cu130` → `cu130`), so adding an extra keeps the build.
+The same applies to the CUDA 13.2 build the wizard installs on a Linux x86_64 GPU host (`torch==<version>+cu132`, see [`20_wizard.md`](./20_wizard.md)). The uv tool receipt does not record `--torch-backend`, so `uv tool upgrade archon-search` can replace that build with PyPI's default Linux build, which is CUDA 13. Upgrade with `uv tool install --upgrade --torch-backend cu132 "archon-search[graph,code]"` instead, listing your extras. When the wizard adds an extra to a uv tool install, it passes `--torch-backend` matching the installed torch build (`+cpu` → `cpu`, `+cu126` → `cu126`, `+cu130` → `cu130`), so adding an extra keeps the build.
 
 To switch an existing CUDA install to the CPU-only build:
 
@@ -90,20 +90,20 @@ Some features ship as optional dependency groups (`[project.optional-dependencie
 
 | Install method | Add extras | Upgrade, keeping the extras |
 | --- | --- | --- |
-| `uv tool` | `uv tool install "archon-search[graph,code]"` | `uv tool upgrade archon-search` — Linux `+cpu`/`+cu126` torch: see [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build) |
+| `uv tool` | `uv tool install "archon-search[graph,code]"` | `uv tool upgrade archon-search` — Linux `+cpu`/`+cu132` torch: see [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build) |
 | pip in a virtual environment | `pip install "archon-search[graph,code]"` | `pip install --upgrade archon-search` |
 | pipx | `pipx install --force "archon-search[graph,code]"` | `pipx upgrade archon-search` |
 | checkout | `uv sync --extra graph --extra code` | `git pull && uv sync --extra graph --extra code` |
 
 **`uv tool` installs: list every extra in one command.** A uv tool environment is declarative. `uv tool upgrade` re-syncs it to the requirements recorded in its receipt (`uv-receipt.toml` in the tool environment) and removes every package installed some other way, for example with `uv pip install`. `uv tool install` records exactly what it is given and replaces the previous receipt. So the command must list every extra you want, the ones already installed included. It must also repeat any `--with`, index or `--torch-backend` options from the original install. Otherwise the next `uv tool upgrade` removes what the command left out. uv documents this: tool environments are ["not intended to be mutated directly"](https://docs.astral.sh/uv/concepts/tools/#tool-environments), and upgrades ["retain the settings provided when installing the tool"](https://docs.astral.sh/uv/concepts/tools/#upgrading-tools). The setup wizard follows this rule. In a uv tool install it adds each extra by re-running `uv tool install` with the receipt's requirements and options plus the new extra (`archon_search/install/extras.py`, `archon_search/uv_tool.py`). The startup errors for a missing extra print the same full command. If the wizard cannot reproduce the receipt (it pins a Python version, or records constraints, overrides or executables from another package) or the installed torch build has a local tag uv has no `--torch-backend` for, it falls back to `uv pip install` with the receipt's index options and prints a warning: the extra works until the next `uv tool upgrade`. To keep it, re-run your original `uv tool install` command with the extra added.
 
-**Upgrading from an older version.** Earlier wizard versions installed extras into a uv tool environment with `uv pip install`, and the receipt did not record them. `uv tool upgrade archon-search` then removed them: `gliner`, `fasttext-wheel` and the `tree-sitter` parsers. The next server start failed with `[graph]` or multilingual enabled. Record your extras once, with the same options as your original install, before you upgrade: `uv tool install "archon-search[graph,code,multilingual]"`; on Linux with a `+cpu` or `+cu126` torch build, add `--torch-backend cpu` or `--torch-backend cu126`. If an upgrade already removed them, run the same command afterwards. pip and pipx installs are not affected: `pip install --upgrade` and `pipx upgrade` keep extras installed into the environment. `pipx reinstall` keeps only the extras named in the original `pipx install`.
+**Upgrading from an older version.** Earlier wizard versions installed extras into a uv tool environment with `uv pip install`, and the receipt did not record them. `uv tool upgrade archon-search` then removed them: `gliner`, `fasttext-predict` and the `tree-sitter` parsers. The next server start failed with `[graph]` or multilingual enabled. Record your extras once, with the same options as your original install, before you upgrade: `uv tool install "archon-search[graph,code,multilingual]"`; on Linux with a `+cpu` or `+cu132` torch build, add `--torch-backend cpu` or `--torch-backend cu132`. If an upgrade already removed them, run the same command afterwards. pip and pipx installs are not affected: `pip install --upgrade` and `pipx upgrade` keep extras installed into the environment. `pipx reinstall` keeps only the extras named in the original `pipx install`.
 
 | Extra | Installs | Unlocks |
 | --- | --- | --- |
 | `graph` | gliner (pulls torch + transformers), networkx, leidenalg, igraph | Knowledge-graph extraction, community detection, PPR / naive graph search — see [`65_graph_search.md`](./65_graph_search.md). |
 | `code` | tree-sitter parsers (Python, TS/JS, Go, Rust, Java, Bash, Swift, C#) | AST-aware def/ref extraction and impact traversal for code files — see [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md). Also selectable via the wizard's `--code` flag. |
-| `multilingual` | fasttext-wheel | Non-English language detection (`language=<code>` search filter). Pair with a multilingual install profile (below). |
+| `multilingual` | fasttext-predict | Non-English language detection (`language=<code>` search filter). Pair with a multilingual install profile (below). |
 | `hyde` | anthropic SDK | HyDE query expansion at search time — see [`60_searching.md`](./60_searching.md). |
 | `rag_fusion` | anthropic SDK | RAG-Fusion multi-query retrieval — see [`60_searching.md`](./60_searching.md). |
 | `ollama` | ollama SDK | Local Ollama provider for HyDE / RAG-Fusion. |
@@ -145,8 +145,8 @@ The wizard detects the accelerator with `archon_search/platform/runtime.py:detec
 
 Embedding and reranking run on an NVIDIA GPU when PyTorch is a CUDA build and `torch.cuda.is_available()` is true. Requirements:
 
-- A CUDA build of PyTorch. On Linux, PyPI's `torch` is one already: torch 2.14.1 is the CUDA 13 build (its metadata requires `cuda-toolkit==13.0.3` and `nvidia-cudnn-cu13`). The CPU-only build from [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build) has no CUDA support. PyPI's Windows and macOS builds are CPU-only too.
-- A driver the build supports. CUDA 13.x needs NVIDIA driver 580 or later ([CUDA 13.0 release notes](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html)); check with `nvidia-smi`. The `+cu126` build the wizard installs targets CUDA 12.6 and is the choice for an older driver.
+- A CUDA build of PyTorch. On Linux, PyPI's `torch` is one already: torch 2.15.0 is the CUDA 13.2 build (its metadata requires `cuda-toolkit==13.2.2` and `nvidia-cudnn-cu13`). The CPU-only build from [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build) has no CUDA support. PyPI's Windows and macOS builds are CPU-only too.
+- A driver the build supports. CUDA 13.x needs NVIDIA driver 580 or later ([CUDA 13.0 release notes](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html)); check with `nvidia-smi`. The `+cu132` build the wizard installs targets CUDA 13.2 and needs driver 580 or later too: on Linux x86_64 with Python 3.14, PyTorch publishes no CUDA 12 build of torch 2.15 (the newest `cu126` torch is 2.14.1), so a host with an older driver runs the CPU-only build.
 - No system CUDA toolkit: PyTorch's CUDA wheels bring the CUDA and cuDNN libraries as `nvidia-*` packages.
 
 Check what your environment has, then re-run the wizard (`archon-search wizard`) and accept CUDA:
@@ -157,12 +157,12 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 
 Without a wizard run, `[database].device = "auto"` (the default) already uses CUDA whenever that prints `True`.
 
-**Linux x86_64: the wizard installs the CUDA build for you.** When you accept CUDA and the wizard's own PyTorch does not see a GPU (for example the CPU-only build), it reinstalls `torch` and `torchvision` as the CUDA 12.6 (`+cu126`) build of the installed version from `https://download.pytorch.org/whl/cu126`. It then checks `torch.cuda.is_available()` in a fresh Python process, and writes `device = "auto"` only if that is true. The step is best-effort: if the download fails, the wizard keeps the installed build and writes `device = "cpu"`. On other platforms the wizard does not change the PyTorch build: install a CUDA build yourself (PyTorch's [install selector](https://pytorch.org/get-started/locally/) lists the commands) and re-run the wizard.
+**Linux x86_64: the wizard installs the CUDA build for you.** When you accept CUDA and the wizard's own PyTorch does not see a GPU (for example the CPU-only build), it reinstalls `torch` and `torchvision` as the CUDA 13.2 (`+cu132`) build of the installed version from `https://download.pytorch.org/whl/cu132`. It then checks `torch.cuda.is_available()` in a fresh Python process, and writes `device = "auto"` only if that is true. The step is best-effort: if the download fails, the wizard keeps the installed build and writes `device = "cpu"`. On other platforms the wizard does not change the PyTorch build: install a CUDA build yourself (PyTorch's [install selector](https://pytorch.org/get-started/locally/) lists the commands) and re-run the wizard.
 
-**uv tool.** Reinstall with the CUDA build, listing your extras (`cu126` for CUDA 12.6, `cu130` for CUDA 13):
+**uv tool.** Reinstall with the CUDA build, listing your extras (`cu132` for CUDA 13.2):
 
 ```bash
-uv tool install --upgrade --torch-backend cu126 "archon-search[graph,code]"
+uv tool install --upgrade --torch-backend cu132 "archon-search[graph,code]"
 ```
 
 The receipt does not record `--torch-backend`: upgrade by re-running this command, not `uv tool upgrade` (see above).

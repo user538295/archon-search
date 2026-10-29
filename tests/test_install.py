@@ -1652,9 +1652,9 @@ class TestIsServiceRunning:
         """urlopen raises HTTPError → _is_service_running returns False."""
         import urllib.error
         installer = _make_installer(tmp_path)
-        with patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError(
+        with urllib.error.HTTPError(
             url=None, code=404, msg="Not Found", hdrs=None, fp=None  # type: ignore[arg-type]
-        )):
+        ) as error, patch("urllib.request.urlopen", side_effect=error):
             assert installer._is_service_running() is False
 
     def test_is_service_running_returns_false_on_connection_refused(self, tmp_path: Path) -> None:

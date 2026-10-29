@@ -18,7 +18,7 @@ This guide covers a developer install from source. For the PyPI install path, se
 
 ## Prerequisites
 
-- Python `>=3.12`
+- Python `>=3.14`
 - `uv` installed (`https://docs.astral.sh/uv/`)
 - `git`
 

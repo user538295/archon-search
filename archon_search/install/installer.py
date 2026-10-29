@@ -310,7 +310,7 @@ class BaseInstaller(ABC):
         because a re-run keeps the previous ``[database].device``.
 
         On linux/x86_64 with CUDA accepted and ``torch.cuda.is_available()`` false, the
-        ``+cu126`` torch swap is the enabling step. This process keeps the torch it
+        ``+cu132`` torch swap is the enabling step. This process keeps the torch it
         already imported, so the swap is verified in a fresh interpreter instead.
         """
         label = _ACCELERATOR_LABELS.get(gpu)
@@ -744,7 +744,7 @@ class BaseInstaller(ABC):
             if telemetry_retention_days is not None:
                 features.telemetry_retention_days = telemetry_retention_days
 
-            # A multilingual profile needs the [multilingual] extra (fasttext-wheel)
+            # A multilingual profile needs the [multilingual] extra (fasttext-predict)
             # or the server hard-fails at startup. Derived from the resolved profile
             # choice, so it fires identically in interactive and non-interactive paths.
             features.install_multilingual_extra = is_multilingual

@@ -30,7 +30,7 @@ ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict
 ARCHON_RUNTIME_PARITY_DATA_DIR=/tmp/rt_data uv run pytest -m runtime_parity tests/runtime_parity/ --no-cov -q -p no:cacheprovider -o addopts= -rP  # real PyTorch weights vs frozen fastembed outputs; downloads ~15 GB on first use
 ARCHON_SEARCH_RUN_DOCKER_SMOKE=1 uv run pytest tests/test_docker_smoke.py -n0 -o addopts= --no-cov   # builds the image and runs it (docker daemon; skipped without the env var)
 ARCHON_SEARCH_API_KEY=<running server key> uv run pytest tests/benchmark_routing_latency.py -n 0 -v -s   # HTTP /route latency against a running server; -n 0 is required (xdist workers inherit the conftest's test key, so every call is a 401)
-uvx ruff@0.17.2 check .                                               # the lint step CI runs before the tests; zero findings
+uvx ruff@0.17.3 check .                                               # the lint step CI runs before the tests; zero findings
 ```
 
 The unlocked-dependency lane re-runs the default suite and the docling/graph lanes in a throwaway venv with the newest dependency versions end users install (`uv.lock` ignored). It fails if a test changes that venv, and a child `uv run` would silently test `uv.lock`'s versions instead — so never let a test run a real package install or `uv run`; spawn a child pytest as `sys.executable -m pytest`:

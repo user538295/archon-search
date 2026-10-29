@@ -121,7 +121,7 @@ def _block_anthropic_key_at_session() -> None:
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _block_anthropic_client() -> Generator[None, None, None]:
+def _block_anthropic_client() -> Generator[None]:
     """Mock anthropic.Anthropic and anthropic.AsyncAnthropic to raise if instantiated.
 
     Guards against token burns even when the env-var guard is bypassed — e.g. a
@@ -257,7 +257,7 @@ def _stub_model_backends(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
 
 
 @pytest.fixture(autouse=True)
-def _isolate_archon_logging() -> Generator[None, None, None]:
+def _isolate_archon_logging() -> Generator[None]:
     """Isolate the `archon_search` logger's state per test.
 
     `logging_setup.configure_logging()` sets `logger.propagate = False` and attaches
@@ -336,10 +336,10 @@ def col_name() -> str:
 
 
 @pytest.fixture
-def off_swap_platform() -> Generator[None, None, None]:
+def off_swap_platform() -> Generator[None]:
     """Run as macOS/arm64, so a CUDA install never takes the linux/x86_64 torch-swap path.
 
-    On linux/x86_64 the wizard's CUDA step swaps in the ``+cu126`` torch and asks a fresh interpreter whether CUDA
+    On linux/x86_64 the wizard's CUDA step swaps in the ``+cu132`` torch and asks a fresh interpreter whether CUDA
     is visible, instead of calling ``_accelerator_validated``. A test that stubs only the latter would pass on a
     macOS or ARM host and probe the real machine on an x86_64 Linux CI runner.
     """
