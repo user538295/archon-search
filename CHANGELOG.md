@@ -1,6 +1,36 @@
 # Changelog
 
 
+## [26.10.2296] - 2026-10-29
+
+**Python 3.13 + dependency updates + credential redaction + authorization fixes**
+
+**Dependencies and tooling**
+
+- Updated all dependency floors to their latest releases: `torch>=2.15`, `transformers>=5.21`, `fastmcp>=4.1.4`, `huggingface-hub>=2.3`, and others. Adjusted version requirements for `transformers>=5.10` (addressing security issue PYSEC-2026-3929) and `huggingface-hub>=1.33` to resolve conflicts with version caps declared by the graph extra (`gliner`) and document processing (`docling-ibm-models`) packages, which previously prevented installation of those extras.
+- Replaced `fasttext-wheel` with `fasttext-predict>=0.9.2.4` in the multilingual extra, fixing NumPy 2 compatibility that prevented documents from receiving language tags.
+- Docker images now ship a prebuilt `fasttext-predict` wheel instead of compiling it during container startup, removing the g++ requirement from the CPU, GPU, and test runner images.
+- Maintained Python 3.13 as the minimum version to support pre-built wheels for `fasttext-predict` across all distributions, and updated the CUDA torch configuration to target `cu132`, which requires NVIDIA driver 580+.
+
+**Logging security**
+
+- Redacted Hugging Face Hub credentials (username, password, token) from all log records. Previously, only the top-level `model download failed` message was scrubbed; failed downloads, warm-up errors, startup validation, and traceback records still exposed `HF_ENDPOINT` query strings. Added `log_redaction.py` with a `redact_secrets` function and new formatters (`_RedactingFormatter`, `_RedactingJsonFormatter`) that scrub every record written to the file and container stderr handlers; records seen by other handlers remain unredacted.
+
+**Export collection authorization**
+
+- `POST /collections/{name}/export` now correctly refuses to export a collection owned by another namespace with a `409` `collection_unavailable` error, consistent with other write paths and the documented behavior. Previously, the route returned `404 Collection '<name>' not found`, so the proper refusal text never appeared. The MCP `export_collection` tool now also returns the same error; collections that do not exist anywhere still answer `404`.
+
+**Data store**
+
+- Fixed `list_tables()` pagination in LanceDB to read all pages instead of stopping after the first 100 names. Databases with more than 100 tables previously lost collections from list, drop, rename, and metadata operations.
+
+**Documentation and testing**
+
+- Corrected documented behaviors based on black-box testing: job status after SIGTERM (ingest, add, reindex, sync jobs end `CANCELLED`; export, import, migration jobs load as `FAILED`), data-directory path overrides (with `ARCHON_SEARCH_DATA_DIR` set, `log_file = ""` remains empty), and Hub URL logging (only top-level messages scrubbed, not traceback records).
+- Added test coverage to ensure the wizard Step 2 transcript stays synchronized with the rendered profile table, preventing documentation drift.
+- Isolated the container-mode status endpoint test from the host service manager to prevent developer service status from affecting the release gate.
+
+
 ## [26.10.2285] - 2026-10-28
 
 **11 security and robustness bug fixes: ingestion hardening, configuration safety, and graceful model handling**
