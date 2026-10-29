@@ -28,15 +28,19 @@ dependencies = [
     "torch>=2.15,<3.0.0",
     "torchvision>=0.29.2,<1",
     # transformers builds the encoder and sequence-classification models
-    # (torch_runtime.py, reranker_loading.py). The latest release (5.21) is above the
-    # `<5.17.0` cap of gliner (graph extra); see override-dependencies in [tool.uv].
-    "transformers>=5.21,<6",
+    # (torch_runtime.py, reranker_loading.py). The floor is the first release that clears
+    # PYSEC-2026-3929 (tests/test_pyproject.py). It must stay at or below the `<5.17.0` cap of
+    # gliner (graph extra): a floor above that cap makes `archon-search[graph]` unresolvable
+    # for pip and `uv tool install`, because [tool.uv] override-dependencies never reaches the wheel.
+    "transformers>=5.10,<6",
     # Tokenizer.from_file loads each snapshot's tokenizer.json (torch_runtime.py, reranker_loading.py).
     "tokenizers>=0.23",
     # safe_open reads the XLM-R classifier head from model.safetensors (reranker_loading.py).
     "safetensors>=0.8",
-    # snapshot_download fetches the pinned model snapshots (model_store.py).
-    "huggingface-hub>=2.3,<3",
+    # snapshot_download fetches the pinned model snapshots (model_store.py). The floor is the
+    # last release the lane suites verified; it must stay below docling-ibm-models' `<2` cap
+    # (via docling), for the same reason as transformers above.
+    "huggingface-hub>=1.33,<3",
     "markitdown[docx,pptx,xls,xlsx,outlook]>=0.1.9,<0.2",
     "watchdog>=6.0",
     "pydantic>=2.14",
@@ -241,11 +245,12 @@ package = true
 # Four latest releases sit above caps declared by other packages, checked on PyPI 2026-10-29:
 # gliner 0.2.29 (graph extra) caps transformers below 5.17.0; docling-ibm-models 4.0.4
 # (via docling) caps huggingface-hub below 2; sympy 1.14.0 (via torch) caps mpmath below 1.4;
-# docling-core 2.105.0 (chunking extra) caps semchunk below 4. This project targets
+# docling-core 2.105.0 (chunking extra) caps semchunk below 4. This project locks
 # transformers 5.21, huggingface-hub 2.3, mpmath 1.4 and semchunk 4.1, so these overrides
 # replace the four caps for `uv lock` / `uv sync`. They are uv project settings, not wheel
 # metadata: pip and `uv tool install` users who add the graph extra or install docling still
-# resolve those packages' own caps.
+# resolve those packages' own caps, so the wheel's own `transformers` and `huggingface-hub`
+# floors (see [project] dependencies) must stay below them.
 override-dependencies = [
     "transformers>=5.21,<6",
     "huggingface-hub>=2.3,<3",
