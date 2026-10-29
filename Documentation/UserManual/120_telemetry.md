@@ -26,7 +26,11 @@ hash_doc_ids = false         # set true to HMAC-SHA256 hash result_doc_ids befor
 # export_enabled = false     # see note below — true is silently coerced to false
 ```
 
-Restart the server. Instrumented call sites append one JSON line per call to `<log_dir>/<YYYY-MM-DD>.jsonl` (UTC date):
+Restart the server. Instrumented call sites append one JSON line per call to `<log_dir>/<YYYY-MM-DD>.jsonl` (UTC date).
+
+`log_dir` is honoured only while `ARCHON_SEARCH_DATA_DIR` is unset. When that variable is set (the Docker image, and a service registered by `archon-search install`, always set it) the directory is `<data dir>/search-logs` whatever the TOML says, with no warning (measured: a `log_dir` outside the data directory stayed empty). To write telemetry elsewhere, leave `ARCHON_SEARCH_DATA_DIR` unset, or point it at the root you want.
+
+The entries:
 
 - `search` and `search_with_context` — instrumented in the **MCP tool wrappers** (`archon_search/server/mcp.py`). The REST `/search` route is **not** instrumented.
 - `route` — instrumented in the **REST** endpoint (`archon_search/server/routes_route.py`).

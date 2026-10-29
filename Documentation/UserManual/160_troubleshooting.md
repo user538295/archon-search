@@ -81,7 +81,7 @@ Symptoms: `archon-search collection list` shows no growth in `chunks=`, `GET /st
 
 - Model weights still downloading on first run (from Hugging Face, into `<data-dir>/models`) — check the log for download progress. A failed download logs `could not fetch model '<repo>': download failed; check the network connection and free disk space`.
 - Port already in use — set `[server].port` (`archon-search config set server.port N`; a fresh wizard install does not write the key) or set `ARCHON_SEARCH_PORT`. #Unverified
-- Write failure on `db_path` or `log_file` parent — the installer's `mkdir(parents=True, exist_ok=True)` does not raise if a parent already exists under another user; the failure surfaces later when the server tries to write inside a directory it cannot access. Verify the running user can write to any custom location.
+- Write failure on `db_path` or `log_file` parent — the installer's `mkdir(parents=True, exist_ok=True)` does not raise if a parent already exists under another user; the failure surfaces later when the server tries to write inside a directory it cannot access. Verify the running user can write to any custom location (a custom `db_path` or `log_file` is used only while `ARCHON_SEARCH_DATA_DIR` is unset; with it set, both live under the data directory).
 
 ## Symptom: Linux install pulls `nvidia-*`/`cuda-*` packages on a CPU-only host
 

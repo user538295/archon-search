@@ -88,6 +88,8 @@ port = 8765
 
 [database]
 # On-disk location for the vector store and metadata.
+# Ignored (replaced by <data dir>/search) whenever ARCHON_SEARCH_DATA_DIR is set — the Docker image
+# and a service registered by `archon-search install` always set it.
 db_path = "~/.archon-search/search"
 # Sentence-transformers embedding model used for indexing and queries.
 embedding_model = "BAAI/bge-small-en-v1.5"
@@ -212,6 +214,8 @@ level = "INFO"
 # Set to "" to disable file logging (stderr only — useful in containers).
 # Upgrade note: the non-empty default activates file logging automatically;
 # set log_file = "" explicitly to opt out.
+# A non-empty value is ignored (replaced by <data dir>/logs/archon-search.log) whenever
+# ARCHON_SEARCH_DATA_DIR is set; an explicit "" is kept.
 log_file = "~/.archon-search/logs/archon-search.log"
 # Log format: "text" (default) or "json" (structured JSON for log aggregators).
 # Use "json" for container deployments and log aggregation pipelines (e.g., Datadog, Loki).
@@ -713,6 +717,7 @@ num_queries = 2
 # Set interactively via `archon-search wizard` or with the `--telemetry / --no-telemetry` flag.
 enabled = false
 retention_days = 30
+# Ignored (replaced by <data dir>/search-logs) whenever ARCHON_SEARCH_DATA_DIR is set.
 log_dir = "~/.archon-search/search-logs"
 # Hashed doc_id mode (D8): when true, result_doc_ids in JSONL telemetry entries are
 # replaced with HMAC-SHA256 values keyed by a 32-byte salt stored at

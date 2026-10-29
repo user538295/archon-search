@@ -98,7 +98,7 @@ See `SEC-2` (now closed) in [`../Architecture/530_technical_debt_refactoring_roa
 - **Location.** One file per UTC date, `~/.archon-search/search-logs/<YYYY-MM-DD>.jsonl`. Lines are appended; one JSON object per call.
 - **Retention.** `archon_search/telemetry/pruner.py::Pruner.prune_once` deletes `*.jsonl` files whose stem date is older than `today - retention_days`. **Today's file is never deleted** regardless of cutoff (`if file_date == now: continue`). Note that `retention_days` is validated at config load to be `>= 1`, so `retention_days = 0` is unreachable through configuration; the smallest reachable value (`retention_days = 1`) still preserves today's file. The pruner runs once at startup and then on a 24-hour interval.
 - **No per-entry redaction.** Old entries are deleted by *file age*, not by per-line policy.
-- **Directory permissions.** The telemetry directory is created `0700` and the JSONL files `0600` (`_durable_io.ensure_private_dir`), which tightens an existing directory only when it lies inside the data directory. If you point `[telemetry].log_dir` outside the data directory, keep it owner-only yourself.
+- **Directory permissions.** The telemetry directory is created `0700` and the JSONL files `0600` (`_durable_io.ensure_private_dir`), which tightens an existing directory only when it lies inside the data directory. If you point `[telemetry].log_dir` outside the data directory, keep it owner-only yourself. That is possible only while `ARCHON_SEARCH_DATA_DIR` is unset: when it is set (the Docker image, a service registered by `archon-search install`) it overrides `log_dir` with `<data dir>/search-logs`.
 
 ## No external transmission
 

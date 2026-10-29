@@ -27,7 +27,7 @@ For the broader security and privacy architecture this guide refines, see [`../A
 | Per-namespace keys | `[namespaces]` block in `~/.archon-search/archon-search.toml`; managed keys in `~/.archon-search/keys.json` (SHA-256 digests only, `0600`) | High — each TOML entry is a static bearer token. | TOML tokens must be at least 32 printable ASCII characters without whitespace, are never admin, and authenticate on REST and `/mcp` alike (`create_app` and `create_mcp_http_app` both pass `namespaces=config.namespaces`). The config file holds them in plaintext: keep it owner-only. |
 | Telemetry logs | `~/.archon-search/search-logs/<date>.jsonl` (only when enabled) | Medium — no raw queries, but `result_doc_ids` derive from paths. | Directory `0700`, files `0600`. See `04_telemetry_privacy.md`. |
 | Indexing state | `~/.archon-search/search/.indexing_state.json` | Low — operational state, not content. | `archon_search/progress.py`. |
-| Server log file | `~/.archon-search/logs/archon-search.log` | Low — application log; may include warnings naming paths. | `[logging].log_file`; created `0600` in a `0700` directory. |
+| Server log file | `~/.archon-search/logs/archon-search.log` | Low — application log; may include warnings naming paths. | `[logging].log_file` (ignored when `ARCHON_SEARCH_DATA_DIR` is set); created `0600` in a `0700` directory. |
 
 ## Trust boundaries
 

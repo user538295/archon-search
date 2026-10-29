@@ -19,7 +19,7 @@ All four keys live in the `[logging]` table of `~/.archon-search/archon-search.t
 | Key | Python field | Default | Accepted values |
 | --- | --- | --- | --- |
 | `level` | `level` | `"INFO"` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive; `WARN` is normalised to `WARNING`) |
-| `log_file` | `log_file` | `"~/.archon-search/logs/archon-search.log"` | any path, or `""` to disable file logging |
+| `log_file` | `log_file` | `"~/.archon-search/logs/archon-search.log"` | a path (used only while `ARCHON_SEARCH_DATA_DIR` is unset — see "Where the log goes" below), or `""` to disable file logging |
 | `format` | `log_format` | `"text"` | `"text"` or `"json"` |
 | `backup_count` | `backup_count` | `7` | integer `>= 0` |
 
@@ -28,9 +28,11 @@ Notes verified against `archon_search/config.py`:
 - **`format` is the one key whose TOML name differs from its Python attribute** (`log_format`). Write `format = "json"` in the TOML, not `log_format`.
 - Any `level` string outside the accepted set raises `ConfigError`; the same holds for a `format` other than `text`/`json` and for a negative `backup_count`.
 - `~` in `log_file` is expanded at use time (`Path(...).expanduser()`), consistent with `db_path` and `telemetry.log_dir`.
-- **The log file is private.** The rotating handler creates the log directory `0700` (tightened only when it lies inside the data directory) and the files `0600`; point `log_file` outside the data directory and you own that directory's mode.
+- **Where the log goes: `ARCHON_SEARCH_DATA_DIR` wins over the TOML.** When `ARCHON_SEARCH_DATA_DIR` is set, `load_config` replaces `[database].db_path`, `[logging].log_file` and `[telemetry].log_dir` with `<data dir>/search`, `<data dir>/logs/archon-search.log` and `<data dir>/search-logs`, whatever the TOML holds, and logs nothing about the override (`archon_search/config.py`, `load_config`). Measured with a TOML naming out-of-tree values for all three and `ARCHON_SEARCH_DATA_DIR` set: the server created and wrote only the data-directory paths and the configured directories stayed empty; with the variable unset, `load_config` returned the TOML paths. The one exception is an explicit empty `log_file = ""`, which stays empty (file logging off). The Docker image sets the variable (`/data`), and `archon-search install` bakes it into the launchd plist and systemd unit, so a managed service or container always logs under its data directory. To put the log elsewhere, leave `ARCHON_SEARCH_DATA_DIR` unset, or point it at the root you want everything under.
+- **The log file is private.** The rotating handler creates the log directory `0700` (tightened only when it lies inside the data directory) and the files `0600`; with `ARCHON_SEARCH_DATA_DIR` unset you can point `log_file` outside the data directory, and then you own that directory's mode.
 - **Credentials in URLs are redacted in the access log.** `uvicorn.access` lines have the values of `view_token`, `token`, `api_key` and `access_token` query parameters replaced (`QueryCredentialRedactionFilter`, installed by `configure_logging`). The filter is unit-tested against a record shaped like uvicorn's; a live uvicorn access line was not captured.
-- **Lines worth knowing.** `model download failed for '<repo>': <ExcClass>: <message>` (WARNING, scrubbed of URL credentials and tokens); `model warm-up recovered: the default models are warm` (INFO); `estimated model memory … exceeds the cgroup memory limit …` (WARNING, once at startup); a startup WARNING when non-admin keys exist and `[ingest].allowed_roots` is empty; and one WARNING listing collections that have a table but no metadata row. A first ingest into a new collection no longer logs a `Collection '…' centroid stale` WARNING per document or a `FTSIndexNotFoundError` traceback (both now DEBUG or silent for an empty collection; a populated collection that lost its centroid still warns).
+- **Lines worth knowing.** `model download failed for '<repo>': <ExcClass>: <message>` (WARNING; only this message is scrubbed of URL credentials, query strings and tokens — see the next bullet); `model warm-up recovered: the default models are warm` (INFO); `estimated model memory … exceeds the cgroup memory limit …` (WARNING, once at startup); a startup WARNING when non-admin keys exist and `[ingest].allowed_roots` is empty; and one WARNING listing collections that have a table but no metadata row. A first ingest into a new collection no longer logs a `Collection '…' centroid stale` WARNING per document or a `FTSIndexNotFoundError` traceback (both now DEBUG or silent for an empty collection; a populated collection that lost its centroid still warns).
+- **Keep credentials out of `HF_ENDPOINT` and any model-hub URL.** Only the `model download failed` WARNING *message* is scrubbed (`model_store._scrub`). Measured with `huggingface_hub` 1.33.0 and `httpx` 0.28.1 against an endpoint `http://user:<secret>@host` that answers the download with an HTTP error status (404, 401 or 500), the unscrubbed endpoint URL, credentials included, appears in the traceback of these records: the WARNINGs `warm-up: embedder failed; first search will pay the init cost` and `warm-up: reranker failed; first search will pay the init cost` (logger `archon_search.pipeline`, logged at the default level, repeated on every warm-up retry: they print the chained hub error, `httpx.HTTPStatusError` / `HfHubHTTPError: Client error '404 Not Found' for url 'http://user:<secret>@…'`); and, only at `[logging].level = "DEBUG"`, the DEBUG record `model download failed for '<repo>'` (`archon_search.model_store`, which keeps the raw cause and traceback by design) and the DEBUG `embedder probe failed` / `reranker probe failed` records (`archon_search.model_validation`). The `httpx` logger's own `HTTP Request: …` INFO line also carries the URL, but `configure_logging` attaches no handler to it, so it reached neither the log file nor stderr in the measured runs. An endpoint that cannot be reached (connection refused, DNS failure, invalid port) produces no URL in any message or traceback, so nothing leaks there. Until the pipeline warm-up records are fixed, treat the log file as secret-bearing when `HF_ENDPOINT` holds credentials, or point `HF_ENDPOINT` at a mirror that needs none.
 
 ### Worked config snippet
 
@@ -39,6 +41,7 @@ Notes verified against `archon_search/config.py`:
 level = "INFO"
 
 # Set to "" to disable file logging (stderr only — useful in containers).
+# A non-empty path other than the default is used only while ARCHON_SEARCH_DATA_DIR is unset.
 # Upgrade note: the non-empty default activates file logging automatically;
 # set log_file = "" explicitly to opt out.
 log_file = "~/.archon-search/logs/archon-search.log"
@@ -67,7 +70,7 @@ File logging uses a `TimedRotatingFileHandler` with `when="midnight"`, `utc=True
 - `backup_count = 1` keeps only one rotated file in addition to the current log.
 - **`backup_count = 0` disables deletion** — rotated files accumulate indefinitely (stdlib behaviour). Watch disk usage if you set this.
 
-The parent directory of `log_file` is created automatically on startup. If it cannot be created or the file cannot be opened (e.g. a read-only `/var/log`), the server logs a warning and continues **without** a file handler — it never crashes on a logging failure.
+The parent directory of `log_file` is created automatically on startup. If it cannot be created or the file cannot be opened (e.g. a read-only data directory or, with `ARCHON_SEARCH_DATA_DIR` unset, a `log_file` under a read-only `/var/log`), the server logs a warning and continues **without** a file handler — it never crashes on a logging failure.
 
 ### Single-process only
 

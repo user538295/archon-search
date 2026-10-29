@@ -240,7 +240,7 @@ Off by default (`enabled = false`), and it stays off until you flip it. Flip it,
 [telemetry]
 enabled = true
 retention_days = 30          # files older than this are deleted at startup and every 24h
-log_dir = "~/.archon-search/search-logs"
+log_dir = "~/.archon-search/search-logs"   # ignored while ARCHON_SEARCH_DATA_DIR is set (then <data dir>/search-logs)
 hash_doc_ids = false         # set true to HMAC-SHA256 result_doc_ids before writing to JSONL
 ```
 

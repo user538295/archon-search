@@ -38,7 +38,7 @@ Disaster recovery for a lost host still reduces to restoring the runtime directo
 | `logs/archon-search.log` | Server log. | Low — operational only. |
 | `search-logs/YYYY-MM-DD.jsonl` | Telemetry, one file per UTC day; self-pruning after `[telemetry].retention_days`. | Optional. |
 
-`db_path`, `log_file`, `[telemetry].log_dir`, and `[backup].output_dir` can be relocated via TOML — if you have moved them outside `~/.archon-search/`, back those locations up too. The key file location can be redirected with `ARCHON_SEARCH_KEY_FILE`. Setting `ARCHON_SEARCH_DATA_DIR` relocates the entire tree (see [Data architecture](../Architecture/130_data_architecture_and_persistence.md)).
+`[backup].output_dir` can be relocated via TOML, and so can `db_path`, `log_file` and `[telemetry].log_dir` — but only while `ARCHON_SEARCH_DATA_DIR` is unset: when it is set (the Docker image, a service installed by `archon-search install`) those three always live under it. If you have moved any of them outside `~/.archon-search/`, back those locations up too. The key file location can be redirected with `ARCHON_SEARCH_KEY_FILE`. Setting `ARCHON_SEARCH_DATA_DIR` relocates the entire tree (see [Data architecture](../Architecture/130_data_architecture_and_persistence.md)).
 
 ## Scheduled backups (`BackupLoop`)
 

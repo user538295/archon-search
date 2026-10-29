@@ -78,7 +78,7 @@ The wizard prints a comparison table. The `balanced` profile is annotated as the
   2) Balanced  ~572 MB     ★★★☆☆         ~150 ms/query / ~50 ms   ← Recommended
   3) Max       ~2.5 GB     ★★★★☆         ~400 ms/query / ~130 ms
 
-  Models (weights are downloaded from Hugging Face at pinned revisions):
+  Models (download = embedder + reranker weights from the Hugging Face Hub):
   1) BAAI/bge-small-en-v1.5 + Xenova/ms-marco-MiniLM-L-6-v2
   2) BAAI/bge-base-en-v1.5 + Xenova/ms-marco-MiniLM-L-12-v2
   3) BAAI/bge-large-en-v1.5 + BAAI/bge-reranker-base
@@ -618,7 +618,7 @@ All flags for the `wizard` command (verified against `archon_search/cli/install_
 | **Tier 1 deployment flags** | | |
 | `--host TEXT` | Not set (uses `127.0.0.1`) | Bind address for the HTTP API. Use `0.0.0.0` for remote or Docker access. Non-loopback values print a security note reminding you to add a firewall or reverse proxy. (`archon-search serve` itself binds `127.0.0.1` natively and `0.0.0.0` only inside a container.) Cannot be an empty string. |
 | `--port INTEGER` | Not set (uses `8765`) | HTTP port for the installed config (valid range 1–65535). This is an **install-time config flag** — it writes `[server].port`; there is no runtime `--port` flag on `serve`/`start`. Port conflicts are not detected at wizard time; the OS reports an error at service start. |
-| `--db-path PATH` | Not set (uses `~/.archon-search/search`) | Database directory. The tilde is written as-is to the config file; `config.py` expands it at use sites. The wizard creates the directory (including parent dirs) and checks writability. If the existing config uses a different path, a migration note is printed. |
+| `--db-path PATH` | Not set (uses `~/.archon-search/search`) | Database directory. The tilde is written as-is to the config file; `config.py` expands it at use sites. The wizard creates the directory (including parent dirs) and checks writability. If the existing config uses a different path, a migration note is printed. **Honoured only while `ARCHON_SEARCH_DATA_DIR` is unset:** with it set the server uses `<data dir>/search` whatever `db_path` says, and the launchd plist / systemd unit this command registers always sets it (to the data directory resolved at install time; `platform/macos.py` `_plist_content`, `platform/linux.py` unit template), so a registered service ignores `--db-path`. To keep the database elsewhere, run `archon-search serve` with the variable unset, or set `ARCHON_SEARCH_DATA_DIR` to the root you want. |
 | `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}` | Not set (uses `INFO`) | Server log level. Case-sensitive. |
 | `--top-k INTEGER` | Not set (uses `5`) | Number of results returned per query (`top_k_return`). Valid range: 1–100. Values > 100 are rejected with a message to edit TOML directly. The wizard also sets `top_k_retrieve = max(15, 3 × top_k)` automatically. This flag is flags-only; no interactive prompt. A hint appears in the "Next steps" block. |
 | `--telemetry-retention-days INTEGER` | Not set (uses `30`) | Days before telemetry log files are pruned. Must be ≥ 1 (same rule as `[telemetry].retention_days` in the config). Always written to TOML as `[telemetry].retention_days`, but never enables telemetry: when this run's telemetry answer is not on (`--no-telemetry`, `n`/Enter at the prompt, or a `--non-interactive` run without `--telemetry`) the value is still written and a stderr warning says it has no effect until telemetry is enabled. The warning is printed after the config is written, so a run that aborts before writing prints none; with `--dry-run` it says the value would be written. This is a warning rather than an error because the value stays valid and is kept for when you turn telemetry on. |
@@ -704,7 +704,7 @@ archon-search wizard \
 
 Note: `--host 0.0.0.0` prints a security note reminding you to add a firewall or reverse proxy.
 
-**Example: homelab server with custom port, database location, and more search results**
+**Example: homelab server with custom port, database location, and more search results** (the database location applies only while `ARCHON_SEARCH_DATA_DIR` is unset; see `--db-path` above)
 
 ```bash
 archon-search wizard \
@@ -842,7 +842,7 @@ The wizard writes `[graph].enabled = true` when `--code` is passed (because code
 
 ### Telemetry log directory
 
-The wizard can enable telemetry (the telemetry prompt, or `--telemetry`) and set `retention_days` (via `--telemetry-retention-days`, which never enables telemetry on its own), but does not configure `log_dir` (default: `~/.archon-search/search-logs/`). Edit `[telemetry]` in the config file to change the log directory.
+The wizard can enable telemetry (the telemetry prompt, or `--telemetry`) and set `retention_days` (via `--telemetry-retention-days`, which never enables telemetry on its own), but does not configure `log_dir` (default: `~/.archon-search/search-logs/`). Edit `[telemetry]` in the config file to change the log directory; the setting is honoured only while `ARCHON_SEARCH_DATA_DIR` is unset (when set, the directory is always `<data dir>/search-logs`).
 
 ### Log file path, rotation, and backup count
 
@@ -852,7 +852,7 @@ log_file = "~/.archon-search/logs/archon-search.log"
 backup_count = 7
 ```
 
-The wizard can set `level` (via `--log-level`) and `format` (via `--log-format`), but not the explicit file path or rotation policy. To use a custom log file location, edit `[logging].log_file` directly.
+The wizard can set `level` (via `--log-level`) and `format` (via `--log-format`), but not the explicit file path or rotation policy. To use a custom log file location, edit `[logging].log_file` directly; it is honoured only while `ARCHON_SEARCH_DATA_DIR` is unset (when set, the file is always `<data dir>/logs/archon-search.log`, and the service that `archon-search install` registers always sets it).
 
 ### Routing tuning parameters
 

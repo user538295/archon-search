@@ -52,7 +52,7 @@ Bind address and port for the HTTP API (MCP mounts on the same port).
 | `docs_enabled` | `false` | Serve the Swagger UI (`/docs`), ReDoc (`/redoc`) and `/openapi.json` **without authentication**. Off by default: `/docs` and `/redoc` do not exist and `/openapi.json` needs a Bearer token. |
 | `cors_origins` | `[]` | Browser origins (`scheme://host[:port]`) allowed to call the API cross-origin. Empty sends no CORS header at all. `"*"` or a malformed origin raises `ConfigError`; credentials are never allowed, methods and headers are fixed. A `413` from the body cap carries the CORS headers for a listed origin. |
 | `max_request_body_mb` | `32` | Largest request body accepted, in MiB (≥1). A larger body (declared in `Content-Length` or streamed) is refused with `413 {"detail": …, "code": "request_body_too_large"}` **before authentication** and before it is buffered. Raise it only if you ingest very large inline `documents` batches. |
-| `graceful_shutdown_seconds` | `25` | Seconds the server lets open requests (an in-flight ingest) finish after `SIGTERM` before it cancels them (≥1). Keep it below your container runtime's stop grace period (`docker stop` waits 30 s before `SIGKILL`). |
+| `graceful_shutdown_seconds` | `25` | Seconds the server lets open HTTP requests finish after `SIGTERM` before it cancels them (≥1). It does not apply to jobs: an ingest, reindex or sync job answers `202` at once and is cancelled by the shutdown (`CANCELLED`), and an export, import or migration still running at exit is `FAILED` `process_restart` on the next start (see [Running with Docker](140_running_with_docker.md)). Keep it below your container runtime's stop grace period (`docker stop` waits 30 s before `SIGKILL`). |
 
 ### `[database]`
 
@@ -60,7 +60,7 @@ Vector store location, models, chunking, and device selection.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `db_path` | `~/.archon-search/search` | LanceDB on-disk location. Tilde is expanded. |
+| `db_path` | `~/.archon-search/search` | LanceDB on-disk location. Tilde is expanded. Ignored (replaced by `<data dir>/search`) whenever `ARCHON_SEARCH_DATA_DIR` is set — the Docker image and a service installed by `archon-search install` always set it. |
 | `embedding_model` | `BAAI/bge-small-en-v1.5` | Dense-embedding model name. Only the models in the registry (`archon_search/model_specs.py`) are supported — the 19 listed under [Supported embedding models](50_ingestion_and_collections.md#supported-embedding-models); any other name does not stop the server: it starts, `/ready` reports `checks.models: "fail"` and the log carries `unsupported model '<name>'; supported: …`; the same name is rejected with `422` on a collection. |
 | `reranker_model` | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder for second-stage scoring. One of `Xenova/ms-marco-MiniLM-L-6-v2`, `Xenova/ms-marco-MiniLM-L-12-v2`, `BAAI/bge-reranker-base`, `jinaai/jina-reranker-v2-base-multilingual`, `BAAI/bge-reranker-v2-m3`; any other name does not stop the server: it starts, `/ready` reports `checks.models: "fail"` and the log carries `unsupported model '<name>'; supported: …`. `""` disables the reranker. |
 | `chunk_size` | `512` | Target chunk size in tokens (>0). |
@@ -125,7 +125,7 @@ Concurrency and checkpointing for bulk export/import/migration jobs.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `level` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` (case-insensitive). |
-| `log_file` | `~/.archon-search/logs/archon-search.log` | Rotating log path. Set to `""` to disable file logging (recommended for containers / multi-worker). |
+| `log_file` | `~/.archon-search/logs/archon-search.log` | Rotating log path. Set to `""` to disable file logging (recommended for containers / multi-worker). Ignored (replaced by `<data dir>/logs/archon-search.log`) whenever `ARCHON_SEARCH_DATA_DIR` is set — the Docker image and a service installed by `archon-search install` always set it. An explicit `""` is the exception: it stays empty. |
 | `format` | `text` | `text` or `json` (structured, for Loki/Datadog/ELK). |
 | `backup_count` | `7` | Rotated files to keep (≥0; `0` = never delete). |
 
@@ -274,7 +274,7 @@ Opt-in local query telemetry. **Disabled by default.** Raw query text is never w
 | --- | --- | --- |
 | `enabled` | `false` | Master switch. |
 | `retention_days` | `30` | Files older than this are pruned at startup and every 24h (≥1). |
-| `log_dir` | `~/.archon-search/search-logs` | Output directory (non-empty). |
+| `log_dir` | `~/.archon-search/search-logs` | Output directory (non-empty). Ignored (replaced by `<data dir>/search-logs`) whenever `ARCHON_SEARCH_DATA_DIR` is set — the Docker image and a service installed by `archon-search install` always set it. |
 | `hash_doc_ids` | `false` | HMAC-SHA256 `result_doc_ids` before write, severing the mapping to filesystem paths in shared logs. |
 | `export_enabled` | `false` | Reserved. **Setting `true` is silently coerced to `false` with a warning** — remote export is not implemented in v1. |
 
@@ -307,7 +307,7 @@ Read at config load, key resolution, and by every lazy path accessor. All overri
 | `ARCHON_SEARCH_KEY_FILE` | Path to the key file (absolute). Takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file. | unset → `<data-dir>/.search.env` |
 | `ARCHON_SEARCH_HOST` | Bind-address override (env > TOML > default). Empty = not set. | unset → `[server].host` |
 | `ARCHON_SEARCH_PORT` | Bind-port override; int `1–65535` or raises `ConfigError`. Empty = not set. | unset → `[server].port` |
-| `ARCHON_SEARCH_DATA_DIR` | Relocate the whole runtime tree (DB, logs, telemetry, key file, jobs file, models). Must be absolute; empty raises `ConfigError`. Docker sets `/data`. | unset → `~/.archon-search/` |
+| `ARCHON_SEARCH_DATA_DIR` | Relocate the whole runtime tree (DB, logs, telemetry, key file, jobs file, models). Must be absolute; empty raises `ConfigError`. Docker sets `/data`. When set it wins over the TOML for `[database].db_path`, `[logging].log_file` and `[telemetry].log_dir` (they become `<data dir>/search`, `<data dir>/logs/archon-search.log`, `<data dir>/search-logs`, silently, except that an explicit empty `log_file` stays empty): to keep any of the three outside the data dir, leave this variable unset. | unset → `~/.archon-search/` |
 | `ARCHON_SEARCH_CONTAINER` | `"1"` attaches a stderr handler so `docker logs` captures output and makes `serve` bind `0.0.0.0` instead of `127.0.0.1`. Docker sets `1`. | unset → no stderr handler, loopback bind |
 | `HF_HUB_OFFLINE` | huggingface_hub's own offline switch, honoured by the model store (`archon_search/model_store.py`): with `1`, `on`, `yes` or `true` (any case) a model snapshot missing from `<data-dir>/models` is an error instead of a download. Embedder and reranker weights live in that directory in the Hugging Face hub layout (`models--<org>--<name>/snapshots/<revision>/`). | unset → missing models are downloaded |
 
