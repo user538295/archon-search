@@ -111,7 +111,7 @@ def _enter_store_patches(stack: ExitStack) -> None:
         # by its own except Exception -> logger.warning(exc_info=True)) but it
         # spams a WARNING traceback into every test's output/caplog. Stub _db
         # with a working list_tables() so the scan finds nothing instead.
-        self._db = MagicMock(list_tables=AsyncMock(return_value=MagicMock(tables=[])))
+        self._db = MagicMock(list_tables=AsyncMock(return_value=MagicMock(page_token=None, tables=[])))
 
     stack.enter_context(patch.object(SearchStore, "connect", new=_fake_connect))
     stack.enter_context(patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()))

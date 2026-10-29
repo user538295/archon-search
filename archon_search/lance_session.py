@@ -27,3 +27,26 @@ def new_lance_session() -> lancedb.Session:
         index_cache_size_bytes=LANCE_INDEX_CACHE_BYTES,
         metadata_cache_size_bytes=LANCE_METADATA_CACHE_BYTES,
     )
+
+
+async def list_all_table_names(db: lancedb.AsyncConnection) -> list[str]:
+    """Return every table name in *db*, following LanceDB's ``page_token`` continuation.
+
+    ``AsyncConnection.list_tables()`` returns one page (100 names by default); reading only
+    ``.tables`` silently drops every table past the first page.
+
+    Raises:
+        RuntimeError: if a page hands back the token it was requested with — retrying would
+            loop forever, and stopping would silently truncate the listing.
+    """
+    names: list[str] = []
+    token: str | None = None
+    while True:
+        page = await db.list_tables(page_token=token)
+        names.extend(page.tables)
+        next_token = page.page_token
+        if not next_token:
+            return names
+        if next_token == token:
+            raise RuntimeError(f"LanceDB list_tables() returned a non-advancing page_token {token!r}")
+        token = next_token

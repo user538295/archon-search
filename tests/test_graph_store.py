@@ -103,6 +103,7 @@ def test_ensure_graph_tables_idempotent() -> None:
 
     mock_db = AsyncMock()
     mock_db.create_table = AsyncMock(return_value=AsyncMock())
+    mock_db.list_tables = AsyncMock(return_value=MagicMock(page_token=None, tables=[]))
 
     async def _run() -> None:
         store._db = mock_db
@@ -1579,6 +1580,7 @@ def test_startup_warns_on_legacy_graph_tables(caplog) -> None:
 
     # Simulate list_tables() returning a mix: four legacy + two new-pattern tables.
     list_tables_result = MagicMock()
+    list_tables_result.page_token = None
     list_tables_result.tables = [
         "_archon_graph_mycol_nodes",
         "_archon_graph_mycol_edges",
@@ -1633,6 +1635,7 @@ def test_startup_no_warn_when_no_legacy_tables(caplog) -> None:
     from archon_search.graph_store import check_and_warn_legacy_graph_tables
 
     list_tables_result = MagicMock()
+    list_tables_result.page_token = None
     list_tables_result.tables = [
         "_archon_graph_default__col1_nodes",
         "_archon_graph_default__col1_edges",
@@ -1683,6 +1686,7 @@ def test_check_and_warn_legacy_graph_tables_empty(caplog) -> None:
     from archon_search.graph_store import check_and_warn_legacy_graph_tables
 
     list_tables_result = MagicMock()
+    list_tables_result.page_token = None
     list_tables_result.tables = []
     mock_db = AsyncMock()
     mock_db.list_tables = AsyncMock(return_value=list_tables_result)
@@ -1709,6 +1713,7 @@ def test_check_and_warn_legacy_graph_tables_ambiguous_collection_name(caplog) ->
     from archon_search.graph_store import check_and_warn_legacy_graph_tables
 
     list_tables_result = MagicMock()
+    list_tables_result.page_token = None
     list_tables_result.tables = [
         # This looks like a legacy table but has __ in the collection name portion;
         # the regex matches it as new-pattern (ns=foo, col=bar) — known limitation.
@@ -1740,6 +1745,7 @@ def test_check_and_warn_no_false_positive_underscored_segments(caplog) -> None:
     from archon_search.graph_store import check_and_warn_legacy_graph_tables
 
     list_tables_result = MagicMock()
+    list_tables_result.page_token = None
     list_tables_result.tables = [
         "_archon_graph_a_b__c_d_nodes",     # ns=a_b, col=c_d
         "_archon_graph_tenant_1__my_docs_edges",  # ns=tenant_1, col=my_docs

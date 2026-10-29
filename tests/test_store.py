@@ -579,6 +579,7 @@ def test_drop_collection_removes_table(tmp_path: Path) -> None:
     store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col", "other"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.drop_table = AsyncMock()
@@ -597,6 +598,7 @@ def test_drop_collection_raises_keyerror_on_missing(tmp_path: Path) -> None:
     store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["other"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     store._db = mock_db
@@ -639,6 +641,7 @@ def test_rename_collection_renames_table(tmp_path: Path) -> None:
     store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["old-name"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.rename_table = AsyncMock()
@@ -657,6 +660,7 @@ def test_rename_collection_raises_keyerror_on_missing(tmp_path: Path) -> None:
     store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = []
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     store._db = mock_db
@@ -675,6 +679,7 @@ def test_rename_collection_raises_not_implemented_on_attribute_error(
     store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["old-name"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.rename_table = AsyncMock(side_effect=AttributeError("no rename_table"))
@@ -694,6 +699,7 @@ def test_rename_collection_raises_not_implemented_on_not_implemented_error(
     store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["old-name"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.rename_table = AsyncMock(
@@ -713,6 +719,7 @@ def test_rename_collection_raises_valueerror_if_target_exists(tmp_path: Path) ->
     store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["old-name", "existing"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     store._db = mock_db
@@ -2310,6 +2317,7 @@ def test_P14_15_store_list_collections_exception_on_one_table_skips_it(tmp_path:
 
     # Two tables: "good-col" succeeds, "bad-col" raises ValueError on open_table
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["good-col", "bad-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
 
@@ -2435,6 +2443,7 @@ def test_hybrid_search_trace_exposes_score_breakdown(tmp_path: Path) -> None:
     mock_table.search = AsyncMock(return_value=fts_result)
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -2494,6 +2503,7 @@ def test_hybrid_search_trace_documents_backend_score_field_mapping(tmp_path: Pat
     mock_table.search = AsyncMock(return_value=fts_result)
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -2550,6 +2560,7 @@ def test_hybrid_search_trace_sets_missing_raw_scores_none(tmp_path: Path) -> Non
     mock_table.search = AsyncMock(return_value=fts_result)
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -2593,6 +2604,7 @@ def test_hybrid_search_trace_sets_fts_score_none_without_index(tmp_path: Path) -
     mock_table.search = AsyncMock(side_effect=Exception("fts index not found"))
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -2646,6 +2658,7 @@ def test_hybrid_search_trace_orders_equal_scores_deterministically(tmp_path: Pat
     mock_table.search = AsyncMock(side_effect=Exception("fts index not found"))
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -2696,6 +2709,7 @@ def _tie_break_mock_store(tmp_path: Path) -> tuple[SearchStore, str]:
     )
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -3095,6 +3109,7 @@ def test_list_collections_namespace_from_meta(tmp_path: Path) -> None:
     mock_db = MagicMock()
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["tenant-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
 
@@ -3140,6 +3155,7 @@ def test_list_collections_orphan_table_defaults(tmp_path: Path) -> None:
     mock_db = MagicMock()
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["orphan-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
 
@@ -3191,6 +3207,7 @@ def test_hybrid_search_trace_row_projection_populates_language(tmp_path: Path) -
     mock_table.search = AsyncMock(return_value=fts_result)
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -3228,6 +3245,7 @@ def test_hybrid_search_trace_row_projection_language_empty_string_stays_empty(tm
     mock_table.search = AsyncMock(return_value=fts_result)
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -3265,6 +3283,7 @@ def test_hybrid_search_trace_row_projection_language_missing_stays_empty(tmp_pat
     mock_table.search = AsyncMock(return_value=fts_result)
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -3335,6 +3354,7 @@ def test_hybrid_search_trace_score_kind_values_match_backend_polarity(tmp_path: 
     mock_table.search = AsyncMock(return_value=fts_result)
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -3382,6 +3402,7 @@ def _make_mock_store_for_filter_tests(
     mock_table.search = AsyncMock(return_value=fts_builder)
 
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)

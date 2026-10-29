@@ -38,6 +38,7 @@ def _trace_store_with_row(tmp_path: Path, name: str, row: dict) -> SearchStore:
     )
     mock_table.search = AsyncMock(return_value=fts_result)
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -232,6 +233,7 @@ def _store_without_fts(tmp_path: Path, name: str, row: dict) -> SearchStore:
     )
     mock_table.search = AsyncMock(side_effect=RuntimeError("fts index not available"))
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["my-col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     mock_db.open_table = AsyncMock(return_value=mock_table)

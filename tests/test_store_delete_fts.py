@@ -58,6 +58,7 @@ def _make_store_with_mock_db(
 
     mock_db = AsyncMock()
     mock_db.open_table = AsyncMock(return_value=mock_table)
+    mock_db.list_tables = AsyncMock(return_value=MagicMock(page_token=None, tables=[]))
 
     store._db = mock_db
     store._config = MagicMock()

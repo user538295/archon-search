@@ -284,7 +284,7 @@ def test_writePagerankScores_batchesViaSingleMergeInsert() -> None:
 
     mock_db = AsyncMock()
     mock_db.open_table = AsyncMock(return_value=mock_table)
-    mock_db.list_tables = AsyncMock(return_value=MagicMock(tables=["_archon_graph_default__test-col_nodes", "_archon_graph_default__test-col_edges", "_archon_graph_default__test-col_communities", "_archon_graph_default__test-col_mentions"]))
+    mock_db.list_tables = AsyncMock(return_value=MagicMock(page_token=None, tables=["_archon_graph_default__test-col_nodes", "_archon_graph_default__test-col_edges", "_archon_graph_default__test-col_communities", "_archon_graph_default__test-col_mentions"]))
 
     async def _run() -> None:
         store._db = mock_db
@@ -404,6 +404,7 @@ def test_ensureGraphTables_migratesPreExistingNodesTable_addsPagerankColumn() ->
     mock_db = AsyncMock()
     mock_db.list_tables = AsyncMock(
         return_value=MagicMock(
+            page_token=None,
             tables=[
                 "_archon_graph_default__test-col_nodes",
                 "_archon_graph_default__test-col_edges",
@@ -464,6 +465,7 @@ def test_ensureGraphTables_migratesPreExistingNodesTable_addsSourcePathColumn() 
     mock_db = AsyncMock()
     mock_db.list_tables = AsyncMock(
         return_value=MagicMock(
+            page_token=None,
             tables=[
                 "_archon_graph_default__test-col_nodes",
                 "_archon_graph_default__test-col_edges",

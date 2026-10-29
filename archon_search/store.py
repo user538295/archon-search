@@ -34,7 +34,7 @@ from archon_search.constants import (
     PING_TTL_SECONDS,
     _validate_namespace,
 )
-from archon_search.lance_session import new_lance_session
+from archon_search.lance_session import list_all_table_names, new_lance_session
 from archon_search.observability import _stage_recorder, record_stage
 from archon_search.store_filters import _sql_quote_str, build_where
 from archon_search.types import MigrationKind, MigrationSpec
@@ -752,7 +752,7 @@ class SearchStore:
         Reads only the ``name`` and ``namespace`` columns of the rows named *collection*: this runs on every ownership
         check, and the other columns (centroid, centroid sum, description embedding) are large JSON strings.
         """
-        if _META_TABLE not in (await db.list_tables()).tables:
+        if _META_TABLE not in await list_all_table_names(db):
             return set()
         table = await db.open_table(_META_TABLE)
         schema_names = (await table.schema()).names
@@ -861,7 +861,7 @@ class SearchStore:
             await lock.acquire()
         try:
             await self._require_collection_access(db, name, namespace)
-            names: list[str] = (await db.list_tables()).tables
+            names: list[str] = await list_all_table_names(db)
             if name not in names:
                 raise KeyError(name)
             await db.drop_table(name)
@@ -891,7 +891,7 @@ class SearchStore:
         # The existence/conflict check and the rename must be atomic: without the
         # lock a concurrent drop/rename/ingest can interleave at the awaits.
         async with self.lock_for(old):
-            names: list[str] = (await db.list_tables()).tables
+            names: list[str] = await list_all_table_names(db)
             if old not in names:
                 raise KeyError(old)
             if new in names:
@@ -914,7 +914,7 @@ class SearchStore:
             RuntimeError: if the store is not connected.
         """
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         names = [n for n in all_names if not n.startswith(_ARCHON_PREFIX)]
         all_meta = await self.get_all_collections_meta()
         meta_by_name = {m.name: m for m in all_meta}
@@ -1031,7 +1031,7 @@ class SearchStore:
         self._validate_collection(name)
         _validate_namespace(namespace)
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return None
         table = await db.open_table(_META_TABLE)
@@ -1058,7 +1058,7 @@ class SearchStore:
         self._validate_collection(name)
         _validate_namespace(namespace)
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
@@ -1075,7 +1075,7 @@ class SearchStore:
             RuntimeError: if the store is not connected.
         """
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return []
         table = await db.open_table(_META_TABLE)
@@ -1085,7 +1085,7 @@ class SearchStore:
     async def migrate_namespace(self) -> None:
         """Idempotent: adds namespace column to _archon_collection_meta if absent."""
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
@@ -1104,7 +1104,7 @@ class SearchStore:
     async def migrate_description_embedding(self) -> None:
         """Idempotent: adds description_embedding_json column to _archon_collection_meta if absent."""
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
@@ -1127,7 +1127,7 @@ class SearchStore:
     async def migrate_centroid_sum(self) -> None:
         """Idempotent: adds centroid_sum_json, mutations_since_recompute, needs_recompute columns to _archon_collection_meta if absent."""
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
@@ -1169,7 +1169,7 @@ class SearchStore:
             ("reindex_job_id", "cast('' as string)"),
         ]
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
@@ -1243,7 +1243,7 @@ class SearchStore:
         Safe to call multiple times (concurrent-startup RuntimeError is caught and logged).
         """
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         meta_table = await db.open_table(_META_TABLE)
@@ -1273,7 +1273,7 @@ class SearchStore:
         import pyarrow as pa
 
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         meta_table = await db.open_table(_META_TABLE)
@@ -1311,7 +1311,7 @@ class SearchStore:
         import pyarrow as pa
 
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
@@ -1332,7 +1332,7 @@ class SearchStore:
         import pyarrow as pa
 
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
@@ -1353,7 +1353,7 @@ class SearchStore:
         import pyarrow as pa
 
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
@@ -1380,7 +1380,7 @@ class SearchStore:
         import pyarrow as pa
 
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         meta_table = await db.open_table(_META_TABLE)
@@ -1428,7 +1428,7 @@ class SearchStore:
     async def _migrate_schema_version(self) -> None:
         """Idempotent: adds schema_version column to _archon_collection_meta if absent."""
         db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
@@ -1522,7 +1522,7 @@ class SearchStore:
         Empty tables are not reported: they hold nothing and any namespace may claim them. Read-only.
         """
         db = self._require_connected()
-        tables = (await db.list_tables()).tables
+        tables = await list_all_table_names(db)
         owned: set[str] = set()
         if _META_TABLE in tables:
             owned = {
@@ -1791,7 +1791,7 @@ class SearchStore:
                 raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
         try:
             db = self._require_connected()
-            all_names: list[str] = (await db.list_tables()).tables
+            all_names: list[str] = await list_all_table_names(db)
             if _META_TABLE not in all_names:
                 table = await db.create_table(_META_TABLE, schema=self._meta_schema())
             else:
@@ -1925,7 +1925,7 @@ class SearchStore:
         self, db: lancedb.db.AsyncConnection, collection: str, namespace: str = DEFAULT_NAMESPACE
     ) -> CollectionMeta | None:
         # Caller must hold lock_for(collection)
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return None
         table = await db.open_table(_META_TABLE)
@@ -1943,7 +1943,7 @@ class SearchStore:
         self, db: lancedb.db.AsyncConnection, collection: str, namespace: str
     ) -> None:
         # Caller must hold lock_for(collection).
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             return
         meta_tbl = await db.open_table(_META_TABLE)
@@ -1976,7 +1976,7 @@ class SearchStore:
             raise ValueError(f"collection {collection!r} != meta.name {meta.name!r}")
         _validate_namespace(meta.namespace)
         self._validate_collection(meta.name)
-        all_names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = await list_all_table_names(db)
         if _META_TABLE not in all_names:
             table = await db.create_table(_META_TABLE, schema=self._meta_schema())
         else:
@@ -2515,7 +2515,7 @@ class SearchStore:
             RuntimeError: if the store is not connected.
         """
         db = self._require_connected()
-        for name in (await db.list_tables()).tables:
+        for name in await list_all_table_names(db):
             if name == _META_TABLE:
                 await self._prune_table_logged(name, retention)
             elif _COLLECTION_RE.fullmatch(name):

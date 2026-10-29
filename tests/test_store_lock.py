@@ -260,6 +260,7 @@ async def test_drop_collection_keeps_lock_entry_while_a_waiter_is_queued(tmp_pat
 
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["col"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
 
@@ -282,6 +283,7 @@ async def test_drop_collection_missing_table_discards_its_own_lock_entry(tmp_pat
     store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = []
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
     store._db = mock_db
@@ -320,6 +322,7 @@ async def test_collection_mutation_holds_lock(
 
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
+    list_tables_resp.page_token = None
     list_tables_resp.tables = ["old-name"]
     mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
 

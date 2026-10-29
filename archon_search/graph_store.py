@@ -36,7 +36,7 @@ from archon_search.graph_types import (
     ImpactResult,
     RelationshipType,
 )
-from archon_search.lance_session import new_lance_session
+from archon_search.lance_session import list_all_table_names, new_lance_session
 from archon_search.store_filters import _sql_quote_str
 
 if TYPE_CHECKING:
@@ -210,7 +210,7 @@ class GraphStore:
         that fails is logged and the others still run.
         """
         db = self._require_db()
-        for name in (await db.list_tables()).tables:
+        for name in await list_all_table_names(db):
             if not name.startswith(_GRAPH_TABLE_PREFIX):
                 continue
             try:
@@ -330,7 +330,7 @@ class GraphStore:
         _validate_namespace(ns)
         db = self._require_db()
 
-        existing_tables: set[str] = set((await db.list_tables()).tables)
+        existing_tables: set[str] = set(await list_all_table_names(db))
 
         nodes_name = self._nodes_table_name(collection, ns)
         if nodes_name not in existing_tables:
@@ -2479,8 +2479,7 @@ async def check_and_warn_legacy_graph_tables(db: lancedb.db.AsyncConnection) -> 
         List of legacy table names found in the database (may be empty).
     """
     try:
-        result = await db.list_tables()
-        all_names: list[str] = result.tables
+        all_names = await list_all_table_names(db)
 
         legacy = [
             name
