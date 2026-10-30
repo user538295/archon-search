@@ -78,7 +78,7 @@ class AnthropicQueryExpansionProvider:
 
     def is_key_available(self) -> bool:
         """Return ``True`` when ``ANTHROPIC_API_KEY`` is set in the environment."""
-        return os.environ.get("ANTHROPIC_API_KEY")
+        return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
     async def generate_hypothetical_doc(
         self,

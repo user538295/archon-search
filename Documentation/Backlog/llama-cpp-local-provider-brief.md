@@ -61,7 +61,7 @@ Developers and operators who prioritise privacy, work air-gapped, or want to avo
 - **Team plan:** [llama-cpp-local-provider-team-plan.md](./llama-cpp-local-provider-team-plan.md)
 - [`archon_search/providers/ollama_provider.py`](../../archon_search/providers/ollama_provider.py) `[code-agent]` — OllamaQueryExpansionProvider: the direct template for the new llama.cpp adapter
 - [`archon_search/providers/openai_provider.py`](../../archon_search/providers/openai_provider.py) `[code-agent]` — OpenAIQueryExpansionProvider: shows the response-shape normalisation pattern
-- [`archon_search/query_expansion_protocol.py`](../../archon_search/query_expansion_protocol.py) `[code-agent]` — QueryExpansionProvider protocol and `provider_key_available` helper
+- [`archon_search/query_expansion_protocol.py`](../../archon_search/query_expansion_protocol.py) `[code-agent]` — QueryExpansionProvider protocol; its `provider_key_available` helper now lives in [`archon_search/llm_client/provider_key.py`](../../archon_search/llm_client/provider_key.py)
 - [`archon_search/config.py`](../../archon_search/config.py) `[code-agent]` — HyDEConfig, RAGFusionConfig, GraphConfig, `_VALID_PROVIDERS`
 - [`archon_search/server/app.py`](../../archon_search/server/app.py) `[code-agent]` — `_build_query_expansion_provider` factory and `_check_provider_deps` startup validation
 - [`archon_search/llm_enrichment_client.py`](../../archon_search/llm_enrichment_client.py) `[code-agent]` — AnthropicEnrichmentClient: template for the new enrichment adapters

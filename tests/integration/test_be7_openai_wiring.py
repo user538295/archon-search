@@ -254,10 +254,10 @@ def test_openai_provider_is_key_available(
     """is_key_available() returns True when OPENAI_API_KEY is set, False otherwise.
 
     Verifies the provider's key-check is wired to the correct env var,
-    and that provider_key_available('openai') in the protocol delegates correctly.
+    and that provider_key_available('openai') in the client package delegates correctly.
     """
+    from archon_search.llm_client.provider_key import provider_key_available
     from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider
-    from archon_search.query_expansion_protocol import provider_key_available
 
     provider = OpenAIQueryExpansionProvider(model="gpt-4o-mini")
 

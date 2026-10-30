@@ -290,6 +290,21 @@ def _isolate_archon_logging() -> Generator[None]:
         logger.setLevel(saved_level)
 
 
+@pytest.fixture(autouse=True)
+def _reset_warn_once() -> Generator[None]:
+    """Clear the process-wide warn-once state around every test.
+
+    ``archon_search.llm_client.once_per_process`` logs one WARNING per key per process, so without a reset
+    the first test that makes a provider fail would silence the WARNING every later test (on the
+    same xdist worker) asserts on, and the outcome would depend on test order.
+    """
+    from archon_search.llm_client import once_per_process
+
+    once_per_process._warned_keys.clear()
+    yield
+    once_per_process._warned_keys.clear()
+
+
 @pytest.fixture
 def real_mcp_auth_context() -> None:
     """Opt a test out of ``_mcp_default_request_context``: its tool calls see the real request context."""

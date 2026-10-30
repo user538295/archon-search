@@ -43,8 +43,8 @@ def _fetch_server_status(api_url: str, api_key: str | None) -> dict[str, Any] | 
         return None
 
 
-# ponytail: only key-gated providers; ollama and claude_cli are keyless
-# (key_available always True server-side — query_expansion_protocol.py:26)
+# ponytail: only key-gated providers; ollama, claude_cli and llama_cpp are keyless
+# (key_available always True server-side — llm_client/provider_key.py)
 _PROVIDER_ENV_VAR: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",

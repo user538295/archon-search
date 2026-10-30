@@ -372,7 +372,7 @@ def test_llama_cpp_in_valid_providers() -> None:
 
 def test_provider_key_available_llama_cpp() -> None:
     """provider_key_available('llama_cpp') must return True (local inference; no key)."""
-    from archon_search.query_expansion_protocol import provider_key_available
+    from archon_search.llm_client.provider_key import provider_key_available
 
     assert provider_key_available("llama_cpp") is True
 

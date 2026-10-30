@@ -377,7 +377,7 @@ Add Ruff and Pyright or mypy incrementally. Start with application-service inter
 
 ### EXT-01 — Query-expansion providers need a registry
 
-Provider names, dependency checks, factories, credential policy, rate-limit behavior, installer extras, and wizard choices are distributed across `archon_search/config.py`, `archon_search/server/app.py`, `archon_search/query_expansion_protocol.py`, `archon_search/hyde.py`, `archon_search/rag_fusion.py`, `archon_search/install/extras.py`, and `archon_search/install/wizard.py`. Adding a provider requires coordinated edits in each location.
+Provider names, dependency checks, factories, credential policy, rate-limit behavior, installer extras, and wizard choices are distributed across `archon_search/config.py`, `archon_search/server/app.py`, `archon_search/llm_client/provider_key.py`, `archon_search/hyde.py`, `archon_search/rag_fusion.py`, `archon_search/install/extras.py`, and `archon_search/install/wizard.py`. Adding a provider requires coordinated edits in each location.
 
 Create a `QueryExpansionProviderSpec` registry containing the provider name, factory, dependency/extra metadata, credential check, rate-limit policy, and optional configuration hook. Keep providers as strategies; make the registry the single source of provider metadata.
 

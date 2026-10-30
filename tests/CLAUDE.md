@@ -77,6 +77,7 @@ wall-clock duration (last measured: ~163 s, `--no-cov -n 8`, 8433 tests, 2026-08
 ## Suite layout
 
 - `tests/` — unit tests. The autouse fixture `_stub_model_backends` (`tests/conftest.py`) patches `ModelEmbedder.encode` (zero vectors of the spec's dimension) and `ModelReranker.predict` (uniform 0.5), so no torch, transformers or weights load; construction is not stubbed, so tests must use model names from the registry (`archon_search/model_specs.py`). `tests/_search_stubs.py` only sets thread env defaults and fakes `chonkie`. A test of the real PyTorch code path opts out with a module-level `pytestmark = pytest.mark.real_torch_backends` and runs on the tiny synthetic snapshots of `tests/_tiny_encoder.py` (no weights, no network); the real-weights lanes (`live_eval`, `live_benchmark`, `runtime_parity`) are opted out by their own marker.
+- Autouse `_reset_warn_once` (`tests/conftest.py`) clears the process-wide `archon_search.llm_client.once_per_process` state around every test, so a test that makes a provider fail sees its one-per-process WARNING whatever ran before it on the same xdist worker.
 - `tests/integration/` — real `SearchStore` / `SearchPipeline` / LanceDB in `tmp_path`, `TestClient`
   against a real app. Marked `integration`, run by default. Shared helpers (`make_real_app`, `ingest_doc`,
   `ingest_file_via_path`, `search`, `make_real_pipeline`) live in `tests/integration/conftest.py` —

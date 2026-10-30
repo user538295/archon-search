@@ -38,6 +38,15 @@ DEFAULT_FAST_MODEL: str = "claude-haiku-4-5-20251001"
 # Default model for description generation when a more capable model is preferred.
 DEFAULT_MODEL: str = "claude-sonnet-4-6"
 
+# Context window (tokens) the shared LLM client assumes when an Ollama ``ollama_context_tokens`` is unset or a
+# ``llama_cpp`` ``GET /props`` probe fails (C1 ``assumedContextTokens``). An assumption, not a guarantee: an unset
+# Ollama value is not sent as ``num_ctx``, so the server's own window applies.
+ASSUMED_CONTEXT_TOKENS: Final[int] = 4096
+
+# Spare share added on top of the gpt2 token estimate before an ``ollama`` prompt is sized to its window
+# (C1 ``ollamaEstimateMargin``, 20%): the gpt2 vocabulary only approximates the model's own tokenizer.
+OLLAMA_ESTIMATE_MARGIN: Final[float] = 0.20
+
 # Default namespace used when no explicit namespace is specified.
 DEFAULT_NAMESPACE: str = "default"
 

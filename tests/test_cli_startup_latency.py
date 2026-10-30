@@ -197,3 +197,19 @@ def test_lightweight_cmd_no_pytorch_runtime(loaded_modules: set[str]) -> None:
         "A PyTorch import has leaked back to module scope — check "
         "archon_search/torch_runtime.py, embedder.py and reranker_loading.py."
     )
+
+
+def test_lightweight_cmd_does_not_import_llm_client_package(loaded_modules: set[str]) -> None:
+    """``archon_search.llm_client`` must be absent from sys.modules after ``archon-search config show``.
+
+    The shared LLM client package is imported by the callers that actually call a model (HyDE, RAG
+    Fusion, graph, description), not by a command that never does. The positive control in
+    ``_run_lightweight_cmd`` (``cli.main`` and ``cli.serve`` loaded) keeps this absence check from
+    passing vacuously.
+    """
+    leaked = sorted(name for name in loaded_modules if name.startswith("archon_search.llm_client"))
+    assert not leaked, (
+        f"{leaked} appeared in sys.modules after 'archon-search config show'. "
+        "The shared LLM client package has leaked into CLI start-up — check which module imports it "
+        "at module scope and move the import to the point of use."
+    )

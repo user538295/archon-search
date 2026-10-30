@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 from archon_search._privacy import _query_fingerprint
 from archon_search.config import HyDEConfig
-from archon_search.query_expansion_protocol import provider_key_available
+from archon_search.llm_client.provider_key import provider_key_available
 from archon_search.uv_tool import extra_install_hint
 
 _logger = logging.getLogger(__name__)

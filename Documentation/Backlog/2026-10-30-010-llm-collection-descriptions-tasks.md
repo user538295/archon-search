@@ -200,7 +200,7 @@ flowchart LR
         - #unit_test — `test_ollama_context_tokens_parsed_in_all_three_sections` — the key loads from `[hyde]`, `[rag_fusion]` and `[graph]`
         - #unit_test — `test_ollama_context_tokens_rejects_non_positive` — zero, negative and non-integer values are rejected like the other bounded ints
         - #unit_test — `test_config_defaults_keyset_includes_context_key` — the defaults key-set trip-wire in `test_config_defaults.py` lists the new key
-- [ ] **BE-2** — Define the consumer-owned shared LLM client interface (one user message in, text out, `think` on the request, context window and input budget, raised failure type that keeps timeout apart from other errors), the C1 constants, the warn-once helper (one WARNING per caller per process), and re-home `provider_key_available` (returns `bool`) in a new lazily imported client package #backend-role
+- [x] **BE-2** — Define the consumer-owned shared LLM client interface (one user message in, text out, `think` on the request, context window and input budget, raised failure type that keeps timeout apart from other errors), the C1 constants, the warn-once helper (one WARNING per caller per process), and re-home `provider_key_available` (returns `bool`) in a new lazily imported client package #backend-role
     - Use Cases · 4.0h
     - needs BE-1 · completes C1, S13
     - Tests
