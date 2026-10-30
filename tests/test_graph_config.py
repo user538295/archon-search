@@ -94,6 +94,7 @@ def test_graph_config_snapshot(tmp_path: Path) -> None:
         "provider": None,
         "llama_cpp_base_url": "http://localhost:8080",
         "ollama_base_url": "http://localhost:11434",
+        "ollama_context_tokens": None,
         "extraction_timeout_seconds": 30.0,
         "extraction_rate_limit_rpm": 60,
         "extraction_token_budget": 1024,

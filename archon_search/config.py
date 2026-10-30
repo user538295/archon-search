@@ -76,6 +76,7 @@ class HyDEConfig:
     provider: str = "anthropic"
     ollama_base_url: str = OLLAMA_BASE_URL_DEFAULT
     llama_cpp_base_url: str = LLAMA_CPP_BASE_URL_DEFAULT
+    ollama_context_tokens: int | None = None
 
 
 @dataclass
@@ -88,6 +89,7 @@ class RAGFusionConfig:
     provider: str = "anthropic"
     ollama_base_url: str = OLLAMA_BASE_URL_DEFAULT
     llama_cpp_base_url: str = LLAMA_CPP_BASE_URL_DEFAULT
+    ollama_context_tokens: int | None = None
 
 
 @dataclass
@@ -197,6 +199,9 @@ class GraphConfig:
     """Base URL for the llama_cpp enrichment provider."""
     ollama_base_url: str = OLLAMA_BASE_URL_DEFAULT
     """Base URL for the ollama enrichment provider."""
+    ollama_context_tokens: int | None = None
+    """Ollama context window in tokens. `None` = not configured (the consumer assumes 4096 and
+    sends no `num_ctx`)."""
     extraction_timeout_seconds: float = 30.0
     """Per-request timeout (seconds) for enrichment LLM calls."""
     extraction_rate_limit_rpm: int = 60
@@ -1000,6 +1005,10 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         if not llama_cpp_base_url:
             raise ConfigError("[hyde].llama_cpp_base_url must be a non-empty string")
         hyde.llama_cpp_base_url = llama_cpp_base_url
+    if "ollama_context_tokens" in hyde_cfg:
+        hyde.ollama_context_tokens = _coerce_bounded_int(
+            hyde_cfg["ollama_context_tokens"], "[hyde].ollama_context_tokens", minimum=1
+        )
     config.hyde = hyde
 
     rag_fusion_cfg = doc.get("rag_fusion", {})
@@ -1049,6 +1058,10 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         if not llama_cpp_base_url:
             raise ConfigError("[rag_fusion].llama_cpp_base_url must be a non-empty string")
         rag_fusion.llama_cpp_base_url = llama_cpp_base_url
+    if "ollama_context_tokens" in rag_fusion_cfg:
+        rag_fusion.ollama_context_tokens = _coerce_bounded_int(
+            rag_fusion_cfg["ollama_context_tokens"], "[rag_fusion].ollama_context_tokens", minimum=1
+        )
     config.rag_fusion = rag_fusion
 
     jobs_cfg = doc.get("jobs", {})
@@ -1324,6 +1337,10 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         if not ollama_base_url:
             raise ConfigError("[graph].ollama_base_url must be a non-empty string")
         graph.ollama_base_url = ollama_base_url
+    if "ollama_context_tokens" in graph_cfg:
+        graph.ollama_context_tokens = _coerce_bounded_int(
+            graph_cfg["ollama_context_tokens"], "[graph].ollama_context_tokens", minimum=1
+        )
     if "extraction_timeout_seconds" in graph_cfg:
         extraction_timeout_seconds = _coerce_float(
             graph_cfg["extraction_timeout_seconds"], "[graph].extraction_timeout_seconds"

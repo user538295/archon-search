@@ -193,7 +193,7 @@ flowchart LR
     - Tests
 
 ### Phase 1 · Expand queries with HyDE through the shared client on any provider *(the walking skeleton of group A: the shared client with all five wrappers, HyDE cut over; no data model exists in group A, the description data foundation arrives in Phase 4 by the plan's decision (Q6))*
-- [ ] **BE-1** — Add `ollama_context_tokens` to `HyDEConfig`, `RAGFusionConfig` and `GraphConfig` and their parsers in `config.py` #backend-role
+- [x] **BE-1** — Add `ollama_context_tokens` to `HyDEConfig`, `RAGFusionConfig` and `GraphConfig` and their parsers in `config.py` #backend-role
     - Entity · 2.0h
     - needs K1 · completes S67
     - Tests

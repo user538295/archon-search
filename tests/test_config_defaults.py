@@ -168,6 +168,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "provider": "anthropic",
             "ollama_base_url": "http://localhost:11434",
             "llama_cpp_base_url": "http://localhost:8080",
+            "ollama_context_tokens": None,
         },
         # [rag_fusion]
         "rag_fusion": {
@@ -179,6 +180,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "provider": "anthropic",
             "ollama_base_url": "http://localhost:11434",
             "llama_cpp_base_url": "http://localhost:8080",
+            "ollama_context_tokens": None,
         },
         # [jobs]
         "jobs": {
@@ -232,6 +234,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "provider": None,
             "llama_cpp_base_url": "http://localhost:8080",
             "ollama_base_url": "http://localhost:11434",
+            "ollama_context_tokens": None,
             "extraction_timeout_seconds": 30.0,
             "extraction_rate_limit_rpm": 60,
             "extraction_token_budget": 1024,
@@ -271,6 +274,14 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
     # Value-level snapshot — fails when any default shifts.
     config = _default_config(tmp_path)
     assert dataclasses.asdict(config) == expected
+
+
+@pytest.mark.parametrize("section", ["hyde", "rag_fusion", "graph"])
+def test_config_defaults_keyset_includes_context_key(_isolated_env: None, tmp_path: Path, section: str) -> None:
+    """Trip-wire: each Ollama-capable section lists `ollama_context_tokens`, unset (None) by default."""
+    section_defaults = dataclasses.asdict(_default_config(tmp_path))[section]
+    assert "ollama_context_tokens" in section_defaults
+    assert section_defaults["ollama_context_tokens"] is None
 
 
 # ---------------------------------------------------------------------------

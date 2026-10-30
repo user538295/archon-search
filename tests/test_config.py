@@ -1366,6 +1366,40 @@ def test_hyde_config_invalid_rpm(tmp_path: Path) -> None:
         load_config(path=toml_file)
 
 
+def test_ollama_context_tokens_parsed_in_all_three_sections(tmp_path: Path) -> None:
+    """`ollama_context_tokens` loads from [hyde], [rag_fusion] and [graph]; unset means None."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text(
+        "[hyde]\nollama_context_tokens = 8192\n"
+        "[rag_fusion]\nollama_context_tokens = 16384\n"
+        "[graph]\nollama_context_tokens = 32768\n",
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.hyde.ollama_context_tokens == 8192
+    assert config.rag_fusion.ollama_context_tokens == 16384
+    assert config.graph.ollama_context_tokens == 32768
+
+    unset = load_config(path=tmp_path / "nonexistent.toml")
+    assert unset.hyde.ollama_context_tokens is None
+    assert unset.rag_fusion.ollama_context_tokens is None
+    assert unset.graph.ollama_context_tokens is None
+
+    boundary = tmp_path / "boundary.toml"
+    boundary.write_text("[hyde]\nollama_context_tokens = 1\n", encoding="utf-8")
+    assert load_config(path=boundary).hyde.ollama_context_tokens == 1
+
+
+@pytest.mark.parametrize("section", ["hyde", "rag_fusion", "graph"])
+@pytest.mark.parametrize("value", ["0", "-1", "4096.5", "8192.0", '"4096"', "true"])
+def test_ollama_context_tokens_rejects_non_positive(tmp_path: Path, section: str, value: str) -> None:
+    """Zero, negative and non-integer values are rejected like the other bounded ints."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text(f"[{section}]\nollama_context_tokens = {value}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=rf"\[{section}\]\.ollama_context_tokens"):
+        load_config(path=toml_file)
+
+
 def test_hyde_config_empty_model(tmp_path: Path) -> None:
     """model = "" raises ConfigError."""
     toml_file = tmp_path / "cfg.toml"
