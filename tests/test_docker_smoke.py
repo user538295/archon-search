@@ -485,7 +485,7 @@ _OFFLINE_PARSE_TIMEOUT_S = 300
 def test_scanned_pdf_parses_with_no_network_and_a_read_only_root(cpu_image: str) -> None:
     """H3: the image carries the models a scanned PDF needs, so its first parse downloads nothing.
 
-    Docling fetched its layout and table models on the first parse, inside ``parse_timeout_seconds``.
+    Docling fetched its layout and table models on the first parse, inside any positive ``parse_timeout_seconds``.
     ``--network none`` makes any download fail, ``--read-only`` makes a write outside ``/tmp`` fail, and the
     image's own non-root user runs the parse.
     """

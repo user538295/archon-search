@@ -229,7 +229,7 @@ def test_dockerfile_healthcheck_follows_archon_search_port(
 def test_dockerfile_prefetches_parse_models_into_a_cache_outside_the_data_volume(
     dockerfile_text: str, dockerfile_logical: list[str]
 ) -> None:
-    """The first PDF/image parse must not download docling's models inside ``parse_timeout_seconds``."""
+    """The first PDF/image parse must not download docling's models inside any positive ``parse_timeout_seconds``."""
     cache = re.search(r"^ENV HF_HUB_CACHE=(\S+)", dockerfile_text, re.MULTILINE)
     assert cache is not None, "the Dockerfile must pin HF_HUB_CACHE to the prefetched model cache"
     assert not cache.group(1).startswith("/data"), "a cache on the data volume is not seeded by the image"
@@ -262,14 +262,12 @@ def test_prefetch_script_writes_a_scanned_pdf_and_a_png(tmp_path: Path) -> None:
     assert png.read_bytes().startswith(b"\x89PNG")
 
 
-def test_prefetch_script_parses_with_a_timeout_far_above_the_runtime_default(
+def test_prefetch_script_parses_with_an_explicit_bound_so_a_hung_build_still_ends(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The arm64 image is built under QEMU, where the first docling parse took over the 300 s runtime default
-    and failed the release build; the prefetch parser must be built with a much larger bound."""
+    """The runtime default is no bound, but a hung image build must still end: the prefetch parser is built with an
+    explicit, generous bound (the arm64 image builds under QEMU, where the first docling parse is very slow)."""
     import asyncio
-
-    from archon_search.parser import DEFAULT_PARSE_TIMEOUT_SECONDS
 
     spec = importlib.util.spec_from_file_location(
         "prefetch_parse_models", REPO_ROOT / "scripts" / "prefetch-parse-models.py"
@@ -294,7 +292,7 @@ def test_prefetch_script_parses_with_a_timeout_far_above_the_runtime_default(
 
     assert parsed == ["sample.pdf", "sample.png"]
     (kwargs,) = built
-    assert kwargs["parse_timeout_seconds"] >= 10 * DEFAULT_PARSE_TIMEOUT_SECONDS  # type: ignore[operator]
+    assert kwargs["parse_timeout_seconds"] >= 3600  # type: ignore[operator]
 
 
 # ---------------------------------------------------------------------------

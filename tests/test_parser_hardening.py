@@ -14,6 +14,7 @@ from archon_search import parser as parser_module
 from archon_search.config import IngestConfig
 from archon_search.parser import (
     NOT_REGULAR_FILE_DETAIL,
+    PARSE_FAILED_DETAIL,
     PARSE_TIMEOUT_DETAIL,
     ZIP_LIMIT_DETAIL,
     DocumentParser,
@@ -22,7 +23,9 @@ from archon_search.parser import (
 
 _TIMEOUT_S = 0.3
 _WAIT_BOUND_S = 10.0
+_SLOW_WORKER_S = 1.0
 _MIB = 1024 * 1024
+_WORKER_TIMEOUT_MESSAGE = "raised by the worker itself"
 _PARSED_TEXT = "parsed text"
 
 
@@ -34,6 +37,11 @@ def _echo_worker(path: str) -> tuple[bool, str]:
 def _block_forever_worker(path: str) -> tuple[bool, str]:
     time.sleep(3600)
     return True, path
+
+
+def _slow_worker(path: str) -> tuple[bool, str]:
+    time.sleep(_SLOW_WORKER_S)
+    return True, f"slow:{Path(path).name}"
 
 
 class _FakeProcess:
@@ -138,6 +146,18 @@ def test_a_real_worker_process_that_hangs_is_killed_and_replaced(tmp_path: Path)
             assert not worker.is_alive()
         assert parser._run_in_worker(_echo_worker, document) == f"echo:{document.name}"
         assert parser._pool is not hung_pool
+    finally:
+        if parser._pool is not None:
+            parser._pool.shutdown(wait=True, cancel_futures=True)
+
+
+def test_an_unbounded_real_worker_lets_a_slow_parse_finish(tmp_path: Path) -> None:
+    """Real spawned worker with no bound: a slow parse is waited for and returns normally, with the pool kept."""
+    parser = DocumentParser(parse_timeout_seconds=0)
+    document = _pdf(tmp_path)
+    try:
+        assert parser._run_in_worker(_slow_worker, document) == f"slow:{document.name}"
+        assert parser._pool is not None
     finally:
         if parser._pool is not None:
             parser._pool.shutdown(wait=True, cancel_futures=True)
@@ -288,18 +308,77 @@ def test_a_file_that_cannot_be_measured_gets_the_base_timeout(tmp_path: Path) ->
     assert pool.waits == [_BASE_TIMEOUT_S]
 
 
+def _parse_one_mib_pdf_waiting_how_long(parser: DocumentParser, tmp_path: Path) -> list[float | None]:
+    pool = _TimeoutRecordingPool()
+    parser._pool = pool  # type: ignore[assignment]
+    parser._parse_with_docling(_pdf_of(tmp_path, 1))
+    return pool.waits
+
+
+def test_a_default_configured_parser_never_bounds_how_long_a_conversion_may_take(tmp_path: Path) -> None:
+    parser = DocumentParser.from_config(IngestConfig())
+
+    assert _parse_one_mib_pdf_waiting_how_long(parser, tmp_path) == [None]
+
+
+def test_a_parser_built_without_arguments_never_bounds_how_long_a_conversion_may_take(tmp_path: Path) -> None:
+    assert _parse_one_mib_pdf_waiting_how_long(DocumentParser(), tmp_path) == [None]
+
+
+class _ExpiredFuture(Future):
+    """A future whose wait runs out at once, with whatever ``TimeoutError`` the caller's bound would have produced."""
+
+    def result(self, timeout: float | None = None) -> object:
+        raise TimeoutError(_WORKER_TIMEOUT_MESSAGE)
+
+
+class _ExpiringPool(_FakePool):
+    def submit(self, _fn: object, _arg: str) -> Future:
+        return _ExpiredFuture()
+
+
 def test_a_timed_out_big_parse_logs_the_bound_it_actually_had(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    parser = DocumentParser(parse_timeout_seconds=_TIMEOUT_S, parse_timeout_seconds_per_mb=_PER_MIB_S)
-    parser._pool = _FakePool()  # type: ignore[assignment]
-    big = tmp_path / "big.pdf"
-    big.write_bytes(b"%PDF-1.4 fake")
+    parser = DocumentParser(parse_timeout_seconds=_BASE_TIMEOUT_S, parse_timeout_seconds_per_mb=_PER_MIB_S)
+    parser._pool = _ExpiringPool()  # type: ignore[assignment]
+    mib = 3
 
     with caplog.at_level("WARNING", logger="archon_search.parser"), pytest.raises(ParseError):
-        parser._parse_with_docling(big)
+        parser._parse_with_docling(_pdf_of(tmp_path, mib))
 
-    assert any("exceeded" in record.getMessage() for record in caplog.records)
+    assert f"exceeded {_BASE_TIMEOUT_S + _PER_MIB_S * mib:.0f}s" in caplog.text
+
+
+def test_a_timeout_error_from_an_unbounded_parse_fails_only_that_document(tmp_path: Path) -> None:
+    """With no bound the TimeoutError is the worker's own: no timeout log, no killed worker, no discarded pool."""
+    parser = DocumentParser()
+    pool = _ExpiringPool()
+    parser._pool = pool  # type: ignore[assignment]
+
+    with pytest.raises(ParseError) as raised:
+        parser._parse_with_docling(_pdf(tmp_path))
+
+    assert raised.value.detail == PARSE_FAILED_DETAIL
+    assert isinstance(raised.value.cause, TimeoutError)
+    assert str(raised.value.cause) == _WORKER_TIMEOUT_MESSAGE
+    assert raised.value.__cause__ is raised.value.cause
+    assert parser._pool is pool
+    assert pool.shutdown_calls == []
+    assert not pool._processes[1].terminated
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"parse_timeout_seconds": -1.0}, {"parse_timeout_seconds_per_mb": -0.5}, {"parse_timeout_seconds": float("nan")}],
+)
+def test_a_negative_or_nan_parse_timeout_is_refused_at_construction(kwargs: dict[str, float]) -> None:
+    with pytest.raises(ValueError, match=r"must be >= 0"):
+        DocumentParser(**kwargs)
+
+
+def test_a_zero_parse_timeout_is_accepted_at_construction() -> None:
+    DocumentParser(parse_timeout_seconds=0, parse_timeout_seconds_per_mb=0)
 
 
 # ---------------------------------------------------------------------------

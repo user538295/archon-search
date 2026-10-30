@@ -64,8 +64,8 @@ Every key is optional and sits in the section shown. Defaults mirror [`archon-se
 | `[server]` | `graceful_shutdown_seconds` | int | `25` | Must be `>= 1`; keep below the 30 s of `docker stop`. |
 | `[ingest]` | `max_file_mb` | int | `100` | Was `0` (no limit); `0` still disables it; applies to files and to one inline document. |
 | `[ingest]` | `allowed_roots` | list[string] | `[]` | Absolute directories a client-supplied path must lie under. Empty adds no scope limit, and a non-admin key may then not send paths at all. |
-| `[ingest]` | `parse_timeout_seconds` | float | `300` | Must be `> 0`; bound on one PDF or image conversion. |
-| `[ingest]` | `parse_timeout_seconds_per_mb` | float | `10` | Must be `>= 0`; added per MiB of the file (`0` keeps the bound flat). |
+| `[ingest]` | `parse_timeout_seconds` | float | `0` | Must be `>= 0`; bound on one PDF or image conversion; `0` = no bound (was `300` before the default changed; set `300` to restore it). |
+| `[ingest]` | `parse_timeout_seconds_per_mb` | float | `10` | Must be `>= 0`; added per MiB of the file when `parse_timeout_seconds` is positive (`0` keeps the bound flat). |
 | `[ingest]` | `max_zip_entries` | int | `10000` | Must be `>= 1`; `.docx`, `.pptx`, `.xlsx`, `.epub`. |
 | `[ingest]` | `max_zip_uncompressed_mb` | int | `512` | Must be `>= 1`. |
 | `[ingest]` | `max_discovered_files` | int | `100000` | Must be `>= 1`; a larger directory tree is refused. |

@@ -106,7 +106,7 @@ Directory ingest skips hidden directories (denied credential or server-state one
 
 - `[server].max_request_body_mb` (default 32): a bigger body gets `413` before authentication.
 - `[ingest].max_concurrent_tasks` (default 4): a further `POST /ingest` or `POST /collections/` gets `503` `ingest_busy` with `Retry-After`; jobs are not queued.
-- `[ingest].max_file_mb` (default 100), `max_zip_entries` (10000) and `max_zip_uncompressed_mb` (512) bound a single document; `parse_timeout_seconds` (300) plus `parse_timeout_seconds_per_mb` (10) per MiB of the file bound the PDF/image parser, which is killed and replaced on timeout.
+- `[ingest].max_file_mb` (default 100), `max_zip_entries` (10000) and `max_zip_uncompressed_mb` (512) bound a single document; `parse_timeout_seconds` (default `0` = no bound) plus `parse_timeout_seconds_per_mb` (10) per MiB of the file bound the PDF/image parser only when `parse_timeout_seconds` is positive; the parser is then killed and replaced on timeout. With the default a wedged conversion (malformed or hostile PDF) holds the single parse worker and, for REST ingest, its ingest slot until the server restarts (queued REST jobs hold theirs, so after `max_concurrent_tasks` of them every REST ingest gets `503` `ingest_busy`; MCP, watcher and sync ingests take no slot and block on the parse lock). One hostile PDF can therefore disable PDF and image ingest until restart, and `/ready` and the HEALTHCHECK will not notice, so set a generous positive `parse_timeout_seconds` (for example `3600`; the first parse of a fresh worker counts against it) if you ingest untrusted files.
 - `[graph].max_cross_collection_collections` (default 8) bounds a cross-collection graph request.
 
 There is still no rate limiter: put one at the proxy.

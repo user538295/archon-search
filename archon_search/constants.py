@@ -91,9 +91,12 @@ DEFAULT_GRACEFUL_SHUTDOWN_SECONDS: Final[int] = 25
 # 0 disables the cap, at the operator's risk.
 DEFAULT_MAX_FILE_MB: Final[int] = 100
 
-# ``[ingest].parse_timeout_seconds`` default: wall-clock bound on one docling (PDF / image) conversion. A large
-# scanned PDF with OCR takes minutes; ten times that is a wedged parse worker, which is then replaced.
-DEFAULT_PARSE_TIMEOUT_SECONDS: Final[float] = 300.0
+# ``[ingest].parse_timeout_seconds`` default: 0 = NO wall-clock bound on one docling (PDF / image) conversion. A slow
+# conversion is not a wedged one (a large scan takes minutes, the first parse of a fresh worker also pays spawn, import,
+# model load and hub checks, and the host may be under load), and abandoning a document for being slow loses it, which
+# is worse than waiting. A positive value opts in to protection against a truly wedged worker: the parse is then
+# abandoned after that many seconds (plus the per-MiB allowance), the worker is killed and replaced.
+DEFAULT_PARSE_TIMEOUT_SECONDS: Final[float] = 0.0
 
 # ``[ingest].parse_timeout_seconds_per_mb`` default: seconds added to the parse bound per MiB of the file, so a big
 # scanned PDF is judged by its size and not by the flat bound a one-page file needs. Measured on an Apple-silicon

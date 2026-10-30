@@ -254,8 +254,7 @@ def test_hardening_keys_parse_from_toml(_no_env: None, tmp_path: Path) -> None:
         ("allowed_roots = [1]", "list of non-empty strings"),
         ('allowed_roots = [""]', "list of non-empty strings"),
         ('allowed_roots = ["relative/dir"]', "absolute"),
-        ("parse_timeout_seconds = 0", "must be > 0"),
-        ("parse_timeout_seconds = -1.0", "must be > 0"),
+        ("parse_timeout_seconds = -1.0", "must be >= 0"),
         ('parse_timeout_seconds = "fast"', "Expected float"),
         ("parse_timeout_seconds_per_mb = -0.5", "must be >= 0"),
         ('parse_timeout_seconds_per_mb = "slow"', "Expected float"),
@@ -273,12 +272,19 @@ def test_hardening_keys_reject_invalid_values(_no_env: None, tmp_path: Path, lin
         load_config(path=cfg_path)
 
 
+def test_a_zero_parse_timeout_is_accepted_and_means_no_bound(_no_env: None, tmp_path: Path) -> None:
+    cfg_path = tmp_path / "archon-search.toml"
+    cfg_path.write_text("[ingest]\nparse_timeout_seconds = 0\n", encoding="utf-8")
+
+    assert load_config(path=cfg_path).ingest.parse_timeout_seconds == 0.0
+
 
 def test_a_zero_per_mb_allowance_is_accepted_and_turns_the_scaling_off(_no_env: None, tmp_path: Path) -> None:
     cfg_path = tmp_path / "archon-search.toml"
     cfg_path.write_text("[ingest]\nparse_timeout_seconds_per_mb = 0\n", encoding="utf-8")
 
     assert load_config(path=cfg_path).ingest.parse_timeout_seconds_per_mb == 0.0
+
 
 # ---------------------------------------------------------------------------
 # [server].cors_origins / max_request_body_mb and [graph].max_cross_collection_collections

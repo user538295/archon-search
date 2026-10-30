@@ -150,7 +150,7 @@ The config loader in `archon_search/config.py` ignores unknown keys silently and
 
 - Adding new keys to your `archon-search.toml` is safe across upgrades; old versions ignore them.
 - Renamed keys that are not on the removed list may stop applying without warning. Check `BREAKING.md` for any `[section].key` renames and update before restart.
-- Diff `archon-search.toml.example` against your live config after every upgrade to pick up new keys and comments (recent additions: `[maintenance].version_retention_hours`, `[server].cors_origins`, `docs_enabled`, `max_request_body_mb`, `graceful_shutdown_seconds`, and the `[ingest]` limits `allowed_roots`, `max_concurrent_tasks`, `parse_timeout_seconds`, `parse_timeout_seconds_per_mb`, `max_zip_entries`, `max_zip_uncompressed_mb`, `max_discovered_files`).
+- Diff `archon-search.toml.example` against your live config after every upgrade to pick up new keys and comments (recent additions: `[maintenance].version_retention_hours`, `[server].cors_origins`, `docs_enabled`, `max_request_body_mb`, `graceful_shutdown_seconds`, and the `[ingest]` limits `allowed_roots`, `max_concurrent_tasks`, `parse_timeout_seconds`, `parse_timeout_seconds_per_mb`, `max_zip_entries`, `max_zip_uncompressed_mb`, `max_discovered_files`). `parse_timeout_seconds` now defaults to `0` (no bound; was `300`), see `BREAKING.md`.
 
 ## Rolling back
 

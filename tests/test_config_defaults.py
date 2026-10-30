@@ -218,7 +218,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "max_file_mb": 100,
             "max_tasks_per_child": DEFAULT_DOCLING_MAX_TASKS_PER_CHILD,
             "allowed_roots": [],
-            "parse_timeout_seconds": 300.0,
+            "parse_timeout_seconds": 0.0,
             "parse_timeout_seconds_per_mb": 10.0,
             "max_zip_entries": 10_000,
             "max_zip_uncompressed_mb": 512,

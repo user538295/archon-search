@@ -710,7 +710,7 @@ Full descriptions are in [`UserManual/30_configuration.md`](../UserManual/30_con
 | `[ingest].max_file_mb` | `100` | `413` `file_too_large` over the limit; `0` = unlimited. |
 | `[ingest].max_concurrent_tasks` | `4` | `503` `ingest_busy` + `Retry-After` beyond the limit. |
 | `[ingest].max_discovered_files` | `100000` | A larger directory tree is refused. |
-| `[ingest].parse_timeout_seconds` / `parse_timeout_seconds_per_mb` | `300` / `10` | Bound on one PDF/image conversion. |
+| `[ingest].parse_timeout_seconds` / `parse_timeout_seconds_per_mb` | `0` / `10` | Bound on one PDF/image conversion; `0` = no bound, and the per-MiB allowance applies only to a positive base. |
 | `[ingest].max_zip_entries` / `max_zip_uncompressed_mb` | `10000` / `512` | Office-zip limits checked before the file is opened. |
 | `[graph].max_cross_collection_collections` | `8` | `GET /graph/cross-collection` / MCP `get_graph_cross_collection` over the limit: `422` / `validation_error`. |
 

@@ -161,9 +161,11 @@ class IngestConfig:
     beyond the always-on deny list (the data directory, ``/proc``, ``/sys``, ``/dev`` and secret-named files);
     collection paths named in this file are operator-trusted and exempt (the secret deny list still applies)."""
     parse_timeout_seconds: float = DEFAULT_PARSE_TIMEOUT_SECONDS
-    """Wall-clock bound on one docling (PDF / image) conversion; the parse worker is replaced on timeout."""
+    """Wall-clock bound on one docling (PDF / image) conversion; the parse worker is replaced on timeout.
+    0 (the default) means no bound: a slow conversion is never abandoned."""
     parse_timeout_seconds_per_mb: float = DEFAULT_PARSE_TIMEOUT_SECONDS_PER_MB
-    """Seconds added to ``parse_timeout_seconds`` per MiB of the file being converted (0 = a flat bound)."""
+    """Seconds added to a positive ``parse_timeout_seconds`` per MiB of the file being converted (0 = a flat bound).
+    No effect while ``parse_timeout_seconds`` is 0."""
     max_zip_entries: int = DEFAULT_MAX_ZIP_ENTRIES
     """Most entries a zip-based Office file (docx, pptx, xlsx, epub) may hold."""
     max_zip_uncompressed_mb: int = DEFAULT_MAX_ZIP_UNCOMPRESSED_MB
@@ -1178,8 +1180,8 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
                 raise ConfigError(f"[ingest].allowed_roots entries must be absolute paths, got {root!r}")
     if "parse_timeout_seconds" in ingest_cfg:
         parse_timeout = _coerce_float(ingest_cfg["parse_timeout_seconds"], "[ingest].parse_timeout_seconds")
-        if parse_timeout <= 0:
-            raise ConfigError(f"[ingest].parse_timeout_seconds must be > 0, got {parse_timeout}")
+        if parse_timeout < 0:
+            raise ConfigError(f"[ingest].parse_timeout_seconds must be >= 0, got {parse_timeout}")
         ingest.parse_timeout_seconds = parse_timeout
     if "parse_timeout_seconds_per_mb" in ingest_cfg:
         per_mb = _coerce_float(ingest_cfg["parse_timeout_seconds_per_mb"], "[ingest].parse_timeout_seconds_per_mb")

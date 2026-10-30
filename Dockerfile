@@ -141,8 +141,8 @@ RUN useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin appuser; \
     chown appuser:appuser /data /data/models /pip-packages
 
 # Model files the document parser would otherwise download on its first PDF or image: docling's layout and
-# table-structure models, about 0.5 GB. Fetched on use they sat inside `[ingest].parse_timeout_seconds` (300 s)
-# and needed the network. `scripts/prefetch-parse-models.py` runs the real parser, so it fetches exactly what
+# table-structure models, about 0.5 GB. Fetched on use they counted against any `[ingest].parse_timeout_seconds`
+# bound and needed the network. `scripts/prefetch-parse-models.py` runs the real parser, so it fetches exactly what
 # docling needs and fails the build if a PDF or scanned image cannot be parsed. `HF_HUB_CACHE` moves only the
 # Hugging Face hub cache off the data volume (embedder, reranker and graph weights keep using
 # `<data dir>/models`, and the Hub's xet chunk cache stays under `HOME`); the files are owned by appuser, so a

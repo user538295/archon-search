@@ -46,10 +46,16 @@ enabled = true
 # operator-trusted and exempt from this list (the credential deny list still applies).
 # allowed_roots = ["/srv/docs"]
 
-# Wall-clock bound (seconds) on one PDF / image conversion; the worker is replaced on timeout.
-# parse_timeout_seconds = 300
-# Seconds added to that bound per MiB of the file, so a large scanned PDF is judged by its size (a 100 MiB scan
-# converts in about 6.5 minutes on a Mac's CPU, where docling runs). 0 keeps the bound flat.
+# Wall-clock bound (seconds) on one PDF / image conversion; the worker is replaced on timeout. 0 (the default)
+# means no bound: a slow conversion is never abandoned, but a wedged one (malformed or hostile PDF) holds the
+# parse worker and, for REST ingest, an ingest slot until the server restarts (after max_concurrent_tasks of them
+# every REST ingest gets 503; MCP, watcher and sync ingests take no slot and block on the parse lock), so set a
+# generous bound such as 3600 if you ingest untrusted files; the first parse of a fresh worker (spawn, docling
+# import, model load) counts against it.
+# parse_timeout_seconds = 0
+# Seconds added to a positive parse_timeout_seconds per MiB of the file, so a large scanned PDF is judged by its
+# size (a 100 MiB scan converts in about 6 min, 380 s, on a Mac's CPU, where docling runs). 0 keeps the bound
+# flat; no effect while parse_timeout_seconds is 0.
 # parse_timeout_seconds_per_mb = 10
 # Limits on zip-based Office files (docx, pptx, xlsx, epub): entry count and total
 # uncompressed MiB, checked on the central directory before the file is opened.

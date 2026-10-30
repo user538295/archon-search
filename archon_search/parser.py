@@ -327,6 +327,12 @@ class DocumentParser:
             )
         if max_tasks_per_child < 1:
             raise ValueError(f"max_tasks_per_child must be >= 1, got {max_tasks_per_child!r}")
+        for name, seconds in (
+            ("parse_timeout_seconds", parse_timeout_seconds),
+            ("parse_timeout_seconds_per_mb", parse_timeout_seconds_per_mb),
+        ):
+            if not seconds >= 0:  # also rejects NaN, which every ordering comparison reports as False
+                raise ValueError(f"{name} must be >= 0, got {seconds!r}")
         self._max_tasks_per_child = max_tasks_per_child
         self._parse_timeout_seconds = parse_timeout_seconds
         self._parse_timeout_seconds_per_mb = parse_timeout_seconds_per_mb
@@ -441,11 +447,14 @@ class DocumentParser:
     def _parse_with_docling(self, path: Path) -> str:
         return self._run_in_worker(_docling_to_markdown, path)
 
-    def _parse_timeout_for(self, path: Path) -> float:
-        """The wall-clock bound for converting *path*: ``parse_timeout_seconds`` plus the per-MiB allowance for its size.
+    def _parse_timeout_for(self, path: Path) -> float | None:
+        """The wall-clock bound for converting *path*, or ``None`` when the parse is unbounded.
 
-        A file that cannot be measured gets the base bound alone.
+        ``parse_timeout_seconds`` of 0 (the default) means no bound. A positive base adds the per-MiB allowance for
+        the file's size; a file that cannot be measured gets the base bound alone.
         """
+        if self._parse_timeout_seconds <= 0:
+            return None
         try:
             size_bytes = path.stat().st_size
         except OSError:
@@ -453,13 +462,13 @@ class DocumentParser:
         return self._parse_timeout_seconds + self._parse_timeout_seconds_per_mb * (size_bytes / BYTES_PER_MIB)
 
     def _run_in_worker(self, fn: Callable[[str], tuple[bool, str]], path: Path) -> str:
-        """Run ``fn(str(path))`` in the docling worker, bounded by :meth:`_parse_timeout_for` (``parse_timeout_seconds``
-        plus ``parse_timeout_seconds_per_mb`` per MiB of the file).
+        """Run ``fn(str(path))`` in the docling worker, bounded by :meth:`_parse_timeout_for` (unbounded by default;
+        with a positive ``parse_timeout_seconds``, that plus ``parse_timeout_seconds_per_mb`` per MiB of the file).
 
         One parse at a time (``_worker_lock``): the pool has a single worker, so serialising here makes the
-        timeout cover the parse itself and never the wait behind another caller's parse. A parse that outlives the
-        timeout fails *this* document with :data:`PARSE_TIMEOUT_DETAIL`, and the pool is discarded with its worker
-        process killed, so the next document gets a fresh worker instead of queueing behind a wedged one forever.
+        timeout cover the parse itself and never the wait behind another caller's parse. When a bound is set, a
+        parse that outlives it fails *this* document with :data:`PARSE_TIMEOUT_DETAIL`, and the pool is discarded
+        with its worker process killed, so the next document gets a fresh worker instead of queueing behind a wedged one.
         """
         timeout_seconds = self._parse_timeout_for(path)
         with self._worker_lock:
@@ -486,6 +495,11 @@ class DocumentParser:
                     path, RuntimeError(PARSE_WORKER_LOST_DETAIL), detail=PARSE_WORKER_LOST_DETAIL
                 ) from exc
             except TimeoutError as exc:
+                if timeout_seconds is None:
+                    # Defensive, not our bound: ``_docling_to_markdown`` reports its own failures as ``(False, msg)``,
+                    # so this is reached only if the worker itself raises TimeoutError (on 3.11+
+                    # ``concurrent.futures.TimeoutError`` is the builtin). The pool is healthy; fail only this document.
+                    raise ParseError(path, exc) from exc
                 self._discard_pool(pool)
                 logger.warning(
                     "docling parse of %s exceeded %.0fs; its worker was killed and will be replaced",
