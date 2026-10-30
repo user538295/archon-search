@@ -1,0 +1,79 @@
+openapi: 3.0.0
+info:
+  title: Archon Search Status API (description block)
+  version: 0.0.0
+tags: []
+paths:
+  /status:
+    get:
+      operationId: Status_status
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusDescriptionFragment'
+components:
+  schemas:
+    ContextWindowSource:
+      type: string
+      enum:
+        - configured
+        - probed
+        - assumed
+    DescriptionStatusDetail:
+      type: object
+      required:
+        - provider
+        - key_available
+        - reachable
+        - effective_context_tokens
+        - context_window_source
+        - backfill_on_startup
+        - last_attempt_ok
+        - last_attempt_at
+      properties:
+        provider:
+          $ref: '#/components/schemas/LlmProvider'
+        key_available:
+          type: boolean
+        reachable:
+          type: boolean
+          nullable: true
+        effective_context_tokens:
+          type: integer
+          format: int32
+          nullable: true
+        context_window_source:
+          allOf:
+            - $ref: '#/components/schemas/ContextWindowSource'
+          nullable: true
+        backfill_on_startup:
+          type: boolean
+        last_attempt_ok:
+          type: boolean
+          nullable: true
+        last_attempt_at:
+          type: string
+          format: date-time
+          nullable: true
+    LlmProvider:
+      type: string
+      enum:
+        - anthropic
+        - openai
+        - ollama
+        - claude_cli
+        - llama_cpp
+    StatusDescriptionFragment:
+      type: object
+      required:
+        - description
+      properties:
+        description:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/DescriptionStatusDetail'
+          nullable: true

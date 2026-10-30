@@ -1,0 +1,146 @@
+openapi: 3.0.0
+info:
+  title: Archon Search Describe Job API (description job kind)
+  version: 0.0.0
+tags: []
+paths:
+  /jobs/{id}:
+    get:
+      operationId: Jobs_get
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DescriptionJob'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+    delete:
+      operationId: Jobs_cancel
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DescriptionJob'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the current state of the server.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotCancellable'
+components:
+  schemas:
+    DescriptionJob:
+      type: object
+      required:
+        - job_id
+        - status
+        - created_at
+        - updated_at
+        - namespace
+        - collection
+        - job_type
+        - kind
+        - result
+        - error
+      properties:
+        job_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/JobStatusValue'
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        namespace:
+          type: string
+        collection:
+          type: string
+        job_type:
+          type: string
+          enum:
+            - description
+        kind:
+          type: string
+          nullable: true
+        result:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/DescriptionJobResult'
+          nullable: true
+        error:
+          type: string
+          nullable: true
+    DescriptionJobOutcome:
+      type: string
+      enum:
+        - generated
+        - failed
+        - alreadyRunning
+        - refusedManual
+        - superseded
+    DescriptionJobResult:
+      type: object
+      required:
+        - outcome
+        - description_status
+      properties:
+        outcome:
+          $ref: '#/components/schemas/DescriptionJobOutcome'
+        description_status:
+          type: string
+          enum:
+            - ok
+            - failed
+            - pending
+          nullable: true
+    JobStatusValue:
+      type: string
+      enum:
+        - PENDING
+        - QUEUED
+        - RUNNING
+        - DONE
+        - FAILED
+        - FAILED_EXPIRED
+        - CANCELLED
+        - CANCELLING
+    NotCancellable:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+    NotFound:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
