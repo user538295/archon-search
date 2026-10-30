@@ -7,11 +7,11 @@ Slice S0 of the [interface parity roadmap](./roadmap.md). Every later slice brie
 The same feature is implemented once per interface. The core is shared (`SearchPipeline.search` and `search_many` are called by REST, MCP and the OpenAI shim), but everything above it is duplicated: validation, HyDE and RAG Fusion resolution, warm-up, the search budget, filter building, error mapping, telemetry and response shaping. Evidence, as of 2026-10-30:
 
 - Search exists three times: `server/routes_search.py:301-695`, `server/mcp.py:520-865` and `server/routes_openai_shim.py` (~250-345). A step-by-step comparison found 20 behavioral differences and a dozen duplicated literals (see [Brief 01](./01_search_brief.md)).
-- `mcp.py` is 2601 lines of tool implementations. It imports from route modules (`routes_explain`, `routes_export`, `schemas`), and route modules import each other (`routes_explain` imports `dependency_error_response` from `routes_search`; `routes_collections` imports from `routes_jobs`). `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` principle 5 already admits this.
+- `mcp.py` is 2601 lines of tool implementations. It imports route modules (`routes_explain` and `routes_export` at module level, `routes_collections` function-locally) and the `schemas` wire models, and route modules import each other (`routes_explain` imports `dependency_error_response` from `routes_search`; `routes_collections` imports from `routes_jobs`). `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` principle 5 already admits this.
 - Shared application logic lives under `server/`: `_search_budget.py`, `_hyde.py`, `_validators.py` and the policy half of `authz.py`. None of the first three imports FastAPI; they sit in `server/` only because the first callers were routes.
 - The CLI has no search, explain, route, document, expiring-chunk or telemetry command, MCP has no job tools, and REST lacks `search_with_context` and document deletion.
 - `Documentation/Architecture/540_code_and_architecture_quality_audit.md` finding ARCH-01 already names this problem and prescribes application services with typed commands, results and domain errors. Nothing has been built.
-- No import-boundary check exists. The repo has no import-linter, tach or pytest-archon configuration, and the pinned ruff rule set deliberately excludes the `TID` rules (`pyproject.toml:127-129`).
+- No layer-boundary check exists. The only import test, `tests/test_import_boundary.py`, forbids imports from the `archon.` namespace. The repo has no import-linter, tach or pytest-archon configuration, and the pinned ruff rule set deliberately excludes the `TID` rules (`pyproject.toml:127-129`).
 
 ## Goal
 
@@ -45,25 +45,31 @@ flowchart LR
 ```
 
 **C1 — Layers and dependency direction.**
-- `archon_search/services/` is the application layer. It may import the core (pipeline, store, router, jobs, key manager, config, constants, filters) and nothing from `archon_search.server`, `archon_search.cli`, `fastapi`, `starlette`, `fastmcp`, `click` or `httpx`.
-- REST routes, MCP tools and the OpenAI shim import services. They do not import each other. No route module imports another route module.
+
+- `archon_search/services/` is the application layer. It may import the core (pipeline, store, router, jobs, key manager, config, constants, filters) and nothing from `archon_search.server`, `archon_search.cli`, `fastapi`, `starlette`, `fastmcp`, `click`, `httpx` or `uvicorn`. It does not import the optional `anthropic` package at module level (ADR-C4, the HyDE dependency decision).
+- REST routes, MCP tools and the OpenAI shim import services. They do not import each other. No route module imports another route module or the MCP module; within `server/` only the composition root `app.py` imports route modules or `server.mcp`.
 - The CLI never imports services or `server/` (the existing lazy `run_server` import in `cli/serve.py:43` is the one allowed exception). It talks to the running server over HTTP, because LanceDB is single-writer and an in-process CLI would conflict with a running server.
+- A CLI command module imports no other command module; shared pieces live in `cli/_helpers.py` (`cli/main.py`, which registers the commands, is exempt).
 
 **C2 — Service shape.**
+
 - One service class per feature group (for example `SearchService`). Constructor-injected dependencies, no module-level globals, built once at startup and reachable from `app.state` for REST and passed to the MCP factory.
 - Each method is async and takes a command plus the caller, and returns a result: `await service.search(command, caller) -> SearchResult`.
 - A service never receives a request object, an `HTTPException`, a FastMCP `Context` or a Click context.
 
 **C3 — Commands, results and names.**
+
 - Commands and results are frozen dataclasses defined next to the service. Existing transport-free models such as `SearchFilters` (`filters.py`) are reused inside them.
 - A concept has one name on every interface: command field names are the canonical names. REST and MCP use them as-is (snake_case); the CLI uses the kebab-case form (`source_path_prefix` becomes `--source-path-prefix`). A different name needs a recorded waiver in the registry (C12).
 - Derived response fields are computed once, in the service (for example `expansion_used` and `expansion_warning`, which REST and MCP compute separately today).
 
 **C4 — Caller and authorization.**
+
 - The caller is `AuthIdentity(namespace, admin)`. Adapters resolve it from their transport (REST middleware state, MCP request context) and pass it in.
 - Authorization is enforced once, inside the service: admin checks, namespace scoping and key-management rules. REST keeps only the OpenAPI declaration of the 403 response; it does not run a second check.
 
 **C5 — Errors.**
+
 - Services raise `ServiceError` subclasses. Each carries a stable `code`, a fixed sanitized `detail` constant (never `str(exc)`, per `140_error_handling_strategy.md` principle 6 and `tests/test_no_wire_str_exc.py`) and the telemetry `ErrorKind` it maps to.
 - Services translate core exceptions (`CollectionNotFoundError`, `MetadataLookupError`, `FanoutTimeoutError`, `EmbedderNotReadyError`, `GraphCommunitiesNotBuiltError`, ...) once. Adapters never catch core exceptions.
 - Each adapter has exactly one mapping table: REST (error kind to HTTP status, including the existing coded and plain body shapes), MCP (`{"error", "code"}` dict), CLI (HTTP status to message and exit code). A slice that changes a wire shape records it in `BREAKING.md`.
@@ -78,11 +84,12 @@ flowchart LR
 
 **C10 — CLI.** A command follows the `cli/sync.py` pattern: `--api-url`, `--api-key`, `_server_connect_fail_msg` on connect failure, `--json` for machine output (`json.dumps(payload, indent=2, sort_keys=True)`), exit 1 on errors, exit 2 for an unsuccessful job where the command already uses it. Shared pieces live in `cli/_helpers.py`.
 
-**C11 — Boundary enforcement.** An AST test asserts C1. Current violations sit in an explicit allowlist keyed by (importing file, imported module); the test fails on a new violation and on a stale allowlist entry. Each slice deletes the entries it resolves, so the list only shrinks.
+**C11 — Boundary enforcement.** An AST test asserts C1. Function-local and `TYPE_CHECKING` imports count like module-level ones. Current violations sit in an explicit allowlist keyed by (importing file, imported module, import scope: module-level, function-local or type-checking-only); the test fails on a new violation and on a stale allowlist entry. The two permanent exceptions (`server/app.py` as composition root, the `run_server` import in `cli/serve.py`) are hard-coded in the test, not allowlist entries. Each slice deletes the entries it resolves, so the list only shrinks.
 
-**C12 — Parity registry.** A registry in `tests/parity/` lists every capability: its service method, its REST route, its MCP tool, its CLI command, and a waiver (with reason) for each interface that lacks it. A test introspects the live REST app routes, the real FastMCP tool list and the Click command tree, and fails when an interface exposes something the registry does not claim, when a capability claims a surface that does not exist, or when a gap has no waiver. Pending slices carry a waiver that names the slice. Field-level parity (every command field exposed on every interface) is evaluated in S1.
+**C12 — Parity registry.** A registry in `tests/parity/` lists every capability: its service method, its REST route, its MCP tool, its CLI command, and a waiver (with reason) for each interface that lacks it. A test introspects the live REST app routes, the real FastMCP tool list and the Click command tree, and fails when an interface exposes something the registry does not claim, when a capability claims a surface that does not exist, when a gap has no waiver, or when a pending waiver names no slice. Pending slices carry a waiver that names the slice. Field-level parity (every command field exposed on every interface) is evaluated in S1.
 
 **C13 — Tests.**
+
 - Characterization tests first (the repo's TDD rule); service logic is tested directly with fakes, without an HTTP or MCP stack; adapter tests check mapping only.
 - Tests pinned to behavior a slice intentionally changes are rewritten or deleted, never re-pinned.
 - OpenAPI snapshots (`tests/contract/openapi_snapshot.json`, `tests/server/openapi_snapshot.json`) and contract tests are updated in the slice that changes them.
@@ -99,8 +106,8 @@ S0 ships only what has a real consumer on day one:
    - `server/_search_budget.py` → `services/search_budget.py` (importers: `mcp.py`, `routes_search.py`, `routes_explain.py`, `routes_openai_shim.py`, `_hyde.py`).
    - `server/_hyde.py` → `services/request_hyde.py` (the root `archon_search/hyde.py` already exists, hence the name).
    - `server/_validators.py` → `services/validators.py`.
-   - The pure policy half of `server/authz.py` (`AuthIdentity`, `ForbiddenError`, `require_admin`, `authorize_key_create`, `authorize_key_listing_namespace`, `can_manage_key`, `caller_may_revoke`, the `*_DETAIL` constants and `FORBIDDEN_CODE`) → `services/authz.py`. The FastAPI-specific half (`identity_of(request)`, `require_admin_dependency`, `caller_identity`, `ADMIN_ONLY_RESPONSES`) stays in `server/authz.py` and imports from services.
-2. **Boundary test** implementing C11, with the allowlist seeded from today's violations (MCP importing route modules, route modules importing each other), and `archon_search/services` added to `_GUARDED_DIRS` in `tests/test_no_wire_str_exc.py` (its allowlist entries for moved code are re-keyed; `test_every_allowlist_entry_still_matches` fails on stale ones).
+   - The transport-free policy half of `server/authz.py` (`AuthIdentity`, `ForbiddenError`, `require_admin`, `authorize_key_create`, `authorize_key_listing_namespace`, `can_manage_key`, `caller_may_revoke`, the `*_DETAIL` constants and `FORBIDDEN_CODE`) → `services/authz.py`. The FastAPI-specific half (`identity_of(request)`, `require_admin_dependency`, `caller_identity`, `ADMIN_ONLY_RESPONSES`) stays in `server/authz.py` and imports from services.
+2. **Boundary test** implementing C11, with the allowlist seeded from today's violations (MCP importing route modules, route modules importing each other, and `_collection_job.py` importing `routes_jobs`; nine edges, listed in the team plan's C1), and `archon_search/services` added to `_GUARDED_DIRS` in `tests/test_no_wire_str_exc.py` (its allowlist entries for moved code are re-keyed; `test_every_allowlist_entry_still_matches` fails on stale ones).
 3. **Parity registry and test** implementing C12, seeded with every feature in the roadmap and its current REST, MCP and CLI surface, and the waivers from the roadmap.
 4. **CLI helper consolidation.** `_resolve_api_key` is copied in `collection.py`, `backup_cmd.py`, `export_cmd.py`, `key_cmd.py` and `maintenance_cmd.py` (`sync.py` imports it from `collection`), and `_DEFAULT_API_URL` is copied in `collection`, `status`, `backup_cmd`, `export_cmd`, `key_cmd` and `maintenance_cmd`. Both move to `cli/_helpers.py` and every module uses them. `tests/test_cli_260_connection_refused_ux.py` must stay green.
 5. **Docs:** a new ADR for the application-service layer and one-implementation-per-feature rule (ADRs are append-only; take the next number), the layer table and principles in `110` and the layering text in `100`, the status of ARCH-01 in `540`, and the layer map in `AGENTS.md` and `CLAUDE.md`. `BREAKING.md` is not touched: S0 changes no wire behavior.
@@ -126,7 +133,7 @@ S0 ships only what has a real consumer on day one:
 
 - **String patch targets.** Many tests patch `archon_search.server.mcp.*` and `archon_search.server._hyde.resolve_hyde_within_budget` by name (`tests/server/test_request_hyde.py:105` and others). Moving a module breaks them silently if the patch target is not updated.
 - **`conftest.py` autouse fixture.** `_mcp_default_request_context` patches `archon_search.server.mcp.get_http_request` for every test; opt-out is `real_mcp_auth_context`. Slices must keep both working.
-- **`authz.py` is mixed.** Its pure policy functions have no transport coupling; `identity_of`, `require_admin_dependency` and `caller_identity` need FastAPI. Only the pure half moves.
+- **`authz.py` is mixed.** Its policy functions have no transport coupling; `identity_of`, `require_admin_dependency` and `caller_identity` need FastAPI. Only the policy half moves.
 - **Wire-text constants.** `tests/test_sanitized_wire_text_docs.py` requires wire literals to appear in docs `600`, `110`, `120`, `140` and `BREAKING.md`. Moving a constant must not break that link.
 - **Unguarded new package.** `tests/test_no_wire_str_exc.py` guards only the directories it lists; without the `_GUARDED_DIRS` change, `services/` would escape the "never `str(exc)` on the wire" rule.
 - **CI.** Ruff runs only in the PR workflow (`archon-search-pr.yml`); the release workflow has no ruff step, so lint must be clean before merge.

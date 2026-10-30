@@ -25,4 +25,9 @@ model ServerTarget {
 
 interface CliHelper {
   resolveApiKey(optionValue: string | null): ResolvedApiKey | NoApiKeyFound;
+  // The one default every `--api-url` option uses.
+  defaultServerTarget(): ServerTarget;
 }
+
+// Not part of this helper: the best-effort lookups (status, and `_fetch_server_status` in backup_cmd and maintenance_cmd) keep their own
+// `api_key or load_key()` that returns no key instead of exiting; key_cmd and maintenance_cmd keep their try/except around resolveApiKey.

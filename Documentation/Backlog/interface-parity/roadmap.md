@@ -21,8 +21,9 @@ The contract every slice follows is [Brief 00](./00_service_layer_foundation_bri
 ## Waivers (agreed 2026-10-30)
 
 - **CLI `start`, `serve`, `stop`, `install`, `uninstall`, `wizard`, `config`, and the local service-manager part of `status`**: local OS and config operations; they act on the machine, not on the running server.
-- **`GET /health`, `GET /ready`, `GET /openapi.json`, `/docs`, `/redoc`**: probes and HTTP documentation surfaces.
-- **OpenAI-compatible `/v1/chat/completions` and `/v1/models`**: protocol adapter. It still calls the same services (S1).
+- **`GET /health`, `GET /ready`, `GET /openapi.json`, `/docs`, `/docs/oauth2-redirect`, `/redoc`**: probes and HTTP documentation surfaces. `/docs`, `/docs/oauth2-redirect` and `/redoc` exist only when `[server].docs_enabled` is true.
+- **`/mcp` mount**: the MCP transport endpoint itself, not a feature. It exists only when `[mcp].enabled` is true and is mounted during app startup.
+- **OpenAI-compatible `/v1/chat/completions` and `/v1/models`**: protocol adapter. They exist only when `[openai_shim].enabled` is true. It still calls the same services (S1).
 - **Graph HTML viewer and view-token on MCP (S32)**: HTTP-specific browser credential. The CLI gets `graph view`.
 - **Key admin toggle**: not built. The `admin` flag is immutable (see D3).
 
@@ -85,7 +86,7 @@ S5 comes before every slice that returns a job (S16-S24): MCP clients need a way
 - [ ] **S22 Sync (admin)**: MCP new.
 - [ ] **S23 Backup trigger (admin)**: MCP new.
 - [ ] **S24 Maintenance trigger (admin)**: MCP new.
-- [ ] **S25 Status**: MCP new; CLI keeps its local part (waived).
+- [ ] **S25 Status**: MCP new; CLI keeps its local part (waived). The CLI `backup status` and `maintenance status` subcommands, which render the backup and maintenance sections of `GET /status` plus on-disk state, are claimed in this slice's registry row.
 - [ ] **S26 Indexing-state**: decide whether it folds into Status; then MCP new and CLI new.
 - [ ] **S27 Telemetry stats and entries (admin)**: MCP new; CLI new.
 
