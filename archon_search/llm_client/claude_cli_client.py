@@ -142,6 +142,12 @@ def child_environment(source: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def resolve_claude_binary() -> str | None:
+    """The ``claude`` program resolved from ``PATH`` now, or ``None`` when there is none (the startup probe of a graph on
+    ``claude_cli`` asks the same question the client answers when it is built)."""
+    return shutil.which(_BINARY_NAME)
+
+
 def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
     """SIGKILL the child and everything it started: it leads its own session, so its pid is its process group."""
     try:
@@ -176,7 +182,7 @@ class ClaudeCliClient:
                 ``None`` (HyDE, RAG Fusion, description) is unthrottled.
         """
         self._model = model
-        self.binary: str | None = binary if binary is not None else shutil.which(_BINARY_NAME)
+        self.binary: str | None = binary if binary is not None else resolve_claude_binary()
         self._attempts = _ATTEMPTS_WITH_RETRY if retry_on_nonzero_exit else _ATTEMPTS_WITHOUT_RETRY
         self._rate_limiter = rate_limiter
 

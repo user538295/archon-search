@@ -205,10 +205,10 @@ class GraphConfig:
     extraction_timeout_seconds: float = 30.0
     """Per-request timeout (seconds) for enrichment LLM calls."""
     extraction_rate_limit_rpm: int = 60
-    """Per-minute rate limit for enrichment LLM calls. Ignored by the llama_cpp
-    enrichment client (local inference, no rate limiting)."""
+    """Per-minute rate limit for enrichment LLM calls. Applies to the anthropic and claude_cli
+    providers (account quotas); the others are not throttled."""
     extraction_token_budget: int = 1024
-    """Max output tokens requested per enrichment LLM call."""
+    """Max output tokens per enrichment LLM call; under a window, a value above 1024 comes out of the passages' room."""
     backend_threshold_edges: int = _GRAPH_BACKEND_THRESHOLD_EDGES_DEFAULT
     # E1b community-detection fields
     leiden_resolution: float = _GRAPH_LEIDEN_RESOLUTION_DEFAULT

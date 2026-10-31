@@ -544,9 +544,9 @@ num_queries = 2
 # NOT label relationships — typed prose edges (uses, implements, depends_on) are
 # produced locally by the graph extraction engine with no provider configured and
 # no network access. Valid values: "anthropic", "ollama", "openai",
-# "llama_cpp" (local; zero-transmission, no API key), "claude_cli" (accepted but
-# has no v1 enrichment client yet — deferred; a WARNING is logged and enrichment
-# stays disabled). Defaults to unset (None): enrichment is disabled unless BOTH
+# "llama_cpp" (local; zero-transmission, no API key), "claude_cli" (the prompt goes
+# to the `claude` program on standard input, on your Claude Code login; `claude`
+# must be on PATH). Defaults to unset (None): enrichment is disabled unless BOTH
 # provider and extraction_model below are set — unlike [hyde]/[rag_fusion],
 # whose provider defaults to "anthropic", this preserves the air-gap guarantee.
 # provider = "llama_cpp"
@@ -579,11 +579,14 @@ num_queries = 2
 # summarisation). Must be > 0.
 # extraction_timeout_seconds = 30.0
 
-# Per-minute rate limit for enrichment LLM calls. Must be >= 1. Ignored by the
-# llama_cpp enrichment client (local inference; no rate limiting is applied).
+# Per-minute rate limit for enrichment LLM calls. Must be >= 1. Applies to the
+# anthropic and claude_cli providers (account quotas); openai, ollama and
+# llama_cpp are not throttled (local servers have no account quota).
 # extraction_rate_limit_rpm = 60
 
-# Max output tokens requested per enrichment LLM call. Must be >= 1.
+# Max output tokens requested per enrichment LLM call. Must be >= 1. On ollama and
+# llama_cpp the prompt is sized to the model's window minus 1024 tokens for the
+# answer, so a value above 1024 comes out of the room for the community's passages.
 # extraction_token_budget = 1024
 
 # Rough empirical edge-count threshold (integer, default 10,000) above which NetworkX

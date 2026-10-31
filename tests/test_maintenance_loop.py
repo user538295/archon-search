@@ -1749,19 +1749,19 @@ async def test_maintenance_loop_uses_shared_rebuild_lock(tmp_path: Path, _clear_
 
 
 # ---------------------------------------------------------------------------
-# LLCP BE-7 — MaintenanceLoop threads the pre-built enrichment client into the
+# LLCP BE-7 / LCD BE-15 — MaintenanceLoop threads the pre-built graph client into the
 # CommunityBuilder it constructs for GC-triggered community rebuilds (S20b).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_maintenance_loop_receives_enrichment_client(tmp_path: Path) -> None:
-    """The enrichment client built once at composition root (app.py) and passed
+async def test_maintenance_loop_receives_graph_client(tmp_path: Path) -> None:
+    """The graph client built once at composition root (app.py) and passed
     into MaintenanceLoop's constructor is threaded into the CommunityBuilder
     instance _rebuild_communities_async constructs -- non-None, same object."""
     from archon_search.config import GraphConfig
 
-    sentinel_client = MagicMock(name="enrichment_client_sentinel")
+    sentinel_client = MagicMock(name="graph_client_sentinel")
 
     loop = MaintenanceLoop(
         dispatch_retry=lambda _job: None,
@@ -1771,7 +1771,7 @@ async def test_maintenance_loop_receives_enrichment_client(tmp_path: Path) -> No
         data_dir=tmp_path,
         graph_store=MagicMock(),
         graph_config=GraphConfig(),
-        enrichment_client=sentinel_client,
+        graph_client=sentinel_client,
     )
 
     with patch("archon_search.community_builder.CommunityBuilder") as mock_builder_cls:
@@ -1779,7 +1779,7 @@ async def test_maintenance_loop_receives_enrichment_client(tmp_path: Path) -> No
         await loop._rebuild_communities_async("default", "col")
 
     mock_builder_cls.assert_called_once()
-    assert mock_builder_cls.call_args.kwargs["enrichment_client"] is sentinel_client
+    assert mock_builder_cls.call_args.kwargs["graph_client"] is sentinel_client
 
 
 @pytest.mark.asyncio

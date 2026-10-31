@@ -25,6 +25,7 @@ from archon_search.llm_client.protocol import (
     LlmCallTimeout,
     LlmClient,
     ThinkSetting,
+    TokenCountingClient,
 )
 
 _HOST = "http://llama.test:8080"
@@ -252,6 +253,16 @@ async def test_llama_cpp_input_budget_uses_the_servers_exact_count() -> None:
     budget = await client.input_budget(_TEMPLATE)
 
     assert budget == InputBudget(tokens=_PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS)
+    assert server.bodies("/tokenize") == [{"content": _TEMPLATE}]
+
+
+async def test_llama_cpp_counts_tokens_with_the_servers_tokenizer_and_is_a_token_counting_client() -> None:
+    """The unit of its budget is the server's token: callers that size passages ask the client (``TokenCountingClient``)."""
+    server = _Server()
+    client = _client(server)
+
+    assert isinstance(client, TokenCountingClient)
+    assert await client.count_tokens(_TEMPLATE) == _TEMPLATE_TOKENS
     assert server.bodies("/tokenize") == [{"content": _TEMPLATE}]
 
 

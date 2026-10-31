@@ -28,7 +28,6 @@ from archon_search.llm_client.protocol import (
 )
 from archon_search.server import app as app_module
 from archon_search.server import llm_composition
-from archon_search.server.llm_composition import build_llm_client
 from tests import _fake_claude
 from tests._fake_model_server import (
     FakeModelServer,
@@ -206,20 +205,14 @@ def test_hyde_claude_cli_client_retries_a_non_zero_exit_once(boot: Boot, tmp_pat
 
 
 def test_hyde_and_graph_keep_their_own_provider_model_and_host(boot: Boot) -> None:
-    """HyDE on Ollama (the app's own client) and graph on llama_cpp (built from [graph] by the same factory, as the app will once
-    graph composes its client): each call reaches its own server with its own model, and the other server sees nothing of it."""
+    """HyDE on Ollama and graph on llama_cpp (each app client built from its own section): each call reaches its own server
+    with its own model, and the other server sees nothing of it."""
     with FakeModelServer(reply_text=_HYDE_REPLY) as ollama_host, FakeModelServer(reply_text=_GRAPH_REPLY) as llama_host:
         toml = _hyde_toml(base_url=ollama_host.base_url, context=_CONFIGURED_WINDOW) + (
             f'[graph]\nprovider = "llama_cpp"\nextraction_model = "{_GRAPH_MODEL}"\nllama_cpp_base_url = "{llama_host.base_url}"\n'
         )
-        client, config = boot(toml)
-        graph_client = build_llm_client(
-            provider=config.graph.provider or "",
-            model=config.graph.extraction_model or "",
-            ollama_base_url=config.graph.ollama_base_url,
-            llama_cpp_base_url=config.graph.llama_cpp_base_url,
-            ollama_context_tokens=config.graph.ollama_context_tokens,
-        )
+        client, _config = boot(toml)
+        graph_client = client.app.state.graph_client
 
         hyde_reply = _call(client.app.state.hyde_client)
         graph_reply = _call(graph_client)

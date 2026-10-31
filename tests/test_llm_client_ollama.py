@@ -28,6 +28,7 @@ from archon_search.llm_client.protocol import (
     LlmCallTimeout,
     LlmClient,
     ThinkSetting,
+    TokenCountingClient,
 )
 from archon_search.llm_client.token_counter import TokenCounter
 from archon_search.uv_tool import extra_install_hint
@@ -316,6 +317,25 @@ async def test_failing_counter_raises_call_failure() -> None:
 
     with pytest.raises(LlmCallFailure) as raised:
         await wrapper.input_budget(_TEMPLATE)
+
+    assert raised.value.provider == "ollama"
+
+
+async def test_count_tokens_is_the_gpt2_count_the_budget_is_measured_in() -> None:
+    wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW)
+
+    assert isinstance(wrapper, TokenCountingClient)
+    assert await wrapper.count_tokens(_TEMPLATE) == _TEMPLATE_TOKENS
+
+
+async def test_failing_counter_raises_call_failure_when_counting_tokens() -> None:
+    def broken_loader() -> StubTokenizer:
+        raise OSError("tokenizer cannot be downloaded")
+
+    wrapper = _wrapper(_Factory(), counter=TokenCounter(load_tokenizer=broken_loader))
+
+    with pytest.raises(LlmCallFailure) as raised:
+        await wrapper.count_tokens(_TEMPLATE)
 
     assert raised.value.provider == "ollama"
 

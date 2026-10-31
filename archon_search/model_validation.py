@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
@@ -17,12 +18,18 @@ from typing import TYPE_CHECKING, Final
 import httpx
 
 from archon_search.embedder import EmbedderBackend, ModelEmbedder
+from archon_search.llm_client.claude_cli_client import resolve_claude_binary
+from archon_search.llm_client.protocol import LlmCallRequest, LlmCallTimeout
 from archon_search.model_specs import UnsupportedModelError, get_embedder_spec
 from archon_search.reranker import ModelReranker, RerankerBackend
 from archon_search.torch_runtime import AUTO_DEVICE, CPU_DEVICE, resolve_device
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
+    from archon_search.llm_client.protocol import LlmClient
+
+#: Builds the fresh graph client the startup probe calls (``None`` when there is no graph client to probe).
+GraphClientFactory = Callable[[], "LlmClient | None"]
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +39,8 @@ logger = logging.getLogger(__name__)
 _LLAMA_CPP_PROBE_TIMEOUT_SECONDS: float = 3.0
 # The ``provider`` value that selects a local llama-server in ``[hyde]``/``[rag_fusion]``/``[graph]``.
 _LLAMA_CPP_PROVIDER: Final[str] = "llama_cpp"
+# The ``provider`` value that selects the ``claude`` program in ``[graph]``.
+_CLAUDE_CLI_PROVIDER: Final[str] = "claude_cli"
 
 # Sanitized ``provider_warnings`` texts (CLAUDE.md: never put `str(exc)` in a wire-facing
 # field; they reach ``GET /status``). The caught exception can name model files under the
@@ -71,16 +80,15 @@ _RERANKER_PROBE_PAIR: Final[tuple[str, str]] = ("archon search query", "archon s
 
 # Fixed, trivial probe inputs for _probe_extraction_model — never derived from real ingest
 # content, so a large production prompt's own truncation behaviour can never reach this
-# probe's warn/no-warn decision. The probe exercises `summarize_community`, the only
-# enrichment method left (the protocol covers community summarisation only); the
-# reasoning-model economic disqualifier it guards against applies to that path.
+# probe's warn/no-warn decision. The probe sends the community-summary prompt, the only
+# graph LLM call; the reasoning-model economic disqualifier it guards against applies to that path.
 _EXTRACTION_MODEL_PROBE_CHUNK_TEXT: str = "Alpha uses Beta."
 _EXTRACTION_MODEL_PROBE_ENTITY_NAMES: tuple[str, ...] = ("Alpha", "Beta")
 
 # The shipped `extraction_timeout_seconds` default (30.0s) is the real disqualifier: a
 # reasoning model returns valid content in 111-286s, well past it. A timeout is therefore the
 # primary "reasoning model" signal, distinct from any other failure (missing package/API key,
-# DNS/connection failure, wrong model name, a 400 rejection, ...), which is plain
+# refused connection, wrong model name, a 400 rejection, ...), which is plain
 # misconfiguration, not a reasoning-model economics problem.
 EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING: Final[str] = (
     "graph enrichment: [graph].extraction_model did not return usable content within the "
@@ -93,6 +101,10 @@ EXTRACTION_MODEL_PROBE_ERROR_WARNING: Final[str] = (
     "credentials, connectivity, and that the model accepts this provider's request parameters "
     "(some reasoning models reject standard parameters like max_tokens); see "
     "OperatorGuide/60_graph_operations.md"
+)
+EXTRACTION_MODEL_PROBE_CLAUDE_MISSING_WARNING: Final[str] = (
+    "graph enrichment: [graph].provider is claude_cli but the 'claude' program was not found on PATH — "
+    "install Claude Code and log in, or choose another [graph].provider; see OperatorGuide/60_graph_operations.md"
 )
 
 # A per-chunk call taking on the order of 100+ seconds is uneconomical regardless of the
@@ -279,15 +291,18 @@ def _log_gliner_install_command() -> None:
 
 
 async def _probe_extraction_model(
-    config: SearchConfig, llama_cpp_ok: bool | None = None
+    config: SearchConfig,
+    llama_cpp_ok: bool | None = None,
+    *,
+    graph_client_factory: GraphClientFactory | None = None,
 ) -> list[str]:
     """One-shot startup probe for ``[graph].extraction_model``.
 
     Reasoning models are economically unsupportable for per-community summarisation: the shipped
     ``extraction_timeout_seconds`` default (30.0s) is the actual disqualifier, as a reasoning
-    model needs 111s-286s per community (measured), far past it. Raising inside the enrichment
-    clients is inert, because it lands inside ``community_builder.py``'s blanket
-    ``except Exception``, which silently falls back to an unsummarised community. The only
+    model needs 111s-286s per community (measured), far past it. Raising inside the summarisation
+    path is inert, because it lands inside ``community_builder.py``'s blanket fallback, which
+    silently keeps an unsummarised community. The only
     reachable, observable enforcement point is a one-shot startup probe feeding
     ``provider_warnings`` — the same pattern as :func:`graph_ner_status` and
     :func:`_probe_llama_cpp` above. Warn-not-block: never raises, never fails startup, and
@@ -299,39 +314,43 @@ async def _probe_extraction_model(
     ``extraction_timeout_seconds`` to accommodate a slow reasoning model can never defeat
     detection by rising past the fixed economic ceiling.
 
-    Runs a single, fixed, trivial round-trip (never real ingest content) against
-    ``summarize_community`` — the only enrichment method left, since relationship labelling was
-    removed — through the same
-    :class:`~archon_search.enrichment.factory.EnrichmentClientFactory` client production
-    enrichment would use. Because the probe input is fixed and small, a genuinely oversized
-    *production* prompt hitting ``finish_reason="length"`` on a non-reasoning model (which only
-    warns in production) can never reach this probe's decision — that failure mode is structurally
-    isolated to production traffic.
+    Runs a single, fixed, trivial round-trip (never real ingest content) of the community-summary
+    prompt on a shared graph client built by *graph_client_factory* — a fresh client, so the probe
+    never takes a slot of the production client's rate limit. Because the probe input is fixed and
+    small, a genuinely oversized *production* prompt can never reach this probe's decision.
 
-    A timed-out call — ``asyncio.TimeoutError``/``TimeoutError`` from our own
-    ``asyncio.wait_for``, or ``httpx.ReadTimeout`` (the server accepted the connection and is
-    still generating) — is the primary, distinctly-worded "reasoning model" signal.
-    ``httpx.ConnectTimeout``/``httpx.PoolTimeout`` (siblings of ``httpx.TimeoutException`` that
-    mean the server was unreachable or the connection pool was exhausted, not that a model is
-    slow) fall through with everything else — missing package/API key, DNS/connection failure,
-    wrong model name, OpenAI's ``max_tokens`` 400 rejection, a client-construction failure inside
-    ``EnrichmentClientFactory.build`` — to the plain-misconfiguration warning, distinctly worded
-    and never claiming "reasoning model", never leaking ``str(exc)``. A call that completes
-    within budget passes regardless of content (an empty result is a legitimate answer, not a
+    A timed-out call — the shared :class:`~archon_search.llm_client.protocol.LlmCallTimeout`, which
+    every wrapper raises when the provider does not answer within the request's timeout (some
+    wrappers count a connection that never opens as a timeout too, which the warning's "may be"
+    wording allows for) — is the primary, distinctly-worded "reasoning model" signal. Every other
+    failure — a missing package or API key, a refused connection, a wrong model name, a rejected
+    request parameter, a failure building the client — reads as plain misconfiguration, with a
+    distinctly worded warning that
+    never claims "reasoning model" and never leaks ``str(exc)``. A call that completes within
+    budget passes regardless of content (an empty result is a legitimate answer, not a
     disqualifier — only *slow* or *broken* disqualifies).
 
+    ``claude_cli`` is the exception: it makes no model call. When ``[graph]`` is configured to use
+    it the probe only checks that the ``claude`` program exists on ``PATH`` (the wrapper's own
+    resolution), and warns when it does not.
+
     Returns ``[]`` (skipped, no probe attempted) when ``[graph].enabled`` is False,
-    ``extraction_model`` is unset, or ``provider`` has no v1 enrichment client
-    (``EnrichmentClientFactory.build`` returns ``None`` — covers both ``provider`` unset and
-    ``claude_cli``) — the same gate ingest itself uses, so this never probes a client ingest
-    would never build. Also skipped when ``provider == "llama_cpp"`` and *llama_cpp_ok* is
-    ``False`` — :func:`_probe_llama_cpp` already found the server unreachable, and re-probing
-    here would only produce a second, confusing warning for the same root cause.
+    ``extraction_model`` is unset (the gate ingest itself uses), ``provider`` is unset, or no
+    *graph_client_factory* was given. Also skipped when ``provider == "llama_cpp"`` and
+    *llama_cpp_ok* is ``False`` — :func:`_probe_llama_cpp` already found the server unreachable,
+    and re-probing here would only produce a second, confusing warning for the same root cause.
     """
     graph_config = config.graph
     if not graph_config.enabled or not graph_config.extraction_model:
         return []
     if graph_config.provider == _LLAMA_CPP_PROVIDER and llama_cpp_ok is False:
+        return []
+    if graph_config.provider == _CLAUDE_CLI_PROVIDER:
+        if resolve_claude_binary() is not None:
+            return []
+        logger.warning("graph enrichment: provider claude_cli is configured but the 'claude' program was not found on PATH")
+        return [EXTRACTION_MODEL_PROBE_CLAUDE_MISSING_WARNING]
+    if graph_client_factory is None:
         return []
 
     # min(...): bound by the operator's own configured timeout when it is the tighter of the
@@ -343,20 +362,22 @@ async def _probe_extraction_model(
     )
 
     try:
-        from archon_search.enrichment.factory import EnrichmentClientFactory
+        from archon_search.community_builder import render_summary_prompt
 
-        client = EnrichmentClientFactory.build(graph_config)
+        client = graph_client_factory()
         if client is None:
             return []
 
         probe_start = time.monotonic()
         try:
-            await asyncio.wait_for(
-                client.summarize_community(
-                    [_EXTRACTION_MODEL_PROBE_CHUNK_TEXT],
-                    list(_EXTRACTION_MODEL_PROBE_ENTITY_NAMES),
-                ),
-                timeout=probe_timeout,
+            await client.call(
+                LlmCallRequest(
+                    prompt=render_summary_prompt(
+                        list(_EXTRACTION_MODEL_PROBE_ENTITY_NAMES), [_EXTRACTION_MODEL_PROBE_CHUNK_TEXT]
+                    ),
+                    max_output_tokens=graph_config.extraction_token_budget,
+                    timeout_seconds=probe_timeout,
+                )
             )
             logger.info(
                 "extraction model probe for %s/%s passed in %.1fs (budget %.1fs)",
@@ -365,13 +386,9 @@ async def _probe_extraction_model(
                 time.monotonic() - probe_start,
                 probe_timeout,
             )
-        except (TimeoutError, httpx.ReadTimeout):
-            # asyncio.TimeoutError/TimeoutError: our own asyncio.wait_for bound. httpx.ReadTimeout:
-            # the server accepted the connection and is still generating — a reasoning model times
-            # out here exactly as it would per-chunk. httpx.ConnectTimeout/PoolTimeout (siblings of
-            # httpx.TimeoutException) mean the server was unreachable or the pool was exhausted —
-            # an infrastructure/config problem, not a reasoning-model economics one — so those fall
-            # through to the generic error branch below instead.
+        except LlmCallTimeout:
+            # The provider did not answer within the probe's bound — a reasoning model times out here exactly as it
+            # would per community. Every other failure falls through to the generic error branch below.
             logger.warning(
                 "extraction model probe timed out for %s/%s after %.1fs",
                 graph_config.provider,
@@ -389,17 +406,17 @@ async def _probe_extraction_model(
             )
             return [EXTRACTION_MODEL_PROBE_ERROR_WARNING]
         finally:
-            # Only AnthropicEnrichmentClient defines aclose() (closes its persistent
-            # AsyncAnthropic connection pool) — ollama/llama_cpp/openai open+close a fresh
-            # httpx.AsyncClient per call and define no such method.
-            if hasattr(client, "aclose"):
+            # The cloud wrappers hold a pooled SDK client (ollama, llama_cpp and claude_cli open one per call and
+            # have nothing to close); the probe's client is thrown away, so close it rather than leak the pool.
+            aclose = getattr(client, "aclose", None)
+            if aclose is not None:
                 try:
-                    await client.aclose()
+                    await aclose()
                 except Exception:
                     logger.debug("extraction-model probe client aclose() failed", exc_info=True)
     except Exception as exc:  # never raises — a factory/constructor failure is still a probe
-        # failure, not a startup crash (EnrichmentClientFactory.build can raise on a malformed
-        # config before the try/except below it would otherwise guard).
+        # failure, not a startup crash (the factory can raise on a malformed config before the
+        # try/except above would otherwise guard).
         logger.warning(
             "extraction model probe could not build a client for %s/%s: %s",
             graph_config.provider,
@@ -514,6 +531,7 @@ async def validate_models_async(
     *,
     embedder: EmbedderBackend | None = None,
     reranker: RerankerBackend | None = None,
+    graph_client_factory: GraphClientFactory | None = None,
 ) -> ModelValidationResult:
     """Validate the configured embedder and reranker without blocking startup (C1).
 
@@ -528,6 +546,10 @@ async def validate_models_async(
     runs those rather than loading throwaway copies, so startup never holds the weights
     twice. A cold backend loads here, serialised on its own load lock with any warm-up
     already building it.
+
+    *graph_client_factory* builds the fresh graph client :func:`_probe_extraction_model` calls (the
+    server passes one built from ``[graph]`` without the rate limit); ``None`` skips that probe for
+    every provider but ``claude_cli``, whose probe needs no client.
 
     Also runs the llama-server reachability probe — see
     :func:`_probe_llama_cpp`. This is an independent, short-timeout side check;
@@ -546,7 +568,7 @@ async def validate_models_async(
     llama_cpp_ok = await _probe_llama_cpp(config)
     graph_warnings = await asyncio.to_thread(graph_ner_status, config)
     graph_warnings = graph_warnings + await _probe_extraction_model(
-        config, llama_cpp_ok=llama_cpp_ok
+        config, llama_cpp_ok=llama_cpp_ok, graph_client_factory=graph_client_factory
     )
 
     def _result(

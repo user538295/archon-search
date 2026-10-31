@@ -89,6 +89,7 @@ class _FakeSdkClient:
         self._reply = reply if reply is not _DEFAULT_REPLY else flavour.reply_shape(_REPLY)
         self._error = error
         self._delay = delay
+        self.closed = 0
         endpoint = SimpleNamespace(create=self._create)
         # Only the path the real SDK client has: client.messages.create, or client.chat.completions.create.
         if flavour is _ANTHROPIC:
@@ -103,6 +104,9 @@ class _FakeSdkClient:
         if self._error is not None:
             raise self._error
         return self._reply
+
+    async def close(self) -> None:
+        self.closed += 1
 
 
 def _wrapper(flavour: _Flavour, fake: _FakeSdkClient) -> Any:
@@ -240,6 +244,20 @@ async def test_anthropic_wrapper_builds_client_lazily_on_first_call() -> None:
 
 async def test_openai_wrapper_builds_client_lazily_on_first_call() -> None:
     await _assert_builds_client_lazily(_OPENAI)
+
+
+@_FLAVOURS
+async def test_wrapper_aclose_closes_the_sdk_client_it_built_and_is_a_noop_before_one(flavour: _Flavour) -> None:
+    fake = _FakeSdkClient(flavour)
+    client = _wrapper(flavour, fake)
+
+    await client.aclose()
+    assert fake.closed == 0, "nothing was built yet, so nothing to close"
+
+    await client.call(_request())
+    await client.aclose()
+    await client.aclose()
+    assert fake.closed == 1, "closed once; a second aclose finds nothing"
 
 
 # --- key guard -------------------------------------------------------------------------------------------------------

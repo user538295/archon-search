@@ -2358,7 +2358,7 @@ def _locked_job_routes_app(
     app.state.pipeline = MagicMock()
     app.state.config.graph.enabled = True
     app.state.graph_store = MagicMock()
-    app.state.enrichment_client = None
+    app.state.graph_client = None
     app.state._background_tasks = set()
     return app, mock_store, meta_rows, lock, name
 

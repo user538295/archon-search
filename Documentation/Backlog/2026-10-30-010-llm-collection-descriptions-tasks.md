@@ -329,7 +329,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_graph_limiter_applies_to_anthropic_and_claude_cli` — calls beyond the configured rpm raise the exhausted failure
         - #unit_test — `test_limiter_not_applied_to_hyde_claude_cli_or_other_graph_providers` — HyDE, RAG Fusion and `llama_cpp`, `ollama`, `openai` graph stay unthrottled
-- [ ] **BE-15** — Move `community_builder.py` summarisation onto the shared client (summarisation-only surface, template moves in, community chunk texts sized to the budget, one WARNING per process instead of per community), rename the injected client through `maintenance_loop.py`, `routes_graph.py` and `app.state`, rewire `_probe_extraction_model` in `model_validation.py`; for `claude_cli` the startup probe only checks that the `claude` program exists, and only when graph is configured to use it (no model call) #backend-role
+- [x] **BE-15** — Move `community_builder.py` summarisation onto the shared client (summarisation-only surface, template moves in, community chunk texts sized to the budget, one WARNING per process instead of per community), rename the injected client through `maintenance_loop.py`, `routes_graph.py` and `app.state`, rewire `_probe_extraction_model` in `model_validation.py`; for `claude_cli` the startup probe only checks that the `claude` program exists, and only when graph is configured to use it (no model call) #backend-role
     - Use Cases · 6.0h
     - needs BE-10, BE-14 · completes S4, S64
     - Tests

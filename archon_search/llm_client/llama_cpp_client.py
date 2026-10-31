@@ -129,9 +129,9 @@ class LlamaCppClient:
         return self._window
 
     async def input_budget(self, template_text: str) -> InputBudget:
-        return await exact_budget(self._window, template_text, self._count_tokens)
+        return await exact_budget(self._window, template_text, self.count_tokens)
 
-    async def _count_tokens(self, text: str) -> int:
+    async def count_tokens(self, text: str) -> int:
         body = await self._request("POST", _TOKENIZE_PATH, TOKENIZE_TIMEOUT_SECONDS, {"content": text}, prompt=text)
         try:
             tokens = body["tokens"]

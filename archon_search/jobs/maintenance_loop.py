@@ -52,9 +52,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from archon_search.config import GraphConfig, MaintenanceConfig
-    from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
     from archon_search.graph_store import GraphStore
     from archon_search.jobs.store import JobStore
+    from archon_search.llm_client.protocol import LlmClient
     from archon_search.store import SearchStore
 
 logger = logging.getLogger(__name__)
@@ -279,7 +279,7 @@ class MaintenanceLoop:
         dispatch_retry: Callable[[IngestJob], None],
         graph_store: GraphStore | None = None,
         graph_config: GraphConfig | None = None,
-        enrichment_client: LLMEnrichmentClientProtocol | None = None,
+        graph_client: LlmClient | None = None,
     ) -> None:
         """*dispatch_retry* starts each PENDING retry job the failed-ingest retry creates
         (``routes_jobs.make_retry_dispatcher`` in the lifespan); required, as nothing else would run the job."""
@@ -289,7 +289,7 @@ class MaintenanceLoop:
         self._config = config
         self._graph_store = graph_store
         self._graph_config = graph_config
-        self._enrichment_client = enrichment_client
+        self._graph_client = graph_client
         self._state_file: Path = data_dir / ".maintenance-state.json"
         # Manual trigger signal: POST /maintenance/trigger sets this event.
         self._trigger_event: asyncio.Event = asyncio.Event()
@@ -852,7 +852,7 @@ class MaintenanceLoop:
                 graph_store=self._graph_store,
                 config=self._graph_config,  # GraphConfig
                 search_store=self._search_store,
-                enrichment_client=self._enrichment_client,
+                graph_client=self._graph_client,
             )
             await builder.build(collection, ns=namespace)
             logger.info(

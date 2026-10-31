@@ -114,6 +114,14 @@ class OllamaClient:
         except Exception as exc:
             raise LlmCallFailure(PROVIDER_NAME, f"cannot size the prompt: the gpt2 token counter failed ({type(exc).__name__})") from exc
 
+    async def count_tokens(self, text: str) -> int:
+        """The gpt2 token count of *text*, the unit :meth:`input_budget` is measured in (callers that size passages to the
+        budget count with this); the count runs in a thread because the counter's first use may download its tokenizer."""
+        try:
+            return await asyncio.to_thread(self._token_counter.count, text)
+        except Exception as exc:
+            raise LlmCallFailure(PROVIDER_NAME, f"cannot count tokens: the gpt2 token counter failed ({type(exc).__name__})") from exc
+
     async def model_max_context_tokens(self, timeout_seconds: float) -> int | None:
         """The model's own maximum context, from ``/api/show``; ``None`` when the server does not state one.
 

@@ -579,8 +579,6 @@ async def test_probe_failure_does_not_block_boot(caplog: pytest.LogCaptureFixtur
 # Startup-probe handlers publish fixed warnings, so the traceback is where the cause survives.
 # ---------------------------------------------------------------------------
 
-_EXTRACTION_FACTORY_BUILD = "archon_search.enrichment.factory.EnrichmentClientFactory.build"
-
 
 def _extraction_probe_config() -> SearchConfig:
     return SearchConfig(graph=GraphConfig(enabled=True, provider="ollama", extraction_model="m"))
@@ -602,30 +600,24 @@ def test_graph_ner_status_failure_is_logged_with_traceback(
 
 
 @pytest.mark.asyncio
-async def test_extraction_probe_call_failure_is_logged_with_traceback(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_extraction_probe_call_failure_is_logged_with_traceback(caplog: pytest.LogCaptureFixture) -> None:
     client = AsyncMock()
-    client.summarize_community.side_effect = RuntimeError(ONNX_MSG)
-    monkeypatch.setattr(_EXTRACTION_FACTORY_BUILD, lambda _config: client)
+    client.call.side_effect = RuntimeError(ONNX_MSG)
 
     with caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
-        warnings = await _probe_extraction_model(_extraction_probe_config())
+        warnings = await _probe_extraction_model(_extraction_probe_config(), graph_client_factory=lambda: client)
 
-    client.summarize_community.assert_awaited_once()
+    client.call.assert_awaited_once()
     assert warnings == [EXTRACTION_MODEL_PROBE_ERROR_WARNING]
     assert_logged_with_traceback(caplog, ONNX_MSG)
 
 
 @pytest.mark.asyncio
-async def test_extraction_probe_client_build_failure_is_logged_with_traceback(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_extraction_probe_client_build_failure_is_logged_with_traceback(caplog: pytest.LogCaptureFixture) -> None:
     build = MagicMock(side_effect=RuntimeError(ONNX_MSG))
-    monkeypatch.setattr(_EXTRACTION_FACTORY_BUILD, build)
 
     with caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
-        warnings = await _probe_extraction_model(_extraction_probe_config())
+        warnings = await _probe_extraction_model(_extraction_probe_config(), graph_client_factory=build)
 
     build.assert_called_once()
     assert warnings == [EXTRACTION_MODEL_PROBE_ERROR_WARNING]

@@ -18,19 +18,66 @@ import asyncio
 import logging
 import math
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from archon_search.constants import ANSWER_RESERVE_TOKENS
+from archon_search.llm_client.once_per_process import warn_once
+from archon_search.llm_client.protocol import (
+    LlmCallFailure,
+    LlmCallRequest,
+    TokenCountingClient,
+)
 from archon_search.uv_tool import extra_install_hint
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig
-    from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
     from archon_search.graph_store import GraphStore
     from archon_search.graph_types import Community, GraphEdge, GraphNode
+    from archon_search.llm_client.protocol import ContextWindow, LlmClient
     from archon_search.store import SearchStore
 
 _logger = logging.getLogger(__name__)
+
+#: The community-summary prompt (moved in from the Anthropic enrichment client with the rest of the summarisation
+#: surface, LCD BE-15). The input budget is asked for with this template, and ``render_summary_prompt`` fills it.
+SUMMARIZE_PROMPT_TEMPLATE = """\
+You are a knowledge-graph summariser. Given a set of representative text passages and \
+the entity names extracted from them, write a single concise paragraph that describes \
+what this cluster of entities represents and how they relate.
+
+Output only the paragraph — no preamble, no bullet points, no headings.
+
+Entities: {entity_names}
+
+Passages:
+{chunk_texts}
+"""
+
+_ENTITY_SEPARATOR = ", "
+_PASSAGE_SEPARATOR = "\n\n---\n\n"
+#: ``warn_once`` keys: one WARNING per process for every failed summary, one for every budget that cannot hold a community.
+_SUMMARY_FAILED_WARN_KEY = "graph_community_summary"
+_SUMMARY_BUDGET_WARN_KEY = "graph_community_summary_budget"
+_SUMMARY_NO_PASSAGE_WARN_KEY = "graph_community_summary_no_passage"
+
+
+def render_summary_prompt(entity_names: Sequence[str], chunk_texts: Sequence[str]) -> str:
+    """The summary prompt for one community: the template filled with its entity names and passages."""
+    return SUMMARIZE_PROMPT_TEMPLATE.format(
+        entity_names=_ENTITY_SEPARATOR.join(entity_names),
+        chunk_texts=_PASSAGE_SEPARATOR.join(chunk_texts),
+    )
+
+
+def _variable_text(entity_names: Sequence[str], chunk_texts: Sequence[str]) -> str:
+    """What a prompt holds beyond its template: the entity names and the passages, as sent."""
+    return _PASSAGE_SEPARATOR.join([_ENTITY_SEPARATOR.join(entity_names), *chunk_texts])
+
+
+def _describe_window(window: ContextWindow) -> str:
+    return "unbounded window" if isinstance(window, str) else f"window of {window.size} tokens"
 
 
 class CommunityDependencyError(ImportError):
@@ -370,7 +417,8 @@ class CommunityBuilder:
     3. Load all edges from ``GraphStore.get_all_edges``.
     4. Run ``_cluster_with_size_limit`` via ``asyncio.to_thread``.
     5. Fill representative_chunk_ids via MMR (when search_store is provided).
-    6. Optionally generate LLM summary (stub; falls back to None on failure).
+    6. Optionally summarise each community on the shared graph client (passages sized to its input budget); a failure
+       keeps ``summary_text=None`` and logs one WARNING per process.
     7. Persist communities via ``GraphStore.write_communities``.
     8. Return one ``Community`` per group with a fresh UUID.
     """
@@ -381,26 +429,85 @@ class CommunityBuilder:
         config: GraphConfig,
         *,
         search_store: SearchStore | None = None,
-        enrichment_client: LLMEnrichmentClientProtocol | None = None,
+        graph_client: LlmClient | None = None,
     ) -> None:
         self._store = graph_store
         self._config = config
         self._search_store = search_store
-        self._enrichment_client = enrichment_client
+        self._graph_client = graph_client
 
     async def _generate_llm_summary(
-        self, community_id: str, chunk_texts: list[str], entity_names: list[str]
+        self, client: LlmClient, chunk_texts: list[str], entity_names: list[str]
     ) -> str | None:
-        """Generate an abstractive LLM summary via the injected enrichment client (LLCP BE-7).
+        """Summarise one community on the shared graph *client*; ``None`` when the answer is empty or nothing can be sent.
 
-        Caller (``build()``) only invokes this when the AND-gate is open
-        (``provider`` and ``extraction_model`` are both set and
-        ``self._enrichment_client`` is not ``None``); it is otherwise
-        responsible for catching any exception raised here and substituting
-        ``summary_text=None`` (C2 contract — the adapter raises, callers decide
-        the fallback).
+        Caller (``build()``) only invokes this when the AND-gate is open (``provider`` and ``extraction_model`` are both
+        set and a client is injected); it is otherwise responsible for catching any failure raised here and substituting
+        ``summary_text=None`` (the client raises, callers decide the fallback).
+
+        The passages are sized to the client's input budget first (C1): the budget is the window minus the answer reserve
+        minus the template, and the entity names plus as many passages as fit within it are sent. A cloud client has no
+        budget, so everything goes. The budget holds ``ANSWER_RESERVE_TOKENS`` back for the answer: an
+        ``extraction_token_budget`` above that comes out of the room for passages, so the prompt and the answer together
+        still fit the window.
         """
-        return await self._enrichment_client.summarize_community(chunk_texts, entity_names)  # type: ignore[union-attr]
+        budget = (await client.input_budget(SUMMARIZE_PROMPT_TEMPLATE)).tokens
+        max_output_tokens = self._config.extraction_token_budget
+        if isinstance(budget, int):
+            budget = max(0, budget - max(0, max_output_tokens - ANSWER_RESERVE_TOKENS))
+            fitting = await self._passages_within(client, budget, entity_names, chunk_texts)
+            if fitting is None:
+                warn_once(
+                    _logger,
+                    _SUMMARY_BUDGET_WARN_KEY,
+                    "community_builder: the model's input budget is %d tokens (%s); the entity names of a community do "
+                    "not fit, so communities are built without summaries (later skips in this process are not logged)",
+                    budget,
+                    _describe_window(client.context_window()),
+                )
+                return None
+            if chunk_texts and not fitting:
+                warn_once(
+                    _logger,
+                    _SUMMARY_NO_PASSAGE_WARN_KEY,
+                    "community_builder: no representative passage fits the model's input budget of %d tokens; "
+                    "communities are summarised from their entity names alone (later cases in this process are not logged)",
+                    budget,
+                )
+            chunk_texts = fitting
+        request = LlmCallRequest(
+            prompt=render_summary_prompt(entity_names, chunk_texts),
+            max_output_tokens=max_output_tokens,
+            timeout_seconds=self._config.extraction_timeout_seconds,
+        )
+        result = await client.call(request)
+        return result.text.strip() or None
+
+    @staticmethod
+    async def _passages_within(
+        client: LlmClient, budget: int, entity_names: list[str], chunk_texts: list[str]
+    ) -> list[str] | None:
+        """The longest prefix of *chunk_texts* that, with the entity names, fits *budget* tokens; ``None`` when even the
+        entity names alone do not fit. Tokens are counted by the client, in the unit its budget is measured in
+        (``llama_cpp``: the server's tokenizer; ``ollama``: gpt2 tokens).
+
+        Raises:
+            LlmCallFailure: the client has a budget but cannot count tokens, or the count failed.
+        """
+        if not isinstance(client, TokenCountingClient):
+            raise LlmCallFailure("graph", "the client sizes its input to a budget but cannot count tokens")
+
+        async def _count(passages: list[str]) -> int:
+            return await client.count_tokens(_variable_text(entity_names, passages))
+
+        if await _count([]) > budget:
+            return None
+        fitting: list[str] = []
+        for text in chunk_texts:
+            if await _count([*fitting, text]) > budget:
+                break
+            fitting.append(text)
+        return fitting
 
     async def _select_representative_chunk_ids(
         self,
@@ -431,7 +538,7 @@ class CommunityBuilder:
             if node is not None:
                 unique_doc_ids.add(node.source_doc_id)
 
-        for doc_id in unique_doc_ids:
+        for doc_id in sorted(unique_doc_ids):
             doc_chunks = await self._search_store.get_chunks_for_doc(collection, doc_id)
             for chunk in doc_chunks:
                 cid = chunk.get("chunk_id")
@@ -453,9 +560,10 @@ class CommunityBuilder:
         blocked by document ingest on the same collection.
 
         Fills ``representative_chunk_ids`` via MMR when a ``search_store`` is
-        provided. Attempts optional LLM summarisation when
-        ``config.extraction_model`` is set; falls back to ``summary_text=None``
-        on any exception. Persists results via ``GraphStore.write_communities``
+        provided. Attempts optional LLM summarisation through the injected
+        ``graph_client`` when ``config.provider`` and ``config.extraction_model``
+        are set; falls back to ``summary_text=None``
+        on any failure. Persists results via ``GraphStore.write_communities``
         before returning.
 
         Args:
@@ -539,35 +647,39 @@ class CommunityBuilder:
             if (
                 self._config.provider is not None
                 and self._config.extraction_model is not None
-                and self._enrichment_client is not None
+                and self._graph_client is not None
             ):
-                chunk_texts: list[str] = []
-                if rep_chunk_ids:
-                    rep_ids_set = set(rep_chunk_ids)
-                    for chunk in candidate_chunks:
-                        cid = chunk.get("chunk_id")
-                        if cid in rep_ids_set:
-                            text = chunk.get("text") or ""
-                            if text:
-                                chunk_texts.append(text)
+                # In MMR rank order (the centroid-nearest first, then the most diverse), so the passages a budget
+                # drops are the later picks, and the same ones on every run.
+                chunks_by_id = {chunk.get("chunk_id"): chunk for chunk in candidate_chunks}
+                chunk_texts: list[str] = [
+                    text for cid in rep_chunk_ids if (text := (chunks_by_id.get(cid) or {}).get("text"))
+                ]
 
                 entity_names = [
                     nodes_by_id[eid].entity_name for eid in group if eid in nodes_by_id
                 ]
 
                 try:
-                    summary_text = await self._generate_llm_summary(
-                        community_id, chunk_texts, entity_names
-                    )
-                except Exception as exc:  # noqa: BLE001 — an LLM provider failure must fall back to MMR representatives, not abort the build
-                    _logger.warning(
-                        "community_builder: LLM summary failed for community %s "
-                        "(extraction_model=%r): %s; falling back to MMR representatives only",
-                        community_id,
+                    summary_text = await self._generate_llm_summary(self._graph_client, chunk_texts, entity_names)
+                except LlmCallFailure as failure:
+                    warn_once(
+                        _logger,
+                        _SUMMARY_FAILED_WARN_KEY,
+                        "community_builder: LLM summary failed (extraction_model=%r): %s; communities are built "
+                        "without summaries (later failures in this process are not logged)",
                         self._config.extraction_model,
-                        exc,
+                        failure,
                     )
-                    summary_text = None
+                except Exception as exc:  # noqa: BLE001 — a summary is optional: anything that goes wrong keeps the community without one, never aborts the build
+                    warn_once(
+                        _logger,
+                        _SUMMARY_FAILED_WARN_KEY,
+                        "community_builder: LLM summary failed (extraction_model=%r): unexpected %s; communities are "
+                        "built without summaries (later failures in this process are not logged)",
+                        self._config.extraction_model,
+                        type(exc).__name__,
+                    )
 
             final_communities.append(
                 Community(

@@ -12,9 +12,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig
-    from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
     from archon_search.graph_store import GraphStore
     from archon_search.jobs.store import JobStore
+    from archon_search.llm_client.protocol import LlmClient
     from archon_search.store import SearchStore
     from archon_search.types import CommunityRebuildJob
 
@@ -111,7 +111,7 @@ async def _community_rebuild_task(
     graph_store: GraphStore,
     graph_config: GraphConfig,
     search_store: SearchStore | None = None,
-    enrichment_client: LLMEnrichmentClientProtocol | None = None,
+    graph_client: LlmClient | None = None,
 ) -> None:
     """Coroutine that drives a single CommunityRebuildJob to completion.
 
@@ -137,7 +137,7 @@ async def _community_rebuild_task(
     """
     job_id = job.job_id
     builder = CommunityBuilder(
-        graph_store, graph_config, search_store=search_store, enrichment_client=enrichment_client
+        graph_store, graph_config, search_store=search_store, graph_client=graph_client
     )
 
     failure_error: str | None = None
@@ -297,7 +297,7 @@ async def rebuild_communities(
             graph_store=graph_store,
             graph_config=config.graph,
             search_store=search_store,
-            enrichment_client=request.app.state.enrichment_client,
+            graph_client=request.app.state.graph_client,
         )
     )
     request.app.state._background_tasks.add(task)

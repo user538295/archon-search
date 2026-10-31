@@ -94,6 +94,13 @@ class OpenAIClient:
     async def input_budget(self, template_text: str) -> InputBudget:
         return cloud_budget()
 
+    async def aclose(self) -> None:
+        """Close the SDK client's connection pool when one was built; a no-op otherwise. The startup probe closes its
+        throwaway client with it; the long-lived feature clients live as long as the process."""
+        client, self._client = self._client, None
+        if client is not None:
+            await client.close()
+
     @staticmethod
     def _failure(exc: Exception, timeout_seconds: float, prompt: str) -> LlmCallFailure:
         """Map an SDK, transport or import error onto the C1 failure contract, without the prompt."""

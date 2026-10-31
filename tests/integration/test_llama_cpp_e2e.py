@@ -149,8 +149,8 @@ def test_live_graph_enrichment_via_llama_cpp(tmp_path: Path, monkeypatch: pytest
     Ingest exercises ``GraphExtractor``'s local prose-engine relation
     extraction (typed edges are produced locally since BE-17, not via an LLM);
     a direct ``CommunityBuilder.build()`` call (using the server's own
-    composition-root enrichment client) exercises the real
-    ``summarize_community`` call. Summarisation is try/except-guarded in
+    composition-root graph client) exercises the real
+    summarisation call. Summarisation is try/except-guarded in
     production (S9) and falls back silently on transport failure, so the
     assertions below — not an exception — are what surfaces an unreachable
     llama-server.
@@ -183,8 +183,8 @@ def test_live_graph_enrichment_via_llama_cpp(tmp_path: Path, monkeypatch: pytest
         )
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
-        enrichment_client = client.app.state.enrichment_client
-        assert enrichment_client is not None, "app.state.enrichment_client was not built for provider=llama_cpp"
+        graph_client = client.app.state.graph_client
+        assert graph_client is not None, "app.state.graph_client was not built for provider=llama_cpp"
 
         async def _build_communities_and_read_edges():
             from archon_search.community_builder import CommunityBuilder
@@ -200,7 +200,7 @@ def test_live_graph_enrichment_via_llama_cpp(tmp_path: Path, monkeypatch: pytest
                     graph_store,
                     cfg.graph,
                     search_store=search_store,
-                    enrichment_client=enrichment_client,
+                    graph_client=graph_client,
                 )
                 communities = await builder.build(col, "default")
                 edges = await graph_store.get_all_edges(col, ns="default")

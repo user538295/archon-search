@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from starlette.datastructures import State
 
+    from archon_search.llm_client.protocol import LlmClient
+
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +27,7 @@ from archon_search._privacy import configure_query_fingerprint_salt
 from archon_search.chunker import ASTChunker, DocumentChunker
 from archon_search.config import (
     ConfigError,
+    GraphConfig,
     SearchConfig,
     get_default_config_path,
     resolve_active_model,
@@ -538,6 +541,24 @@ def _reranker_backend(model_name: str, device: str) -> RerankerBackend:
         return UnsupportedModelReranker(exc)
 
 
+def _build_graph_client(graph: GraphConfig, *, rate_limit_rpm: int | None) -> LlmClient | None:
+    """The shared LLM client of the graph feature, from ``[graph]`` alone; ``None`` when no provider is configured.
+
+    *rate_limit_rpm* is ``[graph].extraction_rate_limit_rpm`` for the production client (the client layer applies it to
+    ``anthropic`` and ``claude_cli``) and ``None`` for the startup probe's throwaway client.
+    """
+    if graph.provider is None:
+        return None
+    return build_llm_client(
+        provider=graph.provider,
+        model=graph.extraction_model or "",
+        ollama_base_url=graph.ollama_base_url,
+        llama_cpp_base_url=graph.llama_cpp_base_url,
+        ollama_context_tokens=graph.ollama_context_tokens,
+        rate_limit_rpm=rate_limit_rpm,
+    )
+
+
 def create_app(
     config: SearchConfig,
     job_store: JobStore,
@@ -671,6 +692,8 @@ def create_app(
                 timeout_seconds=config.validation_timeout_seconds,
                 embedder=pipeline.global_embedder.backend,
                 reranker=pipeline.reranker.backend if pipeline.reranker is not None else None,
+                # A fresh, unthrottled client: the probe must not take a slot of the production graph rate limit.
+                graph_client_factory=lambda: _build_graph_client(config.graph, rate_limit_rpm=None),
             )
 
         async def _run_model_validation() -> None:
@@ -728,8 +751,9 @@ def create_app(
             for feature, enabled, client in (
                 ("hyde", config.hyde.enabled, app.state.hyde_client),
                 ("rag_fusion", config.rag_fusion.enabled, app.state.rag_fusion_client),
+                ("graph", config.graph.enabled, app.state.graph_client),
             )
-            if enabled
+            if enabled and client is not None
         ]
         app.state._llm_window_task = asyncio.create_task(resolve_context_windows(window_features))
         app.state._background_tasks.add(app.state._llm_window_task)
@@ -838,7 +862,7 @@ def create_app(
             data_dir=get_data_dir(),
             graph_store=_graph_store,
             graph_config=config.graph,
-            enrichment_client=_enrichment_client,
+            graph_client=app.state.graph_client,
             # Failed-ingest retries run through POST /ingest's ingest task (jobs/ never imports server/).
             dispatch_retry=make_retry_dispatcher(app.state),
         )
@@ -1186,14 +1210,10 @@ def create_app(
     else:
         _lang_detector = None
 
-    # LLCP BE-7: build the enrichment client once, regardless of graph.enabled --
-    # construction is cheap (no I/O; the httpx-based v1 clients only make network
-    # calls when their methods are invoked) and CommunityBuilder is also reachable
-    # via the rebuild-communities route independently of the extractor below.
-    # Returns None when [graph].provider is None (air-gap default) or unset.
-    from archon_search.enrichment.factory import EnrichmentClientFactory
-    _enrichment_client = EnrichmentClientFactory.build(config.graph)
-    app.state.enrichment_client = _enrichment_client
+    # BE-15: the shared LLM client of graph community summaries, built once from [graph] with the graph rate limit
+    # (regardless of graph.enabled -- construction is cheap, and CommunityBuilder is also reachable via the
+    # rebuild-communities route independently of the extractor below). None when [graph].provider is None (air-gap default).
+    app.state.graph_client = _build_graph_client(config.graph, rate_limit_rpm=config.graph.extraction_rate_limit_rpm)
 
     if config.graph.enabled:
         from archon_search.defref_extractor import DefRefExtractor as _DefRefExtractor

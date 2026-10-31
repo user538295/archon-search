@@ -153,3 +153,18 @@ class LlmClient(Protocol):
                 window and never needs a second sizing.
         """
         ...
+
+
+@runtime_checkable
+class TokenCountingClient(Protocol):
+    """A client that counts tokens itself, in the unit its :meth:`LlmClient.input_budget` is measured in (``llama_cpp``,
+    through the server's own tokenizer). A caller that sizes passages to the budget counts with this when the client has
+    it, and with the gpt2 counter otherwise (``ollama``, whose budget is in gpt2 tokens)."""
+
+    async def count_tokens(self, text: str) -> int:
+        """The number of tokens of *text*.
+
+        Raises:
+            LlmCallFailure: the count failed (an unreachable tokenize endpoint).
+        """
+        ...
