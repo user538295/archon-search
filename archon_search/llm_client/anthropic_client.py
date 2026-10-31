@@ -1,4 +1,4 @@
-"""AnthropicClient — the ``anthropic`` wrapper of the shared LLM client (contract C1, scenario S6).
+"""AnthropicClient — the ``anthropic`` wrapper of the shared LLM client (contract C1, scenarios S6, S64).
 
 Thin wrapper over the ``anthropic`` SDK (``AsyncAnthropic.messages.create``).
 
@@ -9,6 +9,8 @@ Thin wrapper over the ``anthropic`` SDK (``AsyncAnthropic.messages.create``).
   SDK never waits on a missing credential, and tests that clear the key never reach the network).
 * Cloud: no context window and no trimming; ``input_budget`` is ``cloud_budget()``. ``think`` has no verified switch
   and is ignored.
+* Rate limit (S64): a graph client is built with a ``FixedWindowRateLimiter``; the slot is taken after the key guard and
+  once the SDK client exists, before the request is sent. The other features build it without one.
 * Every failure is raised as ``LlmCallFailure`` (a timeout as ``LlmCallTimeout``); the reason carries the provider's own
   status and error text where the server gave one, bounded and with the prompt masked, never the prompt.
 
@@ -32,6 +34,7 @@ from archon_search.llm_client.protocol import (
     LlmCallTimeout,
 )
 from archon_search.llm_client.provider_key import provider_key_available
+from archon_search.llm_client.rate_limit import FixedWindowRateLimiter
 from archon_search.llm_client.server_text import bounded_server_text
 
 PROVIDER_NAME: Final = "anthropic"
@@ -54,14 +57,23 @@ def _build_sdk_client() -> Any:
 class AnthropicClient:
     """``LlmClient`` for one Anthropic feature: one model, the key from the environment."""
 
-    def __init__(self, *, model: str, client_factory: SdkClientFactory = _build_sdk_client) -> None:
+    def __init__(
+        self,
+        *,
+        model: str,
+        client_factory: SdkClientFactory = _build_sdk_client,
+        rate_limiter: FixedWindowRateLimiter | None = None,
+    ) -> None:
         """
         Args:
             model: the Anthropic model name.
             client_factory: builds the SDK client on first use; replaced in tests.
+            rate_limiter: the graph rate limit (``extraction_rate_limit_rpm``); every call takes one slot and an
+                exhausted window raises ``LlmCallFailure``. ``None`` (HyDE, RAG Fusion, description) is unthrottled.
         """
         self._model = model
         self._client_factory = client_factory
+        self._rate_limiter = rate_limiter
         self._client: Any | None = None
 
     def is_key_available(self) -> bool:
@@ -71,11 +83,12 @@ class AnthropicClient:
     async def call(self, request: LlmCallRequest) -> LlmCallResult:
         if not self.is_key_available():
             raise LlmCallFailure(PROVIDER_NAME, f"{_KEY_VARIABLE} is not set")
+        sdk_client = self._ensure_sdk_client(request)
+        if self._rate_limiter is not None:
+            self._rate_limiter.acquire(PROVIDER_NAME)
         try:
-            if self._client is None:
-                self._client = self._client_factory()
             async with asyncio.timeout(request.timeout_seconds):
-                response = await self._client.messages.create(
+                response = await sdk_client.messages.create(
                     model=self._model,
                     max_tokens=request.max_output_tokens,
                     messages=[{"role": "user", "content": request.prompt}],
@@ -86,6 +99,15 @@ class AnthropicClient:
             return LlmCallResult(text="".join(block.text for block in response.content if block.type == "text"))
         except (AttributeError, TypeError) as exc:
             raise LlmCallFailure(PROVIDER_NAME, f"unexpected reply ({type(exc).__name__})") from exc
+
+    def _ensure_sdk_client(self, request: LlmCallRequest) -> Any:
+        """Build the SDK client on the first call and keep it; a missing package or a failed build is raised before a rate-limit slot is taken."""
+        if self._client is None:
+            try:
+                self._client = self._client_factory()
+            except Exception as exc:
+                raise self._failure(exc, request.timeout_seconds, request.prompt) from exc
+        return self._client
 
     def context_window(self) -> ContextWindow:
         return UNBOUNDED

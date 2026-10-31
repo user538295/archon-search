@@ -323,7 +323,7 @@ flowchart LR
         - #e2e_test — `test_e2e_hyde_and_rag_fusion_missing_package_refuse_boot` — masking the package makes the app refuse to start, unlike graph
 
 ### Phase 3 · Summarise graph communities through the shared client on all five providers *(graph cut over, `claude_cli` added for graph, `archon_search/enrichment/` removed)*
-- [ ] **BE-14** — Move the graph rate limiter into the client layer for `anthropic` and `claude_cli` (`extraction_rate_limit_rpm`, fixed window as in `enrichment/anthropic.py`), keep other graph providers and HyDE/RAG `claude_cli` unthrottled, transport retry off for graph #backend-role
+- [x] **BE-14** — Move the graph rate limiter into the client layer for `anthropic` and `claude_cli` (`extraction_rate_limit_rpm`, fixed window as in `enrichment/anthropic.py`), keep other graph providers and HyDE/RAG `claude_cli` unthrottled, transport retry off for graph #backend-role
     - Interface Adapters · 3.0h
     - needs BE-7, BE-8 · completes S64
     - Tests

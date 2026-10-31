@@ -1,4 +1,4 @@
-"""ClaudeCliClient — the ``claude_cli`` wrapper of the shared LLM client (contract C1, scenarios S12, S79).
+"""ClaudeCliClient — the ``claude_cli`` wrapper of the shared LLM client (contract C1, scenarios S12, S64, S79).
 
 Runs the Claude Code CLI as a subprocess (``claude -p``), on the operator's own Claude login: no API key, no SDK.
 
@@ -16,6 +16,8 @@ Runs the Claude Code CLI as a subprocess (``claude -p``), on the operator's own 
 * A transport retry (one retry after a short backoff on a non-zero exit) happens only when the caller asked for it at
   construction, for HyDE and RAG Fusion; graph and description prompts hold document excerpts that a retry would send
   twice. A timeout is never retried.
+* The graph rate limit (S64) is applied here when the graph composition hands the wrapper a ``FixedWindowRateLimiter``:
+  a Claude login has an account-level quota. HyDE, RAG Fusion and description are built without one.
 * Every failure is raised as ``LlmCallFailure`` (a timeout as ``LlmCallTimeout``); the reason carries the CLI's stderr
   (its stdout when stderr is empty: ``claude -p`` prints "Not logged in" there), bounded and with the prompt masked, never
   the prompt. ``think`` is ignored (no verified switch) and so is ``max_output_tokens`` (the CLI has no token cap); window
@@ -50,6 +52,7 @@ from archon_search.llm_client.protocol import (
     LlmCallResult,
     LlmCallTimeout,
 )
+from archon_search.llm_client.rate_limit import FixedWindowRateLimiter
 from archon_search.llm_client.server_text import bounded_server_text
 
 PROVIDER_NAME: Final = "claude_cli"
@@ -153,7 +156,14 @@ def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
 class ClaudeCliClient:
     """``LlmClient`` for one ``claude_cli`` feature: one model on the operator's Claude login."""
 
-    def __init__(self, *, model: str, retry_on_nonzero_exit: bool = False, binary: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: str,
+        retry_on_nonzero_exit: bool = False,
+        binary: str | None = None,
+        rate_limiter: FixedWindowRateLimiter | None = None,
+    ) -> None:
         """
         Args:
             model: passed as ``--model``; blank or ``DEFAULT_FAST_MODEL`` (the config default sentinel) leaves the
@@ -161,14 +171,20 @@ class ClaudeCliClient:
             retry_on_nonzero_exit: one retry after ``RETRY_BACKOFF_SECONDS`` on a non-zero exit; HyDE and RAG Fusion
                 only, never for prompts that hold document excerpts.
             binary: the executable to run; ``claude`` resolved from ``PATH`` now when ``None``. Tests pass the fake.
+            rate_limiter: the graph rate limit (``extraction_rate_limit_rpm``); a call takes one slot (a transport retry
+                inside it does not take a second) and an exhausted window raises ``LlmCallFailure`` without a spawn.
+                ``None`` (HyDE, RAG Fusion, description) is unthrottled.
         """
         self._model = model
         self.binary: str | None = binary if binary is not None else shutil.which(_BINARY_NAME)
         self._attempts = _ATTEMPTS_WITH_RETRY if retry_on_nonzero_exit else _ATTEMPTS_WITHOUT_RETRY
+        self._rate_limiter = rate_limiter
 
     async def call(self, request: LlmCallRequest) -> LlmCallResult:
         if self.binary is None:
             raise LlmCallFailure(PROVIDER_NAME, f"'{_BINARY_NAME}' not found on PATH")
+        if self._rate_limiter is not None:
+            self._rate_limiter.acquire(PROVIDER_NAME)
         argv = [self.binary, *_LOCKDOWN_ARGV, *self._model_argv()]
         for attempt in range(self._attempts):
             if attempt:

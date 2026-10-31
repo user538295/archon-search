@@ -307,6 +307,7 @@ def test_client_package_import_loads_no_provider_sdk() -> None:
         import archon_search.llm_client.provider_key
         import archon_search.llm_client.once_per_process
         import archon_search.llm_client.budget
+        import archon_search.llm_client.rate_limit
         heavy = ("anthropic", "openai", "ollama", "httpx", "claude_agent_sdk", "torch", "transformers")
         loaded = sorted(name for name in heavy if name in sys.modules)
         print(",".join(loaded))

@@ -1,4 +1,4 @@
-"""Composition of the per-feature shared LLM clients (collection-descriptions plan, BE-10, contract C1, S5, S67, S68).
+"""Composition of the per-feature shared LLM clients (collection-descriptions plan, BE-10, BE-14, contract C1, S5, S64, S67, S68).
 
 Frameworks & Drivers: the server startup builds one client per feature from that feature's own section
 (``build_llm_client``), so HyDE, RAG Fusion, graph enrichment and description each keep their own provider, model, host
@@ -36,6 +36,7 @@ from archon_search.llm_client.protocol import (
     LlmCallFailure,
     LlmClient,
 )
+from archon_search.llm_client.rate_limit import FixedWindowRateLimiter
 
 _logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ def build_llm_client(
     llama_cpp_base_url: str,
     ollama_context_tokens: int | None,
     retry_on_nonzero_exit: bool = False,
+    rate_limit_rpm: int | None = None,
 ) -> LlmClient:
     """Build the client of one feature from that feature's own settings.
 
@@ -69,24 +71,35 @@ def build_llm_client(
         ollama_base_url: the feature's Ollama host; used only for ``ollama``.
         llama_cpp_base_url: the feature's llama-server host; used only for ``llama_cpp``.
         ollama_context_tokens: the feature's ``ollama_context_tokens`` (``None`` when unset); used only for ``ollama``.
-        retry_on_nonzero_exit: ``claude_cli`` only, one retry on a non-zero exit; HyDE and RAG Fusion pass ``True``.
+        retry_on_nonzero_exit: ``claude_cli`` only, one retry on a non-zero exit; HyDE and RAG Fusion pass ``True``, graph and
+            description leave it off (their prompts hold excerpts a retry would send twice).
+        rate_limit_rpm: the graph rate limit (``[graph].extraction_rate_limit_rpm``), requests per minute for this one
+            client. Only ``anthropic`` and ``claude_cli`` honour it (a Claude login and an Anthropic key have an account
+            quota); ``openai`` stays unthrottled as it was, and ``ollama`` and ``llama_cpp`` have no account quota, so the
+            graph composition may pass the value whatever its provider. ``None`` (HyDE, RAG Fusion, description) builds
+            an unthrottled client.
 
     Raises:
         ValueError: *provider* is not a known provider (the config loader rejects those, so only programmatic callers can hit it).
     """
     match provider:
         case "anthropic":
-            return AnthropicClient(model=model)
+            return AnthropicClient(model=model, rate_limiter=_graph_limiter(rate_limit_rpm))
         case "openai":
             return OpenAIClient(model=model)
         case "ollama":
             return OllamaClient(model=model, base_url=ollama_base_url, context_tokens=ollama_context_tokens)
         case "claude_cli":
-            return ClaudeCliClient(model=model, retry_on_nonzero_exit=retry_on_nonzero_exit)
+            return ClaudeCliClient(model=model, retry_on_nonzero_exit=retry_on_nonzero_exit, rate_limiter=_graph_limiter(rate_limit_rpm))
         case "llama_cpp":
             return LlamaCppClient(model=model, base_url=llama_cpp_base_url)
         case _:
             raise ValueError(f"unknown LLM provider {provider!r}")
+
+
+def _graph_limiter(rate_limit_rpm: int | None) -> FixedWindowRateLimiter | None:
+    """A fresh limiter for one client (limiters are never shared between features), or ``None`` when no limit is set."""
+    return None if rate_limit_rpm is None else FixedWindowRateLimiter(rate_limit_rpm)
 
 
 async def resolve_context_windows(features: Iterable[FeatureClient]) -> None:

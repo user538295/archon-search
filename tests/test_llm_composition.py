@@ -7,11 +7,17 @@ The servers are the loopback fakes of ``tests/_fake_model_server.py``, reached t
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+import anthropic
+import openai
 import pytest
 
 from archon_search.constants import ANSWER_RESERVE_TOKENS, ASSUMED_CONTEXT_TOKENS
@@ -68,13 +74,23 @@ def _no_proxy_for_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
     keep_loopback_out_of_proxies(monkeypatch)
 
 
-def _client(provider: str, *, ollama_url: str = _OLLAMA_URL, llama_cpp_url: str = _LLAMA_CPP_URL, context: int | None = None) -> LlmClient:
+def _client(
+    provider: str,
+    *,
+    ollama_url: str = _OLLAMA_URL,
+    llama_cpp_url: str = _LLAMA_CPP_URL,
+    context: int | None = None,
+    rate_limit_rpm: int | None = None,
+    retry: bool = False,
+) -> LlmClient:
     return build_llm_client(
         provider=provider,
         model=_MODEL,
         ollama_base_url=ollama_url,
         llama_cpp_base_url=llama_cpp_url,
         ollama_context_tokens=context,
+        retry_on_nonzero_exit=retry,
+        rate_limit_rpm=rate_limit_rpm,
     )
 
 
@@ -304,3 +320,122 @@ async def test_claude_cli_transport_retry_follows_the_option_of_the_feature(
             await client.call(request)
 
     assert len(fake.invocations()) == invocations
+
+
+# --- the graph rate limiter (BE-14, C1, S64) -------------------------------------------------------------------------
+
+_GRAPH_RPM = 2
+_ATTEMPTS_PAST_THE_CAP = _GRAPH_RPM + 3
+_REPLY = "a summary"
+_EXHAUSTED_REASON = f"rate limit exhausted ({_GRAPH_RPM} rpm); retry later"
+_REQUEST = LlmCallRequest(prompt=_PROMPT, max_output_tokens=ANSWER_RESERVE_TOKENS, timeout_seconds=_CALL_TIMEOUT_SECONDS)
+_SDK_REPLY = SimpleNamespace(
+    content=[SimpleNamespace(type="text", text=_REPLY)],
+    choices=[SimpleNamespace(message=SimpleNamespace(content=_REPLY))],
+)
+_OLLAMA_CHAT_PATH = "/api/chat"
+_LLAMA_CPP_CHAT_PATH = "/v1/chat/completions"
+
+
+class _CountingSdkClient:
+    """Stands in for ``AsyncAnthropic`` / ``AsyncOpenAI``: counts the requests that reach the SDK."""
+
+    def __init__(self) -> None:
+        self.requests = 0
+        endpoint = SimpleNamespace(create=self._create)
+        self.messages = endpoint
+        self.chat = SimpleNamespace(completions=endpoint)
+
+    async def _create(self, **kwargs: object) -> SimpleNamespace:
+        self.requests += 1
+        return _SDK_REPLY
+
+
+@contextlib.contextmanager
+def _backend(provider: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, Callable[[], int]]]:
+    """Stand up what *provider* talks to; yields the host to compose against and a count of the requests that reached it."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    match provider:
+        case "claude_cli":
+            fake = _fake_claude.install(tmp_path / "bin", reply=_REPLY)
+            monkeypatch.setenv("PATH", f"{fake.path.parent}{os.pathsep}{os.environ['PATH']}")
+            yield _OLLAMA_URL, lambda: len(fake.invocations())
+        case "anthropic" | "openai":
+            sdk = _CountingSdkClient()
+            module, constructor = (anthropic, "AsyncAnthropic") if provider == "anthropic" else (openai, "AsyncOpenAI")
+            with patch.object(module, constructor, return_value=sdk):
+                yield _OLLAMA_URL, lambda: sdk.requests
+        case "ollama" | "llama_cpp":
+            path = _OLLAMA_CHAT_PATH if provider == "ollama" else _LLAMA_CPP_CHAT_PATH
+            with FakeModelServer(reply_text=_REPLY) as server:
+                yield server.base_url, lambda: len(server.requests_to(path))
+        case _:
+            raise AssertionError(f"no backend for {provider}")
+
+
+async def _served_and_refused(client: LlmClient) -> tuple[int, list[LlmCallFailure]]:
+    """Call *client* ``_ATTEMPTS_PAST_THE_CAP`` times in a row: how many were answered, and the failures of the others."""
+    served = 0
+    refused: list[LlmCallFailure] = []
+    for _ in range(_ATTEMPTS_PAST_THE_CAP):
+        try:
+            await client.call(_REQUEST)
+            served += 1
+        except LlmCallFailure as failure:
+            refused.append(failure)
+    return served, refused
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "claude_cli"])
+async def test_graph_limiter_applies_to_anthropic_and_claude_cli(provider: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _backend(provider, tmp_path, monkeypatch) as (host, requests):
+        client = _client(provider, ollama_url=host, rate_limit_rpm=_GRAPH_RPM)
+
+        served, refused = await _served_and_refused(client)
+
+        assert served == _GRAPH_RPM
+        assert [failure.reason for failure in refused] == [_EXHAUSTED_REASON] * (_ATTEMPTS_PAST_THE_CAP - _GRAPH_RPM)
+        assert requests() == _GRAPH_RPM
+
+
+async def test_each_graph_client_has_its_own_limiter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _backend("claude_cli", tmp_path, monkeypatch) as (_, requests):
+        first_served, _ = await _served_and_refused(_client("claude_cli", rate_limit_rpm=_GRAPH_RPM))
+        second_served, _ = await _served_and_refused(_client("claude_cli", rate_limit_rpm=_GRAPH_RPM))
+
+        assert (first_served, second_served) == (_GRAPH_RPM, _GRAPH_RPM)
+        assert requests() == 2 * _GRAPH_RPM
+
+
+@pytest.mark.parametrize(
+    ("provider", "rate_limit_rpm", "retry"),
+    [
+        pytest.param("claude_cli", None, True, id="hyde_and_rag_fusion_claude_cli"),
+        pytest.param("anthropic", None, False, id="anthropic_without_a_cap"),
+        pytest.param("openai", _GRAPH_RPM, False, id="openai_graph"),
+        pytest.param("ollama", _GRAPH_RPM, False, id="ollama_graph"),
+        pytest.param("llama_cpp", _GRAPH_RPM, False, id="llama_cpp_graph"),
+    ],
+)
+async def test_limiter_not_applied_to_hyde_claude_cli_or_other_graph_providers(
+    provider: str, rate_limit_rpm: int | None, retry: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _backend(provider, tmp_path, monkeypatch) as (host, requests):
+        client = _client(provider, ollama_url=host, llama_cpp_url=host, rate_limit_rpm=rate_limit_rpm, retry=retry)
+
+        served, refused = await _served_and_refused(client)
+
+        assert (served, refused) == (_ATTEMPTS_PAST_THE_CAP, [])
+        assert requests() == _ATTEMPTS_PAST_THE_CAP
+
+
+async def test_graph_claude_cli_client_is_composed_without_the_transport_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(claude_cli_client, "RETRY_BACKOFF_SECONDS", 0.0)
+    fake = _fake_claude.install(tmp_path / "bin", reply=_REPLY, exit_codes=(1, 0))
+    monkeypatch.setenv("PATH", f"{fake.path.parent}{os.pathsep}{os.environ['PATH']}")
+
+    with pytest.raises(LlmCallFailure, match="exit status 1"):
+        await _client("claude_cli", rate_limit_rpm=_GRAPH_RPM).call(_REQUEST)
+
+    assert len(fake.invocations()) == 1
