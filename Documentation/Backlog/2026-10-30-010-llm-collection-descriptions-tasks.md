@@ -315,7 +315,7 @@ flowchart LR
         - #integration_test — `test_hyde_missing_package_refuses_to_start` — a masked `ollama`, `openai` or `anthropic` package stops startup with the existing error naming it
         - #integration_test — `test_rag_fusion_missing_package_refuses_to_start` — the same refusal for RAG Fusion
         - #unit_test — `test_no_query_text_logged_in_llm_client_wrappers` — the source-scan guard covers the new wrapper modules
-- [ ] **T-3** — e2e: RAG Fusion fallback and the refuse-to-start rule through the real app #tester-role
+- [x] **T-3** — e2e: RAG Fusion fallback and the refuse-to-start rule through the real app #tester-role
     - — · 3.0h
     - needs BE-12, BE-13 · completes S3, S65
     - Tests
