@@ -97,6 +97,7 @@ from archon_search.store import (
     STORE_SCHEMA_VERSION,
     SearchStore,
     StoreBusyError,
+    StoreReadError,
     doc_id_for_source_path,
     elementwise_sum,
     refresh_fts,
@@ -1318,6 +1319,27 @@ class SearchPipeline:
         meta = await self.store.get_collection_meta(collection, namespace=namespace)
         return meta.default_ttl_seconds if meta is not None else None
 
+    async def _read_description_sample(self, collection: str, namespace: str) -> list[str]:
+        """Read the excerpts the description generator is shown: the first ``MAX_SAMPLE_CHUNKS`` open chunk ids by id.
+
+        Open means no ACL (the restricted-chunk switch is not wired yet), so no restricted text reaches the model. A
+        ``StoreReadError`` is not "no chunks": it is logged (collection name and the cause's type, never its text) and
+        the sample is empty, which keeps the current description. Any other error propagates, as it would from the
+        ingest's own store calls, which have already passed the same ownership check. The evenly spaced draw over
+        every open chunk, fitted to the model's input budget, replaces this slice with the generator rewrite (BE-22);
+        until then the listing holds every open id in memory to use the first hundred.
+        """
+        try:
+            chunk_ids = await self.store.list_chunk_ids(collection, namespace)
+            return await self.store.read_excerpts(collection, namespace, chunk_ids[:MAX_SAMPLE_CHUNKS])
+        except StoreReadError as exc:
+            logger.warning(
+                "Could not read the description sample of collection %r from the store (%s); keeping its description",
+                collection,
+                type(exc.__cause__ or exc).__name__,
+            )
+            return []
+
     async def _finalize_batch_ingest(
         self,
         collection: str,
@@ -1348,7 +1370,7 @@ class SearchPipeline:
             batch_chunk_count = existing_meta.chunk_count if existing_meta else 0
 
             if force_regenerate_description or _should_regenerate(batch_doc_count, batch_chunk_count, described_at):
-                sample_texts = await self.store.sample_chunk_texts(collection, namespace, sample_size=MAX_SAMPLE_CHUNKS)
+                sample_texts = await self._read_description_sample(collection, namespace)
                 new_desc = await generate_description(sample_texts, collection)
                 if new_desc is not None:
                     description = new_desc

@@ -1708,7 +1708,8 @@ def _make_stub_store_for_embedding_tests(existing_meta=None):  # type: ignore[no
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.update_collection_meta = AsyncMock()
     store.update_description = AsyncMock()
-    store.sample_chunk_texts = AsyncMock(return_value=["sample text"])
+    store.list_chunk_ids = AsyncMock(return_value=["sample-chunk-id"])
+    store.read_excerpts = AsyncMock(return_value=["sample text"])
     store._config = SearchConfig()
     return store
 
@@ -2111,8 +2112,8 @@ def test_ingest_directory_no_all_vectors_accumulator() -> None:
 
 @pytest.mark.asyncio
 async def test_description_reads_from_store_not_accumulator(tmp_path) -> None:
-    """When _should_regenerate returns True, description uses
-    store.sample_chunk_texts(sample_size=100), not any chunk accumulator.
+    """When _should_regenerate returns True, the description sample is read through the store port
+    (list_chunk_ids, then read_excerpts for the picked ids), not from any chunk accumulator.
     store.list_chunks_raw must NOT be called."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2131,8 +2132,10 @@ async def test_description_reads_from_store_not_accumulator(tmp_path) -> None:
     store.update_description = AsyncMock()
     store.update_collection_meta = AsyncMock()
     store.list_chunks_raw = AsyncMock()
+    sample_ids = ["id-A", "id-B", "id-C"]
     sample_texts = ["chunk text A", "chunk text B", "chunk text C"]
-    store.sample_chunk_texts = AsyncMock(return_value=sample_texts)
+    store.list_chunk_ids = AsyncMock(return_value=sample_ids)
+    store.read_excerpts = AsyncMock(return_value=sample_texts)
 
     pipeline = SearchPipeline(
         store=store,
@@ -2152,12 +2155,9 @@ async def test_description_reads_from_store_not_accumulator(tmp_path) -> None:
             tmp_path, "test-col", embedder=pipeline._global_embedder, rebuild_fts=False
         )
 
-    # sample_chunk_texts must be called with sample_size=100
-    store.sample_chunk_texts.assert_awaited_once()
-    call_kwargs = store.sample_chunk_texts.call_args
-    assert call_kwargs.kwargs.get("sample_size") == 100 or (
-        len(call_kwargs.args) >= 3 and call_kwargs.args[2] == 100
-    )
+    # The ids come from the open-chunk listing (restricted chunks stay out), and their excerpts are read in that order
+    store.list_chunk_ids.assert_awaited_once_with("test-col", "default")
+    store.read_excerpts.assert_awaited_once_with("test-col", "default", sample_ids)
 
     # generate_description receives the sample texts
     mock_gen.assert_awaited_once()
@@ -2188,7 +2188,8 @@ async def test_centroid_incremental_path_always_used(tmp_path) -> None:
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_description = AsyncMock()
     store.update_collection_meta = AsyncMock()
-    store.sample_chunk_texts = AsyncMock(return_value=[])
+    store.list_chunk_ids = AsyncMock(return_value=[])
+    store.read_excerpts = AsyncMock(return_value=[])
 
     pipeline = SearchPipeline(
         store=store,
@@ -2648,7 +2649,8 @@ def _make_mock_store_c1(existing_meta=None):  # type: ignore[no-untyped-def]
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.update_collection_meta = AsyncMock()
     store.update_description = AsyncMock()
-    store.sample_chunk_texts = AsyncMock(return_value=[])
+    store.list_chunk_ids = AsyncMock(return_value=[])
+    store.read_excerpts = AsyncMock(return_value=[])
     store._config = SearchConfig()
     return store
 

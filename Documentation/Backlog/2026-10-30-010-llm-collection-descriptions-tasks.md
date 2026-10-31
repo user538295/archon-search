@@ -407,7 +407,7 @@ flowchart LR
         - #unit_test — `test_recompute_carries_stored_vector_for_other_model` — a vector from the collection's model is never replaced by the global embedder's
         - #unit_test — `test_recompute_computes_vector_only_for_matching_model` — a legacy description gets a vector only when the model matches
         - #integration_test — `test_vector_follows_generate_set_and_clear` — the routing vector is written, replaced and removed with the text
-- [ ] **BE-21** — Store port reads for the sample in `store.py`: `list_chunk_ids` sorted by `chunk_id` with open meaning `acl is None` exactly, `read_excerpts` in requested order, raising on store error, empty for an absent table; replaces `sample_chunk_texts` #backend-role
+- [x] **BE-21** — Store port reads for the sample in `store.py`: `list_chunk_ids` sorted by `chunk_id` with open meaning `acl is None` exactly, `read_excerpts` in requested order, raising on store error, empty for an absent table; replaces `sample_chunk_texts` #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-18 · completes S55, S82
     - Tests

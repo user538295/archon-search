@@ -7,11 +7,10 @@ import hashlib
 import json
 import logging
 import math
-import random
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Iterable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -110,6 +109,40 @@ class CollectionOwnershipError(Exception):
         super().__init__(COLLECTION_UNAVAILABLE_DETAIL)
         self.collection = collection
         self.namespace = namespace
+
+
+class StoreReadError(Exception):
+    """Raised by ``list_chunk_ids`` and ``read_excerpts`` when the store fails to read *collection*'s chunks.
+
+    Never an empty result: ``[]`` from those reads means the read worked and found nothing, which a description
+    generation settles differently (``noUnrestrictedChunks``) from a failed read (``sampleReadFailed``). The LanceDB or
+    I/O error that caused it is chained as ``__cause__``; ``str(exc)`` names the collection only, never a chunk text.
+    """
+
+    def __init__(self, collection: str) -> None:
+        super().__init__(f"could not read the chunks of collection {collection!r} from the store")
+        self.collection = collection
+
+
+@contextmanager
+def _translate_read_errors(collection: str) -> Iterator[None]:
+    """Turn any failure of a port read into :class:`StoreReadError` (cause chained); an ownership refusal passes through."""
+    try:
+        yield
+    except CollectionOwnershipError:
+        raise
+    except Exception as exc:
+        raise StoreReadError(collection) from exc
+
+
+def _sorted_chunk_ids(rows: pa.Table, *, open_only: bool) -> list[str]:
+    """The ``chunk_id`` column of *rows* in ascending order; with *open_only*, only the rows whose ``acl`` is null."""
+    import pyarrow.compute as pc
+
+    chunk_ids = rows.column("chunk_id")
+    if open_only:
+        chunk_ids = chunk_ids.filter(pc.is_null(rows.column("acl")))
+    return chunk_ids.take(pc.sort_indices(chunk_ids)).to_pylist()
 
 
 class FTSIndexNotFoundError(RuntimeError):
@@ -2613,31 +2646,98 @@ class SearchStore:
         table = await self._require_connected().open_table(name)
         await table.optimize(cleanup_older_than=retention)
 
-    async def sample_chunk_texts(
-        self,
-        collection: str,
-        namespace: str = DEFAULT_NAMESPACE,
-        sample_size: int = 100,
-    ) -> list[str]:
-        """Return up to *sample_size* chunk text strings from *collection*, in shuffled order.
+    # ------------------------------------------------------------------
+    # Description sample: the port reads behind the open-chunk draw (C2, C3 ``DescriptionStore``)
+    # ------------------------------------------------------------------
 
-        Returns ``[]`` if the collection table does not exist or any error
-        occurs.  Namespace is accepted for API symmetry but not filtered on —
-        the underlying table is per-collection.
+    async def _open_chunk_table_for_read(
+        self, db: lancedb.db.AsyncConnection, collection: str, namespace: str, include_restricted: bool
+    ) -> tuple[lancedb.AsyncTable, bool] | None:
+        """Return *collection*'s chunk table and whether the read keeps only open rows, or ``None`` without a table.
+
+        Existence is read from the table list, not inferred from an ``open_table`` error: a table that is there but
+        cannot be opened is a read failure (:func:`_translate_read_errors` wraps it), never an absent table. The cost is
+        one table-list call per read. The read keeps only open rows (``acl`` null) unless *include_restricted*; a table
+        from before the ``acl`` column existed has only open rows, so there is nothing to keep apart.
         """
-        try:
-            db = self._require_connected()
-            table = await db.open_table(collection)
-            rows = await table.query().select(["text"]).limit(sample_size).to_list()
-            texts = [row["text"] for row in rows]
-            # LanceDB returns rows in insertion order; shuffle the fetched rows so
-            # the caller receives them in a non-deterministic order within the
-            # fetched window (selection is still insertion-order bounded by limit(n)).
-            random.shuffle(texts)
-            return texts
-        except Exception as e:
-            logger.debug("sample_chunk_texts failed for %r: %s", collection, e, exc_info=True)
+        await self._require_collection_access(db, collection, namespace)
+        if collection not in await list_all_table_names(db):
+            return None
+        table = await db.open_table(collection)
+        return table, not include_restricted and "acl" in (await table.schema()).names
+
+    async def list_chunk_ids(
+        self, collection: str, namespace: str, include_restricted: bool = False
+    ) -> list[str]:
+        """List the chunk ids of *collection* sorted by ``chunk_id`` ascending: the pool of the description sample (C2).
+
+        The order is the id order, never the stored row order (which shifts with compaction and re-ingest), so the
+        same rows always give the same list. A chunk is *open* when its ``acl`` is null, exactly: a chunk with any ACL,
+        deny-all ``[]`` included, is listed only when *include_restricted* is true (the operator's switch for a local
+        provider). A table from before the ``acl`` column existed has only open rows.
+
+        Memory is one id per listed chunk, plus its ``acl`` list while the open rows are picked out (the draw needs
+        every open id to space its picks over all of them); the filter and the sort run off the event loop.
+
+        *namespace* is the collection's namespace and follows the ownership rule of the other store calls.
+
+        Returns:
+            The ids, or ``[]`` when the read worked and found none, or the collection has no table.
+
+        Raises:
+            StoreReadError: LanceDB or the disk failed while reading; never an empty result.
+            CollectionOwnershipError: another namespace owns *collection*.
+            RuntimeError: if the store is not connected.
+            ValueError: if *collection* or *namespace* is invalid.
+        """
+        self._validate_collection(collection)
+        _validate_namespace(namespace)
+        db = self._require_connected()
+        with _translate_read_errors(collection):
+            opened = await self._open_chunk_table_for_read(db, collection, namespace, include_restricted)
+            if opened is None:
+                return []
+            table, open_only = opened
+            rows = await table.query().select(["chunk_id", "acl"] if open_only else ["chunk_id"]).to_arrow()
+            return await asyncio.to_thread(_sorted_chunk_ids, rows, open_only=open_only)
+
+    async def read_excerpts(
+        self, collection: str, namespace: str, chunk_ids: list[str], include_restricted: bool = False
+    ) -> list[str]:
+        """Read the text of each chunk in *chunk_ids* from *collection*, in the order the ids are given (C2).
+
+        An id with no stored chunk (deleted since it was listed) is left out, and so is a chunk that carries an ACL
+        now unless *include_restricted* is true: a re-ingest keeps the chunk ids, so a chunk listed as open can turn
+        restricted before it is read, and its text must not reach the model. The others keep their order.
+
+        An empty *chunk_ids* returns ``[]`` before the ownership check and any read; *namespace* otherwise follows the
+        ownership rule of the other store calls. The ids go into one ``IN`` clause, so a caller passes the few it
+        needs (at most ``max_sample_chunks``), not a whole collection.
+
+        Returns:
+            The texts, or ``[]`` for no ids or a collection with no table.
+
+        Raises:
+            StoreReadError: LanceDB or the disk failed while reading; never an empty result.
+            CollectionOwnershipError: another namespace owns *collection*.
+            RuntimeError: if the store is not connected.
+            ValueError: if *collection* or *namespace* is invalid.
+        """
+        self._validate_collection(collection)
+        _validate_namespace(namespace)
+        db = self._require_connected()
+        if not chunk_ids:
             return []
+        with _translate_read_errors(collection):
+            opened = await self._open_chunk_table_for_read(db, collection, namespace, include_restricted)
+            if opened is None:
+                return []
+            table, open_only = opened
+            columns = ["chunk_id", "text", "acl"] if open_only else ["chunk_id", "text"]
+            # chunk_ids come from the caller; _where_in quotes each one (defense in depth)
+            rows = await table.query().where(_where_in("chunk_id", chunk_ids)).select(columns).to_list()
+        text_by_id = {row["chunk_id"]: row["text"] for row in rows if not open_only or row.get("acl") is None}
+        return [text_by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in text_by_id]
 
     # ------------------------------------------------------------------
     # Reindex (metadata backfill for pre-A1 collections)

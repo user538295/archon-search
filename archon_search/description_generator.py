@@ -57,7 +57,7 @@ def _should_regenerate(
 
 
 async def generate_description(chunks: list[str], collection_name: str) -> str | None:
-    """Use up to 100 chunks (shuffled by the store layer), call Haiku via ClaudeSDKClient, return 2-3 sentence description.
+    """Use up to 100 chunks (open chunks read in chunk_id order by the store), call Haiku via ClaudeSDKClient, return 2-3 sentence description.
 
     Session lifecycle: creates a new ClaudeSDKClient with DEFAULT_FAST_MODEL (Haiku),
     permission_mode="bypassPermissions".  Sends a single query, reads response, disconnects.

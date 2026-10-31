@@ -2,7 +2,7 @@
 batched ingest behaviour (BE-2).
 
 Uses make_real_pipeline with a real SearchStore and real LanceDB to verify
-doc_count correctness across batch boundaries and sample_chunk_texts.
+doc_count correctness across batch boundaries and the description-sample port reads.
 """
 from __future__ import annotations
 
@@ -115,8 +115,8 @@ async def test_partial_batch_failure_leaves_store_partially_written(tmp_path: Pa
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_sample_chunk_texts_returns_limit_n(tmp_path: Path, monkeypatch):
-    """sample_chunk_texts returns at most n items, all strings; [] on empty collection."""
+async def test_list_chunk_ids_and_read_excerpts_cover_every_ingested_chunk(tmp_path: Path, monkeypatch):
+    """The port lists every open chunk id in id order and reads any slice of them; [] on an absent collection."""
     from tests.integration.conftest import make_real_pipeline
 
     store, pipeline = await make_real_pipeline(tmp_path, monkeypatch)
@@ -132,23 +132,28 @@ async def test_sample_chunk_texts_returns_limit_n(tmp_path: Path, monkeypatch):
     assert r.status == "ok"
     total_chunks = r.chunks_created
 
-    # Precondition: file must produce ≥200 chunks for the large-sample test to be meaningful
+    # Precondition: file must produce ≥200 chunks for the large-read test to be meaningful
     assert total_chunks >= 200, (
-        f"Expected ≥200 chunks to exercise sample_chunk_texts limit; got {total_chunks}. "
+        f"Expected ≥200 chunks to exercise the excerpt reads; got {total_chunks}. "
         "Increase the file size if this assertion fails."
     )
 
-    # n=50
-    result_50 = await store.sample_chunk_texts("testcol", sample_size=50)
+    ids = await store.list_chunk_ids("testcol", "default")
+    assert len(ids) == total_chunks
+    doc_part = ids[0].rsplit("-", 1)[0]
+    assert ids == [f"{doc_part}-{i:06d}" for i in range(total_chunks)], "ids come in chunk index order"
+
+    # 50 ids — one excerpt string per id
+    result_50 = await store.read_excerpts("testcol", "default", ids[:50])
     assert isinstance(result_50, list)
     assert len(result_50) == 50
     for item in result_50:
         assert isinstance(item, str)
 
-    # n=200 — must return exactly 200 since total_chunks >= 200
-    result_large = await store.sample_chunk_texts("testcol", sample_size=200)
+    # 200 ids — must return exactly 200 since total_chunks >= 200
+    result_large = await store.read_excerpts("testcol", "default", ids[:200])
     assert len(result_large) == 200
 
-    # Empty collection
-    result_empty = await store.sample_chunk_texts("nonexistent_col")
-    assert result_empty == []
+    # Absent collection
+    assert await store.list_chunk_ids("nonexistent_col", "default") == []
+    assert await store.read_excerpts("nonexistent_col", "default", ids[:5]) == []
