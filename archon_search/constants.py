@@ -52,6 +52,18 @@ OLLAMA_ESTIMATE_MARGIN: Final[float] = 0.20
 # ``LlmCallRequest.max_output_tokens`` should equal it so the reserve covers what the model may produce.
 ANSWER_RESERVE_TOKENS: Final[int] = 1024
 
+# Longest description, in characters (C4 ``maxDescriptionChars``): generated text is trimmed to it and manual text over it
+# is rejected.
+MAX_DESCRIPTION_CHARS: Final[int] = 600
+
+# Most description generation requests that may wait for the process-wide generation slot at once (C4
+# ``maxQueuedGenerations``). Not configurable: a loop over hundreds of collections must not grow an unbounded queue.
+MAX_QUEUED_GENERATIONS: Final[int] = 64
+
+# Caller-side bound, in seconds, on loading a collection's embedder and embedding its description (C11
+# ``embedWaitSeconds``); equal to the embedder cache's waiter bound so one number serves both.
+EMBED_WAIT_SECONDS: Final[int] = 120
+
 # Default namespace used when no explicit namespace is specified.
 DEFAULT_NAMESPACE: str = "default"
 

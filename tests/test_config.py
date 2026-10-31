@@ -1409,6 +1409,145 @@ def test_hyde_config_empty_model(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# BE-17 — DescriptionConfig + [description] TOML loader (C4)
+# ---------------------------------------------------------------------------
+
+
+def test_description_defaults_match_c4(tmp_path: Path) -> None:
+    """Every default equals the C4 contract value; the named constants carry the contract's numbers."""
+    from archon_search.config import DescriptionConfig
+    from archon_search.constants import (
+        DEFAULT_FAST_MODEL,
+        EMBED_WAIT_SECONDS,
+        MAX_DESCRIPTION_CHARS,
+        MAX_QUEUED_GENERATIONS,
+    )
+    from archon_search.embedder_cache import _LOAD_WAIT_TIMEOUT_SECONDS
+
+    for cfg in (DescriptionConfig(), load_config(path=tmp_path / "nonexistent.toml").description):
+        assert cfg.enabled is False
+        assert cfg.provider == "anthropic"
+        assert cfg.model == DEFAULT_FAST_MODEL
+        assert cfg.ollama_base_url == "http://localhost:11434"
+        assert cfg.llama_cpp_base_url == "http://localhost:8080"
+        assert cfg.ollama_context_tokens is None
+        assert cfg.backfill_on_startup is False
+        assert cfg.timeout_seconds == 30.0
+        assert type(cfg.timeout_seconds) is float
+        assert cfg.max_sample_chunks == 100
+        assert cfg.think is None
+        assert cfg.include_restricted_chunks is False
+    assert MAX_DESCRIPTION_CHARS == 600
+    assert MAX_QUEUED_GENERATIONS == 64
+    assert EMBED_WAIT_SECONDS == _LOAD_WAIT_TIMEOUT_SECONDS == 120
+
+
+def test_description_partial_section_keeps_other_defaults(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[description]\nenabled = true\ntimeout_seconds = 45\n", encoding="utf-8")
+    cfg = load_config(path=toml_file).description
+    assert cfg.enabled is True
+    assert cfg.timeout_seconds == 45.0
+    assert type(cfg.timeout_seconds) is float
+    assert cfg.provider == "anthropic"
+    assert cfg.max_sample_chunks == 100
+    assert cfg.think is None
+
+
+def test_description_text_keys_are_stripped_plain_strings(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text(
+        '[description]\nprovider = " ollama "\nmodel = "  m1  "\n'
+        'ollama_base_url = "  http://o:1  "\nllama_cpp_base_url = " http://l:2 "\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(path=toml_file).description
+    assert (cfg.provider, cfg.model, cfg.ollama_base_url, cfg.llama_cpp_base_url) == (
+        "ollama",
+        "m1",
+        "http://o:1",
+        "http://l:2",
+    )
+    assert {type(v) for v in (cfg.provider, cfg.model, cfg.ollama_base_url, cfg.llama_cpp_base_url)} == {str}
+
+
+def test_description_toml_all_keys(tmp_path: Path) -> None:
+    """Every [description] key loads; `claude_cli` is a registry provider."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text(
+        "[description]\nenabled = true\nprovider = \"claude_cli\"\nmodel = \"m1\"\n"
+        "ollama_base_url = \"http://o:1\"\nllama_cpp_base_url = \"http://l:2\"\nollama_context_tokens = 8192\n"
+        "backfill_on_startup = true\ntimeout_seconds = 45\nmax_sample_chunks = 7\nthink = false\n"
+        "include_restricted_chunks = true\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(path=toml_file).description
+    assert (cfg.enabled, cfg.provider, cfg.model) == (True, "claude_cli", "m1")
+    assert (cfg.ollama_base_url, cfg.llama_cpp_base_url, cfg.ollama_context_tokens) == ("http://o:1", "http://l:2", 8192)
+    assert (cfg.backfill_on_startup, cfg.timeout_seconds, cfg.max_sample_chunks) == (True, 45.0, 7)
+    assert cfg.think is False
+    assert cfg.include_restricted_chunks is True
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("true", True), ("false", False), ('"default"', None)])
+def test_think_accepts_default_true_false_and_rejects_other(tmp_path: Path, raw: str, expected: bool | None) -> None:
+    """`think` is a TOML bool or the text `default` (None: send no thinking control)."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text(f"[description]\nthink = {raw}\n", encoding="utf-8")
+    assert load_config(path=toml_file).description.think is expected
+
+
+@pytest.mark.parametrize("raw", ['"yes"', '"true"', '"DEFAULT"', '""', "1", "0", "1.5", "[true]"])
+def test_think_rejects_other_values(tmp_path: Path, raw: str) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text(f"[description]\nthink = {raw}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=r"\[description\]\.think"):
+        load_config(path=toml_file)
+
+
+_DESCRIPTION_WRONG_TYPES = [
+    ("enabled", '"yes"'),
+    ("enabled", "1"),
+    ("backfill_on_startup", '"no"'),
+    ("include_restricted_chunks", "1"),
+    ("provider", "5"),
+    ("provider", '"gemini"'),
+    ("provider", '["anthropic"]'),
+    ("provider", "{ a = 1 }"),
+    ("model", "5"),
+    ("model", '""'),
+    ("ollama_base_url", "5"),
+    ("ollama_base_url", '"  "'),
+    ("llama_cpp_base_url", "[1]"),
+    ("llama_cpp_base_url", '""'),
+    ("ollama_context_tokens", '"4096"'),
+    ("ollama_context_tokens", "0"),
+    ("ollama_context_tokens", "4096.5"),
+    ("ollama_context_tokens", "true"),
+    ("timeout_seconds", "true"),
+    ("timeout_seconds", "[1]"),
+    ("timeout_seconds", '"soon"'),
+    ("timeout_seconds", "0"),
+    ("timeout_seconds", "-1"),
+    ("timeout_seconds", "inf"),
+    ("max_sample_chunks", "0"),
+    ("max_sample_chunks", "-3"),
+    ("max_sample_chunks", "2.5"),
+    ("max_sample_chunks", '"100"'),
+    ("max_sample_chunks", "true"),
+]
+
+
+@pytest.mark.parametrize(("key", "raw"), _DESCRIPTION_WRONG_TYPES)
+def test_description_section_rejects_wrong_types(tmp_path: Path, key: str, raw: str) -> None:
+    """Each [description] key rejects a wrong type or out-of-range value at load, naming the key."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text(f"[description]\n{key} = {raw}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=rf"\[description\]\.{key}"):
+        load_config(path=toml_file)
+
+
+# ---------------------------------------------------------------------------
 # C5 Task 1.1 — RAGFusionConfig dataclass + [rag_fusion] TOML loader
 # ---------------------------------------------------------------------------
 
@@ -1620,6 +1759,7 @@ _FLOAT_KEYS = [
     ("routing", "routing_description_weight", "routing_description_weight"),
     ("hyde", "timeout_seconds", "[hyde].timeout_seconds"),
     ("rag_fusion", "timeout_seconds", "[rag_fusion].timeout_seconds"),
+    ("description", "timeout_seconds", "[description].timeout_seconds"),
     ("ingest", "parse_timeout_seconds", "[ingest].parse_timeout_seconds"),
     ("ingest", "parse_timeout_seconds_per_mb", "[ingest].parse_timeout_seconds_per_mb"),
     ("graph", "extraction_timeout_seconds", "[graph].extraction_timeout_seconds"),

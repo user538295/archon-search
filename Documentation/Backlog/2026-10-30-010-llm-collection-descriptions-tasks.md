@@ -374,7 +374,7 @@ flowchart LR
         - #manual_test — Large community on a real claude login — graph enrichment on `claude_cli` with a very large prompt (non-automatable: needs a real `claude` login)
 
 ### Phase 4 · Get a generated description from a local model after the first ingest *(the walking skeleton of the description feature: config by hand, stored state, sampling, one generation, background lifecycle, read exposure, SDK gone)*
-- [ ] **BE-17** — Add `DescriptionConfig` and its parser in `config.py` (C4 keys, `think` as bool or `default`, `timeout_seconds` 30, `max_sample_chunks` 100) with the named constants `maxDescriptionChars` 600, `maxQueuedGenerations` 64, `embedWaitSeconds` 120 #backend-role
+- [x] **BE-17** — Add `DescriptionConfig` and its parser in `config.py` (C4 keys, `think` as bool or `default`, `timeout_seconds` 30, `max_sample_chunks` 100) with the named constants `maxDescriptionChars` 600, `maxQueuedGenerations` 64, `embedWaitSeconds` 120 #backend-role
     - Entity · 3.0h
     - needs BE-1 · completes C4
     - Tests

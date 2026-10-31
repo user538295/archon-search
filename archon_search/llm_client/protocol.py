@@ -34,8 +34,8 @@ class ThinkSetting(enum.Enum):
 
     ``DEFAULT`` sends no thinking control at all. Only description generation exposes this setting;
     providers with no verified switch (``anthropic``, ``openai``, ``claude_cli``) ignore a non-default
-    value. This is the call-level value, not the config file's: the ``[description].think`` parser
-    maps ``default``, ``true`` and ``false`` onto it explicitly.
+    value. This is the call-level value, not the config file's: the consumer of ``[description].think`` (stored as
+    ``true``, ``false`` or ``None`` for ``default``) maps it onto this enum.
     """
 
     DEFAULT = "default"

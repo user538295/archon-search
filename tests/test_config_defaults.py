@@ -182,6 +182,20 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "llama_cpp_base_url": "http://localhost:8080",
             "ollama_context_tokens": None,
         },
+        # [description]
+        "description": {
+            "enabled": False,
+            "provider": "anthropic",
+            "model": DEFAULT_FAST_MODEL,
+            "ollama_base_url": "http://localhost:11434",
+            "llama_cpp_base_url": "http://localhost:8080",
+            "ollama_context_tokens": None,
+            "backfill_on_startup": False,
+            "timeout_seconds": 30.0,
+            "max_sample_chunks": 100,
+            "think": None,
+            "include_restricted_chunks": False,
+        },
         # [jobs]
         "jobs": {
             "max_concurrent_bulk": 1,
@@ -282,6 +296,24 @@ def test_config_defaults_keyset_includes_context_key(_isolated_env: None, tmp_pa
     section_defaults = dataclasses.asdict(_default_config(tmp_path))[section]
     assert "ollama_context_tokens" in section_defaults
     assert section_defaults["ollama_context_tokens"] is None
+
+
+def test_config_defaults_keyset_includes_description(_isolated_env: None, tmp_path: Path) -> None:
+    """Trip-wire: the [description] section is listed with exactly the C4 keys."""
+    section_defaults = dataclasses.asdict(_default_config(tmp_path))["description"]
+    assert set(section_defaults) == {
+        "enabled",
+        "provider",
+        "model",
+        "ollama_base_url",
+        "llama_cpp_base_url",
+        "ollama_context_tokens",
+        "backfill_on_startup",
+        "timeout_seconds",
+        "max_sample_chunks",
+        "think",
+        "include_restricted_chunks",
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -93,6 +93,32 @@ class RAGFusionConfig:
     ollama_context_tokens: int | None = None
 
 
+_DESCRIPTION_DEFAULT_TIMEOUT_SECONDS: float = 30.0
+_DESCRIPTION_DEFAULT_MAX_SAMPLE_CHUNKS: int = 100
+
+
+@dataclass
+class DescriptionConfig:
+    """``[description]`` (C4): LLM-generated collection descriptions. Mirrors ``[hyde]`` except ``timeout_seconds`` and
+    the missing ``max_requests_per_minute`` (generations are capped by a process-wide concurrency limit instead)."""
+
+    enabled: bool = False
+    provider: str = "anthropic"
+    model: str = field(default_factory=lambda: DEFAULT_FAST_MODEL)
+    ollama_base_url: str = OLLAMA_BASE_URL_DEFAULT
+    llama_cpp_base_url: str = LLAMA_CPP_BASE_URL_DEFAULT
+    ollama_context_tokens: int | None = None
+    backfill_on_startup: bool = False
+    timeout_seconds: float = _DESCRIPTION_DEFAULT_TIMEOUT_SECONDS
+    """Per attempt; a cold local model can need more than the default."""
+    max_sample_chunks: int = _DESCRIPTION_DEFAULT_MAX_SAMPLE_CHUNKS
+    """Ceiling on the chunks sampled for one description."""
+    think: bool | None = None
+    """File values: ``true``, ``false`` and ``default`` (``None``: send no thinking control)."""
+    include_restricted_chunks: bool = False
+    """Local providers only: sample chunks that carry an ACL too. Ignored (with a startup WARNING) elsewhere."""
+
+
 @dataclass
 class TelemetryConfig:
     enabled: bool = False
@@ -370,6 +396,8 @@ class SearchConfig:
     hyde: HyDEConfig = field(default_factory=HyDEConfig)
     # [rag_fusion]
     rag_fusion: RAGFusionConfig = field(default_factory=RAGFusionConfig)
+    # [description]
+    description: DescriptionConfig = field(default_factory=DescriptionConfig)
     # [jobs]
     jobs: JobsConfig = field(default_factory=JobsConfig)
     # [backup]
@@ -608,6 +636,28 @@ def validate_document(doc: tomlkit.TOMLDocument, *, setting: tuple[str, str] | N
     copy = tomlkit.parse(tomlkit.dumps(doc))
     strip_removed_keys(copy)
     _apply_toml(SearchConfig(), copy)
+
+
+def _coerce_nonempty_str(raw: object, field_name: str) -> str:
+    """Return the stripped string *raw*; a non-string or blank value is a ``ConfigError`` naming *field_name*."""
+    if not isinstance(raw, str):
+        raise ConfigError(f"Expected string for '{field_name}', got {type(raw).__name__}")
+    value = raw.strip()
+    if not value:
+        raise ConfigError(f"{field_name} must be a non-empty string")
+    return value
+
+
+_THINK_DEFAULT_TEXT = "default"
+
+
+def _coerce_think(raw: object, field_name: str) -> bool | None:
+    """``true`` / ``false`` as given, the text ``default`` as ``None``; anything else is rejected."""
+    if isinstance(raw, bool):
+        return raw
+    if raw == _THINK_DEFAULT_TEXT:
+        return None
+    raise ConfigError(f"{field_name} must be true, false or \"{_THINK_DEFAULT_TEXT}\", got {raw!r}")
 
 
 def _coerce_str(value: object, field_name: str) -> str:
@@ -1064,6 +1114,52 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             rag_fusion_cfg["ollama_context_tokens"], "[rag_fusion].ollama_context_tokens", minimum=1
         )
     config.rag_fusion = rag_fusion
+
+    description_cfg = doc.get("description", {})
+    description = DescriptionConfig()
+    if "enabled" in description_cfg:
+        description.enabled = _coerce_bool(description_cfg["enabled"], "[description].enabled")
+    if "provider" in description_cfg:
+        provider = _coerce_nonempty_str(description_cfg["provider"], "[description].provider")
+        if provider not in _VALID_PROVIDERS:
+            raise ConfigError(
+                f"[description].provider must be one of {sorted(_VALID_PROVIDERS)}, got {provider!r}"
+            )
+        description.provider = provider
+    if "model" in description_cfg:
+        description.model = _coerce_nonempty_str(description_cfg["model"], "[description].model")
+    if "ollama_base_url" in description_cfg:
+        description.ollama_base_url = _coerce_nonempty_str(
+            description_cfg["ollama_base_url"], "[description].ollama_base_url"
+        )
+    if "llama_cpp_base_url" in description_cfg:
+        description.llama_cpp_base_url = _coerce_nonempty_str(
+            description_cfg["llama_cpp_base_url"], "[description].llama_cpp_base_url"
+        )
+    if "ollama_context_tokens" in description_cfg:
+        description.ollama_context_tokens = _coerce_bounded_int(
+            description_cfg["ollama_context_tokens"], "[description].ollama_context_tokens", minimum=1
+        )
+    if "backfill_on_startup" in description_cfg:
+        description.backfill_on_startup = _coerce_bool(
+            description_cfg["backfill_on_startup"], "[description].backfill_on_startup"
+        )
+    if "timeout_seconds" in description_cfg:
+        timeout_seconds = _coerce_float(description_cfg["timeout_seconds"], "[description].timeout_seconds")
+        if timeout_seconds <= 0:
+            raise ConfigError(f"[description].timeout_seconds must be > 0, got {timeout_seconds}")
+        description.timeout_seconds = timeout_seconds
+    if "max_sample_chunks" in description_cfg:
+        description.max_sample_chunks = _coerce_bounded_int(
+            description_cfg["max_sample_chunks"], "[description].max_sample_chunks", minimum=1
+        )
+    if "think" in description_cfg:
+        description.think = _coerce_think(description_cfg["think"], "[description].think")
+    if "include_restricted_chunks" in description_cfg:
+        description.include_restricted_chunks = _coerce_bool(
+            description_cfg["include_restricted_chunks"], "[description].include_restricted_chunks"
+        )
+    config.description = description
 
     jobs_cfg = doc.get("jobs", {})
     jobs = JobsConfig()
