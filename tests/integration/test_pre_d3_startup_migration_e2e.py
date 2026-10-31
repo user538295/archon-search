@@ -79,7 +79,7 @@ def test_pre_d3_startup_applies_in_place_migrations_e2e(
     # Step 1: seed a pre-D3 meta table (no schema_version or default_ttl_seconds columns) with one row.
     # The schema mirrors _meta_schema() minus the fields added after D3.
     pre_d3_schema = pa.schema(
-        [f for f in SearchStore._meta_schema() if f.name not in ("schema_version", "default_ttl_seconds", "community_rebuild_job_id", "metadata_reindex_job_id")]
+        [f for f in SearchStore._meta_schema() if f.name not in ("schema_version", "default_ttl_seconds", "community_rebuild_job_id", "metadata_reindex_job_id", "description_source", "description_status")]
     )
 
     col_path = tmp_path / "pre_d3_docs"
@@ -294,6 +294,8 @@ def test_apply_in_place_migrations_bumped_schema_version_e2e(
             "needs_recompute": False,
             "schema_version": 0,
             "default_ttl_seconds": None,
+            "description_source": None,
+            "description_status": None,
         }
         await db.create_table(
             "_archon_collection_meta",
@@ -377,3 +379,86 @@ def test_apply_in_place_migrations_bumped_schema_version_e2e(
         f"apply_in_place_migrations must set schema_version to patched STORE_SCHEMA_VERSION=1; "
         f"got schema_version={final_version}"
     )
+
+
+def test_old_store_gets_columns_and_default_ttl_at_startup(tmp_path, monkeypatch) -> None:
+    """A store whose metadata table lacks the description and TTL columns starts and accepts a metadata write.
+
+    S78: the startup migrations add ``description_source``, ``description_status`` and ``default_ttl_seconds``;
+    a pre-existing description reads ``generated`` / ``ok``; ``POST /collections/`` (a metadata write, which
+    carries every column) succeeds instead of failing with ``Field ... not found in target schema``.
+    """
+    import lancedb
+    import pyarrow as pa
+
+    from archon_search.store import SearchStore
+    from archon_search.sync import path_to_collection_name
+
+    db_path = str(tmp_path / "db")
+    missing = ("default_ttl_seconds", "description_source", "description_status")
+    old_schema = pa.schema([f for f in SearchStore._meta_schema() if f.name not in missing])
+
+    described_path = tmp_path / "described_docs"
+    described_path.mkdir()
+    described_name = path_to_collection_name(str(described_path))
+
+    async def _seed() -> None:
+        db = await lancedb.connect_async(db_path)
+        old_row = {
+            "name": described_name,
+            "description": "notes about cats",
+            "centroid_json": "",
+            "description_embedding_json": "",
+            "doc_count": 0,
+            "chunk_count": 0,
+            "active_embedding_model": "",
+            "pending_embedding_model": None,
+            "needs_reindex": False,
+            "reindex_job_id": None,
+            "community_rebuild_job_id": None,
+            "metadata_reindex_job_id": None,
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": 0,
+            "namespace": "default",
+            "centroid_sum_json": None,
+            "mutations_since_recompute": 0,
+            "needs_recompute": False,
+            "schema_version": 0,
+        }
+        await db.create_table("_archon_collection_meta", data=[old_row], schema=old_schema)
+
+    asyncio.run(_seed())
+
+    new_path = tmp_path / "new_docs"
+    new_path.mkdir()
+    new_name = path_to_collection_name(str(new_path))
+
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
+        headers = {"Authorization": f"Bearer {api_key}"}
+        resp = client.post("/collections/", json={"path": str(new_path)}, headers=headers)
+        assert resp.status_code in (200, 201, 202), resp.text
+
+    async def _read() -> tuple[list[str], dict[str, dict]]:
+        db = await lancedb.connect_async(db_path)
+        table = await db.open_table("_archon_collection_meta")
+        rows = {r["name"]: r for r in await table.query().to_list()}
+        return (await table.schema()).names, rows
+
+    names, rows = asyncio.run(_read())
+    for column in missing:
+        assert column in names
+    assert new_name in rows, "the metadata write for the new collection must have landed"
+    assert rows[described_name]["description"] == "notes about cats"
+
+    async def _read_through_the_store():
+        store = SearchStore(db_path)
+        await store.connect()
+        try:
+            return await store.get_collection_meta(described_name)
+        finally:
+            await store.disconnect()
+
+    described = asyncio.run(_read_through_the_store())
+    assert described is not None
+    assert (described.description_source, described.description_status) == ("generated", "ok")

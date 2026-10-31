@@ -255,7 +255,6 @@ async def test_a_collection_a_pre_ownership_build_created_keeps_its_namespace_ow
     )
 
     await store._run_startup_migrations()
-    await store.migrate_default_ttl_seconds()  # applied by the in-place migration flow, not at startup
 
     await store.assert_collection_access("legacy-ns", _OWNER)
     await store.assert_collection_access("legacy-null", DEFAULT_NAMESPACE)

@@ -165,6 +165,10 @@ async def test_schema_version_upgrade_0_to_1_runs_both_migrations(tmp_path):
         pa.field("mutations_since_recompute", pa.int64(), nullable=True),
         pa.field("needs_recompute", pa.bool_(), nullable=True),
         pa.field("schema_version", pa.int64(), nullable=True),
+        # description_source / description_status are added by a startup migration at every server start
+        # (not a MigrationSpec), so a current-binary store has them even at v0.
+        pa.field("description_source", pa.utf8(), nullable=True),
+        pa.field("description_status", pa.utf8(), nullable=True),
         # No default_ttl_seconds
     ])
 
@@ -196,6 +200,8 @@ async def test_schema_version_upgrade_0_to_1_runs_both_migrations(tmp_path):
         "mutations_since_recompute": None,
         "needs_recompute": None,
         "schema_version": 0,
+        "description_source": None,
+        "description_status": None,
     }])
 
     # Now open the store and apply migrations

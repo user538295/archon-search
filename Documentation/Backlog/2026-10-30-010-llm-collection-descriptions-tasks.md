@@ -382,7 +382,7 @@ flowchart LR
         - #unit_test — `test_think_accepts_default_true_false_and_rejects_other` — other values are rejected at load
         - #unit_test — `test_description_section_rejects_wrong_types` — the type-reject table in `test_config.py` covers the section
         - #unit_test — `test_config_defaults_keyset_includes_description` — the defaults trip-wire lists the section
-- [ ] **BE-18** — Add `description_source` and `description_status` to `CollectionMeta` and the store: schema, row reader with legacy defaults, both `merge_insert` writer dicts, the 10 store and 2 pipeline `CollectionMeta(` sites moved to `dataclasses.replace`, `_migrate_description_columns` plus `migrate_default_ttl_seconds()` in `_run_startup_migrations`, the eval runner openers, the `STORE_SCHEMA_VERSION` comment; extend the stale old-schema builders in `test_store.py` and `test_pre_d3_startup_migration_e2e.py`; `installer._bootstrap_collections` calls the migrations too (it has no production caller today; nothing is deleted) #backend-role
+- [x] **BE-18** — Add `description_source` and `description_status` to `CollectionMeta` and the store: schema, row reader with legacy defaults, both `merge_insert` writer dicts, the 10 store and 2 pipeline `CollectionMeta(` sites moved to `dataclasses.replace`, `_migrate_description_columns` plus `migrate_default_ttl_seconds()` in `_run_startup_migrations`, the eval runner openers, the `STORE_SCHEMA_VERSION` comment; extend the stale old-schema builders in `test_store.py` and `test_pre_d3_startup_migration_e2e.py`; `installer._bootstrap_collections` calls the migrations too (it has no production caller today; nothing is deleted) #backend-role
     - Entity · 6.0h
     - needs K1 · completes S42, S73, S78
     - Tests

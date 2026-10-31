@@ -65,9 +65,12 @@ These are the rules that are not discoverable by reading one file. Everything el
   `store_filters.py`), never f-strings. `tests/test_no_fstring_sql.py` fails the build otherwise.
 - **`STORE_SCHEMA_VERSION` bump policy:** increment it in `store.py` whenever a structural change to the
   shared `_schema()` (chunk table) or `_meta_schema()` (collection metadata) requires migrating existing
-  rows, and add the matching `MigrationSpec` to `SearchStore._all_migrations()`. **Exception:**
-  per-collection chunk-table-only changes (e.g. `migrate_acl`) do NOT bump it. Current value: `1` —
-  version 1's migrations are NOT applied at startup; operators run `POST /collections/{name}/migrate`.
+  rows, and add the matching `MigrationSpec` to `SearchStore._all_migrations()`. **Exceptions:**
+  per-collection chunk-table-only changes (e.g. `migrate_acl`) and nullable columns added to
+  `_archon_collection_meta` by a startup migration in `_run_startup_migrations()` (`community_rebuild_job_id`,
+  `metadata_reindex_job_id`, `description_source`, `description_status`) do NOT bump it. Current value: `1` —
+  version 1's `migrate_expires_at_and_scopes` is NOT applied at startup (operators run
+  `POST /collections/{name}/migrate`); `migrate_default_ttl_seconds` is also a startup step, so for it the route is a no-op.
 - **Collection/namespace names** may not contain `__` or lead/trail with `_` (`_validate_collection` /
   `_validate_namespace`) — this guards the `_archon_graph_{ns}__{col}_*` graph table names.
 - **All `GraphStore` public methods take `ns` as the LAST parameter.**

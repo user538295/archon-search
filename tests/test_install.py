@@ -440,6 +440,52 @@ class TestBootstrapCollections:
         mock_store.disconnect.assert_called_once()
         assert call_order.index("connect") < call_order.index("sync")
 
+    def test_bootstrap_collections_runs_startup_migrations_between_connect_and_sync(self, tmp_path: Path) -> None:
+        """connect() leaves the store as it is; the bootstrap migrates it before it writes metadata (Q39, S73)."""
+        installer = _make_installer(tmp_path)
+
+        call_order: list[str] = []
+        mock_store = AsyncMock()
+        mock_store.connect.side_effect = lambda: call_order.append("connect")
+        mock_store._run_startup_migrations.side_effect = lambda: call_order.append("migrate")
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = mock_store
+        mock_sync = AsyncMock(side_effect=lambda *a, **kw: call_order.append("sync"))
+
+        with patch("archon_search.install.installer.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync:
+            MockSync.return_value.sync = mock_sync
+            asyncio.run(installer._bootstrap_collections())
+
+        assert call_order == ["connect", "migrate", "sync"]
+
+    def test_bootstrap_collections_migrates_an_old_store(self, tmp_path: Path) -> None:
+        """A store without the description and TTL columns gains them through the installer's bootstrap (S73)."""
+        import lancedb
+        import pyarrow as pa
+
+        from archon_search.store import SearchStore
+
+        installer = _make_installer(tmp_path)
+        db_path = tmp_path / "old-db"
+        missing = ("default_ttl_seconds", "description_source", "description_status")
+
+        async def _seed_and_bootstrap() -> list[str]:
+            db = await lancedb.connect_async(str(db_path))
+            old_schema = pa.schema([f for f in SearchStore._meta_schema() if f.name not in missing])
+            await db.create_table("_archon_collection_meta", schema=old_schema)
+            mock_pipeline = MagicMock()
+            mock_pipeline.store = SearchStore(db_path)
+            with patch("archon_search.install.installer.create_pipeline", return_value=mock_pipeline), \
+                 patch("archon_search.sync.SearchCollectionSync") as MockSync:
+                MockSync.return_value.sync = AsyncMock()
+                await installer._bootstrap_collections()
+            return (await (await db.open_table("_archon_collection_meta")).schema()).names
+
+        names = asyncio.run(_seed_and_bootstrap())
+        for column in missing:
+            assert column in names
+
     def test_bootstrap_collections_disconnects_on_sync_failure(self, tmp_path: Path) -> None:
         """disconnect() called even when sync raises."""
         installer = _make_installer(tmp_path)

@@ -1372,6 +1372,8 @@ async def test_old_schema_upsert_preserves_new_columns(tmp_path: Path) -> None:
         table = await db.open_table("_archon_collection_meta")
         await table.add_columns(pa.field("community_rebuild_job_id", pa.utf8(), nullable=True))
         await table.add_columns(pa.field("metadata_reindex_job_id", pa.utf8(), nullable=True))
+        # The description columns are added by a startup migration at every server start.
+        await store._migrate_description_columns()
 
         # Write B5 values to row_a via update_collection_meta
         meta_a = CollectionMeta(
@@ -6960,7 +6962,10 @@ async def test_run_startup_migrations_applies_in_place_on_startup(tmp_path: Path
         db = store._require_connected()
         # Seed a pre-D3 meta table without schema_version or default_ttl_seconds
         old_schema = pa.schema(
-            [f for f in SearchStore._meta_schema() if f.name not in ("schema_version", "default_ttl_seconds")]
+            [
+                f for f in SearchStore._meta_schema()
+                if f.name not in ("schema_version", "default_ttl_seconds", "description_source", "description_status")
+            ]
         )
         await db.create_table("_archon_collection_meta", schema=old_schema)
 
@@ -6969,7 +6974,9 @@ async def test_run_startup_migrations_applies_in_place_on_startup(tmp_path: Path
 
         # schema_version column must now be present
         tbl = await db.open_table("_archon_collection_meta")
-        assert "schema_version" in (await tbl.schema()).names
+        assert {"schema_version", "default_ttl_seconds", "description_source", "description_status"} <= set(
+            (await tbl.schema()).names
+        )
 
         # No pending migrations should remain after startup (no collections seeded,
         # so pending_migrations returns [] by definition — collection meta is absent).
@@ -6981,7 +6988,7 @@ async def test_run_startup_migrations_applies_in_place_on_startup(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
-    """_run_startup_migrations() calls all 9 migrations in the correct order, then reports tables without a meta row."""
+    """_run_startup_migrations() calls all 11 migrations in the correct order, then reports tables without a meta row."""
     from archon_search.store import SearchStore
 
     call_order: list[str] = []
@@ -7000,6 +7007,8 @@ async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
     store._migrate_schema_version = make_recorder("_migrate_schema_version")
     store._migrate_community_rebuild_job_id = make_recorder("_migrate_community_rebuild_job_id")
     store._migrate_metadata_reindex_job_id = make_recorder("_migrate_metadata_reindex_job_id")
+    store.migrate_default_ttl_seconds = make_recorder("migrate_default_ttl_seconds")
+    store._migrate_description_columns = make_recorder("_migrate_description_columns")
     store.migrate_acl_provenance = make_recorder("migrate_acl_provenance")
     store._log_tables_without_meta = make_recorder("_log_tables_without_meta")
 
@@ -7014,6 +7023,8 @@ async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
         "_migrate_schema_version",
         "_migrate_community_rebuild_job_id",
         "_migrate_metadata_reindex_job_id",
+        "migrate_default_ttl_seconds",
+        "_migrate_description_columns",
         "migrate_acl_provenance",
         "_log_tables_without_meta",
     ], f"Unexpected call order: {call_order}"

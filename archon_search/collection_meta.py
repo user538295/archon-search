@@ -3,8 +3,18 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import datetime
+from typing import Literal, get_args
 
 from archon_search.constants import DEFAULT_NAMESPACE
+
+# C3: where a description came from, and the outcome of the last attempt to write one. ``pending`` is a memory-only
+# overlay owned by the description lifecycle and applied at the API edge: the store never holds or reports it.
+DescriptionSource = Literal["generated", "manual"]
+DescriptionStoredStatus = Literal["ok", "failed"]
+DESCRIPTION_SOURCE_GENERATED: DescriptionSource = "generated"
+DESCRIPTION_STATUS_OK: DescriptionStoredStatus = "ok"
+DESCRIPTION_SOURCES: tuple[str, ...] = get_args(DescriptionSource)
+DESCRIPTION_STORED_STATUSES: tuple[str, ...] = get_args(DescriptionStoredStatus)
 
 
 @dataclasses.dataclass
@@ -36,3 +46,8 @@ class CollectionMeta:
     """E2a: optional default TTL in seconds for new chunks in this collection.
     None = no automatic expiry. Valid range when set: [1, 2_147_483_647].
     Read by the pipeline at ingest time (BE-3); set via PATCH route (BE-4)."""
+    description_source: DescriptionSource | None = None
+    """C3: ``generated`` or ``manual``; None = no description. A legacy row with a description reads ``generated``."""
+    description_status: DescriptionStoredStatus | None = None
+    """C3: stored outcome of the last description attempt, ``ok`` or ``failed``; None = no description and no failed
+    attempt. A legacy row with a description reads ``ok``. ``pending`` is never stored."""

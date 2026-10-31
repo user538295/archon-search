@@ -8,7 +8,7 @@ import logging
 import math
 import os
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
@@ -3954,51 +3954,28 @@ class SearchPipeline:
 
         vectors = await self.store.get_all_vectors(collection)
 
-        description = existing_meta.description if existing_meta else None
-        last_described = existing_meta.last_described if existing_meta else None
-        described_at = existing_meta.described_at_doc_count if existing_meta else None
-
-        # Determine C1 fields: preserve from existing meta, or use defaults for new collections.
-        if existing_meta is not None:
-            active_embedding_model = existing_meta.active_embedding_model
-            pending_embedding_model = existing_meta.pending_embedding_model
-            needs_reindex = existing_meta.needs_reindex
-            reindex_job_id = existing_meta.reindex_job_id
-            community_rebuild_job_id = existing_meta.community_rebuild_job_id
-            metadata_reindex_job_id = existing_meta.metadata_reindex_job_id
-        else:
-            active_embedding_model = global_embedder.model_name
-            pending_embedding_model = None
-            needs_reindex = False
-            reindex_job_id = None
-            community_rebuild_job_id = None
-            metadata_reindex_job_id = None
+        # Start from the stored row (a new collection from the defaults), so every field the recompute does not
+        # change, including the description state (C3), survives by construction.
+        base = existing_meta or CollectionMeta(
+            name=collection,
+            namespace=namespace,
+            active_embedding_model=global_embedder.model_name,
+            schema_version=STORE_SCHEMA_VERSION,
+        )
 
         if not vectors:
             if force or existing_meta is not None:
-                doc_count = await self.store.count_documents(collection)
-                meta = CollectionMeta(
-                    name=collection,
+                meta = replace(
+                    base,
                     centroid=None,
                     centroid_sum=None,
-                    description=description,
-                    doc_count=doc_count,
+                    doc_count=await self.store.count_documents(collection),
                     chunk_count=0,
-                    active_embedding_model=active_embedding_model,
-                    pending_embedding_model=pending_embedding_model,
-                    needs_reindex=needs_reindex,
-                    reindex_job_id=reindex_job_id,
-                    community_rebuild_job_id=community_rebuild_job_id,
-                    metadata_reindex_job_id=metadata_reindex_job_id,
                     last_indexed=datetime.now(UTC),
-                    last_described=last_described,
-                    described_at_doc_count=described_at,
                     namespace=namespace,
                     description_embedding=None,
                     mutations_since_recompute=0,
                     needs_recompute=False,
-                    schema_version=existing_meta.schema_version if existing_meta else STORE_SCHEMA_VERSION,
-                    default_ttl_seconds=existing_meta.default_ttl_seconds if existing_meta else None,
                 )
                 await self.store.update_collection_meta(meta)
             return
@@ -4008,33 +3985,22 @@ class SearchPipeline:
         centroid = [x / chunk_count for x in centroid_sum]
         doc_count = await self.store.count_documents(collection)
 
-        if description is not None:
-            description_embedding = await global_embedder.embed_one(description)
+        if base.description is not None:
+            description_embedding = await global_embedder.embed_one(base.description)
         else:
             description_embedding = None
 
-        meta = CollectionMeta(
-            name=collection,
+        meta = replace(
+            base,
             centroid=centroid,
             centroid_sum=centroid_sum,
-            description=description,
             doc_count=doc_count,
             chunk_count=chunk_count,
-            active_embedding_model=active_embedding_model,
-            pending_embedding_model=pending_embedding_model,
-            needs_reindex=needs_reindex,
-            reindex_job_id=reindex_job_id,
-            community_rebuild_job_id=community_rebuild_job_id,
-            metadata_reindex_job_id=metadata_reindex_job_id,
             last_indexed=datetime.now(UTC),
-            last_described=last_described,
-            described_at_doc_count=described_at,
             namespace=namespace,
             description_embedding=description_embedding,
             mutations_since_recompute=0,
             needs_recompute=False,
-            schema_version=existing_meta.schema_version if existing_meta else STORE_SCHEMA_VERSION,
-            default_ttl_seconds=existing_meta.default_ttl_seconds if existing_meta else None,
         )
         await self.store.update_collection_meta(meta)
 

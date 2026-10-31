@@ -374,6 +374,7 @@ class BaseInstaller(ABC):
         pipeline = create_pipeline(self.cfg)
         try:
             await pipeline.store.connect()
+            await pipeline.store._run_startup_migrations()
             state_store = IndexingStateStore(Path(self.cfg.db_path).expanduser())
             sync = SearchCollectionSync(
                 pipeline,

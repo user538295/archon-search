@@ -14,7 +14,7 @@ Both are opt-in per ingest (or per collection default), and both require a one-t
 
 ## Prerequisites: schema migration
 
-TTL and scoping add two columns to the chunk table and one to the collection-metadata table. These are **not** applied automatically at server startup — you must run the in-place migration for each collection after upgrading. This is the same `POST /collections/{name}/migrate` flow described in the migration guide; see [../MigrationGuide/05_data_migration.md](../MigrationGuide/05_data_migration.md) for the full upgrade procedure, backup guidance, and rollback notes.
+TTL and scoping add two columns to the chunk table and one to the collection-metadata table. The metadata column (`default_ttl_seconds`) is added at every server start; the chunk-table columns (`expires_at`, `scopes`) are **not** applied automatically at server startup — you must run the in-place migration for each collection after upgrading. This is the same `POST /collections/{name}/migrate` flow described in the migration guide; see [../MigrationGuide/05_data_migration.md](../MigrationGuide/05_data_migration.md) for the full upgrade procedure, backup guidance, and rollback notes.
 
 ```bash
 # Migrate a collection:

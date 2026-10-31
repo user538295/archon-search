@@ -632,6 +632,7 @@ async def _build_pipeline_with_eval_backends(
 
     store = SearchStore(db_path)
     await store.connect()
+    await store._run_startup_migrations()
 
     graph_expander = None
     if backend == "live":
@@ -802,6 +803,7 @@ async def _build_code_lane_pipeline(
 
     store = SearchStore(db_path)
     await store.connect()
+    await store._run_startup_migrations()
 
     embedder = Embedder(EvalEmbedderBackend())
     reranker = Reranker(EvalRerankerBackend())

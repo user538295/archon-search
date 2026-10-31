@@ -27,6 +27,12 @@ from archon_search._types import (
     normalize_iso_utc,
 )
 from archon_search.acl import ChunkVisibility, is_acl_allowed
+from archon_search.collection_meta import (
+    DESCRIPTION_SOURCE_GENERATED,
+    DESCRIPTION_SOURCES,
+    DESCRIPTION_STATUS_OK,
+    DESCRIPTION_STORED_STATUSES,
+)
 from archon_search.constants import (
     DEFAULT_NAMESPACE,
     INGEST_LOCK_TIMEOUT_S,
@@ -117,7 +123,11 @@ if TYPE_CHECKING:
     import lancedb
     import pyarrow as pa
 
-    from archon_search.collection_meta import CollectionMeta
+    from archon_search.collection_meta import (
+        CollectionMeta,
+        DescriptionSource,
+        DescriptionStoredStatus,
+    )
     from archon_search.config import SearchConfig
     from archon_search.filters import SearchFilters
 
@@ -176,11 +186,17 @@ FTS_OPTIMIZE_REMOVES_DELETED: bool = True  # Plan A; change to False if Plan B a
 
 # Schema version for _archon_collection_meta. Starts at 0 for D3 (infrastructure-only
 # release; no new data migrations ship). Increment by 1 whenever a structural change is
-# made to _meta_schema() or _schema(), and add a corresponding MigrationSpec entry to
-# SearchStore._all_migrations().
-# NOTE: chunk-table-only structural changes (e.g. migrate_acl which adds an acl column
-# to per-collection chunk tables) do NOT bump STORE_SCHEMA_VERSION. Only changes to
-# _meta_schema() or _schema() (the shared chunk-table schema) require a version bump.
+# made to _meta_schema() or _schema() that must be applied per collection by an operator, and
+# add a corresponding MigrationSpec entry to SearchStore._all_migrations().
+# NOTE: this is not the rule the code has followed since E2a. Two kinds of change do NOT bump it:
+#   - chunk-table-only structural changes (e.g. migrate_acl, which adds an acl column to
+#     per-collection chunk tables);
+#   - nullable columns added to _archon_collection_meta by a startup migration, which
+#     _run_startup_migrations() applies at every server start (community_rebuild_job_id,
+#     metadata_reindex_job_id, and description_source/description_status). The version-1
+#     MigrationSpec entries (including migrate_default_ttl_seconds) stay valid for
+#     POST /collections/{name}/migrate; migrate_default_ttl_seconds is now also a startup
+#     migration, so for that spec the POST is a no-op.
 STORE_SCHEMA_VERSION: int = 1
 
 # Number of chunks processed between progress_cb calls in apply_rewrite_migration.
@@ -235,6 +251,51 @@ def _centroid_sum_valid(
     if stored_model != writer_model:
         return False
     return all(math.isfinite(v) for v in centroid_sum)
+
+
+def _stored_description_value(row: dict[str, Any], column: str, allowed: tuple[str, ...]) -> str | None:
+    """The stored value of *column*, or None when it is NULL, empty, or outside the contract (logged)."""
+    value = row.get(column) or None
+    if value is not None and value not in allowed:
+        logger.warning(
+            "Unknown %s %r for collection %r — read as if unset", column, value, row.get("name")
+        )
+        return None
+    return value
+
+
+def _description_state(row: dict[str, Any]) -> tuple[DescriptionSource | None, DescriptionStoredStatus | None]:
+    """Read ``description_source`` / ``description_status`` from a metadata row, with the legacy defaults (C3).
+
+    A row that holds a description but carries no stored source or status (a legacy row, or a NULL from the
+    startup migration) reads ``generated`` / ``ok``; a row without a description reads empty, except that a
+    stored ``failed`` status is kept (a failed attempt on a collection with no description). A stored value
+    outside the contract (a newer build after a rollback) reads as unset, so a writer never meets it.
+    """
+    has_description = bool(row["description"])
+    source = _stored_description_value(row, "description_source", DESCRIPTION_SOURCES)
+    status = _stored_description_value(row, "description_status", DESCRIPTION_STORED_STATUSES)
+    return (
+        source or (DESCRIPTION_SOURCE_GENERATED if has_description else None),
+        status or (DESCRIPTION_STATUS_OK if has_description else None),
+    )
+
+
+def _description_state_columns(meta: CollectionMeta) -> dict[str, str]:
+    """The two description-state keys of a metadata writer dict (empty string = none).
+
+    ``pending`` is memory only and never stored; any value outside the contract is refused rather than written.
+    """
+    for column, value, allowed in (
+        ("description_source", meta.description_source, DESCRIPTION_SOURCES),
+        ("description_status", meta.description_status, DESCRIPTION_STORED_STATUSES),
+    ):
+        if value is not None and value not in allowed:
+            raise ValueError(f"{column} {value!r} cannot be stored; expected one of {allowed}")
+    return {
+        "description_source": meta.description_source or "",
+        "description_status": meta.description_status or "",
+    }
 
 
 def _log_stale_centroid(collection: str, meta: CollectionMeta) -> None:
@@ -739,6 +800,8 @@ class SearchStore:
                 pa.field("needs_recompute", pa.bool_(), nullable=True),
                 pa.field("schema_version", pa.int64(), nullable=True),
                 pa.field("default_ttl_seconds", pa.int64(), nullable=True),
+                pa.field("description_source", pa.utf8(), nullable=True),
+                pa.field("description_status", pa.utf8(), nullable=True),
             ]
         )
 
@@ -994,6 +1057,7 @@ class SearchStore:
         schema_version = int(row.get("schema_version") or 0)
         raw_default_ttl = row.get("default_ttl_seconds")
         default_ttl_seconds = int(raw_default_ttl) if raw_default_ttl is not None else None
+        description_source, description_status = _description_state(row)
         return CollectionMeta(
             name=row["name"],
             description=row["description"] if row["description"] else None,
@@ -1016,6 +1080,8 @@ class SearchStore:
             description_embedding=description_embedding,
             schema_version=schema_version,
             default_ttl_seconds=default_ttl_seconds,
+            description_source=description_source,
+            description_status=description_status,
         )
 
     async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> CollectionMeta | None:
@@ -1369,6 +1435,36 @@ class SearchStore:
             else:
                 raise
 
+    async def _migrate_description_columns(self) -> None:
+        """Idempotent: adds description_source (utf8|null) and description_status (utf8|null) to _archon_collection_meta.
+
+        Existing rows get NULL: the row reader maps a NULL source and status on a row with a description to
+        ``generated`` / ``ok`` and leaves a row without a description empty.
+        """
+        import pyarrow as pa
+
+        db = self._require_connected()
+        all_names: list[str] = await list_all_table_names(db)
+        if _META_TABLE not in all_names:
+            return
+        table = await db.open_table(_META_TABLE)
+        schema = await table.schema()
+        missing = [
+            pa.field(name, pa.utf8(), nullable=True)
+            for name in ("description_source", "description_status")
+            if name not in schema.names
+        ]
+        if not missing:
+            return
+        try:
+            await table.add_columns(missing)
+            logger.info("description migration: added %s to %s", [f.name for f in missing], _META_TABLE)
+        except RuntimeError as exc:
+            if "already exists" in str(exc).lower():
+                logger.warning("Concurrent description migration: columns already added — %s", exc)
+            else:
+                raise
+
     async def migrate_acl_provenance(self) -> None:
         """Idempotent: adds acl_source (utf8|null), acl_sidecar_path (utf8|null), and
         acl_warning (list<utf8>|null) to each per-collection chunk table (G15 migration).
@@ -1499,8 +1595,11 @@ class SearchStore:
         - ``migrate_centroid_sum`` (adds centroid_sum_json and related columns)
         - ``migrate_per_collection_model`` (renames embedding_model → active_embedding_model)
 
-        Also adds the ``schema_version`` column to ``_archon_collection_meta`` (BE-2).
-        All operations are idempotent; calling this method multiple times is safe.
+        Also adds the ``schema_version`` column to ``_archon_collection_meta`` (BE-2), and the nullable metadata columns
+        every metadata writer carries: ``migrate_default_ttl_seconds`` and ``_migrate_description_columns``. A metadata
+        write on a table lacking a column the writer names fails, so every opener of the store that writes metadata
+        calls this right after ``connect()``: the server lifespan, the installer's collection bootstrap and the eval
+        runner. All operations are idempotent; calling this method multiple times is safe.
         """
         await self.migrate_namespace()
         await self.migrate_description_embedding()
@@ -1510,6 +1609,8 @@ class SearchStore:
         await self._migrate_schema_version()
         await self._migrate_community_rebuild_job_id()
         await self._migrate_metadata_reindex_job_id()
+        await self.migrate_default_ttl_seconds()
+        await self._migrate_description_columns()
         await self.migrate_acl_provenance()
         await self._log_tables_without_meta()
 
@@ -1549,7 +1650,8 @@ class SearchStore:
     # Catalog of all known migrations.  Each entry is a MigrationSpec that describes
     # one idempotent structural change.  The five existing migrate_*() methods are
     # formalised here with introduced_at=0 (already applied on all pre-D3 stores).
-    # Future migrations must increment STORE_SCHEMA_VERSION and add a new entry here.
+    # Future migrations that must be applied per collection by an operator increment STORE_SCHEMA_VERSION and add a
+    # new entry here; nullable meta columns added by a startup migration do not (see STORE_SCHEMA_VERSION).
     @staticmethod
     def _all_migrations() -> list[MigrationSpec]:
         """Return the full ordered catalog of MigrationSpec objects."""
@@ -1849,6 +1951,7 @@ class SearchStore:
                             "needs_recompute": meta.needs_recompute,
                             "schema_version": meta.schema_version,
                             "default_ttl_seconds": meta.default_ttl_seconds,
+                            **_description_state_columns(meta),
                         }
                     ]
                 )
@@ -1876,8 +1979,6 @@ class SearchStore:
         Description is cosmetic — stalling indefinitely behind reindex_metadata is
         worse than skipping one description update.
         """
-        from archon_search.collection_meta import CollectionMeta
-
         self._validate_collection(collection)
         db = self._require_connected()
         lock = self.lock_for(collection)
@@ -1890,28 +1991,12 @@ class SearchStore:
             existing = await self._do_read_meta_unlocked(db, collection, namespace=namespace)
             if existing is None:
                 return
-            updated = CollectionMeta(
-                name=existing.name,
+            updated = replace(
+                existing,
                 description=description,
-                description_embedding=existing.description_embedding,
-                centroid=existing.centroid,
-                centroid_sum=existing.centroid_sum,
-                doc_count=existing.doc_count,
-                chunk_count=existing.chunk_count,
-                active_embedding_model=existing.active_embedding_model,
-                pending_embedding_model=existing.pending_embedding_model,
-                needs_reindex=existing.needs_reindex,
-                reindex_job_id=existing.reindex_job_id,
-                community_rebuild_job_id=existing.community_rebuild_job_id,
-                metadata_reindex_job_id=existing.metadata_reindex_job_id,
                 last_indexed=last_indexed,
                 last_described=last_described,
                 described_at_doc_count=described_at_doc_count,
-                namespace=existing.namespace,
-                mutations_since_recompute=existing.mutations_since_recompute,
-                needs_recompute=existing.needs_recompute,
-                schema_version=existing.schema_version,
-                default_ttl_seconds=existing.default_ttl_seconds,
             )
             await self._do_write_meta_unlocked(db, collection, updated)
         finally:
@@ -2017,6 +2102,7 @@ class SearchStore:
                         "needs_recompute": meta.needs_recompute,
                         "schema_version": meta.schema_version,
                         "default_ttl_seconds": meta.default_ttl_seconds,
+                        **_description_state_columns(meta),
                     }
                 ]
             )
@@ -2067,29 +2153,7 @@ class SearchStore:
         if existing is not None:
             if not _batch_vectors_valid(batch_vectors):
                 logger.warning("Collection %r batch vectors contain NaN/inf; skipping centroid maintenance", collection)
-                patched = CollectionMeta(
-                    name=existing.name,
-                    description=existing.description,
-                    description_embedding=existing.description_embedding,
-                    centroid=existing.centroid,
-                    centroid_sum=existing.centroid_sum,
-                    doc_count=existing.doc_count,
-                    chunk_count=existing.chunk_count,
-                    active_embedding_model=existing.active_embedding_model,
-                    pending_embedding_model=existing.pending_embedding_model,
-                    needs_reindex=existing.needs_reindex,
-                    reindex_job_id=existing.reindex_job_id,
-                    community_rebuild_job_id=existing.community_rebuild_job_id,
-                    metadata_reindex_job_id=existing.metadata_reindex_job_id,
-                    last_indexed=existing.last_indexed,
-                    last_described=existing.last_described,
-                    described_at_doc_count=existing.described_at_doc_count,
-                    namespace=existing.namespace,
-                    mutations_since_recompute=existing.mutations_since_recompute,
-                    needs_recompute=True,
-                    schema_version=existing.schema_version,
-                    default_ttl_seconds=existing.default_ttl_seconds,
-                )
+                patched = replace(existing, needs_recompute=True)
                 await self._do_write_meta_unlocked(db, collection, patched)
                 return True
 
@@ -2099,29 +2163,7 @@ class SearchStore:
                 writer_model=embedding_model,
             ):
                 _log_stale_centroid(collection, existing)
-                patched = CollectionMeta(
-                    name=existing.name,
-                    description=existing.description,
-                    description_embedding=existing.description_embedding,
-                    centroid=None,
-                    centroid_sum=None,
-                    doc_count=existing.doc_count,
-                    chunk_count=existing.chunk_count,
-                    active_embedding_model=existing.active_embedding_model,
-                    pending_embedding_model=existing.pending_embedding_model,
-                    needs_reindex=existing.needs_reindex,
-                    reindex_job_id=existing.reindex_job_id,
-                    community_rebuild_job_id=existing.community_rebuild_job_id,
-                    metadata_reindex_job_id=existing.metadata_reindex_job_id,
-                    last_indexed=existing.last_indexed,
-                    last_described=existing.last_described,
-                    described_at_doc_count=existing.described_at_doc_count,
-                    namespace=existing.namespace,
-                    mutations_since_recompute=existing.mutations_since_recompute,
-                    needs_recompute=True,
-                    schema_version=existing.schema_version,
-                    default_ttl_seconds=existing.default_ttl_seconds,
-                )
+                patched = replace(existing, centroid=None, centroid_sum=None, needs_recompute=True)
                 await self._do_write_meta_unlocked(db, collection, patched)
                 return True
 
@@ -2130,28 +2172,13 @@ class SearchStore:
             new_doc_count = existing.doc_count + distinct_doc_count
             new_mutations = existing.mutations_since_recompute + len(batch_vectors)
             new_centroid = [v / new_chunk_count for v in new_sum]
-            new_meta = CollectionMeta(
-                name=existing.name,
-                description=existing.description,
-                description_embedding=existing.description_embedding,
+            new_meta = replace(
+                existing,
                 centroid=new_centroid,
                 centroid_sum=new_sum,
                 doc_count=new_doc_count,
                 chunk_count=new_chunk_count,
-                active_embedding_model=existing.active_embedding_model,
-                pending_embedding_model=existing.pending_embedding_model,
-                needs_reindex=existing.needs_reindex,
-                reindex_job_id=existing.reindex_job_id,
-                community_rebuild_job_id=existing.community_rebuild_job_id,
-                metadata_reindex_job_id=existing.metadata_reindex_job_id,
-                last_indexed=existing.last_indexed,
-                last_described=existing.last_described,
-                described_at_doc_count=existing.described_at_doc_count,
-                namespace=existing.namespace,
                 mutations_since_recompute=new_mutations,
-                needs_recompute=existing.needs_recompute,
-                schema_version=existing.schema_version,
-                default_ttl_seconds=existing.default_ttl_seconds,
             )
             await self._do_write_meta_unlocked(db, collection, new_meta)
             return new_meta.mutations_since_recompute >= self._config.centroid_recompute_threshold or new_meta.needs_recompute
@@ -2191,8 +2218,6 @@ class SearchStore:
     ) -> None:
         # Caller must hold lock_for(collection).
 
-        from archon_search.collection_meta import CollectionMeta
-
         if not del_vectors:
             return
 
@@ -2211,28 +2236,13 @@ class SearchStore:
             writer_model=existing.active_embedding_model or "",
         ):
             _log_stale_centroid(collection, existing)
-            patched = CollectionMeta(
-                name=existing.name,
-                description=existing.description,
-                description_embedding=existing.description_embedding,
+            patched = replace(
+                existing,
                 centroid=None,
                 centroid_sum=None,
-                doc_count=existing.doc_count,
-                chunk_count=existing.chunk_count,
-                active_embedding_model=existing.active_embedding_model,
-                pending_embedding_model=existing.pending_embedding_model,
-                needs_reindex=existing.needs_reindex,
-                reindex_job_id=existing.reindex_job_id,
-                community_rebuild_job_id=existing.community_rebuild_job_id,
-                metadata_reindex_job_id=existing.metadata_reindex_job_id,
                 last_indexed=now,
-                last_described=existing.last_described,
-                described_at_doc_count=existing.described_at_doc_count,
-                namespace=existing.namespace,
                 mutations_since_recompute=new_mutations,
                 needs_recompute=True,
-                schema_version=existing.schema_version,
-                default_ttl_seconds=existing.default_ttl_seconds,
             )
             await self._do_write_meta_unlocked(db, collection, patched)
             return
@@ -2249,28 +2259,14 @@ class SearchStore:
         else:
             new_centroid = [v / new_chunk_count for v in new_sum]
 
-        new_meta = CollectionMeta(
-            name=existing.name,
-            description=existing.description,
-            description_embedding=existing.description_embedding,
+        new_meta = replace(
+            existing,
             centroid=new_centroid,
             centroid_sum=new_sum,
             doc_count=new_doc_count,
             chunk_count=new_chunk_count,
-            active_embedding_model=existing.active_embedding_model,
-            pending_embedding_model=existing.pending_embedding_model,
-            needs_reindex=existing.needs_reindex,
-            reindex_job_id=existing.reindex_job_id,
-            community_rebuild_job_id=existing.community_rebuild_job_id,
-            metadata_reindex_job_id=existing.metadata_reindex_job_id,
             last_indexed=now,
-            last_described=existing.last_described,
-            described_at_doc_count=existing.described_at_doc_count,
-            namespace=existing.namespace,
             mutations_since_recompute=new_mutations,
-            needs_recompute=existing.needs_recompute,
-            schema_version=existing.schema_version,
-            default_ttl_seconds=existing.default_ttl_seconds,
         )
         await self._do_write_meta_unlocked(db, collection, new_meta)
 

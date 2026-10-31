@@ -105,7 +105,7 @@ Migrations are classified into three kinds (`archon_search/store.py`, `_all_migr
 | `rewrite` | Rewrites every chunk (e.g. field backfill, re-embed) | Explicit operator action; runs as a checkpointed `MigrationJob` | Restore from backup (gated by `backup_confirmed`) |
 | `export_rebuild` | Column rename/drop — impossible in-place (LanceDB is append-only) | Not executed by the tool — **re-ingest manually** | Restore from backup |
 
-**Not everything is automatic.** Only `in_place` migrations apply on boot. As of `STORE_SCHEMA_VERSION = 1`, the two version-1 migrations (`migrate_expires_at_and_scopes`, `migrate_default_ttl_seconds`) are **not** applied at startup — an operator must run them via the migrate route after upgrading. Do not assume an upgrade left every collection at the current schema; check `collections_schema_behind` and the per-collection pending list.
+**Not everything is automatic.** Only `in_place` migrations apply on boot, and only the startup steps in `_run_startup_migrations()`. As of `STORE_SCHEMA_VERSION = 1`, `migrate_expires_at_and_scopes` is **not** applied at startup — an operator must run it via the migrate route after upgrading. `migrate_default_ttl_seconds` is also a startup step, so for it the route is a no-op; the nullable metadata columns `description_source` and `description_status` are startup steps without a migration entry, so the route never involves them. Do not assume an upgrade left every collection at the current schema; check `collections_schema_behind` and the per-collection pending list.
 
 ### Inspect and apply
 
