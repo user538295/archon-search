@@ -1181,13 +1181,16 @@ def create_app(
                 await app.state.description_lifecycle.drain()
 
             # The cloud wrappers hold a pooled SDK client for the life of the process (the other providers have nothing
-            # to close); with the generations gone, close it here instead of leaving it to be closed on a dead event loop.
-            aclose = getattr(app.state.description_client, "aclose", None)
-            if aclose is not None:
-                try:
-                    await aclose()
-                except Exception:
-                    logger.debug("description client aclose() failed", exc_info=True)
+            # to close); with the generations and the maintenance loop's rebuilds gone, close each shared client here
+            # instead of leaving it to be closed on a dead event loop. A client that is off is None; one failing close
+            # must not skip the others.
+            for client_state in ("hyde_client", "rag_fusion_client", "graph_client", "description_client"):
+                aclose = getattr(getattr(app.state, client_state), "aclose", None)
+                if aclose is not None:
+                    try:
+                        await aclose()
+                    except Exception:
+                        logger.debug("%s aclose() failed", client_state, exc_info=True)
 
             # Shutdown: disconnect search store
             await app.state.search_store.disconnect()

@@ -1825,3 +1825,35 @@ async def test_empty_collection_gets_health_entry(tmp_path: Path) -> None:
     )
     # Empty collection's health entry must have last_error=null (FTS skip is not an error)
     assert health["default/empty_corpus"]["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_cancelling_run_cancels_and_awaits_in_flight_rebuilds_without_respawning(tmp_path: Path) -> None:
+    """Shutdown cancels ``run()``; a community rebuild it spawned must be cancelled and awaited with it (it calls the
+    shared graph client, closed right after), and a pending flag must not respawn it."""
+    loop = _make_loop(tmp_path)
+    started = asyncio.Event()
+    cleaned_up = asyncio.Event()
+
+    async def hang(_namespace: str, _collection: str) -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0)  # a rebuild's cleanup that yields: run() must wait for it
+            cleaned_up.set()
+
+    loop._rebuild_communities_async = hang  # type: ignore[method-assign]
+    runner = asyncio.create_task(loop.run())
+    loop._spawn_rebuild_task("default", "docs")
+    await started.wait()
+    loop._rebuild_state[("default", "docs")].pending = True
+
+    runner.cancel()
+    await asyncio.gather(runner, return_exceptions=True)
+
+    state = loop._rebuild_state[("default", "docs")]
+    assert state.task.done()
+    assert state.task.cancelled()
+    assert state.pending is False
+    assert cleaned_up.is_set()

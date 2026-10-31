@@ -96,7 +96,7 @@ class OpenAIClient:
 
     async def aclose(self) -> None:
         """Close the SDK client's connection pool when one was built; a no-op otherwise. The startup probe closes its
-        throwaway client with it; the long-lived feature clients live as long as the process."""
+        throwaway client with it; the server lifespan closes the long-lived feature clients at shutdown."""
         client, self._client = self._client, None
         if client is not None:
             await client.close()

@@ -1515,5 +1515,18 @@ class MaintenanceLoop:
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
-        """Run the trigger loop. Cancellable on server shutdown."""
-        await self._trigger_loop()
+        """Run the trigger loop. Cancellable on server shutdown; the community rebuilds it spawned end with it."""
+        try:
+            await self._trigger_loop()
+        finally:
+            await self._cancel_rebuilds()
+
+    async def _cancel_rebuilds(self) -> None:
+        """Cancel and await every in-flight community rebuild: they call the shared graph client, which the server
+        closes right after, and a cleared ``pending`` flag keeps a done-callback from respawning one."""
+        tasks = [state.task for state in self._rebuild_state.values() if not state.task.done()]
+        for state in self._rebuild_state.values():
+            state.pending = False
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
