@@ -263,6 +263,35 @@ class TestPromptGraphProvider:
         assert llama_url == "http://saved-box:8080"
         assert ollama_url == ""
 
+    def test_graph_prompt_offers_claude_cli_with_model_pick(self, capsys) -> None:
+        """FE-2 (S71): graph offers all five providers; claude_cli runs the presence check, then the model pick."""
+        ask_yn = lambda *_a, **_k: True
+        offered: list[set[str]] = []
+
+        def _ask_choice(_prompt: str, valid: set[str], _default: str) -> str:
+            offered.append(valid)
+            return "claude_cli"
+
+        with (
+            patch("archon_search.install.shutil.which", return_value=None) as which,
+            patch("builtins.input", return_value="2"),
+        ):
+            result = _prompt_graph_provider(ask_yn, _ask_choice, OLLAMA_BASE_URL_DEFAULT)
+        assert offered == [{"anthropic", "openai", "ollama", "claude_cli", "llama_cpp"}]
+        which.assert_called_once_with("claude")
+        assert "WARNING" in capsys.readouterr().out  # a missing CLI warns, never blocks
+        assert result == ("claude_cli", "sonnet", "", "")
+
+    def test_graph_claude_cli_blank_model_is_accepted(self) -> None:
+        """FE-2 (S71): as for HyDE, a blank model means Claude Code's own default and returns ``""``."""
+        ask_yn = lambda *_a, **_k: True
+        with (
+            patch("archon_search.install.shutil.which", return_value="/usr/bin/claude"),
+            patch("builtins.input", return_value=""),
+        ):
+            result = _prompt_graph_provider(ask_yn, self._ask_choice_from("claude_cli"), OLLAMA_BASE_URL_DEFAULT)
+        assert result == ("claude_cli", "", "", "")
+
 
 class TestPromptMultilingual:
     def test_flag_true_skips_prompt(self) -> None:

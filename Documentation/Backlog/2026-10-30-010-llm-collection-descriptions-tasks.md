@@ -345,7 +345,7 @@ flowchart LR
         - #integration_test — `test_graph_missing_ollama_package_warns_and_boots_with_graph_off` — the WARNING names the package and install command
         - #integration_test — `test_graph_missing_openai_package_warns_and_boots_with_graph_off` — same for `openai`
         - #unit_test — `test_no_chunk_text_logged_in_graph_client_modules` — the source-scan guard covers the new graph path
-- [ ] **FE-2** — Offer `claude_cli` in the wizard graph prompt (all five providers): CLI presence check and model pick, generalised wording, docstring rewrite; a blank `claude_cli` model is accepted for graph as it is for HyDE #frontend-role
+- [x] **FE-2** — Offer `claude_cli` in the wizard graph prompt (all five providers): CLI presence check and model pick, generalised wording, docstring rewrite; a blank `claude_cli` model is accepted for graph as it is for HyDE #frontend-role
     - Presentation · 3.0h
     - needs BE-16 · completes S71
     - Tests

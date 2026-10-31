@@ -442,13 +442,13 @@ Enabling this buys community summaries and nothing else.
 
 **On EOF**: No — `[graph].provider` stays `null`.
 
-If you answer `y`, the wizard prompts for one of four enrichment providers (`claude_cli` runs on the shared LLM client but this prompt does not offer it yet):
+If you answer `y`, the wizard prompts for one of the five enrichment providers, the same set HyDE and RAG Fusion offer:
 
 ```
-Which provider for graph enrichment? (anthropic/openai/ollama/llama_cpp) [anthropic]:
+Which provider for graph enrichment? (anthropic/openai/ollama/claude_cli/llama_cpp) [anthropic]:
 ```
 
-`extraction_model` is prompted as free text for `anthropic` and `openai`, because unlike `HyDEConfig`/`RAGFusionConfig`, `GraphConfig.extraction_model` has no built-in default. Choosing `ollama` or `llama_cpp` instead gets the same base-URL-then-model-picker flow shown above for HyDE/RAG Fusion — for `ollama` the list comes from the server you name, for `llama_cpp` from the same two-tier local lookup (`llama cli -cl`, then a GGUF cache-directory scan). After answering, the wizard writes `[graph].provider`, `[graph].extraction_model`, and the base URL for whichever local provider you picked (`[graph].ollama_base_url` or `[graph].llama_cpp_base_url`) to your config. As everywhere else, a base URL equal to the built-in default is left out of the config rather than written, and on a re-run the prompt is pre-filled with the address already saved in `[graph]`. With `ollama`, the wizard then asks the graph's own context window (`Ollama context window for graph enrichment (tokens) [8192]:`) and writes it to `[graph].ollama_context_tokens`, exactly as described for HyDE above.
+`extraction_model` is prompted as free text for `anthropic` and `openai`, because unlike `HyDEConfig`/`RAGFusionConfig`, `GraphConfig.extraction_model` has no built-in default. Choosing `claude_cli` checks that the `claude` command is on `PATH` (a warning if not, never a block) and offers the same Claude model alias picker as for HyDE; a blank answer is accepted, no `[graph].extraction_model` is written, and Claude Code's own default model is used. Choosing `ollama` or `llama_cpp` instead gets the same base-URL-then-model-picker flow shown above for HyDE/RAG Fusion — for `ollama` the list comes from the server you name, for `llama_cpp` from the same two-tier local lookup (`llama cli -cl`, then a GGUF cache-directory scan). After answering, the wizard writes `[graph].provider`, `[graph].extraction_model`, and the base URL for whichever local provider you picked (`[graph].ollama_base_url` or `[graph].llama_cpp_base_url`) to your config. As everywhere else, a base URL equal to the built-in default is left out of the config rather than written, and on a re-run the prompt is pre-filled with the address already saved in `[graph]`. With `ollama`, the wizard then asks the graph's own context window (`Ollama context window for graph enrichment (tokens) [8192]:`) and writes it to `[graph].ollama_context_tokens`, exactly as described for HyDE above.
 
 ### Step 6 — Summary screen
 

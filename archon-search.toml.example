@@ -546,9 +546,10 @@ num_queries = 2
 # no network access. Valid values: "anthropic", "ollama", "openai",
 # "llama_cpp" (local; zero-transmission, no API key), "claude_cli" (the prompt goes
 # to the `claude` program on standard input, on your Claude Code login; `claude`
-# must be on PATH). Defaults to unset (None): enrichment is disabled unless BOTH
-# provider and extraction_model below are set — unlike [hyde]/[rag_fusion],
-# whose provider defaults to "anthropic", this preserves the air-gap guarantee.
+# must be on PATH). Defaults to unset (None): enrichment is disabled unless the
+# provider is set and a model is available (extraction_model below; "claude_cli"
+# needs none) — unlike [hyde]/[rag_fusion], whose provider defaults to "anthropic",
+# this preserves the air-gap guarantee.
 # provider = "llama_cpp"
 
 # Model used for community summarisation — always a bare model name, never a
@@ -563,8 +564,10 @@ num_queries = 2
 #   When that command is unavailable the wizard instead offers .gguf files found
 #   in your cache directories, named as paths (e.g. "models/gpt-oss-nano/Q4_K_M.gguf");
 #   only a router-mode llama-server resolves those.
-# When provider is set but extraction_model is absent, a WARNING is logged at
-# startup and enrichment remains disabled (no ConfigError, no crash).
+# For "claude_cli": an alias ("haiku", "sonnet", "opus", "fable") or a full model ID; may be
+#   left out, which uses Claude Code's own default model.
+# For every other provider, when provider is set but extraction_model is absent, a
+# WARNING is logged at startup and enrichment remains disabled (no ConfigError, no crash).
 # extraction_model = "claude-haiku-4-5-20251001"
 
 # Base URL for the llama_cpp enrichment provider. Only used when

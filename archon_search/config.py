@@ -63,6 +63,7 @@ _CONFIG_FILE_NAME = "archon-search.toml"
 
 _PROVIDER_REGISTRY: tuple[str, ...] = ("anthropic", "ollama", "openai", "claude_cli", "llama_cpp")
 _VALID_PROVIDERS: frozenset[str] = frozenset(_PROVIDER_REGISTRY)
+_CLAUDE_CLI_PROVIDER = "claude_cli"
 OLLAMA_BASE_URL_DEFAULT: str = "http://localhost:11434"
 LLAMA_CPP_BASE_URL_DEFAULT: str = "http://localhost:8080"
 
@@ -1368,6 +1369,10 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
                 f"[graph].extraction_token_budget must be >= 1, got {extraction_token_budget}"
             )
         graph.extraction_token_budget = extraction_token_budget
+    if graph.provider == _CLAUDE_CLI_PROVIDER and graph.extraction_model is None:
+        # As for [hyde]/[rag_fusion]: the Claude Code program picks its own model, so a missing one is not an error
+        # and the enrichment gate (provider and model set) opens. The client sends no --model for this value.
+        graph.extraction_model = DEFAULT_FAST_MODEL
     _validate_provider_config(graph.provider, graph.extraction_model, "[graph]")
     config.graph = graph
 

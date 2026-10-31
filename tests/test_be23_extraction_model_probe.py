@@ -21,11 +21,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from archon_search.config import GraphConfig, SearchConfig
+from archon_search.config import GraphConfig, SearchConfig, load_config
 from archon_search.llm_client.protocol import (
     UNBOUNDED,
     ContextWindow,
@@ -132,6 +133,18 @@ def test_claude_cli_graph_probe_checks_presence_only_and_only_when_configured(
     ):
         asyncio.run(_probe_extraction_model(not_configured, graph_client_factory=lambda: None))
     resolver.assert_not_called()
+
+
+def test_claude_cli_graph_without_a_model_in_the_file_still_gets_the_presence_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S71: the wizard omits a blank claude_cli model; the loaded config must still open the probe's gate."""
+    toml = tmp_path / "archon-search.toml"
+    toml.write_text('[graph]\nenabled = true\nprovider = "claude_cli"\n', encoding="utf-8")
+    monkeypatch.setattr(_CLAUDE_BINARY, lambda: None)
+    config = load_config(toml)
+    warnings = asyncio.run(_probe_extraction_model(config, graph_client_factory=_unused_factory()))
+    assert warnings == [EXTRACTION_MODEL_PROBE_CLAUDE_MISSING_WARNING]
 
 
 async def test_claude_cli_missing_warning_is_a_fixed_text_naming_the_program(monkeypatch: pytest.MonkeyPatch) -> None:

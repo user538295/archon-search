@@ -9,6 +9,7 @@ import pytest
 import tomlkit
 
 from archon_search.config import load_config
+from archon_search.constants import DEFAULT_FAST_MODEL
 from archon_search.install import WizardFeatures
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
 
@@ -744,6 +745,44 @@ class TestApplyWizardFeaturesFE2LlamaCppAndGraph:
         config_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
         cfg = load_config(config_path)
         assert cfg.graph.provider is None
+
+    def test_graph_claude_cli_writes_provider_and_model(self) -> None:
+        """FE-2 (S71): claude_cli for graph stores provider and the picked model, no base-URL keys."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        features = WizardFeatures(graph_provider="claude_cli", graph_extraction_model="sonnet")
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["graph"]["provider"] == "claude_cli"
+        assert doc["graph"]["extraction_model"] == "sonnet"
+        assert not {"ollama_base_url", "llama_cpp_base_url", "ollama_context_tokens"} & set(doc["graph"])
+
+    def test_graph_claude_cli_blank_model_keeps_provider_and_omits_model(self, tmp_path: Path) -> None:
+        """FE-2 (S71): as for HyDE, a blank claude_cli model is accepted: the provider is written, the key is not,
+        and the config loads with enrichment on (the model falls back to Claude Code's default)."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        features = WizardFeatures(graph_provider="claude_cli", graph_extraction_model="")
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["graph"]["provider"] == "claude_cli"
+        assert "extraction_model" not in doc["graph"]
+
+        config_path = tmp_path / "archon-search.toml"
+        config_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+        cfg = load_config(config_path)
+        assert cfg.graph.provider == "claude_cli"
+        assert cfg.graph.extraction_model == DEFAULT_FAST_MODEL
+
+    def test_graph_claude_cli_blank_model_clears_a_stale_model_from_an_earlier_run(self) -> None:
+        """A re-run that picks claude_cli with a blank model must not keep the previous provider's model name."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(graph_provider="ollama", graph_extraction_model="qwen3"))
+        _apply_wizard_features_to_toml(doc, WizardFeatures(graph_provider="claude_cli", graph_extraction_model=""))
+        assert doc["graph"]["provider"] == "claude_cli"
+        assert "extraction_model" not in doc["graph"]
 
 
 # ---------------------------------------------------------------------------

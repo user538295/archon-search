@@ -544,15 +544,18 @@ def _prompt_graph_provider(
     default — unlike HyDE/RAG Fusion, ``[graph].provider`` is itself
     the enable gate (there is no separate ``[graph].enabled`` for enrichment;
     that key gates the graph subsystem — entity extraction, PPR, communities —
-    which works fine without enrichment). Offers four of the five providers
-    (anthropic/openai/ollama/llama_cpp) — ``claude_cli`` runs on the shared LLM
-    client but this prompt does not offer it yet (a later wizard task adds it).
+    which works fine without enrichment). Offers all five providers
+    (anthropic/openai/ollama/claude_cli/llama_cpp), the same set HyDE and RAG
+    Fusion offer; ``claude_cli`` checks that the ``claude`` command is installed
+    (a warning, never a block) and offers the Claude model picker.
 
     Returns ``(provider, extraction_model, ollama_base_url, llama_cpp_base_url)``
     — the same shape :func:`_prompt_provider` returns — all ``""`` when the
-    operator declines enrichment. ``extraction_model`` is always prompted (even
-    for anthropic) because, unlike ``HyDEConfig``/``RAGFusionConfig``,
-    ``GraphConfig.extraction_model`` has no built-in default model.
+    operator declines enrichment. ``extraction_model`` is prompted for every
+    provider (even anthropic) because, unlike ``HyDEConfig``/``RAGFusionConfig``,
+    ``GraphConfig.extraction_model`` has no built-in default model; for
+    ``claude_cli`` a blank answer is accepted (Claude Code's own default) and
+    ``load_config`` fills the default.
     """
     print(
         "\nLLM-backed graph enrichment:\n"
@@ -565,8 +568,8 @@ def _prompt_graph_provider(
         return "", "", "", ""
 
     provider = ask_choice(
-        "Which provider for graph enrichment? (anthropic/openai/ollama/llama_cpp) [anthropic]: ",
-        {"anthropic", "openai", "ollama", "llama_cpp"},
+        "Which provider for graph enrichment? (anthropic/openai/ollama/claude_cli/llama_cpp) [anthropic]: ",
+        {"anthropic", "openai", "ollama", "claude_cli", "llama_cpp"},
         "anthropic",
     )
     local = _prompt_local_provider_model(
@@ -575,6 +578,8 @@ def _prompt_graph_provider(
     if local is not None:
         model, ollama_url, llama_cpp_url = local
         return provider, model, ollama_url, llama_cpp_url
+    if provider == "claude_cli":
+        return provider, _prompt_claude_cli_model("graph enrichment"), "", ""
     return provider, _prompt_model_freetext("graph enrichment"), "", ""
 
 
@@ -597,7 +602,7 @@ def _check_claude_cli_present() -> bool:
         "  WARNING: 'claude' command not found in PATH.\n"
         "  The claude_cli provider needs Claude Code installed and logged in.\n"
         "  Install it from https://claude.ai/code, then start the server.\n"
-        "  Writing the config anyway — query expansion will fall back until 'claude' is available."
+        "  Writing the config anyway — the feature will fall back until 'claude' is available."
     )
     return False
 
@@ -622,6 +627,15 @@ def _pick_claude_model(feature_label: str) -> str:
     if raw.isdigit() and 1 <= int(raw) <= len(_CLAUDE_MODEL_ALIASES):
         return _CLAUDE_MODEL_ALIASES[int(raw) - 1]
     return raw
+
+
+def _prompt_claude_cli_model(feature_label: str) -> str:
+    """Check the ``claude`` command is installed (warn only), then pick the model for *feature_label*.
+
+    Shared by the HyDE/RAG Fusion and graph-enrichment prompts; returns ``""`` for Claude Code's default.
+    """
+    _check_claude_cli_present()
+    return _pick_claude_model(feature_label)
 
 
 def _prompt_provider(
@@ -649,8 +663,7 @@ def _prompt_provider(
     if provider == "openai":
         return provider, _prompt_model_freetext(feature_label), "", ""
     if provider == "claude_cli":
-        _check_claude_cli_present()
-        return provider, _pick_claude_model(feature_label), "", ""
+        return provider, _prompt_claude_cli_model(feature_label), "", ""
     return provider, "", "", ""
 
 

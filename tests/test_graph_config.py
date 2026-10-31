@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from archon_search.config import ConfigError, GraphConfig, SearchConfig, load_config
+from archon_search.constants import DEFAULT_FAST_MODEL
 
 # ---------------------------------------------------------------------------
 # Default value assertions
@@ -149,6 +150,27 @@ def test_graph_config_extraction_model_rejects_empty_string(tmp_path: Path) -> N
     )
     with pytest.raises(ConfigError, match="extraction_model"):
         load_config(path=toml)
+
+
+def test_graph_claude_cli_without_a_model_defaults_to_the_fast_model(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """FE-2 (S71): a `claude_cli` provider with no `extraction_model` loads with the default model, like HyDE,
+    so the enrichment gate (provider and model both set) opens and no "model is not set" warning fires."""
+    toml = _write_toml(tmp_path, '[graph]\nprovider = "claude_cli"\n')
+    with caplog.at_level("WARNING"):
+        config = load_config(path=toml)
+    assert config.graph.extraction_model == DEFAULT_FAST_MODEL
+    assert "extraction_model is not set" not in caplog.text
+
+
+def test_graph_other_providers_without_a_model_keep_it_unset(tmp_path: Path) -> None:
+    """Only `claude_cli` gets the default: other providers have no model that fits them."""
+    toml = _write_toml(tmp_path, '[graph]\nprovider = "ollama"\n')
+    assert load_config(path=toml).graph.extraction_model is None
+
+
+def test_graph_claude_cli_keeps_an_explicit_model(tmp_path: Path) -> None:
+    toml = _write_toml(tmp_path, '[graph]\nprovider = "claude_cli"\nextraction_model = "sonnet"\n')
+    assert load_config(path=toml).graph.extraction_model == "sonnet"
 
 
 def test_backend_threshold_edges_accepts_minimum(tmp_path: Path) -> None:

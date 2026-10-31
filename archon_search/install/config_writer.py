@@ -397,8 +397,10 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
     # A provider chosen with no model (EOF, or two invalid free-text entries)
     # would otherwise write `extraction_model = ""`, which config.py rejects at
     # load time with an unhandled ConfigError — so the whole block is skipped
-    # and enrichment stays disabled instead.
-    if features.graph_provider and not features.graph_extraction_model:
+    # and enrichment stays disabled instead. `claude_cli` is the exception, as
+    # for [hyde]/[rag_fusion]: a blank model means Claude Code's own default,
+    # so the provider is written and only the key is omitted (config.py fills it).
+    if features.graph_provider and not features.graph_extraction_model and features.graph_provider != "claude_cli":
         print(
             "Warning: graph enrichment was left disabled because no model was chosen.",
             file=sys.stderr,
@@ -406,7 +408,10 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
     elif features.graph_provider:
         _ensure_section("graph")
         doc["graph"]["provider"] = features.graph_provider
-        doc["graph"]["extraction_model"] = features.graph_extraction_model
+        if features.graph_extraction_model:
+            doc["graph"]["extraction_model"] = features.graph_extraction_model
+        else:
+            _remove_key("graph", "extraction_model")
         if features.graph_provider == "llama_cpp":
             _reconcile_llama_cpp_base_url(doc["graph"], features.graph_llama_cpp_base_url)
         elif features.graph_provider == "ollama":

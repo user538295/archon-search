@@ -1245,6 +1245,38 @@ def test_wizard_graph_provider_step_writes_all_three_fields(runner: CliRunner, t
 
 
 @pytest.mark.integration
+def test_wizard_graph_claude_cli_leg_end_to_end(runner: CliRunner, tmp_path: Path) -> None:
+    """FE-2 S71: choosing claude_cli for graph enrichment (no key, no server) runs the CLI presence check, takes the
+    alias pick, and writes a [graph] section that loads with the provider and the picked model."""
+    config_path = tmp_path / "archon-search.toml"
+
+    # Input queue as in the llama_cpp test above, from step 11:
+    # 11. "Which provider for graph enrichment?": "claude_cli"
+    # 12. Claude model picker: "2" (sonnet)
+    # 13. "Proceed?": "y"
+    stdin_responses = "n\nn\nn\nn\nn\nn\n\n\nn\ny\nclaude_cli\n2\ny\n"
+
+    with (
+        _no_anthropic_key(),
+        patch("archon_search.install.shutil.which", return_value="/usr/bin/claude") as which,
+        _patched_wizard(),
+    ):
+        result = runner.invoke(
+            main,
+            ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+            input=stdin_responses,
+        )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    assert any(call.args == ("claude",) for call in which.call_args_list)
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["graph"]["provider"] == "claude_cli"
+    assert doc["graph"]["extraction_model"] == "sonnet"
+    cfg = load_config(config_path)
+    assert (cfg.graph.provider, cfg.graph.extraction_model) == ("claude_cli", "sonnet")
+
+
+@pytest.mark.integration
 def test_wizard_abort_reverts_graph_enrichment_only(runner: CliRunner, tmp_path: Path) -> None:
     """FE-2 S22: declining the final 'Proceed?' prompt after configuring graph
     enrichment strips provider/extraction_model/llama_cpp_base_url from [graph],
@@ -3905,7 +3937,7 @@ def test_wizard_writes_ollama_context_per_feature(runner: CliRunner, tmp_path: P
                 provider_prompt.format("HyDE"): "ollama",
                 provider_prompt.format("RAG Fusion"): "ollama",
                 "Enable LLM-backed graph enrichment? [y/n]: ": "y",
-                "Which provider for graph enrichment? (anthropic/openai/ollama/llama_cpp) [anthropic]: ": "ollama",
+                "Which provider for graph enrichment? (anthropic/openai/ollama/claude_cli/llama_cpp) [anthropic]: ": "ollama",
                 "Select a model by number [1-1]: ": ("1", "1", "1"),
                 context_prompt.format("HyDE"): "4096",
                 context_prompt.format("RAG Fusion"): "",
