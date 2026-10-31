@@ -51,7 +51,7 @@ To skip extras entirely (lean core-only deployment), pass an empty value:
 docker run ... -e ARCHON_EXTRAS="" ...
 ```
 
-When `ARCHON_EXTRAS` is set to an empty string, the entrypoint skips the pip install block, does not add `/pip-packages` to `PYTHONPATH`, and proceeds directly to exec. Note: if `ARCHON_EXTRAS` is **unset** (not passed at all), the default `graph,code,multilingual` applies.
+When `ARCHON_EXTRAS` is set to an empty string, the entrypoint skips the pip install block, does not add `/pip-packages` to `PYTHONPATH`, and proceeds directly to exec. Note: if `ARCHON_EXTRAS` is **unset** (not passed at all), the default `graph,code,multilingual` applies. The default has none of the provider extras: graph enrichment on `anthropic`, `openai` or `ollama` (like HyDE and RAG Fusion) needs `hyde`, `openai-provider` or `ollama` added to `ARCHON_EXTRAS`, otherwise the server logs a WARNING and builds no graph summaries (see [`160_troubleshooting.md`](./160_troubleshooting.md)).
 
 ## Image variants
 

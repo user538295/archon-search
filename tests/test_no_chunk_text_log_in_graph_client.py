@@ -1,26 +1,25 @@
-"""LLCP BE-8 — CI guard: raw chunk/community content must never appear in
-logging calls in any ``archon_search/enrichment/*.py`` module.
+"""BE-16 (LCD C12, S4, S15) — CI guard: raw chunk/community content must never appear in a logging call of the graph
+client path.
 
-Analogous to ``tests/test_no_query_log_in_hyde.py`` (S15a), extended to scan
-every module in the ``enrichment`` package and to guard three content-bearing
-identifiers instead of one:
+The graph path is every module that sees community text: ``archon_search/community_builder.py`` (the consumer, which
+renders the summary prompt from ``chunk_texts`` and logs the failures) and every module of
+``archon_search/llm_client/`` (the wrappers that carry the prompt to the model). It replaces the guard of the removed
+``archon_search/enrichment/`` adapters, which had the same job.
 
-- ``chunk_text``  — guarded defensively; it was the per-chunk text passed to
-  the former ``label_relationships`` path (removed by BE-17), kept in the guard
-  so a future re-introduction cannot leak it.
-- ``chunk_texts`` — the per-community list of chunk texts passed to
-  ``summarize_community`` (the actual parameter name used by all four v1
-  clients for what the plan/task text calls "community text").
-- ``community_text`` — included for forward-compatibility with the literal
-  name used in the task/plan wording, in case a future client introduces it.
+Analogous to ``tests/test_no_query_log_in_hyde.py`` (S15a) and ``tests/test_no_query_log_in_llm_client.py``,
+with three content-bearing identifiers:
 
-The guard does NOT import the enrichment modules — it is purely static text
-analysis, same as the hyde guard.
+- ``chunk_text``  — guarded defensively; it was the per-chunk text passed to the former ``label_relationships``
+  path (removed by BE-17), kept in the guard so a future re-introduction cannot leak it.
+- ``chunk_texts`` — the per-community list of chunk texts the community builder renders into the summary prompt.
+- ``community_text`` — included for forward-compatibility with the literal name used in the plan wording.
 
-Entity names (e.g. ``item.get("source_entity")``) are explicitly OUT of
-scope: they are already-abstracted graph metadata extracted from the raw
-text, not raw input content, and ``AnthropicEnrichmentClient`` intentionally
-logs them.
+``warn_once(...)`` counts as a logging call (the community builder and the wrappers log through it).
+
+The guard does NOT import the modules — it is purely static text analysis, same as the hyde guard.
+
+Entity names (e.g. ``item.get("source_entity")``) are explicitly OUT of scope: they are already-abstracted graph
+metadata extracted from the raw text, not raw input content.
 
 Detection strategy (two complementary patterns, mirroring the hyde guard):
 
@@ -39,13 +38,17 @@ import re
 import textwrap
 from pathlib import Path
 
-_ENRICHMENT_DIR = Path(__file__).parent.parent / "archon_search" / "enrichment"
+_ARCHON_DIR = Path(__file__).parent.parent / "archon_search"
+_COMMUNITY_BUILDER = _ARCHON_DIR / "community_builder.py"
+_LLM_CLIENT_DIR = _ARCHON_DIR / "llm_client"
 
 # ---------------------------------------------------------------------------
 # Logger-call prefix — shared alternation used in both patterns.
 # Covers: logging.X(  _logger.X(  logger.X(
 # ---------------------------------------------------------------------------
 _LOG_PREFIX = r"(?:logging\.|_logger\.|(?<![_\w])logger\.)"
+# A ``warn_once(...)`` call writes like a logger, called by name or through a module.
+_LOG_CALL = r"(?:" + _LOG_PREFIX + r"\w+|(?<![\w])(?:\w+\.)?warn_once)"
 
 # ---------------------------------------------------------------------------
 # Content-variable alternation. Order does not affect correctness (each
@@ -58,7 +61,7 @@ _CONTENT_VAR_ALT = r"(?:chunk_texts|chunk_text|community_text)"
 # Pattern 1 — f-string with a bare {content_var} inside a logging call.
 # ---------------------------------------------------------------------------
 _FSTRING_CONTENT_IN_LOG = re.compile(
-    _LOG_PREFIX + r"""\w+\s*\([^)]*f['"][^'"]*\{""" + _CONTENT_VAR_ALT + r"(?![_\w(])",
+    _LOG_CALL + r"""\s*\([^)]*f['"][^'"]*\{""" + _CONTENT_VAR_ALT + r"(?![_\w(])",
     re.DOTALL,
 )
 
@@ -66,7 +69,7 @@ _FSTRING_CONTENT_IN_LOG = re.compile(
 # Pattern 2 — bare content-var positional arg in a logging call (full-file
 # scan, balanced-paren matching for multiline calls).
 # ---------------------------------------------------------------------------
-_LOG_OPENER = re.compile(_LOG_PREFIX + r"\w+\s*\(", re.DOTALL)
+_LOG_OPENER = re.compile(_LOG_CALL + r"\s*\(", re.DOTALL)
 _STRING_LITERAL = re.compile(
     r'"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\'',
     re.DOTALL,
@@ -183,7 +186,7 @@ def test_guard_ignores_entity_names() -> None:
 
     Entity names (e.g. ``item.get("source_entity")``) are explicitly excluded
     from this guard — they are graph metadata, not raw input content, and
-    AnthropicEnrichmentClient intentionally logs them.
+    the community builder intentionally logs them.
     """
     content = (
         '_logger.warning('
@@ -244,25 +247,39 @@ def test_guard_ignores_non_log_calls() -> None:
     )
 
 
+def test_guard_detects_content_in_warn_once() -> None:
+    """``warn_once(...)`` is a logging call: a bare or f-string content argument in it is a violation."""
+    bare = 'once_per_process.warn_once(_logger, KEY, "x %s", chunk_text)\n'
+    fstring = 'warn_once(_logger, KEY, f"x {chunk_text}")\n'
+    assert _bare_content_in_log_violations(bare)
+    assert _FSTRING_CONTENT_IN_LOG.search(fstring)
+
+
 # ---------------------------------------------------------------------------
-# Real guard — reads every archon_search/enrichment/*.py module as a single
-# string and asserts zero violations across the whole package.
+# Real guard — reads the community builder and every llm_client module and asserts zero violations.
 # ---------------------------------------------------------------------------
 
 
-def test_no_raw_content_in_enrichment_logging() -> None:
-    """No archon_search/enrichment/*.py module may pass raw chunk/community
-    text directly to a logging call.
+def _graph_client_modules() -> list[Path]:
+    return [_COMMUNITY_BUILDER, *sorted(_LLM_CLIENT_DIR.glob("*.py"))]
 
-    Only already-abstracted metadata (entity names, relationship types,
-    counts) may be logged. On failure the assertion names the offending file
-    and line for quick triage.
+
+def test_graph_client_path_modules_exist() -> None:
+    """A moved or renamed module must not turn the guard below into a scan of nothing."""
+    assert _COMMUNITY_BUILDER.is_file(), _COMMUNITY_BUILDER
+    names = {path.name for path in _graph_client_modules()}
+    assert {"ollama_client.py", "openai_client.py", "anthropic_client.py", "llama_cpp_client.py", "claude_cli_client.py"} <= names
+
+
+def test_no_chunk_text_logged_in_graph_client_modules() -> None:
+    """No module of the graph client path (the community builder and ``archon_search/llm_client/*.py``) may pass raw
+    chunk/community text directly to a logging call.
+
+    Only already-abstracted metadata (entity names, counts, model names) may be logged. On failure the assertion names
+    the offending file and line for quick triage.
     """
-    enrichment_files = sorted(_ENRICHMENT_DIR.glob("*.py"))
-    assert enrichment_files, f"No modules found under {_ENRICHMENT_DIR}"
-
     violations: list[str] = []
-    for path in enrichment_files:
+    for path in _graph_client_modules():
         source = path.read_text(encoding="utf-8")
 
         for m in _FSTRING_CONTENT_IN_LOG.finditer(source):
@@ -274,9 +291,8 @@ def test_no_raw_content_in_enrichment_logging() -> None:
             violations.append(f"  {path.name}:{lineno} (bare arg): {snippet}")
 
     assert not violations, (
-        "Raw chunk/community text passed directly to a logging call in "
-        "archon_search/enrichment/*.py:\n"
+        "Raw chunk/community text passed directly to a logging call in the graph client path:\n"
         + "\n".join(violations)
-        + "\nLog only already-abstracted metadata (entity names, counts, "
-        "relationship types) — never chunk_text, chunk_texts, or community_text."
+        + "\nLog only already-abstracted metadata (entity names, counts, model names) — "
+        "never chunk_text, chunk_texts, or community_text."
     )

@@ -1,6 +1,6 @@
 """BE-14 (collection-descriptions plan, C1, S64): the fixed-window rate limiter of the shared LLM client layer.
 
-Semantics ported from the limiter inside ``enrichment/anthropic.py`` (N requests per 60 s window, the window opens when
+Semantics ported from the limiter inside the removed Anthropic enrichment adapter (N requests per 60 s window, the window opens when
 the limiter is built, a burst is possible at a window boundary, an exhausted limiter raises instead of waiting) and
 applied by the ``anthropic`` and ``claude_cli`` wrappers when the graph composition hands them one. The clock is injected,
 so no test sleeps.

@@ -264,6 +264,28 @@ async def test_empty_answer_leaves_no_summary():
 
 
 @pytest.mark.asyncio
+async def test_empty_answer_logs_one_warning_per_process_without_text(caplog):
+    """The warning the removed adapters logged for an unusable reply survives on the shared client: a model that
+    answers nothing (a reasoning model that spent its answer budget) is told to the operator once per process, naming
+    the model and never holding chunk text, and the communities keep no summary."""
+    client = _GraphClient(reply="   ")
+    builder, _ = _two_communities_setup(client)
+
+    with patch(
+        "archon_search.community_builder._run_leiden_partition_sync",
+        return_value=[["a", "b"], ["c", "d"]],
+    ), caplog.at_level(logging.WARNING, logger="archon_search.community_builder"):
+        communities = await builder.build("test-col", ns="default")
+        await builder.build("test-col", ns="default")
+
+    assert all(comm.summary_text is None for comm in communities)
+    warnings = _build_warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert "no summary text" in warnings[0]
+    assert "text of c" not in caplog.text, "no chunk text in the log"
+
+
+@pytest.mark.asyncio
 async def test_community_builder_skips_enrichment_when_client_none():
     """graph_client=None (default) -> no call is attempted, even when provider and
     extraction_model are both set. summary_text stays None; build() still succeeds."""

@@ -2190,14 +2190,15 @@ def test_provider_without_model_emits_warning(tmp_path: Path, caplog: pytest.Log
 
 
 def test_real_graphconfig_constructible_with_all_fields() -> None:
-    """AnthropicEnrichmentClient is constructible from a real (non-MagicMock) GraphConfig instance.
+    """The graph client is composable from a real (non-MagicMock) GraphConfig instance.
 
     Regression test for Q6: GraphConfig previously lacked extraction_timeout_seconds /
     extraction_rate_limit_rpm / extraction_token_budget, so only MagicMock configs
-    (which auto-provide any attribute) could construct an enrichment client.
+    (which auto-provide any attribute) could feed the graph client composition.
     """
     from archon_search.config import GraphConfig
-    from archon_search.enrichment.anthropic import AnthropicEnrichmentClient
+    from archon_search.llm_client.anthropic_client import AnthropicClient
+    from archon_search.server.app import _build_graph_client
 
     cfg = GraphConfig(
         provider="anthropic",
@@ -2206,8 +2207,8 @@ def test_real_graphconfig_constructible_with_all_fields() -> None:
         extraction_rate_limit_rpm=60,
         extraction_token_budget=1024,
     )
-    client = AnthropicEnrichmentClient(model="claude-haiku-4-5", config=cfg)
-    assert client is not None
+    client = _build_graph_client(cfg, rate_limit_rpm=cfg.extraction_rate_limit_rpm)
+    assert isinstance(client, AnthropicClient)
 
 
 # ---------------------------------------------------------------------------

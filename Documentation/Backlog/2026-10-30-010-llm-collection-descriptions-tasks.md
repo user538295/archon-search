@@ -338,7 +338,7 @@ flowchart LR
         - #integration_test — `test_graph_on_claude_cli_sends_stdin_prompt_and_throttles` — a fake `claude` receives the prompt on stdin and the rpm cap applies
         - #integration_test — `test_extraction_probe_classifies_timeout_through_shared_failure_type` — a timeout still reads as a possible reasoning model
         - #unit_test — `test_claude_cli_graph_probe_checks_presence_only_and_only_when_configured` — no model call is made, and nothing is probed when graph does not use `claude_cli`
-- [ ] **BE-16** — Graph package guard (C12): a missing `openai` or `ollama` package is a WARNING with the install hint, graph stays off and the server starts; build the five-provider graph client in `app.py`; remove `archon_search/enrichment/`, `graph_enrichment_protocol.py` and `EnrichmentClientFactory`; rewrite the enrichment-pinned tests and re-point `test_no_content_log_in_enrichment.py` #backend-role
+- [x] **BE-16** — Graph package guard (C12): a missing `openai` or `ollama` package is a WARNING with the install hint, graph stays off and the server starts; build the five-provider graph client in `app.py`; remove `archon_search/enrichment/`, `graph_enrichment_protocol.py` and `EnrichmentClientFactory`; rewrite the enrichment-pinned tests and re-point `test_no_content_log_in_enrichment.py` #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-15, BE-13 · completes C12, S16
     - Tests

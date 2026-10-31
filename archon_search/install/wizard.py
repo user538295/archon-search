@@ -544,10 +544,9 @@ def _prompt_graph_provider(
     default — unlike HyDE/RAG Fusion, ``[graph].provider`` is itself
     the enable gate (there is no separate ``[graph].enabled`` for enrichment;
     that key gates the graph subsystem — entity extraction, PPR, communities —
-    which works fine without enrichment). Offers the four v1 enrichment
-    providers (anthropic/openai/ollama/llama_cpp) — ``claude_cli`` has no v1
-    enrichment client (deferred; see ``EnrichmentClientFactory``) and is
-    intentionally not offered here.
+    which works fine without enrichment). Offers four of the five providers
+    (anthropic/openai/ollama/llama_cpp) — ``claude_cli`` runs on the shared LLM
+    client but this prompt does not offer it yet (a later wizard task adds it).
 
     Returns ``(provider, extraction_model, ollama_base_url, llama_cpp_base_url)``
     — the same shape :func:`_prompt_provider` returns — all ``""`` when the

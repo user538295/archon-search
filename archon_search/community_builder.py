@@ -61,6 +61,7 @@ _PASSAGE_SEPARATOR = "\n\n---\n\n"
 _SUMMARY_FAILED_WARN_KEY = "graph_community_summary"
 _SUMMARY_BUDGET_WARN_KEY = "graph_community_summary_budget"
 _SUMMARY_NO_PASSAGE_WARN_KEY = "graph_community_summary_no_passage"
+_SUMMARY_EMPTY_WARN_KEY = "graph_community_summary_empty"
 
 
 def render_summary_prompt(entity_names: Sequence[str], chunk_texts: Sequence[str]) -> str:
@@ -481,7 +482,18 @@ class CommunityBuilder:
             timeout_seconds=self._config.extraction_timeout_seconds,
         )
         result = await client.call(request)
-        return result.text.strip() or None
+        summary = result.text.strip()
+        if not summary:
+            warn_once(
+                _logger,
+                _SUMMARY_EMPTY_WARN_KEY,
+                "community_builder: the model returned no summary text (extraction_model=%r); a reasoning model may have "
+                "spent its whole answer budget thinking (raise [graph].extraction_token_budget or pick another model); "
+                "communities are built without summaries (later cases in this process are not logged)",
+                self._config.extraction_model,
+            )
+            return None
+        return summary
 
     @staticmethod
     async def _passages_within(

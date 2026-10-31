@@ -26,10 +26,9 @@ alias OllamaBaseUrlDefault = "http://localhost:11434";
 // + Scenario S16; tasks.md BE-4) — there is no narrower enrichment-only
 // allowlist. Also used for HyDE/RAG-Fusion query-expansion provider
 // selection.
-// SYNCHRONIZATION: this must be kept identical to the ProviderKind
-// definition in llama-cpp-provider-factory.tsp — these files do not use
-// cross-file TypeSpec imports, so the two copies are synchronized by
-// convention/comment, not by import.
+// SYNCHRONIZATION: the sibling llama-cpp-provider-factory.tsp that held the
+// second copy of this enum was removed with the enrichment factory
+// (collection-descriptions BE-16); this is now the only definition.
 // Registry shape (documentation-only — no separate model needed): this
 // enum's declared member order IS the `_PROVIDER_REGISTRY` ordered
 // sequence referenced by team-plan.md C4 ("the registry key shape ... is
@@ -84,23 +83,19 @@ model GraphConfig {
   // "same pattern as `[hyde]`/`[rag_fusion]` validators" (team-plan.md C3;
   // tasks.md BE-4). Neither document restricts `claude_cli` here, so config
   // validation accepts it for `[graph] provider`.
-  // UNRESOLVED GAP (flagged, not decided here): `claude_cli` has no v1
-  // enrichment client — `ClaudeCLIEnrichmentClient` is deferred (subprocess-
-  // based, no HTTP endpoint; see llama-cpp-provider-factory.tsp). So
-  // `[graph] provider = "claude_cli"` passes config validation but the
-  // enrichment factory (C3) has no concrete client to build for it. Neither
-  // the plan nor the tasks file resolves what the factory should do in that
-  // case (e.g. return null with a WARNING, or raise) — this needs a team
-  // decision before BE-4/BE-7 are implemented. See the corresponding note
-  // on `BuildEnrichmentClientInput.provider` in llama-cpp-provider-factory.tsp.
+  // `claude_cli` is composed like the other four: the shared LLM client
+  // (archon_search/llm_client/, collection-descriptions BE-8, BE-16) runs it as
+  // the `claude` subprocess, so every ProviderKind member builds a graph client.
+  // A provider whose optional package is missing (anthropic, openai, ollama) is a
+  // startup WARNING with the install hint and graph enrichment stays off (C12).
   provider: ProviderKind | null = null;
   // Always a bare model name (Q7=A resolved) — never a "provider:model"
   // prefixed string.
   extractionModel: string | null = null;
-  // New — additive. The enrichment client's timeout/rate-limit/token
-  // fields that AnthropicEnrichmentClient already reads but GraphConfig
-  // never defined. They MUST be added before any enrichment client can be
-  // constructed against a real GraphConfig.
+  // New — additive. The timeout/rate-limit/token fields the graph client
+  // composition reads (extraction_timeout_seconds, extraction_rate_limit_rpm,
+  // extraction_token_budget); GraphConfig carries them so a real config, not
+  // only a mock, can feed the client.
   //
   // Defaults are REQUIRED, not optional polish: GraphConfig is a real
   // Python @dataclass (config.py) where every existing field already
@@ -109,20 +104,17 @@ model GraphConfig {
   // class-definition time. This is a technical blocker for BE-4, verified
   // against config.py, not merely a documentation gap.
   //
-  // extractionTimeoutSeconds matches existing HyDE/RAG-Fusion precedent
-  // exactly (HyDEConfig.timeoutSeconds / RAGFusionConfig.timeoutSeconds =
-  // 10.0, config.py:37/47).
-  extractionTimeoutSeconds: float64 = 10.0;
+  // extractionTimeoutSeconds: 30.0 (config.py GraphConfig; a summary call is
+  // longer than a HyDE call, whose timeout is 10.0).
+  extractionTimeoutSeconds: float64 = 30.0;
   // extractionRateLimitRpm matches existing HyDE/RAG-Fusion precedent
   // exactly (HyDEConfig.maxRequestsPerMinute / RAGFusionConfig.
-  // maxRequestsPerMinute = 60, config.py:38/48).
+  // maxRequestsPerMinute = 60). The shared client applies it to `anthropic`
+  // and `claude_cli` only.
   extractionRateLimitRpm: int32 = 60;
-  // extractionTokenBudget: PROPOSED default — no existing precedent value
-  // anywhere in the codebase for this concept. 4096 is offered as a
-  // reasonable common LLM context-budget round number, but this needs
-  // explicit team confirmation before BE-4 locks it in — unlike the two
-  // fields above, this is not grounded in an existing config value.
-  extractionTokenBudget: int32 = 4096;
+  // extractionTokenBudget: the answer ceiling of one summary call, 1024
+  // (config.py GraphConfig).
+  extractionTokenBudget: int32 = 1024;
   // New — additive. Base URL for a local (llama_cpp) enrichment backend.
   // Q2 (resolved): discrete field selected over a "provider:model@base_url"
   // encoding — see the Data table in the team plan ("resolves Q2 — discrete

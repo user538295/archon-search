@@ -323,7 +323,7 @@ async def _probe_extraction_model(
     every wrapper raises when the provider does not answer within the request's timeout (some
     wrappers count a connection that never opens as a timeout too, which the warning's "may be"
     wording allows for) — is the primary, distinctly-worded "reasoning model" signal. Every other
-    failure — a missing package or API key, a refused connection, a wrong model name, a rejected
+    failure — a missing API key, a refused connection, a wrong model name, a rejected
     request parameter, a failure building the client — reads as plain misconfiguration, with a
     distinctly worded warning that
     never claims "reasoning model" and never leaks ``str(exc)``. A call that completes within

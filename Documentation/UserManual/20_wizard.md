@@ -442,7 +442,7 @@ Enabling this buys community summaries and nothing else.
 
 **On EOF**: No — `[graph].provider` stays `null`.
 
-If you answer `y`, the wizard prompts for one of the four v1 enrichment providers (`claude_cli` is not offered here — it has no v1 HTTP enrichment client, deferred post-v1):
+If you answer `y`, the wizard prompts for one of four enrichment providers (`claude_cli` runs on the shared LLM client but this prompt does not offer it yet):
 
 ```
 Which provider for graph enrichment? (anthropic/openai/ollama/llama_cpp) [anthropic]:

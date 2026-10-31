@@ -104,10 +104,10 @@ Some features ship as optional dependency groups (`[project.optional-dependencie
 | `graph` | gliner (pulls torch + transformers), networkx, leidenalg, igraph | Knowledge-graph extraction, community detection, PPR / naive graph search — see [`65_graph_search.md`](./65_graph_search.md). |
 | `code` | tree-sitter parsers (Python, TS/JS, Go, Rust, Java, Bash, Swift, C#) | AST-aware def/ref extraction and impact traversal for code files — see [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md). Also selectable via the wizard's `--code` flag. |
 | `multilingual` | fasttext-predict | Non-English language detection (`language=<code>` search filter). Pair with a multilingual install profile (below). |
-| `hyde` | anthropic SDK | HyDE query expansion at search time — see [`60_searching.md`](./60_searching.md). |
+| `hyde` | anthropic SDK | HyDE query expansion at search time — see [`60_searching.md`](./60_searching.md). Also the package of graph enrichment on `anthropic`. |
 | `rag_fusion` | anthropic SDK | RAG-Fusion multi-query retrieval — see [`60_searching.md`](./60_searching.md). |
-| `ollama` | ollama SDK | Local Ollama provider for HyDE / RAG-Fusion. |
-| `openai-provider` | openai SDK | OpenAI provider for HyDE / RAG-Fusion. |
+| `ollama` | ollama SDK | Local Ollama provider for HyDE / RAG-Fusion / graph enrichment. |
+| `openai-provider` | openai SDK | OpenAI provider for HyDE / RAG-Fusion / graph enrichment. |
 | *(none for llama.cpp)* | `httpx` (core dep) | Local llama-server provider for HyDE / RAG-Fusion / graph enrichment — no extra install. Set `provider = "llama_cpp"` in the relevant config sections. |
 
 `graph.enabled = true` with the `gliner` *library* absent raises a `ConfigError` at startup (`ensure_graph_engine_importable` in `archon_search/graph_extractor.py`); missing `code` parsers only log a warning and skip code files, so prose graphing still works.

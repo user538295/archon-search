@@ -1,73 +1,44 @@
-"""BE-17 integration: the surviving community-summarisation path.
+"""BE-17 integration (re-pointed by LCD BE-16): the surviving community-summarisation path.
 
-S24 — with an enrichment provider configured, abstractive summaries are still
-produced through the one surviving protocol method.
-S25 — with no provider configured, the factory and provider registry survive:
-building a client raises nothing and simply yields no client (no summaries).
+S24 — with a graph provider configured, abstractive summaries are still produced, now through the shared client the
+app composes (``_build_graph_client``) against a real HTTP model server.
+S25 — with no provider configured, composing the client raises nothing and simply yields no client (no summaries).
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 
+from archon_search.community_builder import CommunityBuilder
 from archon_search.config import GraphConfig
-from archon_search.enrichment.factory import EnrichmentClientFactory
+from archon_search.server.app import _build_graph_client
+from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
 
 pytestmark = pytest.mark.integration
 
-
-def _make_response(json_body: dict) -> MagicMock:
-    response = MagicMock()
-    response.status_code = 200
-    response.json = MagicMock(return_value=json_body)
-    response.raise_for_status = MagicMock()
-    return response
+_SUMMARY = "A summary of the community."
 
 
-async def test_summaries_still_produced_with_a_provider_configured() -> None:
-    config = GraphConfig(enabled=True, provider="llama_cpp", extraction_model="local-model")
-    client = EnrichmentClientFactory.build(config)
-    assert client is not None
-
-    response = _make_response(
-        {"choices": [{"message": {"content": "A summary of the community."}}]}
-    )
-    mock_ctx = MagicMock()
-    mock_ctx.__aenter__ = _AsyncReturn(_make_client_with_post(response))
-    mock_ctx.__aexit__ = _AsyncReturn(None)
-
-    with patch("archon_search.enrichment.llama_cpp.httpx.AsyncClient", return_value=mock_ctx):
-        summary = await client.summarize_community(
-            ["chunk one", "chunk two"], ["Alpha", "Beta"]
+async def test_summaries_still_produced_with_a_provider_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    keep_loopback_out_of_proxies(monkeypatch)
+    with FakeModelServer(reply_text=_SUMMARY) as server:
+        config = GraphConfig(
+            enabled=True,
+            provider="llama_cpp",
+            extraction_model="local-model",
+            llama_cpp_base_url=server.base_url,
         )
+        client = _build_graph_client(config, rate_limit_rpm=None)
+        assert client is not None
+        builder = CommunityBuilder(graph_store=None, config=config, graph_client=client)  # type: ignore[arg-type]
 
-    assert summary == "A summary of the community."
+        summary = await builder._generate_llm_summary(client, ["chunk one", "chunk two"], ["Alpha", "Beta"])
+
+        assert summary == _SUMMARY
+        (request,) = server.requests_to("/v1/chat/completions")
+        assert "chunk one" in request.body["messages"][0]["content"]
 
 
 async def test_no_provider_configured_raises_nothing_and_omits_summaries() -> None:
     config = GraphConfig(enabled=True, provider=None)
-    # The factory and provider registry survive the narrowing: no provider
-    # means no client, and no configuration error is raised.
-    client = EnrichmentClientFactory.build(config)
-    assert client is None
-
-
-class _AsyncReturn:
-    """A callable returning an awaitable that yields a fixed value (for __aenter__/__aexit__)."""
-
-    def __init__(self, value: object) -> None:
-        self._value = value
-
-    async def __call__(self, *_args: object, **_kwargs: object) -> object:
-        return self._value
-
-
-def _make_client_with_post(response: MagicMock) -> MagicMock:
-    inner = MagicMock()
-
-    async def _post(*_args: object, **_kwargs: object) -> MagicMock:
-        return response
-
-    inner.post = _post
-    return inner
+    # No provider means no client, and no configuration error is raised.
+    assert _build_graph_client(config, rate_limit_rpm=None) is None

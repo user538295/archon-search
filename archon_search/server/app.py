@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import importlib
 import logging
 import secrets
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from starlette.datastructures import State
@@ -486,6 +487,42 @@ def _check_graph_deps(config: SearchConfig) -> None:
     ensure_graph_engine_importable(config.graph)
 
 
+#: C12 — graph providers whose shared-client wrapper imports an optional package (named like the provider): provider ->
+#: install extra. ``llama_cpp`` needs none (httpx is core) and ``claude_cli`` needs the ``claude`` binary, which the
+#: startup probe checks.
+_GRAPH_PROVIDER_EXTRA: Final[dict[str, str]] = {
+    "anthropic": "hyde",
+    "openai": "openai-provider",
+    "ollama": "ollama",
+}
+
+
+def _missing_graph_package(graph: GraphConfig) -> str | None:
+    """The WARNING text when the enabled graph's provider package cannot be imported, else ``None`` (C12, S16).
+
+    Unlike HyDE and RAG Fusion (``_check_provider_deps`` refuses to start), a missing graph package is no startup error:
+    ``create_app`` logs this text, ``_build_graph_client`` composes no client (graph enrichment stays off: no community
+    summary, no model call) and the server starts. A graph that is off needs no package, so it is never reported.
+    """
+    if not graph.enabled or graph.provider not in _GRAPH_PROVIDER_EXTRA:
+        return None
+    package = graph.provider
+    try:
+        importlib.import_module(package)
+    except Exception as exc:  # noqa: BLE001 — an SDK that raises while importing must not stop the boot: graph stays off
+        if not (isinstance(exc, ModuleNotFoundError) and exc.name == package):
+            # A broken install, not a missing one: an install command would not help, so none is offered.
+            return (
+                f"[graph] provider={package!r} but the {package!r} package failed to import ({type(exc).__name__}); "
+                "graph enrichment stays off (communities are built without summaries)"
+            )
+        return (
+            f"[graph] provider={package!r} but the {package!r} package is not installed; graph enrichment stays off "
+            f"(communities are built without summaries); run: {extra_install_hint(_GRAPH_PROVIDER_EXTRA[package])}"
+        )
+    return None
+
+
 def _configure_openapi(app: FastAPI) -> None:
     """Override app.openapi with a closure that adds BearerAuth security scheme
     and per-path security annotations to all non-public endpoints."""
@@ -542,12 +579,14 @@ def _reranker_backend(model_name: str, device: str) -> RerankerBackend:
 
 
 def _build_graph_client(graph: GraphConfig, *, rate_limit_rpm: int | None) -> LlmClient | None:
-    """The shared LLM client of the graph feature, from ``[graph]`` alone; ``None`` when no provider is configured.
+    """The shared LLM client of the graph feature, from ``[graph]`` alone.
 
+    ``None`` when no provider is configured, or when the graph is enabled and its package is missing (C12: graph
+    enrichment stays off).
     *rate_limit_rpm* is ``[graph].extraction_rate_limit_rpm`` for the production client (the client layer applies it to
     ``anthropic`` and ``claude_cli``) and ``None`` for the startup probe's throwaway client.
     """
-    if graph.provider is None:
+    if graph.provider is None or _missing_graph_package(graph) is not None:
         return None
     return build_llm_client(
         provider=graph.provider,
@@ -569,6 +608,13 @@ def create_app(
     _check_multilingual_deps(config)
     _check_graph_deps(config)
     _check_provider_deps(config)
+
+    # C12 (S16): a missing graph provider package is a WARNING, never a refusal (HyDE and RAG Fusion refuse above);
+    # `_build_graph_client` then composes no graph client, so graph enrichment stays off.
+    graph_package_warning = _missing_graph_package(config.graph)
+    if graph_package_warning is not None:
+        logger.warning("%s", graph_package_warning)
+
     api_key, key_source = load_or_generate_key()
     if api_key in config.namespaces:
         # The managed-key path resolves a TOML token first, so it would shadow the default key and silently
@@ -1211,8 +1257,10 @@ def create_app(
         _lang_detector = None
 
     # BE-15: the shared LLM client of graph community summaries, built once from [graph] with the graph rate limit
-    # (regardless of graph.enabled -- construction is cheap, and CommunityBuilder is also reachable via the
-    # rebuild-communities route independently of the extractor below). None when [graph].provider is None (air-gap default).
+    # (regardless of graph.enabled -- a disabled graph gets one too, and CommunityBuilder is also reachable via the
+    # rebuild-communities route independently of the extractor below). None when [graph].provider is None (air-gap default)
+    # or when the graph is enabled and its provider package cannot be imported (C12); the guard runs again here, so the
+    # client decision never depends on the WARNING logged above.
     app.state.graph_client = _build_graph_client(config.graph, rate_limit_rpm=config.graph.extraction_rate_limit_rpm)
 
     if config.graph.enabled:

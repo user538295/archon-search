@@ -15,8 +15,8 @@ If a future provider is added to the registry and one of these derived sites is 
 updated, this guard fails loudly instead of shipping a half-wired provider.
 
 Deliberately NOT covered here: `_prompt_graph_provider` (graph enrichment) offers
-only 4 of the 5 providers by design — `claude_cli` has no v1
-`LLMEnrichmentClientProtocol` implementation (see `EnrichmentClientFactory`) — so it
+only 4 of the 5 providers for now — the shared client runs `claude_cli`, but the prompt
+does not offer it yet (a later wizard task adds it) — so it
 is intentionally a strict subset of the registry, not an equality match.
 
 `_PROVIDER_EXTRA` (archon_search/install/extras.py) is asserted to be a *subset* of
@@ -174,6 +174,13 @@ def test_provider_extra_is_strict_subset_of_registry() -> None:
         "_PROVIDER_EXTRA should not equal the full registry — some providers "
         "(claude_cli, llama_cpp) legitimately have no pip extra"
     )
+
+
+def test_graph_package_guard_table_matches_the_installer_extras() -> None:
+    """The server's graph package guard (C12) and the wizard's extras installer name the same extra per provider."""
+    from archon_search.server.app import _GRAPH_PROVIDER_EXTRA
+
+    assert _GRAPH_PROVIDER_EXTRA == _PROVIDER_EXTRA
 
 
 def test_provider_registry_is_source_of_truth() -> None:

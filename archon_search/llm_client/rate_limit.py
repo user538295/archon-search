@@ -1,6 +1,6 @@
 """FixedWindowRateLimiter — the graph rate limit of the shared LLM client layer (contract C1, scenario S64).
 
-Moved here from the limiter inside the Anthropic enrichment client (``enrichment/anthropic.py``) with the same window rules:
+Moved here from the limiter inside the removed Anthropic enrichment adapter with the same window rules:
 
 * N requests per fixed 60 s window, counted per limiter; the window opens when the limiter is built and a new one opens
   at the first call after the old one has run its whole period, so a burst is possible at a window boundary.
