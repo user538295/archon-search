@@ -41,6 +41,9 @@ _OK = 200
 _BAD_REQUEST = 400
 _NOT_FOUND = 404
 
+_CHAT_PATHS = frozenset({"/api/chat", "/v1/chat/completions"})
+_HELD_CHAT_MAX_SECONDS = 120.0  # a test that forgot to release answers 503 instead of parking a handler thread forever
+_UNAVAILABLE = 503
 _DEFAULT_REPLY = "fake model reply"
 _DEFAULT_OLLAMA_CONTEXT_LENGTH = 8192
 _DEFAULT_LLAMA_N_CTX = 4096
@@ -95,12 +98,15 @@ class FakeModelServer:
     """Loopback server for both providers; see the module docstring.
 
     Args:
-        reply_text: the model's answer on ``/api/chat`` and ``/v1/chat/completions``.
+        reply_text: the model's answer on ``/api/chat`` and ``/v1/chat/completions`` (a public attribute: a test may change it).
         ollama_context_length: the model maximum ``/api/show`` reports under ``<architecture>.context_length``.
         llama_n_ctx: the window ``GET /props`` reports under ``default_generation_settings.n_ctx``.
         status_overrides: path to HTTP status; such a path answers that status with an ``error`` body in the shape its
             real server uses (the request is still recorded), so a test can fail one endpoint and leave the others alone.
         response_delay_seconds: pause before every answer, so a test can make a client's timeout fire.
+        hold_chat: the chat endpoints record a request on arrival but answer only after :meth:`release` (or when the
+            server exits); the other endpoints answer at once. A test can then observe the state while a model call is in flight,
+            and :meth:`hold` closes the gate again.
     """
 
     _httpd: _Server  # bound by ``__enter__``, so a server that is never entered holds no socket
@@ -114,14 +120,18 @@ class FakeModelServer:
         llama_n_ctx: int = _DEFAULT_LLAMA_N_CTX,
         status_overrides: Mapping[str, int] | None = None,
         response_delay_seconds: float = 0.0,
+        hold_chat: bool = False,
     ) -> None:
-        self._reply_text = reply_text
+        self.reply_text = reply_text
         self._ollama_context_length = ollama_context_length
         self._llama_n_ctx = llama_n_ctx
         self._status_overrides = dict(status_overrides or {})
         self.response_delay_seconds = response_delay_seconds
         self._requests: list[RecordedRequest] = []
         self._lock = threading.Lock()
+        self._chat_gate = threading.Event()
+        if not hold_chat:
+            self._chat_gate.set()
 
     @property
     def base_url(self) -> str:
@@ -149,11 +159,24 @@ class FakeModelServer:
         return self
 
     def __exit__(self, *exc_info: object) -> None:
+        self.release()  # let a held handler finish promptly (it is a daemon thread; ``server_close`` does not join it)
         with _listening_lock:
             _listening_ports.discard(self._httpd.server_address[1])
         self._httpd.shutdown()
         self._httpd.server_close()
         self._thread.join()
+
+    def hold(self) -> None:
+        """Hold every chat request that arrives from now on, until :meth:`release`."""
+        self._chat_gate.clear()
+
+    def release(self) -> None:
+        """Let every held chat request (and every later one) be answered."""
+        self._chat_gate.set()
+
+    def wait_until_released(self) -> bool:
+        """Block while the gate is closed; ``False`` when it stayed closed for ``_HELD_CHAT_MAX_SECONDS``."""
+        return self._chat_gate.wait(timeout=_HELD_CHAT_MAX_SECONDS)
 
     def record(self, request: RecordedRequest) -> None:
         with self._lock:
@@ -189,7 +212,7 @@ class FakeModelServer:
         return {
             "model": _MODEL_NAME,
             "created_at": "2026-01-01T00:00:00Z",
-            "message": {"role": "assistant", "content": self._reply_text},
+            "message": {"role": "assistant", "content": self.reply_text},
             "done": True,
             "done_reason": "stop",
         }
@@ -213,7 +236,7 @@ class FakeModelServer:
         return {
             "object": "chat.completion",
             "model": _MODEL_NAME,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": self._reply_text}, "finish_reason": "stop"}],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": self.reply_text}, "finish_reason": "stop"}],
         }
 
 
@@ -248,7 +271,13 @@ class _Handler(BaseHTTPRequestHandler):
                 malformed = True
         request = RecordedRequest(method=method, path=urlsplit(self.path).path, body=body if isinstance(body, dict) else None)
         fake.record(request)
-        status, answer = fake.respond(request) if not malformed else fake.error(request.path, _BAD_REQUEST, "invalid JSON body")
+        held_too_long = request.path in _CHAT_PATHS and not fake.wait_until_released()
+        if held_too_long:
+            status, answer = fake.error(request.path, _UNAVAILABLE, "a held chat request was never released")
+        elif malformed:
+            status, answer = fake.error(request.path, _BAD_REQUEST, "invalid JSON body")
+        else:  # answered only now, so a held request carries the reply text current at its release
+            status, answer = fake.respond(request)
         time.sleep(fake.response_delay_seconds)
         payload = json.dumps(answer).encode()
         try:

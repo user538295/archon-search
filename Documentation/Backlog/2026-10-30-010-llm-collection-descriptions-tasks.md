@@ -477,7 +477,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_info_shows_source_and_status` — both lines print when present
         - #unit_test — `test_info_omits_source_and_status_when_null` — an empty description keeps `description` out of the output
-- [ ] **T-5** — e2e: description appears after the first ingest on a fake local model, read through REST, MCP and the CLI; builds the CLI-to-TestClient bridge `tests/_cli_testclient_bridge.py` #tester-role
+- [x] **T-5** — e2e: description appears after the first ingest on a fake local model, read through REST, MCP and the CLI; builds the CLI-to-TestClient bridge `tests/_cli_testclient_bridge.py` #tester-role
     - — · 8.0h
     - needs BE-25, BE-26, FE-5 · completes S17, S19, S23, S40, S55
     - Tests

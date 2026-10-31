@@ -8,12 +8,22 @@ request so a test can assert what the wrapper sent.
 from __future__ import annotations
 
 import ipaddress
+import threading
+import time
 from urllib.parse import urlsplit
 
 import httpx
 import pytest
 
 from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
+
+_HELD_CHAT_PROBE_SECONDS = 0.3
+_POLL_SECONDS = 0.01
+_CHATS_BEFORE_THIRD_ARRIVES = 3  # the timed-out probe, the answered request, and the one held here
+_SHORT_HOLD_LIMIT_SECONDS = 0.05
+_UNAVAILABLE = 503
+_SECOND_REPLY = "a changed answer"
+_HELD_CHAT_TIMEOUT_SECONDS = 10.0
 
 _PROMPT = "describe this collection please"
 _PROMPT_WORDS = 4
@@ -147,3 +157,58 @@ def test_two_requests_share_one_keep_alive_connection(server: FakeModelServer) -
 
     assert first.http_version == second.http_version == "HTTP/1.1"
     assert [recorded.path for recorded in server.requests] == ["/props", "/tokenize"]
+
+
+def _wait_for_chats(server: FakeModelServer, count: int) -> None:
+    deadline = time.monotonic() + _HELD_CHAT_TIMEOUT_SECONDS
+    while len(server.requests_to("/api/chat")) < count:
+        assert time.monotonic() < deadline, f"chat request number {count} never arrived"
+        time.sleep(_POLL_SECONDS)
+
+
+def test_held_chat_waits_for_release_and_other_endpoints_still_answer() -> None:
+    body = {"model": "m", "messages": [{"role": "user", "content": _PROMPT}], "stream": False}
+    with (
+        FakeModelServer(reply_text=_REPLY, hold_chat=True) as held,
+        httpx.Client(base_url=held.base_url, timeout=_HELD_CHAT_TIMEOUT_SECONDS) as client,
+    ):
+        assert client.post("/api/show", json={"model": "m"}).status_code == 200
+        with pytest.raises(httpx.ReadTimeout):
+            client.post("/api/chat", json=body, timeout=_HELD_CHAT_PROBE_SECONDS)
+        _wait_for_chats(held, 1)  # recorded on arrival, answered only after release
+        held.release()
+        assert client.post("/api/chat", json=body).json()["message"]["content"] == _REPLY
+        held.hold()
+        answers: list[str] = []
+        waiter = threading.Thread(
+            target=lambda: answers.append(client.post("/api/chat", json=body).json()["message"]["content"])
+        )
+        waiter.start()
+        _wait_for_chats(held, _CHATS_BEFORE_THIRD_ARRIVES)
+        held.reply_text = _SECOND_REPLY
+        held.release()
+        waiter.join(timeout=_HELD_CHAT_TIMEOUT_SECONDS)
+        assert answers == [_SECOND_REPLY]  # a held request is answered with the text current at its release
+
+
+def test_a_chat_held_past_the_limit_answers_503_in_the_shape_of_its_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("tests._fake_model_server._HELD_CHAT_MAX_SECONDS", _SHORT_HOLD_LIMIT_SECONDS)
+    ollama_body = {"model": "m", "messages": [{"role": "user", "content": _PROMPT}], "stream": False}
+    with FakeModelServer(hold_chat=True) as held:
+        ollama = httpx.post(f"{held.base_url}/api/chat", json=ollama_body, timeout=_HELD_CHAT_TIMEOUT_SECONDS)
+        llama = httpx.post(f"{held.base_url}/v1/chat/completions", json=ollama_body, timeout=_HELD_CHAT_TIMEOUT_SECONDS)
+
+    assert ollama.status_code == llama.status_code == _UNAVAILABLE
+    assert isinstance(ollama.json()["error"], str)
+    assert llama.json()["error"]["code"] == _UNAVAILABLE
+
+
+def test_the_llama_chat_endpoint_is_held_too() -> None:
+    body = {"model": "m", "messages": [{"role": "user", "content": _PROMPT}]}
+    with FakeModelServer(reply_text=_REPLY, hold_chat=True) as held:
+        with pytest.raises(httpx.ReadTimeout):
+            httpx.post(f"{held.base_url}/v1/chat/completions", json=body, timeout=_HELD_CHAT_PROBE_SECONDS)
+        held.release()
+        answered = httpx.post(f"{held.base_url}/v1/chat/completions", json=body, timeout=_HELD_CHAT_TIMEOUT_SECONDS)
+
+    assert answered.json()["choices"][0]["message"]["content"] == _REPLY
