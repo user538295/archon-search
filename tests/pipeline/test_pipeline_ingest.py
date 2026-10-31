@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any
+from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,6 +19,7 @@ from archon_search._types import PARSE_ERROR_CODE, ChunkRecord, IngestResult
 from archon_search.embedder import Embedder
 from archon_search.parser import PARSE_FAILED_DETAIL
 from archon_search.store import ChunkIngestResult
+from tests._collection_lock_stub import with_locked_collection_meta
 
 from .conftest import (
     MockEmbedderBackend,
@@ -1666,6 +1668,7 @@ async def test_recompute_collection_meta_namespace_param(tmp_path) -> None:
     store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4], [0.3, 0.4, 0.5, 0.6]])
     store.count_documents = AsyncMock(return_value=2)
     store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(store)
 
     pipeline = SearchPipeline(
         store=store,
@@ -1679,7 +1682,12 @@ async def test_recompute_collection_meta_namespace_param(tmp_path) -> None:
 
     await pipeline.recompute_collection_meta("my-col", pipeline._global_embedder, namespace="tenantA")
 
-    store.get_collection_meta.assert_awaited_once_with("my-col", namespace="tenantA")
+    # Exactly two reads of the row, the one before the scan and the one under the collection lock, both with the
+    # namespace.
+    assert store.get_collection_meta.await_args_list == [
+        mock.call("my-col", namespace="tenantA"),
+        mock.call("my-col", "tenantA"),
+    ]
     saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
     assert saved_meta.namespace == "tenantA"
 
@@ -1808,6 +1816,7 @@ async def test_recompute_populates_description_embedding() -> None:
     store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4], [0.3, 0.4, 0.5, 0.6]])
     store.count_documents = AsyncMock(return_value=2)
     store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(store)
 
     pipeline = SearchPipeline(
         store=store,
@@ -1847,6 +1856,7 @@ async def test_recompute_no_description_embedding_when_description_none() -> Non
     store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
     store.count_documents = AsyncMock(return_value=1)
     store.update_collection_meta = AsyncMock()
+    with_locked_collection_meta(store)
 
     pipeline = SearchPipeline(
         store=store,
@@ -2294,6 +2304,7 @@ def _make_pipeline_for_recompute(store, config=None):
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
+    with_locked_collection_meta(store)
     pipeline = SearchPipeline(
         store=store,
         embedder=make_embedder(),
@@ -2853,11 +2864,13 @@ async def test_recompute_collection_meta_preserves_all_c1_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recompute_collection_meta_uses_global_embedder_for_description() -> None:
-    """recompute_collection_meta calls global_embedder.embed_one for the description embedding."""
+async def test_recompute_collection_meta_embeds_a_legacy_description_with_the_passed_embedder_of_its_model() -> None:
+    """A legacy description (no vector) is embedded by the passed embedder when it has the collection's model."""
     from archon_search.collection_meta import CollectionMeta
 
-    existing_meta = CollectionMeta(name="col", description="desc text", needs_recompute=True)
+    existing_meta = CollectionMeta(
+        name="col", description="desc text", active_embedding_model="global-model", needs_recompute=True
+    )
     store = MagicMock()
     store.assert_collection_access = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=existing_meta)

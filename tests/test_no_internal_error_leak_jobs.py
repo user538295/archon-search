@@ -58,6 +58,7 @@ from archon_search.server.routes_jobs import (
     _reindex_task,
 )
 from archon_search.types import JobStatus, MigrationKind, MigrationSpec
+from tests._collection_lock_stub import with_locked_collection_meta
 from tests._internal_error_leak import (
     LANCE_MSG,
     LEAK_NEEDLE,
@@ -96,7 +97,7 @@ def _search_store() -> MagicMock:
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
-    return store
+    return with_locked_collection_meta(store)
 
 
 # ---------------------------------------------------------------------------

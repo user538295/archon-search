@@ -21,7 +21,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -33,6 +33,7 @@ from archon_search.community_builder import (
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.types import JobStatus
+from tests._collection_lock_stub import with_locked_collection_meta
 from tests._install_hint_leak import (
     assert_install_hint_logged_not_sent,
     patch_install_hint,
@@ -44,6 +45,13 @@ _ROUTES_GRAPH_LOGGER = "archon_search.server.routes_graph"
 _ROUTES_JOBS_LOGGER = "archon_search.server.routes_jobs"
 _SECRET_KEY_TEXT = "/secret/internal/key"
 
+
+def _store_serving(meta: object, update: AsyncMock) -> MagicMock:
+    """A mock search store serving *meta* under a real collection lock, whose writes go to *update*."""
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=meta)
+    store.update_collection_meta = update
+    return with_locked_collection_meta(store)
 
 # ---------------------------------------------------------------------------
 # Unit tests — CommunityBuilder.build is mocked; only the task's outcome
@@ -200,10 +208,7 @@ async def test_rebuild_task_unexpected_error_sets_failed_with_sanitized_detail_a
     job_store = JobStore(path=tmp_path / "jobs.json")
     job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
     meta = SimpleNamespace(community_rebuild_job_id=job.job_id)
-    search_store = SimpleNamespace(
-        get_collection_meta=AsyncMock(return_value=meta),
-        update_collection_meta=AsyncMock(),
-    )
+    search_store = _store_serving(meta, AsyncMock())
 
     with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls:
         mock_builder_cls.return_value.build = AsyncMock(side_effect=KeyError(_SECRET_KEY_TEXT))
@@ -224,7 +229,7 @@ async def test_rebuild_task_unexpected_error_sets_failed_with_sanitized_detail_a
     assert _SECRET_KEY_TEXT not in (updated.error or "")
     assert_error_logged_with_traceback(caplog, _ROUTES_GRAPH_LOGGER)
     assert meta.community_rebuild_job_id is None
-    search_store.update_collection_meta.assert_awaited_once_with(meta)
+    search_store.update_collection_meta.assert_awaited_once_with(meta, _locked_by_caller=True)
 
 
 @pytest.mark.parametrize(
@@ -237,9 +242,9 @@ async def test_rebuild_task_unexpected_error_sets_failed_with_sanitized_detail_a
 async def test_rebuild_task_clears_the_meta_pointer_before_the_terminal_status(
     tmp_path: Path, build_outcome: dict, terminal_status: JobStatus
 ) -> None:
-    """The community_rebuild_job_id clear (an unlocked meta read, then an upsert) runs while the job is still
-    RUNNING: DELETE /collections/{name} refuses only while a rebuild is RUNNING/CANCELLING, so a clear after the
-    terminal write could re-create the meta row of a collection DELETE dropped in between."""
+    """The community_rebuild_job_id clear (a read under the collection lock, then an upsert) runs while the job is
+    still RUNNING: DELETE /collections/{name} refuses only while a rebuild is RUNNING/CANCELLING, so a client that
+    sees the terminal status must also see the pointer cleared."""
     from types import SimpleNamespace
 
     from archon_search.server.routes_graph import _community_rebuild_task
@@ -248,9 +253,11 @@ async def test_rebuild_task_clears_the_meta_pointer_before_the_terminal_status(
     job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
     meta = SimpleNamespace(community_rebuild_job_id=job.job_id)
     status_at_clear: list[JobStatus] = []
-    search_store = SimpleNamespace(
-        get_collection_meta=AsyncMock(return_value=meta),
-        update_collection_meta=AsyncMock(side_effect=lambda _meta: status_at_clear.append(job_store.get(job.job_id).status)),
+    search_store = _store_serving(
+        meta,
+        AsyncMock(
+            side_effect=lambda _meta, **_kwargs: status_at_clear.append(job_store.get(job.job_id).status)
+        ),
     )
 
     with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls:

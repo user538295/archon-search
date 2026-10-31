@@ -1773,14 +1773,16 @@ class SearchStore:
             they have a backup before any rewrite migration runs.
 
         .. note::
-            ``schema_version`` is updated after the per-collection lock is released
-            (via ``update_collection_meta``, which acquires the lock independently).
-            In the narrow window between lock release and schema_version update, a
-            concurrent operation may modify collection metadata.  This is acceptable
-            for D3 (asyncio single-threaded; window is at most one ``await`` point).
+            ``schema_version`` is stamped after the per-collection lock is released, on the row read again under the
+            lock (:meth:`locked_collection_meta`), so a description or any other metadata change that landed in
+            between is carried, and a collection dropped meanwhile is not re-inserted.
 
         Returns:
             The total number of chunks processed (``migrated_chunks``).
+
+        Raises:
+            StoreBusyError: if the per-collection lock cannot be acquired for the ``schema_version`` stamp within
+                ``INGEST_LOCK_TIMEOUT_S``; the rewrite itself has then been applied.
         """
         if spec.kind != MigrationKind.REWRITE:
             raise ValueError(
@@ -1823,9 +1825,11 @@ class SearchStore:
             lock.release()
 
         if success:
-            meta = await self.get_collection_meta(collection, namespace)
-            if meta is not None:
-                await self.update_collection_meta(replace(meta, schema_version=STORE_SCHEMA_VERSION))
+            async with self.locked_collection_meta(collection, namespace) as meta:
+                if meta is not None:
+                    await self.update_collection_meta(
+                        replace(meta, schema_version=STORE_SCHEMA_VERSION), _locked_by_caller=True
+                    )
 
         return processed
 
@@ -1982,6 +1986,11 @@ class SearchStore:
     ) -> None:
         """Partial-write description/timestamp fields without touching centroid fields.
 
+        A description that differs from the stored one drops the stored routing vector, which belongs to the old
+        text (a stale vector would route on text that is gone), and flags the row ``needs_recompute`` so the next
+        recompute can repair it (when its embedder has the collection's model); the shared write operation writes
+        the vector of a changed description (C11).
+
         On lock timeout, logs a warning and returns silently (no StoreBusyError).
         Description is cosmetic — stalling indefinitely behind reindex_metadata is
         worse than skipping one description update.
@@ -1998,12 +2007,17 @@ class SearchStore:
             existing = await self._do_read_meta_unlocked(db, collection, namespace=namespace)
             if existing is None:
                 return
+            dropped_vector = (description or None) != (existing.description or None) and (
+                existing.description_embedding is not None
+            )
             updated = replace(
                 existing,
                 description=description,
                 last_indexed=last_indexed,
                 last_described=last_described,
                 described_at_doc_count=described_at_doc_count,
+                description_embedding=None if dropped_vector else existing.description_embedding,
+                needs_recompute=existing.needs_recompute or dropped_vector,
             )
             await self._do_write_meta_unlocked(db, collection, updated)
         finally:

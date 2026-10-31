@@ -82,6 +82,18 @@ _META_FIELD_OF: Final[dict[str, str]] = {
 }
 
 
+def is_storable_vector(vector: list[float]) -> bool:
+    """Whether *vector* can be stored as a description routing vector: non-empty, plain finite numbers only (what
+    the row reader keeps)."""
+    return bool(vector) and all(type(x) in (int, float) and math.isfinite(x) for x in vector)
+
+
+def check_description_text(text: str) -> None:
+    """Refuse blank *text*: a description is set to text or cleared, never to nothing."""
+    if not text.strip():
+        raise ValueError("description cannot be set to blank text: clear it instead")
+
+
 @dataclasses.dataclass(frozen=True)
 class DescriptionFields:
     """The fields one description write owns. Every field is required, so a writer states each one.
@@ -104,14 +116,14 @@ class DescriptionFields:
         check_stored_description_value("description_source", self.source.value, DESCRIPTION_SOURCES)
         check_stored_description_value("description_status", self.status.value, DESCRIPTION_STORED_STATUSES)
         text = self.description.value
-        if text is not None and not text.strip():
-            raise ValueError("description cannot be set to blank text: clear it instead")
+        if text is not None:
+            check_description_text(text)
         baseline = self.described_at_doc_count.value
         if baseline is not None and baseline < 0:
             raise ValueError(f"described_at_doc_count {baseline!r} cannot be stored: a negative count reads as unset")
         vector = self.description_embedding.value
         # The reader drops anything but plain finite numbers, so the writer refuses it up front.
-        if vector is not None and (not vector or not all(type(x) in (int, float) and math.isfinite(x) for x in vector)):
+        if vector is not None and not is_storable_vector(vector):
             raise ValueError("description_embedding must be a non-empty list of finite numbers")
         # Source, status and the routing vector follow every description change (C3, C11, S43, S69): a set or cleared
         # text never keeps the source, the status or the vector of the old one.

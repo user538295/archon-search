@@ -399,7 +399,7 @@ flowchart LR
         - #unit_test — `test_stale_write_and_recorded_failure_refused_after_clear` — a clear is not undone and no `failed` lands on a cleared row
         - #integration_test — `test_manual_set_during_slow_step_survives_interleave` — a deterministic interleave with `tests/_parked_lock.py` ends in one serial outcome
         - #integration_test — `test_lock_timeout_is_reported_not_swallowed` — the outcome is `lockTimeout`, which the caller records as failed
-- [ ] **BE-20** — Shared write-description operation (C11): one use case for generate, set, clear and import that embeds with the collection's own embedder from the cache under `embedWaitSeconds`, writes text and vector in one guarded step, keeps the text without a vector on embedding failure with a WARNING; the metadata recompute in `pipeline.py` carries the stored vector and computes one only for a legacy description when the model matches; the read-outside-lock whole-row writers carry the locked fields #backend-role
+- [x] **BE-20** — Shared write-description operation (C11): one use case for generate, set, clear and import that embeds with the collection's own embedder from the cache under `embedWaitSeconds`, writes text and vector in one guarded step, keeps the text without a vector on embedding failure with a WARNING; the metadata recompute in `pipeline.py` carries the stored vector and computes one only for a legacy description when the model matches; the read-outside-lock whole-row writers carry the locked fields #backend-role
     - Use Cases · 8.0h
     - needs BE-19, BE-17 · completes C11, S43, S69, S88
     - Tests

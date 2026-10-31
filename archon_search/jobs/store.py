@@ -86,8 +86,8 @@ _RUNNING_OR_CANCELLING = frozenset({JobStatus.RUNNING, JobStatus.CANCELLING})
 #: Job kind (exact type) -> the statuses in which DELETE /collections/{name} refuses to drop the job's collection,
 #: because the job may still write the table or meta row without holding the collection lock. Each of these tasks
 #: writes outside ``lock_for(name)`` at some point of its run (a metadata reindex holds the lock for its whole store
-#: call, but clears its meta pointer after releasing it), and a meta-row write from a read made before a drop
-#: (``update_collection_meta`` locks, but upserts by ``merge_insert``) re-inserts the dropped collection's row:
+#: call, but clears its meta pointer in a separate locked step afterwards, on the row read under that lock), and a
+#: write that lands after a drop and is not made on a row read under the lock re-inserts the dropped collection:
 #: - ``IngestJob`` (base ingest only): its dispatch path releases the lock right after marking the job RUNNING and
 #:   keeps writing. PENDING is excluded — the lock covers it (see ``JobStore.find_active_collection_job``).
 #: - ``ReindexJob``: ``_reindex_task`` writes through ``pipeline.ingest_directory`` (lock per ``ingest_chunks``
@@ -96,16 +96,16 @@ _RUNNING_OR_CANCELLING = frozenset({JobStatus.RUNNING, JobStatus.CANCELLING})
 #:   PENDING under the lock; one left PENDING by a restart is failed at load (``JobStore._load``).
 #: - ``ImportJob``: its task locks per write (``ensure_collection``, ``ingest_chunks``). QUEUED is excluded: no
 #:   task runs yet, and an import creates its target collection by design.
-#: - ``MigrationJob``: ``apply_rewrite_migration`` locks only during the rewrite, then re-reads and rewrites the meta
-#:   row (``schema_version``). QUEUED is excluded, and POST /collections/{name}/migrate needs no lock to create its
-#:   RUNNING job: the rewrite opens the table under the lock first, so a dropped collection fails it cleanly before
-#:   any meta write.
+#: - ``MigrationJob``: ``apply_rewrite_migration`` locks only during the rewrite, then re-locks to stamp
+#:   ``schema_version`` on the row read again under that lock. QUEUED is excluded, and POST
+#:   /collections/{name}/migrate needs no lock to create its RUNNING job: the rewrite opens the table under the lock
+#:   first, so a dropped collection fails it cleanly before any meta write.
 #: - ``MetadataReindexJob``: created RUNNING (under the lock, by its route) before ``reindex_metadata`` takes the
-#:   lock (and holds it for its whole run); once that call returns, the task clears its meta pointer from a read made
-#:   outside the lock. A ``dry_run`` one is exempt in every status (``may_write_collection``): it only reads the
+#:   lock (and holds it for its whole run); once that call returns, the task clears its meta pointer in a separate
+#:   locked step. A ``dry_run`` one is exempt in every status (``may_write_collection``): it only reads the
 #:   table, records no meta pointer, and so has none to clear.
 #: - ``CommunityRebuildJob``: created RUNNING (under the lock, by its route); writes the collection's graph tables,
-#:   then clears its meta pointer from a read made outside the lock.
+#:   then clears its meta pointer in a separate locked step.
 COLLECTION_WRITING_JOB_STATUSES: dict[type[IngestJob], frozenset[JobStatus]] = {
     IngestJob: _RUNNING_OR_CANCELLING,
     ReindexJob: _RUNNING_OR_CANCELLING | {JobStatus.PENDING},

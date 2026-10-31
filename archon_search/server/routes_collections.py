@@ -945,6 +945,9 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
                         meta.pending_embedding_model = requested
                         meta.needs_reindex = True
                     else:
+                        # No chunks to re-embed, so the model switches at once; the description vector belongs to
+                        # the old model and must not route against the new one.
+                        meta.description_embedding = None
                         meta.active_embedding_model = requested
                         meta.pending_embedding_model = None
                         meta.needs_reindex = False
@@ -1464,8 +1467,9 @@ async def _reindex_metadata_task(
       4. Transition to FAILED with ``METADATA_REINDEX_FAILED_DETAIL`` on any exception (the DONE write's included).
 
     The clear runs BEFORE the terminal write: DELETE /collections/{name} refuses only while this job is
-    RUNNING/CANCELLING, and the clear (a meta read outside the collection lock, then an upsert) would re-create
-    the meta row of a collection dropped after the terminal write.
+    RUNNING/CANCELLING, so a client that sees the terminal status must also see the pointer cleared. The clear reads
+    the meta row under the collection lock and upserts it as read, so a description write that landed meanwhile is
+    carried and a collection dropped meanwhile is not re-created.
 
     Note: does NOT pre-acquire the per-collection lock — ``reindex_metadata``
     already acquires ``lock_for(collection)`` internally (non-reentrant).
@@ -1483,12 +1487,14 @@ async def _reindex_metadata_task(
         logger.exception("_reindex_metadata_task: job %s failed", job_id)
     finally:
         try:
-            meta = await search_store.get_collection_meta(  # type: ignore[attr-defined]
-                job.collection, namespace=job.namespace
-            )
-            if meta is not None and meta.metadata_reindex_job_id == job_id:
-                meta.metadata_reindex_job_id = None
-                await search_store.update_collection_meta(meta)  # type: ignore[attr-defined]
+            async with search_store.locked_collection_meta(  # type: ignore[attr-defined]
+                job.collection, job.namespace
+            ) as meta:
+                if meta is not None and meta.metadata_reindex_job_id == job_id:
+                    meta.metadata_reindex_job_id = None
+                    await search_store.update_collection_meta(  # type: ignore[attr-defined]
+                        meta, _locked_by_caller=True
+                    )
         except Exception:  # noqa: BLE001 — best-effort pointer cleanup in a background task; failure is logged, never raised
             logger.warning(
                 "_reindex_metadata_task: failed to clear metadata_reindex_job_id for job %s",

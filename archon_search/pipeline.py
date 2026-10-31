@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
 
 from archon_search._diagnostics import (
     GraphProvenance,
@@ -56,6 +56,7 @@ from archon_search.constants import (
     DEFAULT_MAX_DISCOVERED_FILES,
     DEFAULT_MAX_FILE_MB,
     DEFAULT_NAMESPACE,
+    EMBED_WAIT_SECONDS,
     INLINE_CHUNK_METADATA_KEY,
     INLINE_CHUNK_METADATA_VALUE,
 )
@@ -65,6 +66,7 @@ from archon_search.description_generator import (
     _should_regenerate,
     generate_description,
 )
+from archon_search.description_write import is_storable_vector
 from archon_search.embedder import (
     Embedder,
     EmbedderBackend,
@@ -477,6 +479,13 @@ def _extract_front_matter(text: str) -> tuple[dict, str]:
 
 # Immutable (frozen dataclass), so safe as a shared default for ``SearchPipeline(path_policy=...)``.
 _DEFAULT_PATH_POLICY = IngestPathPolicy()
+
+
+class _LegacyDescriptionVector(NamedTuple):
+    """The vector the recompute computed for a legacy description, with the text it was computed from."""
+
+    text: str
+    vector: list[float]
 
 
 class SearchPipeline:
@@ -3936,7 +3945,22 @@ class SearchPipeline:
 
         Reads all vectors from the store, recomputes the centroid and centroid_sum,
         resets mutations_since_recompute to 0 and needs_recompute to False, and
-        updates the collection metadata. Preserves existing description fields.
+        updates the collection metadata.
+
+        The scan is slow, so the row is written back as read again under the collection lock: every field this
+        method does not recompute, the description state and the description routing vector included, is carried
+        as stored at write time, so a description write that landed during the scan is never overwritten (C3,
+        C11). Only the shared write operation (``DescriptionWriter``) writes the vector of a changed description.
+        The one exception is a legacy description with no vector: it gets one here, and only when *global_embedder*
+        has the collection's model (``active_embedding_model``; an unpinned collection uses the default, this
+        pipeline's own model), so a wrong-model vector is never written (S88). A vector that exists is never
+        replaced, and a failure to embed the legacy description leaves it without one: it never blocks the
+        centroid.
+
+        A collection dropped during the scan is left dropped. When an ingest or delete batch landed during the scan
+        (the row's ``mutations_since_recompute`` or ``needs_recompute`` moved) the scanned totals may predate it, so
+        the row keeps the totals it maintained incrementally, its counter and its flag (the next trigger recomputes
+        again) and only the description repair is applied.
 
         Short-circuit: when force=False, skips the full scan if the meta row already
         has needs_recompute=False and mutations_since_recompute=0.
@@ -3953,56 +3977,100 @@ class SearchPipeline:
             return
 
         vectors = await self.store.get_all_vectors(collection)
-
-        # Start from the stored row (a new collection from the defaults), so every field the recompute does not
-        # change, including the description state (C3), survives by construction.
-        base = existing_meta or CollectionMeta(
-            name=collection,
-            namespace=namespace,
-            active_embedding_model=global_embedder.model_name,
-            schema_version=STORE_SCHEMA_VERSION,
-        )
-
-        if not vectors:
-            if force or existing_meta is not None:
-                meta = replace(
-                    base,
-                    centroid=None,
-                    centroid_sum=None,
-                    doc_count=await self.store.count_documents(collection),
-                    chunk_count=0,
-                    last_indexed=datetime.now(UTC),
-                    namespace=namespace,
-                    description_embedding=None,
-                    mutations_since_recompute=0,
-                    needs_recompute=False,
-                )
-                await self.store.update_collection_meta(meta)
+        if not vectors and not (force or existing_meta is not None):
             return
 
-        centroid_sum = elementwise_sum(vectors)
-        chunk_count = len(vectors)
-        centroid = [x / chunk_count for x in centroid_sum]
         doc_count = await self.store.count_documents(collection)
-
-        if base.description is not None:
-            description_embedding = await global_embedder.embed_one(base.description)
+        legacy_vector = await self._legacy_description_vector(existing_meta, global_embedder)
+        if vectors:
+            centroid_sum: list[float] | None = elementwise_sum(vectors)
+            chunk_count = len(vectors)
+            centroid: list[float] | None = [x / chunk_count for x in centroid_sum]
         else:
-            description_embedding = None
+            centroid_sum = centroid = None
+            chunk_count = 0
 
-        meta = replace(
-            base,
-            centroid=centroid,
-            centroid_sum=centroid_sum,
-            doc_count=doc_count,
-            chunk_count=chunk_count,
-            last_indexed=datetime.now(UTC),
-            namespace=namespace,
-            description_embedding=description_embedding,
-            mutations_since_recompute=0,
-            needs_recompute=False,
-        )
-        await self.store.update_collection_meta(meta)
+        async with self.store.locked_collection_meta(collection, namespace) as locked:
+            if locked is None and existing_meta is not None:
+                return  # dropped during the scan: a write would re-insert it
+            # Start from the row under the lock (a new collection from the defaults), so every field the recompute
+            # does not change survives by construction.
+            base = locked or CollectionMeta(
+                name=collection,
+                namespace=namespace,
+                active_embedding_model=global_embedder.model_name,
+                schema_version=STORE_SCHEMA_VERSION,
+            )
+            description_embedding = base.description_embedding
+            if (
+                description_embedding is None
+                and legacy_vector is not None
+                and legacy_vector.text == base.description  # still the text it was computed from
+                and self._collection_model_is(base, global_embedder)  # and still the model it was computed with
+            ):
+                description_embedding = legacy_vector.vector
+            scanned_at = (
+                (existing_meta.mutations_since_recompute, existing_meta.needs_recompute)
+                if existing_meta is not None
+                else (0, False)
+            )
+            if (base.mutations_since_recompute, base.needs_recompute) != scanned_at:
+                # An ingest or delete batch landed during the scan, so the scanned totals may predate it. The row
+                # keeps the totals it maintained incrementally and its counter and flag, which make the next
+                # trigger recompute again; only the description repair is applied.
+                if description_embedding != base.description_embedding:
+                    await self.store.update_collection_meta(
+                        replace(base, description_embedding=description_embedding), _locked_by_caller=True
+                    )
+                return
+            meta = replace(
+                base,
+                centroid=centroid,
+                centroid_sum=centroid_sum,
+                doc_count=doc_count,
+                chunk_count=chunk_count,
+                last_indexed=datetime.now(UTC),
+                namespace=namespace,
+                description_embedding=description_embedding,
+                mutations_since_recompute=0,
+                needs_recompute=False,
+            )
+            await self.store.update_collection_meta(meta, _locked_by_caller=True)
+
+    def _collection_model_is(self, row: CollectionMeta, embedder: Embedder) -> bool:
+        """Whether *embedder* has the model *row*'s collection searches with (an unpinned one uses the default)."""
+        return (row.active_embedding_model or self._global_embedder.model_name) == embedder.model_name
+
+    async def _legacy_description_vector(
+        self, row: CollectionMeta | None, embedder: Embedder
+    ) -> _LegacyDescriptionVector | None:
+        """The vector of a legacy description (text, no vector) from *embedder* when it has the row's model.
+
+        ``None`` when the row has no description, already has a vector, or *embedder* is of another model than the
+        collection's: that vector would route with the wrong model, so the description stays vectorless until it
+        next changes through the shared write operation (C11). Also ``None``, after one WARNING that names the
+        collection and the failure's class only, when the embedding fails or is unusable.
+        """
+        if (
+            row is None
+            or not row.description
+            or row.description_embedding is not None
+            or not self._collection_model_is(row, embedder)
+        ):
+            return None
+        failure: str | None = None
+        try:
+            async with asyncio.timeout(EMBED_WAIT_SECONDS):  # the import path passes a cold, lazily built embedder
+                vector = await embedder.embed_one(row.description)
+        except Exception as exc:  # noqa: BLE001 — the repair is optional; it must not block the centroid
+            failure = type(exc).__name__
+        else:
+            if not is_storable_vector(vector):
+                failure = "unusable vector"
+        if failure is not None:
+            logger.warning("Collection %r: legacy description left without a routing vector (%s)", row.name, failure)
+            return None
+        return _LegacyDescriptionVector(row.description, vector)
 
 
 # ---------------------------------------------------------------------------

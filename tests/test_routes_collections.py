@@ -4833,7 +4833,8 @@ def test_patch_state_d_replace_pending(
 def test_patch_empty_collection_sets_active_directly(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
-    """PATCH on empty collection (count_chunks==0) sets active_model directly, no pending."""
+    """PATCH on empty collection (count_chunks==0) sets active_model directly, no pending, and drops the old model's
+    description vector (the description text stays)."""
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "docs"
@@ -4844,7 +4845,13 @@ def test_patch_empty_collection_sets_active_directly(
     app = create_app(cfg, tmp_store)
 
     name = path_to_collection_name(str(src))
-    meta = CollectionMeta(name=name, namespace="default", active_embedding_model="BAAI/bge-small-en-v1.5")
+    meta = CollectionMeta(
+        name=name,
+        namespace="default",
+        active_embedding_model="BAAI/bge-small-en-v1.5",
+        description="a meta-only collection",
+        description_embedding=[0.1, 0.2],
+    )
 
     mock_store = MagicMock()
     mock_store.get_collection_meta = AsyncMock(return_value=meta)
@@ -4874,6 +4881,8 @@ def test_patch_empty_collection_sets_active_directly(
     assert saved_meta.active_embedding_model == "BAAI/bge-base-en-v1.5"
     assert saved_meta.pending_embedding_model is None
     assert saved_meta.needs_reindex is False
+    assert saved_meta.description == "a meta-only collection"
+    assert saved_meta.description_embedding is None
 
 
 def test_patch_stale_reindex_job_id_auto_cleared(
@@ -7032,6 +7041,7 @@ def _make_reindex_metadata_app(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
+    with_locked_collection_meta(mock_store)
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -7251,10 +7261,10 @@ def test_reindex_metadata_task_failed_path(
 def test_reindex_metadata_task_clears_job_id_before_terminal_status(
     tmp_store: JobStore, reindex_outcome: dict[str, Any], terminal_status: JobStatus
 ) -> None:
-    """The meta-pointer clear (an unlocked meta read + upsert) runs while the job is still RUNNING.
+    """The meta-pointer clear (a read under the collection lock, then an upsert) runs while the job is still RUNNING.
 
-    DELETE /collections/{name} refuses only while the job is RUNNING/CANCELLING: a clear after the terminal
-    write could upsert the meta row of a collection DELETE dropped in between, re-creating it.
+    DELETE /collections/{name} refuses only while the job is RUNNING/CANCELLING: a client that sees the terminal
+    status must also see the pointer cleared.
     """
     from archon_search.server.routes_collections import _reindex_metadata_task
 
@@ -7264,8 +7274,9 @@ def test_reindex_metadata_task_clears_job_id_before_terminal_status(
     search_store = MagicMock()
     search_store.reindex_metadata = AsyncMock(**reindex_outcome)
     search_store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(search_store)
     search_store.update_collection_meta = AsyncMock(
-        side_effect=lambda _meta: status_at_clear.append(tmp_store.get(job.job_id).status)
+        side_effect=lambda _meta, **_kwargs: status_at_clear.append(tmp_store.get(job.job_id).status)
     )
 
     asyncio.run(_reindex_metadata_task(job, tmp_store, search_store, dry_run=False, normalize_timestamps=False))
@@ -7292,6 +7303,7 @@ def test_reindex_metadata_task_done_write_failure_ends_failed_after_clearing_the
         return_value=MagicMock(processed=1, updated=1, skipped=0, ts_normalized=0, warnings=[])
     )
     search_store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(search_store)
     search_store.update_collection_meta = AsyncMock()
     real_update = tmp_store.update
 
@@ -7331,6 +7343,7 @@ async def test_reindex_metadata_task_cancelled_clears_the_pointer_and_leaves_the
     search_store = MagicMock()
     search_store.reindex_metadata = AsyncMock(side_effect=reindex_until_cancelled)
     search_store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(search_store)
     search_store.update_collection_meta = AsyncMock()
     task = asyncio.create_task(
         _reindex_metadata_task(job, tmp_store, search_store, dry_run=False, normalize_timestamps=False)
@@ -7342,7 +7355,7 @@ async def test_reindex_metadata_task_cancelled_clears_the_pointer_and_leaves_the
         await asyncio.wait_for(task, timeout=_ASYNC_STEP_TIMEOUT_S)
 
     assert meta.metadata_reindex_job_id is None
-    search_store.update_collection_meta.assert_awaited_once_with(meta)
+    search_store.update_collection_meta.assert_awaited_once_with(meta, _locked_by_caller=True)
     assert tmp_store.get(job.job_id).status == JobStatus.RUNNING
 
 

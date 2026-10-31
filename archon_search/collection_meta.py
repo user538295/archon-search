@@ -14,6 +14,7 @@ DescriptionStoredStatus = Literal["ok", "failed"]
 DESCRIPTION_SOURCE_GENERATED: DescriptionSource = "generated"
 DESCRIPTION_SOURCE_MANUAL: DescriptionSource = "manual"
 DESCRIPTION_STATUS_OK: DescriptionStoredStatus = "ok"
+DESCRIPTION_STATUS_FAILED: DescriptionStoredStatus = "failed"
 DESCRIPTION_SOURCES: tuple[str, ...] = get_args(DescriptionSource)
 DESCRIPTION_STORED_STATUSES: tuple[str, ...] = get_args(DescriptionStoredStatus)
 

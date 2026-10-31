@@ -1668,6 +1668,9 @@ def create_app(
                         meta.pending_embedding_model = requested
                         meta.needs_reindex = True
                     else:
+                        # No chunks to re-embed, so the model switches at once; the description vector belongs to
+                        # the old model and must not route against the new one.
+                        meta.description_embedding = None
                         meta.active_embedding_model = requested
                         meta.pending_embedding_model = None
                         meta.needs_reindex = False

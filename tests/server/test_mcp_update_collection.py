@@ -379,6 +379,8 @@ async def test_update_collection_revert_clears_pending() -> None:
 async def test_update_collection_empty_collection_sets_active_model() -> None:
     """When chunk_count == 0, model is set directly as active_embedding_model, no reindex needed."""
     meta = _make_meta(active_model="old-model")
+    meta.description = "a meta-only collection"
+    meta.description_embedding = [0.1, 0.2]
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=meta)
@@ -412,6 +414,9 @@ async def test_update_collection_empty_collection_sets_active_model() -> None:
     # needs_reindex is an internal field and must NOT appear in the response.
     assert "needs_reindex" not in result
     store.update_collection_meta.assert_awaited_once()
+    saved = store.update_collection_meta.call_args[0][0]
+    assert saved.description == "a meta-only collection"
+    assert saved.description_embedding is None, "the old model's description vector must not outlive the switch"
 
 
 # ---------------------------------------------------------------------------

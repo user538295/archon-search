@@ -5,7 +5,9 @@ builds a row with EVERY field non-default and sends it through every writer path
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -197,6 +199,12 @@ class _RecordingStore:
     async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> CollectionMeta | None:
         return self.existing
 
+    @contextlib.asynccontextmanager
+    async def locked_collection_meta(
+        self, name: str, namespace: str = DEFAULT_NAMESPACE
+    ) -> AsyncIterator[CollectionMeta | None]:
+        yield self.existing
+
     async def get_all_vectors(self, collection: str) -> list[list[float]]:
         return self.vectors
 
@@ -226,7 +234,7 @@ async def test_row_with_every_field_non_default_survives_every_writer_pipeline_r
     assert fake.written is not None
     assert fake.written.doc_count == RECOMPUTED_DOC_COUNT
     assert fake.written.needs_recompute is False
-    assert fake.written.description_embedding == (RECOMPUTED_EMBEDDING if vectors else None)
+    assert fake.written.description_embedding == meta.description_embedding, "the stored vector is carried"
     _assert_only_changed(
         meta,
         fake.written,
@@ -238,7 +246,6 @@ async def test_row_with_every_field_non_default_survives_every_writer_pipeline_r
             "last_indexed",
             "mutations_since_recompute",
             "needs_recompute",
-            "description_embedding",
         },
     )
 

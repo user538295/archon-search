@@ -474,14 +474,14 @@ def test_task_clears_job_id_on_every_terminal_exit(tmp_path: Path, monkeypatch: 
                 original_update = search_store.update_collection_meta
                 call_count = {"n": 0}
 
-                async def _flaky_update(m):
+                async def _flaky_update(m, **kwargs):
                     call_count["n"] += 1
                     if call_count["n"] == 1:
                         # first call is the setup write above; let it through
                         # by falling back to original -- but we already awaited
                         # it, so this only affects the clear-time call below.
                         raise OSError("disk full")
-                    return await original_update(m)
+                    return await original_update(m, **kwargs)
 
                 monkeypatch.setattr(search_store, "update_collection_meta", _flaky_update)
 

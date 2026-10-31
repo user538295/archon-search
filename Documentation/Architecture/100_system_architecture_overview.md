@@ -140,7 +140,7 @@ Stages are independent classes wired by the orchestrator. The ordering `parser -
 score = (1 - w) * centroid_score + w * description_score
 ```
 
-where `w = routing_description_weight` (default `0.3`). The blend activates only when the collection's `description_embedding` field is non-null, non-zero, and dimensionally consistent with the query embedding. Collections without a valid `description_embedding` fall back to pure centroid scoring. The `description_embedding` artifact is computed per-collection at ingest time and stored in `CollectionMeta`. The default strategy remains `"centroid"` — no operator action is needed to preserve pre-B4 behavior. See ADR-07 for the full decision.
+where `w = routing_description_weight` (default `0.3`). The blend activates only when the collection's `description_embedding` field is non-null, non-zero, and dimensionally consistent with the query embedding. Collections without a valid `description_embedding` fall back to pure centroid scoring. The `description_embedding` artifact is stored in `CollectionMeta` and written together with the description text by the shared write-description operation (`DescriptionWriter`), which embeds the text with the collection's own embedder; the metadata recompute carries it and only fills in a legacy description that has none, when its embedder has the collection's model. The default strategy remains `"centroid"` — no operator action is needed to preserve pre-B4 behavior. See ADR-07 for the full decision.
 
 The router calls `get_collections_meta` over JSON-RPC against the MCP endpoint — it does not import the pipeline.
 

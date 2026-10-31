@@ -161,10 +161,10 @@ async def _community_rebuild_task(
     # ponytail: eager clear prevents the poll→read race that only manifests on slow CI disks.
     if search_store is not None:
         try:
-            meta = await search_store.get_collection_meta(job.collection, namespace=job.namespace)
-            if meta is not None and meta.community_rebuild_job_id == job_id:
-                meta.community_rebuild_job_id = None
-                await search_store.update_collection_meta(meta)
+            async with search_store.locked_collection_meta(job.collection, job.namespace) as meta:
+                if meta is not None and meta.community_rebuild_job_id == job_id:
+                    meta.community_rebuild_job_id = None
+                    await search_store.update_collection_meta(meta, _locked_by_caller=True)
         except Exception:  # noqa: BLE001 — best-effort pointer cleanup in a background task; failure is logged, never raised
             logger.warning(
                 "_community_rebuild_task: failed to clear community_rebuild_job_id for job %s",

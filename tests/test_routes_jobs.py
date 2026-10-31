@@ -56,6 +56,7 @@ from archon_search.types import (
     SyncJob,
 )
 from tests._collection_access_stub import allow_collection_access_everywhere
+from tests._collection_lock_stub import with_locked_collection_meta
 from tests._internal_error_leak import (
     LEAK_NEEDLE,
     assert_logged_with_traceback,
@@ -1400,6 +1401,7 @@ def _make_mocks(
 
     search_store = MagicMock()
     search_store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(search_store)
     search_store.update_collection_meta = AsyncMock(return_value=None)
 
     fake_embedder = MagicMock()
@@ -1512,6 +1514,7 @@ async def test_reindex_task_preserves_active_on_failure(tmp_path: Path) -> None:
     )
     # Return the same meta on success-path fetch
     search_store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(search_store)
 
     await _reindex_task(
         job_id=job.job_id,
@@ -1545,7 +1548,7 @@ async def test_reindex_task_writes_collection_meta_before_job_done(tmp_path: Pat
     meta = _make_collection_meta(active_embedding_model="model-A")
     job_store, search_store, embedder_cache, pipeline = _make_mocks(job, meta)
 
-    async def track_meta_write(m: CollectionMeta) -> None:
+    async def track_meta_write(m: CollectionMeta, **_kwargs: object) -> None:
         call_order.append("meta_write")
 
     def track_job_update(job_id: str, **kwargs: object) -> None:
@@ -1620,6 +1623,7 @@ async def test_reindex_task_concurrent_patch_preserves_new_pending(tmp_path: Pat
     # First call returns initial_meta (for embedder resolution in data-only path, not needed here)
     # success-path read returns concurrent_meta
     search_store.get_collection_meta = AsyncMock(return_value=concurrent_meta)
+    with_locked_collection_meta(search_store)
 
     await _reindex_task(
         job_id=job.job_id,
@@ -1657,6 +1661,7 @@ async def test_reindex_task_after_patch_revert_promotes_active_clears_needs_rein
     )
     job_store, search_store, embedder_cache, pipeline = _make_mocks(job, reverted_meta)
     search_store.get_collection_meta = AsyncMock(return_value=reverted_meta)
+    with_locked_collection_meta(search_store)
 
     await _reindex_task(
         job_id=job.job_id,
@@ -1721,6 +1726,7 @@ async def test_reindex_task_data_only_preserves_active_model(tmp_path: Path) -> 
     )
     job_store, search_store, embedder_cache, pipeline = _make_mocks(job, meta)
     search_store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(search_store)
 
     await _reindex_task(
         job_id=job.job_id,
@@ -1759,6 +1765,7 @@ async def test_reindex_task_data_only_failure_clears_job_id_only(tmp_path: Path)
         job, meta, ingest_raises=ValueError("data-only boom")
     )
     search_store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(search_store)
 
     await _reindex_task(
         job_id=job.job_id,
@@ -1792,6 +1799,7 @@ async def test_reindex_task_embedder_cache_failure_marks_job_failed(tmp_path: Pa
         job, meta, embedder_raises=RuntimeError("model load failed")
     )
     search_store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(search_store)
 
     await _reindex_task(
         job_id=job.job_id,
@@ -2024,6 +2032,7 @@ async def _run_reindex_on_failing_writes(
 ) -> Any:
     search_store = MagicMock()
     search_store.get_collection_meta = AsyncMock(return_value=_make_collection_meta(reindex_job_id=job_id))
+    with_locked_collection_meta(search_store)
     search_store.update_collection_meta = AsyncMock(return_value=None)
     await _reindex_task(
         job_id=job_id, store=search_store, job_store=job_store, embedder_cache=embedder_cache, pipeline=pipeline,
@@ -2341,6 +2350,7 @@ def _reindex_cancel_fixture(tmp_path: Path, target_model: str | None) -> tuple:
     )
     search_store = MagicMock()
     search_store.get_collection_meta = AsyncMock(return_value=meta)
+    with_locked_collection_meta(search_store)
     search_store.update_collection_meta = AsyncMock(return_value=None)
     pipeline = MagicMock()
     pipeline.ingest_directory = AsyncMock(return_value=[])
@@ -2597,7 +2607,7 @@ async def test_reindex_task_clears_pointer_before_terminal_status(
     run = _reindex_exit(tmp_path, monkeypatch, exit_at)
     status_at_clear: list[JobStatus] = []
 
-    async def _record_clear(_meta: CollectionMeta) -> None:
+    async def _record_clear(_meta: CollectionMeta, **_kwargs: object) -> None:
         status_at_clear.append(run.job_store.get(run.job_id).status)  # type: ignore[union-attr]
 
     run.search_store.update_collection_meta = AsyncMock(side_effect=_record_clear)
@@ -2618,13 +2628,13 @@ async def test_reindex_task_clears_pointer_before_terminal_status(
 async def test_reindex_task_success_writes_the_meta_row_before_done(tmp_path: Path) -> None:
     """On success the promotion's meta write (which also clears reindex_job_id) runs while the job is still RUNNING,
     and DONE is written after it: DELETE /collections/{name} refuses only while the job is PENDING/RUNNING/CANCELLING,
-    so a meta write after DONE (an unlocked read, then an upsert) could re-create a collection dropped in between."""
+    so a meta write after DONE could land after the collection was dropped, which the job no longer guards."""
     job_store, job, meta, search_store, pipeline = _reindex_cancel_fixture(tmp_path, "model-B")
     embedder_cache = MagicMock()
     embedder_cache.get_or_load = AsyncMock(return_value=MagicMock())
     status_at_write: list[JobStatus] = []
 
-    async def _record_write(_meta: CollectionMeta) -> None:
+    async def _record_write(_meta: CollectionMeta, **_kwargs: object) -> None:
         status_at_write.append(job_store.get(job.job_id).status)  # type: ignore[union-attr]
 
     search_store.update_collection_meta = AsyncMock(side_effect=_record_write)
@@ -2709,7 +2719,7 @@ async def test_reindex_task_running_claim_persist_failure_honours_cancel_landing
     embedder_cache = MagicMock()
     embedder_cache.get_or_load = AsyncMock(return_value=MagicMock())
 
-    async def _clear_while_a_delete_lands(_meta: CollectionMeta) -> None:
+    async def _clear_while_a_delete_lands(_meta: CollectionMeta, **_kwargs: object) -> None:
         _cancel_job(job_store, job.job_id)
 
     search_store.update_collection_meta = AsyncMock(side_effect=_clear_while_a_delete_lands)
@@ -2797,7 +2807,7 @@ async def test_reindex_task_cancel_during_model_promotion_ends_cancelled_with_mo
     embedder_cache = MagicMock()
     embedder_cache.get_or_load = AsyncMock(return_value=MagicMock())
 
-    async def _promote_while_a_delete_lands(_meta: CollectionMeta) -> None:
+    async def _promote_while_a_delete_lands(_meta: CollectionMeta, **_kwargs: object) -> None:
         _cancel_job(job_store, job.job_id)
 
     search_store.update_collection_meta = AsyncMock(side_effect=_promote_while_a_delete_lands)

@@ -281,12 +281,19 @@ async def _dispatch_ingest(
                 from archon_search.collection_meta import CollectionMeta
                 from archon_search.store import STORE_SCHEMA_VERSION
                 try:
-                    await search_store.update_collection_meta(CollectionMeta(
-                        name=body.collection,
-                        namespace=namespace,
-                        active_embedding_model=active_model,
-                        schema_version=STORE_SCHEMA_VERSION,
-                    ))
+                    # Only while the row is still missing under the collection lock: a concurrent ingest may have
+                    # created the collection since the read above, and the upsert would reset its row.
+                    async with search_store.locked_collection_meta(body.collection, namespace) as current:
+                        if current is None:
+                            await search_store.update_collection_meta(
+                                CollectionMeta(
+                                    name=body.collection,
+                                    namespace=namespace,
+                                    active_embedding_model=active_model,
+                                    schema_version=STORE_SCHEMA_VERSION,
+                                ),
+                                _locked_by_caller=True,
+                            )
                 except Exception:
                     logger.warning(
                         "_dispatch_ingest: could not write stub meta for %r on path-not-found",
@@ -509,10 +516,10 @@ async def _clear_reindex_job_id(search_store: SearchStore, collection: str, name
     stale, so a newer reindex may already own the collection.
     """
     try:
-        meta = await search_store.get_collection_meta(collection, namespace)
-        if meta is not None and meta.reindex_job_id == job_id:
-            meta.reindex_job_id = None
-            await search_store.update_collection_meta(meta)
+        async with search_store.locked_collection_meta(collection, namespace) as meta:
+            if meta is not None and meta.reindex_job_id == job_id:
+                meta.reindex_job_id = None
+                await search_store.update_collection_meta(meta, _locked_by_caller=True)
     except Exception:
         logger.exception("_reindex_task: failed to clear reindex_job_id for job %s", job_id)
 
@@ -525,9 +532,9 @@ async def _end_reindex_cancelled_or_failed(
     when a DELETE requested a cancel (CANCELLING), else FAILED with *error*.
 
     ``error=None`` never writes FAILED: only a requested cancel is completed (the job is already terminal, or the
-    caller has checked that a cancel is pending). The clear comes first because it rewrites the whole meta row: a
-    client that waits for the terminal status and then starts a new reindex or PATCH must not have its row clobbered
-    by this task's stale write. Both steps are best-effort (failures are logged, never raised).
+    caller has checked that a cancel is pending). The clear comes first so that a client that waits for the terminal
+    status and then starts a new reindex or PATCH finds the pointer already cleared. The clear reads the row under the
+    collection lock and writes it as read. Both steps are best-effort (failures are logged, never raised).
     """
     await _clear_reindex_job_id(search_store, collection, namespace, job_id)
     if _finish_requested_cancel(job_store, job_id, context=_REINDEX_LOG_CONTEXT) or error is None:
@@ -685,31 +692,39 @@ async def _reindex_task(
 
     # --- Step 5: success path — promote model ---
     try:
-        meta = await store.get_collection_meta(collection, namespace)
-        if meta is not None:
-            if meta.reindex_job_id == job_id:  # another job's pointer is left alone (see _clear_reindex_job_id)
-                meta.reindex_job_id = None
-            # Only promote the model when the chunks were actually re-embedded.
-            # A source-less no-op reindex (collection_path is None) skipped the
-            # scan, so promoting active_embedding_model would advertise a model the
-            # stored vectors were never produced with — silent search corruption.
-            # Leave pending_embedding_model/needs_reindex intact in that case.
-            if target_model is not None and collection_path is not None:
-                # Model-change path
-                meta.active_embedding_model = target_model
-                pending = meta.pending_embedding_model
-                if pending == target_model:
-                    meta.pending_embedding_model = None
-                    meta.needs_reindex = False
-                elif pending is not None:
-                    # Different pending set concurrently — leave pending and needs_reindex as-is
-                    pass
-                else:
-                    # pending is None
-                    meta.needs_reindex = False
-            await store.update_collection_meta(meta)
-        else:
-            logger.warning("_reindex_task: collection meta not found at success for job %s", job_id)
+        # Read under the collection lock and written back as read (``update_collection_meta`` upserts), so a
+        # description write or a drop that landed during the reindex is carried, not overwritten or re-inserted.
+        async with store.locked_collection_meta(collection, namespace) as meta:
+            if meta is not None:
+                if meta.reindex_job_id == job_id:  # another job's pointer is left alone (see _clear_reindex_job_id)
+                    meta.reindex_job_id = None
+                # Only promote the model when the chunks were actually re-embedded.
+                # A source-less no-op reindex (collection_path is None) skipped the
+                # scan, so promoting active_embedding_model would advertise a model the
+                # stored vectors were never produced with — silent search corruption.
+                # Leave pending_embedding_model/needs_reindex intact in that case.
+                if target_model is not None and collection_path is not None:
+                    # Model-change path
+                    if meta.active_embedding_model != target_model and meta.description_embedding is not None:
+                        # The description vector belongs to the model it was computed with: a vector of the old
+                        # model must not route against the new one. The shared write refreshes it with the text; the
+                        # flag lets the next recompute repair it when its embedder has the new model.
+                        meta.description_embedding = None
+                        meta.needs_recompute = True
+                    meta.active_embedding_model = target_model
+                    pending = meta.pending_embedding_model
+                    if pending == target_model:
+                        meta.pending_embedding_model = None
+                        meta.needs_reindex = False
+                    elif pending is not None:
+                        # Different pending set concurrently — leave pending and needs_reindex as-is
+                        pass
+                    else:
+                        # pending is None
+                        meta.needs_reindex = False
+                await store.update_collection_meta(meta, _locked_by_caller=True)
+            else:
+                logger.warning("_reindex_task: collection meta not found at success for job %s", job_id)
     except Exception:
         logger.exception("_reindex_task: failed to update collection meta for job %s", job_id)
 
