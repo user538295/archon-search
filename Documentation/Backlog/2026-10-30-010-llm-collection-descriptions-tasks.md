@@ -523,7 +523,7 @@ flowchart LR
         - #manual_test — Real `think` behaviour — `true`, `false` and `default` on a real reasoning model such as `qwen3.6:35b-a3b-128k` (non-automatable: needs a real reasoning model)
 
 ### Phase 6 · Turn on collection descriptions in the install wizard *(the wizard step, its config section, extras, secrets and template)*
-- [ ] **FE-6** — `WizardFeatures` description fields and the `[description]` writer in `config_writer.py` (`enabled = false` on no, blank `claude_cli` model omitted), extend `_assert_features_persisted`, settle the re-run key handling; `description.enabled` follows HyDE's re-run key handling #frontend-role
+- [x] **FE-6** — `WizardFeatures` description fields and the `[description]` writer in `config_writer.py` (`enabled = false` on no, blank `claude_cli` model omitted), extend `_assert_features_persisted`, settle the re-run key handling; `description.enabled` follows HyDE's re-run key handling #frontend-role
     - Presentation · 4.0h
     - needs BE-17 · completes C4, S46
     - Tests

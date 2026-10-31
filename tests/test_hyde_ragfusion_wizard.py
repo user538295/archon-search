@@ -536,6 +536,17 @@ class TestAssertFeaturesPersisted:
                 self._cfg(rag_enabled=False), WizardFeatures(enable_rag_fusion=True)
             )
 
+    def test_assert_features_persisted_requires_description(self) -> None:
+        from archon_search.config import DescriptionConfig
+
+        cfg = self._cfg()
+        cfg.description = DescriptionConfig(enabled=False)
+        with pytest.raises(InstallError, match="description"):
+            _assert_features_persisted(cfg, WizardFeatures(description_enabled=True))
+        cfg.description = DescriptionConfig(enabled=True)
+        _assert_features_persisted(cfg, WizardFeatures(description_enabled=True))
+        _assert_features_persisted(self._cfg(), WizardFeatures(description_enabled=False))
+
     def test_noop_when_feature_not_requested(self) -> None:
         # Wizard did not enable hyde; disabled on disk is correct → no raise.
         _assert_features_persisted(self._cfg(hyde_enabled=False), WizardFeatures())

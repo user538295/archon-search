@@ -63,6 +63,15 @@ class WizardFeatures:
     graph_llama_cpp_base_url: str = ""        # empty = use config default
     graph_ollama_base_url: str = ""           # empty = use config default
     graph_ollama_context_tokens: int | None = None
+    # FE-6: [description] — same tri-state as HyDE/RAG Fusion (None = unanswered, False = `enabled = false`).
+    # think / include_restricted_chunks / timeout_seconds / max_sample_chunks are never asked by the wizard.
+    description_enabled: bool | None = None
+    description_provider: str = "anthropic"
+    description_model: str = ""               # empty = use provider default
+    description_ollama_base_url: str = ""     # empty = use config default
+    description_llama_cpp_base_url: str = ""  # empty = use config default
+    description_ollama_context_tokens: int | None = None  # only written for provider "ollama"
+    description_backfill_on_startup: bool = False
 
     @property
     def graph_enrichment_written(self) -> bool:
@@ -72,7 +81,7 @@ class WizardFeatures:
 
 # Tri-state optional keys written by `_apply_wizard_features_to_toml`:
 # (TOML section, TOML key, WizardFeatures field, dotted SearchConfig attribute holding the default).
-# `[hyde]`/`[rag_fusion]` `enabled` share the tri-state but are deliberately not listed: True also
+# `[hyde]`/`[rag_fusion]`/`[description]` `enabled` share the tri-state but are deliberately not listed: True also
 # writes a provider block, so they have their own writer (`_apply_query_expansion`).
 _OPTIONAL_KEYS: tuple[tuple[str, str, str, str], ...] = (
     ("database", "eager_load_embedders", "eager_load_embedders", "eager_load_embedders"),
@@ -93,12 +102,13 @@ _DEFAULTED_RERUN_KEYS: tuple[tuple[str, str, str], ...] = (
     *((section, key, default_attr) for section, key, _, default_attr in _OPTIONAL_KEYS),
     ("hyde", "enabled", "hyde.enabled"),
     ("rag_fusion", "enabled", "rag_fusion.enabled"),
+    ("description", "enabled", "description.enabled"),
     ("telemetry", "retention_days", "telemetry.retention_days"),
 )
 
 # The keys hand-edit detection guards: the keys a re-run rewrites or removes from its own answers
 # even when no flag names them, except `[database].device`. Deployment keys (`[server]`,
-# `db_path`, `[logging].level`, top-k), `[graph]` and the HyDE/RAG Fusion provider/model keys are
+# `db_path`, `[logging].level`, top-k), `[graph]` and the HyDE/RAG Fusion/description provider/model keys are
 # excluded: a re-run writes them only when their flag or answer is given. `[database].device` is
 # excluded although Step 9 rewrites it from the GPU answer: a declined GPU prompt, `--disable-gpu`
 # or a failed accelerator check writes `cpu` on every such run, and `configure_device` skips the
@@ -106,6 +116,14 @@ _DEFAULTED_RERUN_KEYS: tuple[tuple[str, str, str], ...] = (
 _RERUN_MANAGED_KEYS: tuple[tuple[str, str], ...] = (
     *(("database", key) for key in _PROFILE_DATABASE_KEYS),
     *((section, key) for section, key, _ in _DEFAULTED_RERUN_KEYS),
+)
+
+# Provider `[hyde]`/`[rag_fusion]`/`[description]` use when `provider` is absent from the file.
+_DEFAULT_QUERY_EXPANSION_PROVIDER = "anthropic"
+
+# Keys a query-expansion provider owns: dropped when a re-run switches to another provider.
+_PROVIDER_OWNED_KEYS: tuple[str, ...] = (
+    "model", "ollama_base_url", "llama_cpp_base_url", "ollama_context_tokens",
 )
 
 
@@ -211,11 +229,9 @@ def _reconcile_ollama_base_url(section: tomlkit.items.Table, base_url: str) -> N
     set a custom value, else delete any stale key so config falls back to
     ``OLLAMA_BASE_URL_DEFAULT`` — keeps the stored URL in step with that choice.
 
-    Scope: this only runs while the section's provider is still Ollama. Switching
-    provider *away* is not handled: the ``anthropic`` branch of
-    ``_apply_query_expansion`` returns before touching the provider keys, so a stale
-    non-anthropic provider block from an earlier run is not cleared (known gap, not
-    tracked in a backlog file).
+    Scope: this only runs while the section's provider is still Ollama. A provider
+    switch away is cleaned up by ``_apply_query_expansion`` only for sections that
+    pass ``provider_answered`` (``[description]``).
     """
     if base_url:
         section["ollama_base_url"] = base_url
@@ -253,7 +269,7 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
     Only the operator's actual choices are written (20_wizard.md §"Only the
     choices you actually made are written"). ``enable_watch``,
     ``enable_telemetry``, ``eager_load_embedders``, ``routing_strategy``,
-    ``log_format``, ``enable_hyde`` and ``enable_rag_fusion`` are optional
+    ``log_format``, ``enable_hyde``, ``enable_rag_fusion`` and ``description_enabled`` are optional
     because a bare default cannot distinguish "explicitly asked for the default"
     from "never answered": ``None`` means unanswered — the key is removed if a
     prior run wrote it (re-run safe) — and any value, including ``False`` or one
@@ -305,12 +321,19 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         ollama_base_url: str,
         llama_cpp_base_url: str,
         ollama_context_tokens: int | None,
+        *,
+        provider_answered: bool = False,
     ) -> None:
-        """Write one C15 Tier 2 query-expansion table (``[hyde]`` or ``[rag_fusion]``).
+        """Write one query-expansion-style table (``[hyde]``, ``[rag_fusion]`` or ``[description]``).
 
         True writes ``enabled = true`` plus the provider block (G10 BE-8); False/None go
         through ``_set_optional`` like the tri-state keys (False → ``enabled = false``,
-        None → stale key removed).
+        None → stale key removed). With *provider_answered* (the caller knows the provider was
+        answered, not defaulted) the provider keys are authoritative: a switch drops the keys the
+        previous provider owned (model, base URLs, context window) and a blank ``claude_cli``
+        model drops a stale ``model``. Without it the writer cannot tell an answered ``anthropic``
+        from the default (``--enable-hyde`` / ``--enable-rag-fusion`` skip the prompt), so a
+        stale or hand-edited provider block is kept (known gap for HyDE/RAG Fusion).
         """
         if not enabled:
             _set_optional(section, "enabled", enabled)
@@ -318,7 +341,14 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         _ensure_section(section)
         table = doc[section]
         table["enabled"] = True
-        if provider == "anthropic":
+        previous_provider = table.get("provider", _DEFAULT_QUERY_EXPANSION_PROVIDER)
+        if provider_answered and previous_provider != provider:
+            for stale in _PROVIDER_OWNED_KEYS:
+                if stale in table:
+                    del table[stale]
+        if provider == _DEFAULT_QUERY_EXPANSION_PROVIDER:
+            if provider_answered and "provider" in table:
+                del table["provider"]
             return
         table["provider"] = provider
         if provider == "claude_cli":
@@ -327,6 +357,8 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
             # Writing "" would trip config.py's non-empty guard at startup.
             if model:
                 table["model"] = model
+            elif provider_answered and "model" in table:
+                del table["model"]
             return
         # Always write model for ollama/openai (even empty string) so
         # config.py's "if not model: raise ConfigError" guard fires at
@@ -395,6 +427,21 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         features.rag_fusion_llama_cpp_base_url,
         features.rag_fusion_ollama_context_tokens,
     )
+    # FE-6: [description] reuses the HyDE writer; `backfill_on_startup` is written only on a yes.
+    _apply_query_expansion(
+        "description",
+        features.description_enabled,
+        features.description_provider,
+        features.description_model,
+        features.description_ollama_base_url,
+        features.description_llama_cpp_base_url,
+        features.description_ollama_context_tokens,
+        provider_answered=True,  # no description flag exists: whenever enabled, the provider was asked
+    )
+    if features.description_enabled:
+        doc["description"]["backfill_on_startup"] = features.description_backfill_on_startup
+    else:
+        _remove_key("description", "backfill_on_startup")
 
     # FE-2: LLM-backed graph enrichment provider — independent of graph.enabled
     # (BE-11, below): `[graph].provider` is itself the enrichment gate (no
@@ -530,7 +577,7 @@ def _detect_config_hand_edits(
     before records existed) it falls back to ``_differs_from_baseline``, which cannot tell
     a wizard-written non-default value from a hand edit. Keys outside
     ``_RERUN_MANAGED_KEYS`` are never compared: ``[server]`` and the other deployment keys,
-    ``[graph]`` and the HyDE/RAG Fusion provider/model keys, which a re-run writes only when
+    ``[graph]`` and the HyDE/RAG Fusion/description provider/model keys, which a re-run writes only when
     asked to, and ``[database].device``, which Step 9 rewrites from the GPU answer (``cpu``
     after a declined GPU prompt, ``--disable-gpu`` or a failed accelerator check) and otherwise
     leaves unchanged when it already holds the detected value.
@@ -543,7 +590,7 @@ def _detect_config_hand_edits(
 
 
 def _assert_features_persisted(cfg: SearchConfig, features: WizardFeatures) -> None:
-    """Verify the wizard's HyDE / RAG Fusion choices survived the config round-trip.
+    """Verify the wizard's HyDE / RAG Fusion / description choices survived the config round-trip.
 
     Called in ``run()`` immediately after the freshly-written config is reloaded
     via ``load_config``. Surfaces a silent write/parse failure at install time —
@@ -559,6 +606,12 @@ def _assert_features_persisted(cfg: SearchConfig, features: WizardFeatures) -> N
     if features.enable_rag_fusion and not cfg.rag_fusion.enabled:
         raise InstallError(
             "[rag_fusion].enabled was requested but is not present in the written "
+            "archon-search.toml after reload — the config write did not persist. "
+            "This is a bug; please re-run the wizard and report it if it recurs."
+        )
+    if features.description_enabled and not cfg.description.enabled:
+        raise InstallError(
+            "[description].enabled was requested but is not present in the written "
             "archon-search.toml after reload — the config write did not persist. "
             "This is a bug; please re-run the wizard and report it if it recurs."
         )

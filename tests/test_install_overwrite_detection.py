@@ -289,6 +289,7 @@ class TestDetectConfigHandEdits:
         [
             pytest.param("hyde", "enabled", True, id="hyde-enabled"),
             pytest.param("rag_fusion", "enabled", True, id="rag-fusion-enabled"),
+            pytest.param("description", "enabled", True, id="description-enabled"),
             pytest.param("telemetry", "retention_days", 7, id="telemetry-retention-days"),
         ],
     )
@@ -347,6 +348,33 @@ class TestDetectConfigHandEdits:
         config_path.write_text('hyde = "oops"\n' + config_path.read_text())
 
         assert _detect_config_hand_edits(config_path, "balanced", False) is False
+
+    @pytest.mark.integration
+    def test_overwrite_detection_managed_keys_include_description(self, tmp_path: Path) -> None:
+        """FE-6: `[description].enabled` follows HyDE's re-run handling in every hand-edit list."""
+        from archon_search.install import _detect_config_hand_edits
+        from archon_search.install.config_writer import (
+            _DEFAULTED_RERUN_KEYS,
+            _RERUN_MANAGED_KEYS,
+        )
+
+        assert {(section, key) for section, key, _ in _DEFAULTED_RERUN_KEYS} <= set(_RERUN_MANAGED_KEYS)
+        assert ("description", "enabled") in _RERUN_MANAGED_KEYS
+
+        # Baseline fallback (no record): a hand-set true is a hand edit, a wizard-written false is not.
+        baseline = tmp_path / "baseline.toml"
+        _write_wizard_config(baseline, "balanced", False, features=WizardFeatures(description_enabled=False))
+        assert _detect_config_hand_edits(baseline, "balanced", False) is False
+        _set_key(baseline, "description", "enabled", True)
+        assert _detect_config_hand_edits(baseline, "balanced", False) is True
+
+        # With a record: the wizard's own `enabled = true` is not a hand edit, a later flip is.
+        recorded = tmp_path / "recorded.toml"
+        _write_wizard_config(recorded, "balanced", False, features=WizardFeatures(description_enabled=True))
+        _record_wizard_values(recorded)
+        assert _detect_config_hand_edits(recorded, "balanced", False) is False
+        _set_key(recorded, "description", "enabled", False)
+        assert _detect_config_hand_edits(recorded, "balanced", False) is True
 
     def test_detect_missing_database_section_returns_true(self, tmp_path: Path) -> None:
         """Config with no [database] section → hand edit detected (all wizard keys absent/None)."""
@@ -490,6 +518,7 @@ class TestWizardRecord:
             pytest.param("collections", "watch", False, id="changed-back-to-default"),
             pytest.param("database", "chunk_size", 999, id="changed-profile-key"),
             pytest.param("hyde", "enabled", True, id="added-hyde-enabled"),
+            pytest.param("description", "enabled", True, id="added-description-enabled"),
             pytest.param("telemetry", "retention_days", 30, id="added-retention-days"),
         ],
     )

@@ -717,6 +717,180 @@ class TestApplyWizardFeaturesFE2LlamaCppAndGraph:
         _apply_wizard_features_to_toml(doc, features)
         assert "ollama_context_tokens" not in doc["hyde"]
 
+    def test_description_section_written_and_keys_stay_in_secrets(self) -> None:
+        """FE-6/S46: the answers land in [description]; no API key (or key-like entry) is written."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        features = WizardFeatures(
+            description_enabled=True,
+            description_provider="ollama",
+            description_model="qwen3",
+            description_ollama_base_url="http://desc-box:11434",
+            description_ollama_context_tokens=8192,
+            description_backfill_on_startup=True,
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        section = doc["description"]
+        assert section["enabled"] is True
+        assert section["provider"] == "ollama"
+        assert section["model"] == "qwen3"
+        assert section["ollama_base_url"] == "http://desc-box:11434"
+        assert section["ollama_context_tokens"] == 8192
+        assert section["backfill_on_startup"] is True
+        # The exact key set: nothing the wizard does not ask for, and no API key (those live in .secrets.env).
+        assert set(section) == {
+            "enabled", "provider", "model", "ollama_base_url", "ollama_context_tokens", "backfill_on_startup",
+        }
+
+    def test_description_llama_cpp_and_cloud_providers(self) -> None:
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(
+            doc,
+            WizardFeatures(
+                description_enabled=True,
+                description_provider="llama_cpp",
+                description_model="m",
+                description_llama_cpp_base_url="http://box:8080",
+            ),
+        )
+        assert doc["description"]["llama_cpp_base_url"] == "http://box:8080"
+        assert doc["description"]["backfill_on_startup"] is False
+        assert "ollama_context_tokens" not in doc["description"]
+
+    def test_description_claude_cli_blank_model_is_omitted_and_loads(self, tmp_path: Path) -> None:
+        """A blank claude_cli model writes no `model` key; load_config then supplies the default."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(
+            doc, WizardFeatures(description_enabled=True, description_provider="claude_cli")
+        )
+        assert doc["description"]["provider"] == "claude_cli"
+        assert "model" not in doc["description"]
+        path = tmp_path / "archon-search.toml"
+        path.write_text(tomlkit.dumps(doc))
+        cfg = load_config(path=path)
+        assert cfg.description.provider == "claude_cli"
+        assert cfg.description.model == DEFAULT_FAST_MODEL
+
+    def test_answering_no_writes_enabled_false(self) -> None:
+        """FE-6/S46: a no answer is written explicitly and keeps other hand-edited keys."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        doc["description"] = tomlkit.table()
+        doc["description"]["think"] = False
+        _apply_wizard_features_to_toml(doc, WizardFeatures(description_enabled=False))
+        assert doc["description"]["enabled"] is False
+        assert doc["description"]["think"] is False
+
+    def test_description_unanswered_writes_nothing(self) -> None:
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+        assert "description" not in doc
+
+    @pytest.mark.parametrize("provider", ["anthropic", "openai"])
+    def test_description_cloud_providers(self, provider: str) -> None:
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        model = "gpt-x" if provider == "openai" else ""
+        _apply_wizard_features_to_toml(
+            doc, WizardFeatures(description_enabled=True, description_provider=provider, description_model=model)
+        )
+        section = doc["description"]
+        assert section["enabled"] is True
+        if provider == "anthropic":
+            assert "provider" not in section
+            assert "model" not in section
+        else:
+            assert section["provider"] == "openai"
+            assert section["model"] == model
+        assert section["backfill_on_startup"] is False
+
+    def test_description_rerun_unanswered_removes_enabled_and_backfill_but_keeps_other_keys(self) -> None:
+        """None drops what the wizard wrote (like HyDE) and must not clobber hand-edited keys."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(
+            doc, WizardFeatures(description_enabled=True, description_provider="claude_cli", description_backfill_on_startup=True)
+        )
+        doc["description"]["think"] = False
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+        assert "enabled" not in doc["description"]
+        assert "backfill_on_startup" not in doc["description"]
+        assert doc["description"]["think"] is False
+        del doc["description"]["think"]
+        doc["description"]["enabled"] = True
+        doc["description"]["backfill_on_startup"] = True
+        _apply_wizard_features_to_toml(doc, WizardFeatures(description_enabled=False))
+        assert doc["description"]["enabled"] is False
+        assert "backfill_on_startup" not in doc["description"]
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+        assert "description" not in doc or "enabled" not in doc["description"]
+
+    def test_description_rerun_switching_provider_drops_previous_provider_keys(self) -> None:
+        """ollama -> anthropic / claude_cli(blank) / llama_cpp / ollama leaves none of the old provider's keys."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        def features(provider: str, model: str = "", **extra: object) -> WizardFeatures:
+            return WizardFeatures(
+                description_enabled=True, description_provider=provider, description_model=model, **extra
+            )
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(
+            doc,
+            features(
+                "ollama",
+                "qwen3",
+                description_ollama_base_url="http://old:11434",
+                description_ollama_context_tokens=8192,
+            ),
+        )
+        _apply_wizard_features_to_toml(doc, features("anthropic"))
+        assert dict(doc["description"]).get("provider", "anthropic") == "anthropic"
+        assert not {"model", "ollama_base_url", "ollama_context_tokens"} & set(doc["description"])
+
+        _apply_wizard_features_to_toml(doc, features("claude_cli", "sonnet"))
+        assert doc["description"]["model"] == "sonnet"
+        _apply_wizard_features_to_toml(doc, features("claude_cli"))
+        assert doc["description"]["provider"] == "claude_cli"
+        assert "model" not in doc["description"]
+
+        _apply_wizard_features_to_toml(doc, features("llama_cpp", "m", description_llama_cpp_base_url="http://l:8080"))
+        _apply_wizard_features_to_toml(doc, features("ollama", "m2"))
+        assert "llama_cpp_base_url" not in doc["description"]
+        assert doc["description"]["model"] == "m2"
+
+    @pytest.mark.parametrize(
+        ("enable_field", "section"),
+        [("enable_hyde", "hyde"), ("enable_rag_fusion", "rag_fusion")],
+    )
+    def test_flag_only_rerun_keeps_hand_edited_provider_block(self, enable_field: str, section: str) -> None:
+        """`--enable-hyde` / `--enable-rag-fusion` skip the provider prompt: an ollama block survives."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        doc.add(section, tomlkit.table())
+        for key, value in (
+            ("provider", "ollama"), ("model", "qwen3"), ("ollama_base_url", "http://box:11434"),
+            ("ollama_context_tokens", 8192),
+        ):
+            doc[section][key] = value
+        _apply_wizard_features_to_toml(doc, WizardFeatures(**{enable_field: True}))
+        assert doc[section]["enabled"] is True
+        assert doc[section]["provider"] == "ollama"
+        assert doc[section]["model"] == "qwen3"
+        assert doc[section]["ollama_base_url"] == "http://box:11434"
+        assert doc[section]["ollama_context_tokens"] == 8192
+
     def test_graph_provider_empty_writes_nothing(self) -> None:
         """graph_provider='' (declined enrichment) writes no [graph] section at all."""
         from archon_search.install import _apply_wizard_features_to_toml

@@ -2627,6 +2627,7 @@ _WIZARD_WRITTEN_VALUE_FLAGS = [
 _HAND_ADDED_MANAGED_KEYS = [
     pytest.param("hyde", "enabled", True, id="hyde-enabled"),
     pytest.param("rag_fusion", "enabled", True, id="rag-fusion-enabled"),
+    pytest.param("description", "enabled", True, id="description-enabled"),
     pytest.param("telemetry", "retention_days", SearchConfig().telemetry.retention_days, id="telemetry-retention-days"),
 ]
 
