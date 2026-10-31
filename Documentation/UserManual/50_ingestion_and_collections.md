@@ -187,7 +187,7 @@ archon-search collection remove docs
 
 ### `archon-search collection info <name>`
 
-Proxies `GET /collections/{name}`. Prints the `CollectionMeta` repr for one collection; exits `1` if unknown.
+Proxies `GET /collections/{name}`. Prints one `key: value` line per field for one collection (name, description, `description_source`, `description_status`, counts, embedding models and so on); exits `1` if unknown. `description`, `description_source` and `description_status` are left out when empty or null, and terminal control characters in any printed value are replaced with spaces.
 
 ### `archon-search collection reindex <name>`
 

@@ -9,6 +9,7 @@ import httpx
 from archon_search.cli._helpers import (
     _CONNECT_FAIL,
     _LOCK_WAITING_REQUEST_TIMEOUT_S,
+    _clean,
     _poll_job,
     _server_connect_fail_msg,
 )
@@ -33,6 +34,11 @@ def _resolve_api_key(api_key: str | None) -> str:
     raise SystemExit(1)
 
 logger = logging.getLogger(__name__)
+
+_INFO_OMIT_WHEN_EMPTY = frozenset({
+    "pending_embedding_model", "reindex_job_id", "description",
+    "description_source", "description_status",
+})
 
 
 @click.group()
@@ -239,20 +245,22 @@ def info(collection_name: str, api_url: str, api_key: str | None) -> None:
         raise SystemExit(1)
 
     data = resp.json()
-    _OMIT_NULL = {"pending_embedding_model", "reindex_job_id", "description"}
     fields = [
-        "name", "description", "namespace", "doc_count", "chunk_count",
+        "name", "description", "description_source", "description_status",
+        "namespace", "doc_count", "chunk_count",
         "active_embedding_model", "pending_embedding_model", "needs_reindex",
         "reindex_job_id", "last_indexed", "default_ttl_seconds", "schema_version",
         "centroid_present",
     ]
     for field in fields:
         val = data.get(field)
-        if (val is None or val == "") and field in _OMIT_NULL:
-            continue
         if field == "last_indexed" and val is None:
             val = "never"
-        click.echo(f"{field}: {val}")
+        # Every value is server data and description is derived from document content: strip terminal controls.
+        text = _clean(str(val))
+        if (val is None or not text.strip()) and field in _INFO_OMIT_WHEN_EMPTY:
+            continue
+        click.echo(f"{field}: {text}")
 
 
 @collection.command("reindex-metadata")

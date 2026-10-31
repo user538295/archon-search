@@ -60,6 +60,26 @@ def _exit_on_config_error() -> Iterator[None]:
         raise SystemExit(1)
 
 
+def _clean(value: str) -> str:
+    """Replace non-printable characters with spaces so one value stays on one line.
+
+    Echoed fields (a job ``collection``, a collection ``description``, ...) are free-form,
+    server- or document-derived data. An embedded newline would otherwise render one row
+    as several physical lines (breaking ``jobs list``'s ``--limit`` budget, or forging a
+    ``key: value`` line), and terminal escapes such as ``\\x1b`` could drive the operator's
+    terminal. Every character ``str.splitlines()`` breaks on is non-printable, so this
+    covers them all.
+
+    Substitution is 1:1, so the result is length-preserving and callers' column widths
+    are unaffected.
+
+    Applied to stdout only. The ``err=True`` error paths are each followed by
+    ``SystemExit(1)``, so no row can follow them, and an operator debugging a
+    failure wants the server's bytes verbatim.
+    """
+    return "".join(ch if ch.isprintable() else " " for ch in value)
+
+
 def _server_connect_fail_msg(base_url: str | None = None) -> str:
     """Return the appropriate message when a connection attempt fails.
 

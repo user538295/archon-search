@@ -13,6 +13,9 @@ Tests:
 - test_list_cmd_no_make_store_in_module: structural guard — _make_store removed from module
 - test_info_proxies_to_server: mocked httpx.get → formatted output, exit 0  (brief 350)
 - test_info_server_not_running: ConnectError → exit 1  (brief 350)
+- test_info_shows_source_and_status / test_info_omits_*: description, source and status lines (S40)
+- test_info_strips_control_characters_*: terminal controls never reach stdout (S40)
+- test_info_omits_whitespace_only_source_and_status: control-only values print no blank line (S40)
 """
 from __future__ import annotations
 
@@ -126,6 +129,89 @@ def test_info_proxies_to_server() -> None:
     assert "my-col" in result.output
     assert "doc_count: 5" in result.output
     assert "description: test desc" in result.output
+
+
+def _info_output(**overrides: object) -> str:
+    detail = {
+        "name": "my-col", "description": "test desc", "namespace": "default",
+        "doc_count": 5, "chunk_count": 20, "active_embedding_model": "BAAI/bge-small-en-v1.5",
+        "pending_embedding_model": None, "needs_reindex": False, "reindex_job_id": None,
+        "last_indexed": None, "default_ttl_seconds": None, "schema_version": 0,
+        "centroid_present": False,
+    }
+    detail.update(overrides)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = detail
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp):
+        result = CliRunner().invoke(collection, ["info", "my-col", "--api-key", "testkey"])
+    assert result.exit_code == 0, result.output
+    return result.output
+
+
+def test_info_shows_source_and_status() -> None:
+    """S40: description_source and description_status print as key: value lines."""
+    output = _info_output(description_source="generated", description_status="ok")
+    assert "description_source: generated" in output
+    assert "description_status: ok" in output
+
+
+def test_info_omits_source_and_status_when_null() -> None:
+    """S40: an empty description and null source/status print no such lines."""
+    output = _info_output(description="", description_source=None, description_status=None)
+    assert "description" not in output
+    absent = _info_output(description=None, description_source=None, description_status=None)
+    assert "description" not in absent
+
+
+def test_info_omits_whitespace_only_description_after_cleaning() -> None:
+    """A description of only line breaks/control characters prints no blank line."""
+    output = _info_output(description="\n\x1b\r", description_source=None, description_status=None)
+    assert "description" not in output
+
+
+def test_info_omits_whitespace_only_source_and_status() -> None:
+    """Control-only source/status values print no blank line."""
+    output = _info_output(description_source="\n", description_status="\x1b\t")
+    assert "description_source" not in output
+    assert "description_status" not in output
+
+
+def test_info_keeps_status_when_description_is_empty() -> None:
+    """First-ingest/failed state: no description yet, but the status line still prints."""
+    output = _info_output(description="", description_source=None, description_status="pending")
+    assert "description:" not in output
+    assert "description_source" not in output
+    assert "description_status: pending" in output
+
+
+def test_info_keeps_description_when_source_and_status_null() -> None:
+    """A legacy server omits source/status: the description still prints alone."""
+    output = _info_output(description_source=None, description_status=None)
+    assert "description: test desc" in output
+    assert "description_source" not in output
+    assert "description_status" not in output
+
+
+def test_info_strips_control_characters_from_other_fields() -> None:
+    """Every printed value is cleaned, not just the description trio."""
+    output = _info_output(name="my\x1b[2Jcol", namespace="ns\nforged: 1")
+    assert "\x1b" not in output
+    assert "name: my [2Jcol" in output
+    assert "namespace: ns forged: 1" in output
+
+
+def test_info_strips_control_characters_from_untrusted_text() -> None:
+    """Description, source and status come from documents/the server: no escape or newline reaches the terminal."""
+    output = _info_output(
+        description="line1\nfake: injected\x1b[31m",
+        description_source="gen\x07erated",
+        description_status="o\rk",
+    )
+    assert "\x1b" not in output and "\x07" not in output and "\r" not in output
+    assert "description: line1 fake: injected [31m" in output
+    assert "description_source: gen erated" in output
+    assert "description_status: o k" in output
 
 
 def test_info_server_not_running() -> None:

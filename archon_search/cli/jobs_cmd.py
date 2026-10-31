@@ -20,6 +20,7 @@ import httpx
 
 from archon_search.cli._helpers import (
     _CONNECT_FAIL,
+    _clean,
     _poll_job,
     _server_connect_fail_msg,
 )
@@ -27,25 +28,6 @@ from archon_search.cli.collection import _DEFAULT_API_URL, _resolve_api_key
 
 _EXIT_1_STATUSES = {"FAILED", "FAILED_EXPIRED", "CANCELLED"}
 _DEFAULT_WAIT_TIMEOUT = 600  # 10 minutes
-
-
-def _clean(value: str) -> str:
-    """Replace non-printable characters with spaces so one job stays on one row.
-
-    ``collection`` (and any other echoed field) is free-form and user-controlled;
-    an embedded newline would otherwise render a single job as several physical
-    lines, breaking the ``--limit`` row budget and the ``Showing N`` footer.
-    Every character ``str.splitlines()`` breaks on is non-printable, so this
-    covers them all — as well as terminal escapes such as ``\\x1b``.
-
-    Substitution is 1:1, so the result is length-preserving and the callers'
-    column widths are unaffected.
-
-    Applied to stdout only. The ``err=True`` error paths are each followed by
-    ``SystemExit(1)``, so no row can follow them, and an operator debugging a
-    failure wants the server's bytes verbatim.
-    """
-    return "".join(ch if ch.isprintable() else " " for ch in value)
 
 
 def _fmt_elapsed(created_at: str, updated_at: str, status: str) -> str:

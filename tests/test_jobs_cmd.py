@@ -7,7 +7,8 @@ import pytest
 from _cli_server_stub import server_reported_stopped
 from click.testing import CliRunner
 
-from archon_search.cli.jobs_cmd import _clean, jobs
+from archon_search.cli._helpers import _clean
+from archon_search.cli.jobs_cmd import jobs
 
 # ---------------------------------------------------------------------------
 # Helpers

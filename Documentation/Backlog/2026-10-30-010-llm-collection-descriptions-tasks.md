@@ -471,7 +471,7 @@ flowchart LR
         - #unit_test — `test_sdk_not_declared_in_pyproject_or_lock` — neither file names the package
         - #integration_test — `test_server_and_cli_boot_with_sdk_module_masked` — masking the module still boots the server and `config show`
         - #integration_test — `test_lightweight_cli_start_does_not_import_sdk` — the start-up latency guard no longer expects the SDK
-- [ ] **FE-5** — Show `description_source` and `description_status` in `collection info` (omitted when null); strip terminal control characters from the untrusted text as `jobs_cmd._clean` does #frontend-role
+- [x] **FE-5** — Show `description_source` and `description_status` in `collection info` (omitted when null); strip terminal control characters from the untrusted text as `jobs_cmd._clean` does #frontend-role
     - Presentation · 1.5h
     - needs BE-26 · completes S40
     - Tests
