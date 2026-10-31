@@ -359,7 +359,7 @@ flowchart LR
         - #unit_test — `test_graph_extra_installed_once_with_hyde_dedup` — a shared extra is installed once across sections
         - #unit_test — `test_failed_graph_install_reverts_graph_flags` — a failed install strips the graph section keys
         - #integration_test — `test_wizard_graph_install_failure_reverts_end_to_end` — failure, disk-space and decline-Proceed paths revert the graph section
-- [ ] **FE-4** — Add the graph-provider-set guard to `tests/test_provider_registry_sync.py` (extractor plus equality with the registry), refresh its docstring and the stale comments in `cli/status.py` and `wizard.py` (the plan's "four of five" is only a stale docstring: no test asserts the graph set today) #frontend-role
+- [x] **FE-4** — Add the graph-provider-set guard to `tests/test_provider_registry_sync.py` (extractor plus equality with the registry), refresh its docstring and the stale comments in `cli/status.py` and `wizard.py` (the plan's "four of five" is only a stale docstring: no test asserts the graph set today) #frontend-role
     - Presentation · 1.0h
     - needs FE-2 · completes S14
     - Tests
