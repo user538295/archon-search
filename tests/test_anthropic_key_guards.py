@@ -52,9 +52,9 @@ _GUARD_PATTERN = re.compile(
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GUARD_FILES = [
-    # Collection descriptions BE-7/BE-13: the HyDE and RAG Fusion call path to Anthropic is the shared client's
-    # wrapper, whose ``call`` raises an ``LlmCallFailure`` before it builds an SDK client when no key is set.
-    # hyde.py and rag_fusion.py hold no early-exit guard of their own (they only report ``is_key_available``).
+    # Collection descriptions BE-7/BE-13/BE-28: the HyDE, RAG Fusion and description-generation call path to Anthropic
+    # is the shared client's wrapper, whose ``call`` raises an ``LlmCallFailure`` before it builds an SDK client when no
+    # key is set. hyde.py, rag_fusion.py and description_generator.py hold no early-exit guard of their own.
     REPO_ROOT / "archon_search" / "llm_client" / "anthropic_client.py",
 ]
 

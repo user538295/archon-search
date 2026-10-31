@@ -9,7 +9,7 @@ with the test runner (the xdist worker already imported archon_search and its
 transitive deps), so CliRunner cannot reliably prove absence — see plan Q4.
 
 Packages guarded:
-- ``claude_agent_sdk`` — deferred into ``_call_haiku()`` by BE-1 (S1, S6)
+- ``claude_agent_sdk`` — no longer a dependency (BE-28); nothing may bring it back at start-up (S1, S6, S49)
 - ``torch`` / ``transformers`` — deferred into the model loaders; ``serve()`` defers ``run_server`` (BE-2, S1)
 - ``archon_search.llm_client`` — absent after ``config show`` (BE-2)
 - ``anthropic`` / ``openai`` / ``ollama`` — absent after ``config show``, and not loaded by importing every
@@ -34,7 +34,7 @@ import pytest
 # xdist_group serialises the tests in this file onto one worker so the
 # module-scoped ``loaded_modules`` fixture is never split across workers.
 # The subprocess spawned here is intentionally lightweight — ``config show``
-# must NOT load torch, transformers or claude_agent_sdk (that is what the tests prove),
+# must NOT load torch, transformers or the provider SDKs (that is what the tests prove),
 # so this is not the ~2 GB model-loading subprocess that caused the 2026-07-05
 # OOM crash.  A unique group name is therefore correct: there is no genuinely
 # heavy-subprocess family to join, and joining a mock-based in-process group
@@ -146,22 +146,20 @@ def loaded_modules() -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_lightweight_cmd_no_claude_agent_sdk(loaded_modules: set[str]) -> None:
-    """S1, S6: ``claude_agent_sdk`` must be absent from sys.modules after
+def test_lightweight_cli_start_does_not_import_sdk(loaded_modules: set[str]) -> None:
+    """S1, S6, S49: ``claude_agent_sdk`` must be absent from sys.modules after
     ``archon-search config show``.
 
-    Before BE-1, description_generator.py imported the SDK at module level,
-    meaning every pipeline importer (CLI included) dragged the SDK in at
-    startup.  After BE-1, the import lives inside ``_call_haiku()`` and fires
-    only when description generation actually runs.  This test is the
-    automated proof of that invariant — it will fail immediately if anyone
-    moves the import back to module scope.
+    The package is no longer declared in ``pyproject.toml`` and the description
+    generator reaches a model through ``archon_search.llm_client``, so no module
+    may import it (``tests/test_sdk_not_declared.py`` scans every import
+    statement).  This guard fails only where the package is still installed (a
+    stale environment) and something imports it at start-up; on a clean
+    environment such an import crashes ``config show`` at the exit-code check.
     """
     assert "claude_agent_sdk" not in loaded_modules, (
         "'claude_agent_sdk' appeared in sys.modules after 'archon-search config show'. "
-        "This means the SDK import has leaked back to module scope — check "
-        "archon_search/description_generator.py and ensure the import stays inside "
-        "_call_haiku()."
+        "The package was removed in BE-28; find the module that imports it."
     )
 
 

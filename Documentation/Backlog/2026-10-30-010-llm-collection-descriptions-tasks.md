@@ -464,7 +464,7 @@ flowchart LR
         - #unit_test — `test_closing_tag_in_description_is_escaped` — `</search_collections>` cannot close the block
         - #unit_test — `test_multiline_description_collapsed_no_forged_row` — a `- other:` line inside text cannot forge a row
         - #unit_test — `test_router_ignores_new_metadata_fields` — the routing-field filter drops source and status
-- [ ] **BE-28** — Remove `claude-agent-sdk` from `pyproject.toml` and the three `uv.lock` spots, rewrite the SDK assertion and docstrings in `test_cli_startup_latency.py`, update `GUARD_FILES` in `test_anthropic_key_guards.py` #backend-role
+- [x] **BE-28** — Remove `claude-agent-sdk` from `pyproject.toml` and the three `uv.lock` spots, rewrite the SDK assertion and docstrings in `test_cli_startup_latency.py`, update `GUARD_FILES` in `test_anthropic_key_guards.py` #backend-role
     - Frameworks & Drivers · 2.0h
     - needs BE-22, BE-24 · completes S49
     - Tests
