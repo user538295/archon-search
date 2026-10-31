@@ -956,11 +956,10 @@ async def test_graph_ner_throughput_within_budget(
         f"{[(r.doc_id, r.status, r.error) for r in warmup_results]}"
     )
 
-    # ANTHROPIC_API_KEY needs no guard of its own here: `tests/conftest.py` clears it both
-    # session-wide (`_block_anthropic_key_at_session`) and per test
-    # (`_archon_isolated_data_dir`, which does NOT skip that step for this lane), so
-    # `generate_description()` short-circuits and no live LLM call lands in the timed
-    # window. The standalone module asserted it only because it ran outside pytest.
+    # No live LLM call lands in the timed window: the pipeline here is built without a description generator
+    # (generation runs only through an injected one), and ANTHROPIC_API_KEY is cleared by
+    # `tests/conftest.py` both session-wide (`_block_anthropic_key_at_session`) and per test
+    # (`_archon_isolated_data_dir`, which does NOT skip that step for this lane).
     baseline_mib = _read_own_rss_mib()
     started = time.monotonic()
     trace: list[float] = []

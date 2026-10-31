@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Final
 if TYPE_CHECKING:
     from starlette.datastructures import State
 
+    from archon_search.description_generator import DescriptionGenerator
     from archon_search.llm_client.protocol import LlmClient
 
 import uvicorn
@@ -28,6 +29,7 @@ from archon_search._privacy import configure_query_fingerprint_salt
 from archon_search.chunker import ASTChunker, DocumentChunker
 from archon_search.config import (
     ConfigError,
+    DescriptionConfig,
     GraphConfig,
     SearchConfig,
     get_default_config_path,
@@ -596,6 +598,27 @@ def _build_graph_client(graph: GraphConfig, *, rate_limit_rpm: int | None) -> Ll
         ollama_context_tokens=graph.ollama_context_tokens,
         rate_limit_rpm=rate_limit_rpm,
     )
+
+
+def _build_description_generator(description: DescriptionConfig, store: SearchStore) -> DescriptionGenerator | None:
+    """The description generator on its own client, from ``[description]`` alone.
+
+    ``None`` while ``[description]`` is disabled (the default): no client is built and no provider can be touched (S19).
+    Interim wiring: the pipeline asks it on every ingest until the lifecycle service takes generation over (BE-23 to
+    BE-25), which also resolves this client's context window and warns about an unset one.
+    """
+    if not description.enabled:
+        return None
+    from archon_search.description_generator import DescriptionGenerator
+
+    client = build_llm_client(
+        provider=description.provider,
+        model=description.model,
+        ollama_base_url=description.ollama_base_url,
+        llama_cpp_base_url=description.llama_cpp_base_url,
+        ollama_context_tokens=description.ollama_context_tokens,
+    )
+    return DescriptionGenerator(description, client, store)
 
 
 def create_app(
@@ -1310,6 +1333,7 @@ def create_app(
         graph_expander=_graph_expander,
         defref_extractor=_defref_extractor,
         ppr_walker=_ppr_walker,
+        description_generator=_build_description_generator(config.description, app.state.search_store),
     )
     from archon_search.sync import SearchCollectionSync
 

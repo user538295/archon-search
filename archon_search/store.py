@@ -40,6 +40,7 @@ from archon_search.constants import (
     PING_TTL_SECONDS,
     _validate_namespace,
 )
+from archon_search.description_sample import StoreReadError
 from archon_search.description_write import (
     UNCONDITIONAL,
     DescriptionFields,
@@ -109,19 +110,6 @@ class CollectionOwnershipError(Exception):
         super().__init__(COLLECTION_UNAVAILABLE_DETAIL)
         self.collection = collection
         self.namespace = namespace
-
-
-class StoreReadError(Exception):
-    """Raised by ``list_chunk_ids`` and ``read_excerpts`` when the store fails to read *collection*'s chunks.
-
-    Never an empty result: ``[]`` from those reads means the read worked and found nothing, which a description
-    generation settles differently (``noUnrestrictedChunks``) from a failed read (``sampleReadFailed``). The LanceDB or
-    I/O error that caused it is chained as ``__cause__``; ``str(exc)`` names the collection only, never a chunk text.
-    """
-
-    def __init__(self, collection: str) -> None:
-        super().__init__(f"could not read the chunks of collection {collection!r} from the store")
-        self.collection = collection
 
 
 @contextmanager

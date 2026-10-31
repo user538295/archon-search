@@ -61,11 +61,6 @@ from archon_search.constants import (
     INLINE_CHUNK_METADATA_VALUE,
 )
 from archon_search.defref_extractor import DEFREF_SUPPORTED_EXTENSIONS
-from archon_search.description_generator import (
-    MAX_SAMPLE_CHUNKS,
-    _should_regenerate,
-    generate_description,
-)
 from archon_search.description_write import is_storable_vector
 from archon_search.embedder import (
     Embedder,
@@ -97,7 +92,6 @@ from archon_search.store import (
     STORE_SCHEMA_VERSION,
     SearchStore,
     StoreBusyError,
-    StoreReadError,
     doc_id_for_source_path,
     elementwise_sum,
     refresh_fts,
@@ -109,6 +103,7 @@ from archon_search.warmup_coordinator import WARMUP_TIMEOUT_SECONDS
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig, RAGFusionConfig, SearchConfig
     from archon_search.defref_extractor import DefRefExtractor
+    from archon_search.description_generator import DescriptionGenerator
     from archon_search.graph_expander import ExpandedQuery, GraphExpander
     from archon_search.graph_extractor import GraphExtractor
     from archon_search.graph_store import GraphStore
@@ -517,6 +512,7 @@ class SearchPipeline:
         ppr_walker: PPRWalker | None = None,
         path_policy: IngestPathPolicy = _DEFAULT_PATH_POLICY,
         max_discovered_files: int = DEFAULT_MAX_DISCOVERED_FILES,
+        description_generator: DescriptionGenerator | None = None,
     ) -> None:
         self.store = store
         self._global_embedder = embedder
@@ -544,6 +540,10 @@ class SearchPipeline:
         self._max_file_mb = max_file_mb
         self._path_policy = path_policy
         self._max_discovered_files = max_discovered_files
+        # Collection descriptions BE-22: generation on the shared client. ``None`` makes the ingest generate nothing (the
+        # eval, installer and CLI pipelines, and the server's while ``[description]`` is disabled). BE-24 moves
+        # generation to the lifecycle.
+        self._description_generator = description_generator
         self._context_window_max = context_window_max
         self._graph_extractor = graph_extractor
         self._graph_store = graph_store
@@ -1319,27 +1319,6 @@ class SearchPipeline:
         meta = await self.store.get_collection_meta(collection, namespace=namespace)
         return meta.default_ttl_seconds if meta is not None else None
 
-    async def _read_description_sample(self, collection: str, namespace: str) -> list[str]:
-        """Read the excerpts the description generator is shown: the first ``MAX_SAMPLE_CHUNKS`` open chunk ids by id.
-
-        Open means no ACL (the restricted-chunk switch is not wired yet), so no restricted text reaches the model. A
-        ``StoreReadError`` is not "no chunks": it is logged (collection name and the cause's type, never its text) and
-        the sample is empty, which keeps the current description. Any other error propagates, as it would from the
-        ingest's own store calls, which have already passed the same ownership check. The evenly spaced draw over
-        every open chunk, fitted to the model's input budget, replaces this slice with the generator rewrite (BE-22);
-        until then the listing holds every open id in memory to use the first hundred.
-        """
-        try:
-            chunk_ids = await self.store.list_chunk_ids(collection, namespace)
-            return await self.store.read_excerpts(collection, namespace, chunk_ids[:MAX_SAMPLE_CHUNKS])
-        except StoreReadError as exc:
-            logger.warning(
-                "Could not read the description sample of collection %r from the store (%s); keeping its description",
-                collection,
-                type(exc.__cause__ or exc).__name__,
-            )
-            return []
-
     async def _finalize_batch_ingest(
         self,
         collection: str,
@@ -1369,13 +1348,20 @@ class SearchPipeline:
             batch_doc_count = existing_meta.doc_count if existing_meta else 0
             batch_chunk_count = existing_meta.chunk_count if existing_meta else 0
 
-            if force_regenerate_description or _should_regenerate(batch_doc_count, batch_chunk_count, described_at):
-                sample_texts = await self._read_description_sample(collection, namespace)
-                new_desc = await generate_description(sample_texts, collection)
-                if new_desc is not None:
-                    description = new_desc
-                    described_at = batch_doc_count
-                    last_described = datetime.now(UTC)
+            if self._description_generator is not None:
+                # Imported here: the generator module pulls in the shared LLM client, which a pipeline that never
+                # generates (CLI store commands, eval, installer) must not load.
+                from archon_search.description_generator import (
+                    DescriptionGenerated,
+                    _should_regenerate,
+                )
+
+                if force_regenerate_description or _should_regenerate(batch_doc_count, batch_chunk_count, described_at):
+                    outcome = await self._description_generator.generate(collection, namespace)
+                    if isinstance(outcome, DescriptionGenerated):
+                        description = outcome.text
+                        described_at = batch_doc_count
+                        last_described = datetime.now(UTC)
 
             await self.store.update_description(
                 collection,

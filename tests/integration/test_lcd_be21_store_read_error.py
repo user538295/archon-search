@@ -13,7 +13,8 @@ from pathlib import Path
 import pytest
 
 from archon_search._types import ChunkRecord
-from archon_search.store import SearchStore, StoreReadError
+from archon_search.description_sample import StoreReadError
+from archon_search.store import SearchStore
 
 pytestmark = pytest.mark.integration
 

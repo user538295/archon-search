@@ -216,6 +216,41 @@ class TestCreateAppPipelineWiring:
             "to the constructor default and the operator's config is ignored (S443)."
         )
 
+    def test_create_app_passes_no_description_generator_while_description_is_disabled(self, tmp_path):
+        """S19: ``[description]`` is off by default; nothing is built, so no provider can be touched."""
+        from archon_search.jobs import JobStore
+
+        cfg = SearchConfig()
+        cfg.db_path = str(tmp_path / "test.db")
+
+        with patch("archon_search.server.app.SearchPipeline") as mock_pipeline:
+            _create_app_with_stubbed_deps(cfg, JobStore())
+
+        assert mock_pipeline.call_args.kwargs["description_generator"] is None
+
+    def test_create_app_builds_the_description_generator_from_its_own_section_when_enabled(self, tmp_path):
+        """The generator's client comes from ``[description]`` alone (provider, model, host), and it reads the app's store."""
+        from archon_search.description_generator import DescriptionGenerator
+        from archon_search.jobs import JobStore
+        from archon_search.llm_client.llama_cpp_client import LlamaCppClient
+        from tests._fake_model_server import unreachable_port
+
+        cfg = SearchConfig()
+        cfg.db_path = str(tmp_path / "test.db")
+        cfg.description.enabled = True
+        cfg.description.provider = "llama_cpp"
+        cfg.description.model = "description-model"
+
+        with unreachable_port() as port, patch("archon_search.server.app.SearchPipeline") as mock_pipeline:
+            cfg.description.llama_cpp_base_url = f"http://127.0.0.1:{port}"
+            app = _create_app_with_stubbed_deps(cfg, JobStore())
+
+        generator = mock_pipeline.call_args.kwargs["description_generator"]
+        assert isinstance(generator, DescriptionGenerator)
+        assert isinstance(generator._client, LlamaCppClient)
+        assert generator._config is cfg.description
+        assert generator._store is app.state.search_store
+
     def test_create_app_wires_fanout_config_into_pipeline(self, tmp_path):
         """S443 regression: [search] fan-out knobs must reach the SearchPipeline.
 

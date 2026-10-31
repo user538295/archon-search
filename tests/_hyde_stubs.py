@@ -4,8 +4,8 @@ HyDE resolves through ``server/_hyde.RequestHyDE``, which skips a request with n
 or a disabled ``[hyde]`` before any LLM call — so a test that wants HyDE to run must supply
 both, and controls the outcome through the stub's ``generate``.
 
-``ScriptedLlmClient`` is the stand-in for the shared LLM client the real ``HyDEGenerator`` and ``RAGFusionGenerator`` call
-(``app.state.hyde_client``, ``app.state.rag_fusion_client``): it answers with a fixed text or raises a fixed failure and records every request.
+``ScriptedLlmClient`` is the stand-in for the shared LLM client the real ``HyDEGenerator``, ``RAGFusionGenerator`` and ``DescriptionGenerator`` call
+(``app.state.hyde_client``, ``app.state.rag_fusion_client``, the ``[description]`` client): it answers with a fixed text or raises a fixed failure and records every request.
 """
 from __future__ import annotations
 

@@ -10,7 +10,8 @@ from datetime import UTC, datetime
 import pytest
 
 from archon_search._types import ChunkRecord
-from archon_search.store import CollectionOwnershipError, StoreReadError
+from archon_search.description_sample import StoreReadError
+from archon_search.store import CollectionOwnershipError
 
 _DIM = 4
 _NAMESPACE_OWNER = "alice"

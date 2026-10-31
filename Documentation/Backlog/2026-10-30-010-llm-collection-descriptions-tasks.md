@@ -414,7 +414,7 @@ flowchart LR
         - #unit_test — `test_list_chunk_ids_excludes_acl_and_deny_all_chunks` — chunks with any ACL including `[]` are never listed
         - #unit_test — `test_list_chunk_ids_sorted_by_chunk_id_after_compaction` — the order is the id order whatever the row order
         - #integration_test — `test_store_read_error_raises_not_empty` — a failing read raises instead of reading as no chunks
-- [ ] **BE-22** — Rewrite `description_generator.py` onto the shared client: deterministic evenly spaced sample fitted to the budget (stated shrink loop, window-too-small failure naming the window), typed outcome, one call with the unchanged prompt wording, failure never replaces a description, `_should_regenerate` kept; `_ENV_LOCK`, the `CLAUDECODE` mutation and the SDK import removed; source-scan guard for the module #backend-role
+- [x] **BE-22** — Rewrite `description_generator.py` onto the shared client: deterministic evenly spaced sample fitted to the budget (stated shrink loop, window-too-small failure naming the window), typed outcome, one call with the unchanged prompt wording, failure never replaces a description, `_should_regenerate` kept; `_ENV_LOCK`, the `CLAUDECODE` mutation and the SDK import removed; source-scan guard for the module #backend-role
     - Use Cases · 8.0h
     - needs BE-17, BE-21, BE-4, BE-5 · completes C2, S10, S18, S20, S57, S76, S82
     - Tests

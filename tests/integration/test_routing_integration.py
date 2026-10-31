@@ -236,7 +236,7 @@ async def test_hybrid_routing_blends_description_embedding_to_rank_collection(
     distinct ``description_embedding`` values into CollectionMeta objects to
     simulate collections with different descriptions.
 
-    Note: ``generate_description`` is skipped without ``ANTHROPIC_API_KEY``, so
+    Note: the pipeline built here has no description generator (generation runs only through an injected one), so
     ``description_embedding`` is always ``None`` after ``recompute_collection_meta``.
     Manual injection is the only viable path in CI without live model access.
     The test exercises the hybrid-blending formula in ``MultiCollectionRouter``

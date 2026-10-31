@@ -36,7 +36,7 @@ def make_reranker() -> Reranker:
     return Reranker(MockRerankerBackend())
 
 
-def make_pipeline(store, *, context_window_max: int | None = None):  # type: ignore[no-untyped-def]
+def make_pipeline(store, *, context_window_max: int | None = None, description_generator=None):  # type: ignore[no-untyped-def]
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
@@ -51,5 +51,6 @@ def make_pipeline(store, *, context_window_max: int | None = None):  # type: ign
         parser=DocumentParser(),
         top_k_retrieve=10,
         top_k_return=5,
+        description_generator=description_generator,
         **overrides,
     )

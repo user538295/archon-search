@@ -20,6 +20,7 @@ from archon_search.embedder import Embedder
 from archon_search.parser import PARSE_FAILED_DETAIL
 from archon_search.store import ChunkIngestResult
 from tests._collection_lock_stub import with_locked_collection_meta
+from tests._description_stubs import stub_description_generator
 
 from .conftest import (
     MockEmbedderBackend,
@@ -778,19 +779,15 @@ async def test_ingest_centroid_averages_heterogeneous_embeddings(connected_store
 
 
 @pytest.mark.asyncio
-async def test_ingest_directory_calls_generate_description(connected_store, col_name, tmp_path):
-    """ingest_directory() calls generate_description when _should_regenerate returns True (first ingest)."""
-    from unittest.mock import patch as _patch
-
-    pipeline = make_pipeline(connected_store)
+async def test_ingest_directory_asks_the_generator_for_a_description(connected_store, col_name, tmp_path):
+    """ingest_directory() asks the description generator when _should_regenerate returns True (first ingest)."""
+    generator = stub_description_generator("A fine collection.")
+    pipeline = make_pipeline(connected_store, description_generator=generator)
     (tmp_path / "doc.md").write_text("# Doc\n\nContent.\n" * 5)
 
-    with _patch(
-        "archon_search.pipeline.generate_description", return_value="A fine collection."
-    ) as mock_gen:
-        await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False)
+    await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False)
 
-    mock_gen.assert_awaited_once()
+    generator.generate.assert_awaited_once_with(col_name, "default")
     meta = await connected_store.get_collection_meta(col_name)
     assert meta is not None
     assert meta.description == "A fine collection."
@@ -801,45 +798,42 @@ async def test_ingest_directory_calls_generate_description(connected_store, col_
 async def test_ingest_directory_preserves_old_description_on_generation_failure(
     connected_store, col_name, tmp_path
 ):
-    """When generate_description returns None, the previous description is preserved."""
-    from unittest.mock import patch as _patch
-
-    pipeline = make_pipeline(connected_store)
+    """When the generator reports a failed outcome, the previous description and its baseline are preserved."""
     (tmp_path / "doc.md").write_text("# Doc\n\nContent.\n" * 5)
-
-    # First ingest — description successfully generated
-    with _patch("archon_search.pipeline.generate_description", return_value="Original description."):
-        await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False)
-
+    first = make_pipeline(connected_store, description_generator=stub_description_generator("Original description."))
+    await first.ingest_directory(tmp_path, col_name, embedder=first._global_embedder, rebuild_fts=False)
     meta1 = await connected_store.get_collection_meta(col_name)
     assert meta1 is not None and meta1.description == "Original description."
 
-    # Swap embedder so centroid changes and described_at_doc_count triggers regeneration
-    class AltBackend:
-        model_name: str = "alt"
-        def encode(self, texts: list[str]) -> list[list[float]]:
-            return [[0.9] * 4 for _ in texts]
-
-    pipeline._global_embedder = Embedder(AltBackend())
-
-    # Second ingest — described_at=1, current=1 → no 20% change → no regeneration
-    # Force regeneration by using a new collection that has no existing description
-    # (We test preservation by simulating failure on a new path that triggers regeneration)
-    new_col = col_name + "-b"
+    # The next ingest asks again (the rule's own arithmetic is covered in test_description_generator.py)
     (tmp_path / "doc2.md").write_text("# Doc2\n\nNew content.\n" * 5)
+    (tmp_path / "doc3.md").write_text("# Doc3\n\nMore content.\n" * 5)
+    failing = stub_description_generator(None)
+    second = make_pipeline(connected_store, description_generator=failing)
+    with patch("archon_search.description_generator._should_regenerate", return_value=True):
+        await second.ingest_directory(tmp_path, col_name, embedder=second._global_embedder, rebuild_fts=False)
 
-    with _patch("archon_search.pipeline.generate_description", return_value=None) as mock_gen:
-        pipeline._global_embedder = make_embedder()  # reset to standard embedder
-        await pipeline.ingest_directory(tmp_path, new_col, embedder=pipeline._global_embedder, rebuild_fts=False)
-
-    meta2 = await connected_store.get_collection_meta(new_col)
+    meta2 = await connected_store.get_collection_meta(col_name)
     assert meta2 is not None
-    # generate_description was called (first ingest, described_at=None) but returned None
-    mock_gen.assert_awaited_once()
-    # description remains None since generation failed and there was no previous description
-    assert meta2.description is None
-    # described_at_doc_count not updated on failure
-    assert meta2.described_at_doc_count is None
+    failing.generate.assert_awaited_once()
+    assert meta2.description == "Original description."
+    assert meta2.described_at_doc_count == meta1.described_at_doc_count
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_failed_first_generation_leaves_no_description(connected_store, col_name, tmp_path):
+    """A failed first generation leaves the description unset and the baseline unwritten."""
+    failing = stub_description_generator(None)
+    pipeline = make_pipeline(connected_store, description_generator=failing)
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.\n" * 5)
+
+    await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False)
+
+    meta = await connected_store.get_collection_meta(col_name)
+    assert meta is not None
+    failing.generate.assert_awaited_once()
+    assert meta.description is None
+    assert meta.described_at_doc_count is None
 
 
 @pytest.mark.asyncio
@@ -847,14 +841,11 @@ async def test_ingest_directory_sets_described_at_doc_count_on_success(
     connected_store, col_name, tmp_path
 ):
     """After successful description generation, described_at_doc_count equals batch_doc_count."""
-    from unittest.mock import patch as _patch
-
-    pipeline = make_pipeline(connected_store)
+    pipeline = make_pipeline(connected_store, description_generator=stub_description_generator("Three docs here."))
     for i in range(3):
         (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent.\n" * 5)
 
-    with _patch("archon_search.pipeline.generate_description", return_value="Three docs here."):
-        await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False)
+    await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False)
 
     meta = await connected_store.get_collection_meta(col_name)
     assert meta is not None
@@ -1714,7 +1705,7 @@ def _make_stub_store_for_embedding_tests(existing_meta=None):  # type: ignore[no
     return store
 
 
-def _make_pipeline_for_embedding_tests(store):  # type: ignore[no-untyped-def]
+def _make_pipeline_for_embedding_tests(store, description_generator=None):  # type: ignore[no-untyped-def]
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
@@ -1727,6 +1718,7 @@ def _make_pipeline_for_embedding_tests(store):  # type: ignore[no-untyped-def]
         parser=DocumentParser(),
         top_k_retrieve=10,
         top_k_return=5,
+        description_generator=description_generator,
     )
 
 
@@ -1736,12 +1728,11 @@ async def test_ingest_calls_update_description_with_generated_desc(tmp_path) -> 
     from unittest.mock import patch
 
     store = _make_stub_store_for_embedding_tests(existing_meta=None)
-    pipeline = _make_pipeline_for_embedding_tests(store)
+    pipeline = _make_pipeline_for_embedding_tests(store, stub_description_generator("test desc"))
 
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for description test.\n" * 5)
 
-    with patch("archon_search.pipeline._should_regenerate", return_value=True), \
-         patch("archon_search.pipeline.generate_description", return_value="test desc"):
+    with patch("archon_search.description_generator._should_regenerate", return_value=True):
         await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
 
     store.update_description.assert_awaited_once()
@@ -1752,20 +1743,20 @@ async def test_ingest_calls_update_description_with_generated_desc(tmp_path) -> 
 
 @pytest.mark.asyncio
 async def test_ingest_description_none_passes_none_to_update_description(tmp_path) -> None:
-    """When generate_description returns None, update_description is called with description=None."""
+    """When the generator fails, update_description is called with description=None."""
     from unittest.mock import AsyncMock, patch
 
     store = _make_stub_store_for_embedding_tests(existing_meta=None)
-    pipeline = _make_pipeline_for_embedding_tests(store)
+    generator = stub_description_generator(None)
+    pipeline = _make_pipeline_for_embedding_tests(store, generator)
 
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for null description test.\n" * 5)
 
-    with (
-        patch("archon_search.pipeline.generate_description", return_value=None),
-        patch.object(pipeline._global_embedder, "embed_one", new_callable=AsyncMock) as mock_embed,
-    ):
+    with patch.object(pipeline._global_embedder, "embed_one", new_callable=AsyncMock) as mock_embed, \
+         patch("archon_search.description_generator._should_regenerate", return_value=True):
         await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
 
+    generator.generate.assert_awaited_once_with("my-col", "default")
     mock_embed.assert_not_awaited()
     store.update_description.assert_awaited_once()
     args, _ = store.update_description.call_args
@@ -1773,8 +1764,14 @@ async def test_ingest_description_none_passes_none_to_update_description(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_ingest_preserves_existing_description_when_no_regeneration(tmp_path) -> None:
-    """When description regeneration is not triggered, existing description is passed to update_description."""
+@pytest.mark.parametrize(
+    ("doc_count", "regenerates"),
+    [(1, False), (2, True)],  # described at 1 document: 0% change keeps the text, +100% asks the generator
+)
+async def test_ingest_asks_the_generator_only_when_the_document_count_moved(
+    tmp_path, doc_count: int, regenerates: bool
+) -> None:
+    """The pipeline's call to the 20% rule: no regeneration keeps the existing description, a moved count asks again."""
     from unittest.mock import AsyncMock, patch
 
     from archon_search.collection_meta import CollectionMeta
@@ -1782,20 +1779,24 @@ async def test_ingest_preserves_existing_description_when_no_regeneration(tmp_pa
     existing_meta = CollectionMeta(
         name="my-col",
         description="old desc",
-        described_at_doc_count=1,  # batch has 1 doc → 0% change → no regeneration
+        described_at_doc_count=1,
+        doc_count=doc_count,
+        chunk_count=3 * doc_count,
     )
     store = _make_stub_store_for_embedding_tests(existing_meta=existing_meta)
-    pipeline = _make_pipeline_for_embedding_tests(store)
+    generator = stub_description_generator("fresh desc")
+    pipeline = _make_pipeline_for_embedding_tests(store, generator)
 
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for preservation test.\n" * 5)
 
     with patch.object(pipeline._global_embedder, "embed_one", new_callable=AsyncMock) as mock_embed:
         await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
 
+    assert generator.generate.await_count == int(regenerates)
     mock_embed.assert_not_awaited()
     store.update_description.assert_awaited_once()
     args, _ = store.update_description.call_args
-    assert args[1] == "old desc"
+    assert args[1] == ("fresh desc" if regenerates else "old desc")
 
 
 @pytest.mark.asyncio
@@ -2113,13 +2114,16 @@ def test_ingest_directory_no_all_vectors_accumulator() -> None:
 @pytest.mark.asyncio
 async def test_description_reads_from_store_not_accumulator(tmp_path) -> None:
     """When _should_regenerate returns True, the description sample is read through the store port
-    (list_chunk_ids, then read_excerpts for the picked ids), not from any chunk accumulator.
+    (list_chunk_ids, then read_excerpts for the picked ids) by the generator, not from any chunk accumulator.
     store.list_chunks_raw must NOT be called."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from archon_search.chunker import DocumentChunker
+    from archon_search.config import SearchConfig
+    from archon_search.description_generator import DescriptionGenerator
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
+    from tests._hyde_stubs import ScriptedLlmClient
 
     store = MagicMock()
     store.assert_collection_access = AsyncMock()
@@ -2137,6 +2141,7 @@ async def test_description_reads_from_store_not_accumulator(tmp_path) -> None:
     store.list_chunk_ids = AsyncMock(return_value=sample_ids)
     store.read_excerpts = AsyncMock(return_value=sample_texts)
 
+    client = ScriptedLlmClient(reply="generated desc")
     pipeline = SearchPipeline(
         store=store,
         embedder=make_embedder(),
@@ -2145,24 +2150,24 @@ async def test_description_reads_from_store_not_accumulator(tmp_path) -> None:
         parser=DocumentParser(),
         top_k_retrieve=10,
         top_k_return=5,
+        description_generator=DescriptionGenerator(SearchConfig().description, client, store),
     )
 
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for BE-3 test.\n" * 5)
 
-    with patch("archon_search.pipeline.generate_description", return_value="generated desc") as mock_gen, \
-         patch("archon_search.pipeline._should_regenerate", return_value=True):
+    with patch("archon_search.description_generator._should_regenerate", return_value=True):
         await pipeline.ingest_directory(
             tmp_path, "test-col", embedder=pipeline._global_embedder, rebuild_fts=False
         )
 
     # The ids come from the open-chunk listing (restricted chunks stay out), and their excerpts are read in that order
-    store.list_chunk_ids.assert_awaited_once_with("test-col", "default")
-    store.read_excerpts.assert_awaited_once_with("test-col", "default", sample_ids)
+    store.list_chunk_ids.assert_awaited_once_with("test-col", "default", False)
+    store.read_excerpts.assert_awaited_once_with("test-col", "default", sample_ids, False)
 
-    # generate_description receives the sample texts
-    mock_gen.assert_awaited_once()
-    desc_arg = mock_gen.call_args[0][0]
-    assert desc_arg == sample_texts
+    # The model is shown the sample texts and its answer becomes the description
+    [request] = client.requests
+    assert all(text in request.prompt for text in sample_texts)
+    assert store.update_description.call_args.args[1] == "generated desc"
 
     # list_chunks_raw must NOT be called — the old accumulator path is gone
     store.list_chunks_raw.assert_not_awaited()
@@ -2743,12 +2748,12 @@ async def test_ingest_directory_passes_generated_description_to_update_descripti
         parser=DocumentParser(),
         top_k_retrieve=10,
         top_k_return=5,
+        description_generator=stub_description_generator("A good description"),
     )
 
     (tmp_path / "doc.md").write_text("# Hello\n\nContent.\n" * 5)
 
-    with patch("archon_search.pipeline._should_regenerate", return_value=True), \
-         patch("archon_search.pipeline.generate_description", new=AsyncMock(return_value="A good description")):
+    with patch("archon_search.description_generator._should_regenerate", return_value=True):
         await pipeline.ingest_directory(tmp_path, "col", embedder=passed_embedder, rebuild_fts=False)
 
     store.update_description.assert_awaited_once()

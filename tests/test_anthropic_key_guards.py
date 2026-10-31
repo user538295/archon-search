@@ -2,9 +2,9 @@
 
 This file protects the C18 Fix 1 contract on two layers:
 
-1. **Guard-existence regression tests** — parametrized assertions that each of
-   the production early-exit guards in ``archon_search/description_generator.py``
-   and ``archon_search/llm_client/anthropic_client.py`` still contains
+1. **Guard-existence regression tests** — parametrized assertions that the production early-exit guard in
+   ``archon_search/llm_client/anthropic_client.py`` (the shared client's Anthropic wrapper, which every
+   Anthropic-calling feature including description generation goes through) still contains
    an ``if``-statement guard on ``ANTHROPIC_API_KEY`` (matched by ``_GUARD_PATTERN``).
    If a future refactor removes the guard, Fix 1's autouse ``delenv`` in
    ``tests/conftest.py`` silently stops doing useful work and the 30 s SDK timeout
@@ -52,7 +52,6 @@ _GUARD_PATTERN = re.compile(
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GUARD_FILES = [
-    REPO_ROOT / "archon_search" / "description_generator.py",
     # Collection descriptions BE-7/BE-13: the HyDE and RAG Fusion call path to Anthropic is the shared client's
     # wrapper, whose ``call`` raises an ``LlmCallFailure`` before it builds an SDK client when no key is set.
     # hyde.py and rag_fusion.py hold no early-exit guard of their own (they only report ``is_key_available``).
@@ -160,7 +159,7 @@ def test_per_test_setenv_overrides_autouse_delenv(
     before any test body runs. That ordering is structural; this test does not prove
     it. What this test proves is that monkeypatch.setenv works as expected:
     the value is visible immediately after the call. Tests that need ANTHROPIC_API_KEY set (like
-    test_description_generator.py, test_hyde.py, test_rag_fusion.py) rely on
+    test_hyde.py, test_rag_fusion.py) rely on
     this mechanism."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-from-per-test-setenv")
     assert os.environ.get("ANTHROPIC_API_KEY") == "test-key-from-per-test-setenv"

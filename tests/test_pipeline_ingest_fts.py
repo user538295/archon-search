@@ -246,7 +246,6 @@ def test_ingest_file_uses_rebuild_under_plan_b(
     store.rebuild_fts_index.assert_called_once()
 
 
-@patch("archon_search.pipeline.generate_description", new=AsyncMock(return_value=None))
 def test_ingest_directory_rebuild_fts_false_skips_fts(tmp_path: Any) -> None:
     """ingest_directory(rebuild_fts=False) must call neither optimize_fts nor rebuild_fts_index."""
     store = FakeStore()
@@ -268,7 +267,6 @@ def test_ingest_directory_rebuild_fts_false_skips_fts(tmp_path: Any) -> None:
     store.rebuild_fts_index.assert_not_called()
 
 
-@patch("archon_search.pipeline.generate_description", new=AsyncMock(return_value=None))
 def test_ingest_directory_rebuild_fts_true_calls_fts(tmp_path: Any) -> None:
     """ingest_directory(rebuild_fts=True) must call at least one FTS maintenance method."""
     store = FakeStore()
