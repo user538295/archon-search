@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 import os
+import tomllib
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -203,8 +205,8 @@ def test_run_reinstall_different_profile_no_force_returns_1(tmp_path: Path) -> N
 # Test 4a-i: interactive reinstall, different profile, user confirms rebuild
 # ---------------------------------------------------------------------------
 
-# All optional-feature flags are pre-answered so the ONLY input() call left in an
-# interactive run is the new reindex-confirmation prompt.
+# The hyde / rag-fusion / graph questions are not pre-answered here (they take the mock's `y`); the
+# description question, which no pre-answered flag skips (FE-7), is declined by `_guard_answers`.
 _PREANSWERED_FEATURES = {
     "install_code": False,
     "disable_reranker": False,
@@ -214,6 +216,18 @@ _PREANSWERED_FEATURES = {
     "routing_strategy": "centroid",
     "log_format": "text",
 }
+
+
+def _guard_answers(typed_confirm: str) -> Callable[[str], str]:
+    """Answer the typed index-rebuild confirmation with *typed_confirm*, the description question with `n`
+    and every other prompt with `y`."""
+
+    def _answer(prompt: str = "") -> str:
+        if "Type 'yes'" in prompt:
+            return typed_confirm
+        return "n" if "Enable collection descriptions?" in prompt else "y"
+
+    return _answer
 
 
 def test_run_interactive_guard_confirm_yes_reindexes(tmp_path: Path) -> None:
@@ -227,7 +241,7 @@ def test_run_interactive_guard_confirm_yes_reindexes(tmp_path: Path) -> None:
     existing_db_path.mkdir(parents=True, exist_ok=True)  # simulate an existing index on disk
 
     rmtree_mock = MagicMock()
-    input_mock = MagicMock(side_effect=lambda p="": "yes" if "Type 'yes'" in p else "y")
+    input_mock = MagicMock(side_effect=_guard_answers("yes"))
     load_service_mock = MagicMock(return_value=0)
     with (
         patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
@@ -263,6 +277,10 @@ def test_run_interactive_guard_confirm_yes_reindexes(tmp_path: Path) -> None:
     inner_prompts = [c for c in input_mock.call_args_list if c.args and "Type 'yes' to confirm" in c.args[0]]
     assert len(guard_prompts) == 1
     assert inner_prompts == []
+    # The description question no pre-answered flag skips was asked once, and declined.
+    description_prompts = [c for c in input_mock.call_args_list if c.args and "Enable collection descriptions?" in c.args[0]]
+    assert len(description_prompts) == 1
+    assert tomllib.loads(config_path.read_text())["description"] == {"enabled": False}
     assert "bge-base-en-v1.5" in config_path.read_text()
     rmtree_mock.assert_called_once_with(existing_db_path)
 
@@ -280,7 +298,7 @@ def test_run_interactive_guard_decline_keeps_config(tmp_path: Path) -> None:
     config_path.write_text(_profile_toml("minimal", False))
 
     rmtree_mock = MagicMock()
-    input_mock = MagicMock(side_effect=lambda p="": "no" if "Type 'yes'" in p else "y")
+    input_mock = MagicMock(side_effect=_guard_answers("no"))
     load_service_mock = MagicMock(return_value=0)
     with (
         patch("archon_search.install.installer.get_default_config_path", return_value=config_path),

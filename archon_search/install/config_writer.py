@@ -427,7 +427,7 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         features.rag_fusion_llama_cpp_base_url,
         features.rag_fusion_ollama_context_tokens,
     )
-    # FE-6: [description] reuses the HyDE writer; `backfill_on_startup` is written only on a yes.
+    # FE-6: [description] reuses the HyDE writer; `backfill_on_startup` is written with the answer (even `false`) while enabled.
     _apply_query_expansion(
         "description",
         features.description_enabled,

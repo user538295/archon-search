@@ -50,6 +50,7 @@ def _make_search_config(tmp_path: Path) -> object:
         hyde: FakeProviderConfig = field(default_factory=FakeProviderConfig)
         rag_fusion: FakeProviderConfig = field(default_factory=FakeProviderConfig)
         graph: FakeProviderConfig = field(default_factory=FakeProviderConfig)
+        description: FakeProviderConfig = field(default_factory=FakeProviderConfig)
 
     return FakeSearchConfig()
 
@@ -661,6 +662,9 @@ class TestRun:
         installer.cfg.hyde.ollama_context_tokens = 16384
         installer.cfg.rag_fusion.ollama_context_tokens = 4096
         installer.cfg.graph.ollama_context_tokens = 12288
+        installer.cfg.description.ollama_base_url = "http://saved-description:11434"
+        installer.cfg.description.llama_cpp_base_url = "http://saved-description:8080"
+        installer.cfg.description.ollama_context_tokens = 24576
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
@@ -695,6 +699,9 @@ class TestRun:
         assert captured["hyde_ollama_context_tokens_default"] == 16384
         assert captured["rag_fusion_ollama_context_tokens_default"] == 4096
         assert captured["graph_ollama_context_tokens_default"] == 12288
+        assert captured["description_ollama_base_url_default"] == "http://saved-description:11434"
+        assert captured["description_llama_cpp_base_url_default"] == "http://saved-description:8080"
+        assert captured["description_ollama_context_tokens_default"] == 24576
 
     def test_run_prints_apple_gpu_device_when_validation_passes(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """METAL GPU whose models pass on mps: the summary names the Apple GPU as the device."""

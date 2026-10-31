@@ -310,9 +310,9 @@ def _fetch_llama_cpp_models() -> list[str]:
     get a picker instead of free-text entry.
 
     Memoised with ``functools.cache``: the wizard calls this independently for
-    HyDE, RAG Fusion, and graph enrichment, and the local model cache cannot
+    HyDE, RAG Fusion, graph enrichment and collection descriptions, and the local model cache cannot
     change mid-run, so without memoisation a large HF cache would be walked up
-    to three times per wizard invocation. Tests clear the cache via
+    to four times per wizard invocation. Tests clear the cache via
     ``_fetch_llama_cpp_models.cache_clear()`` so results never leak between them.
 
     Never raises — every failure yields ``[]`` and the wizard falls back to
@@ -451,7 +451,7 @@ def _pick_llama_cpp_model(models: list[str]) -> str:
     The entry is shown verbatim but returned with any ``[cache-root]``
     disambiguation suffix removed: that suffix tells the operator which cache a
     colliding file came from, and would otherwise be written to
-    ``[hyde]``/``[rag_fusion]``/``[graph]`` as part of the model name.
+    ``[hyde]``/``[rag_fusion]``/``[graph]``/``[description]`` as part of the model name.
     """
     print("\nLocally cached llama.cpp models:")
     for i, name in enumerate(models, start=1):
@@ -472,7 +472,7 @@ def _prompt_llama_cpp_model(feature_label: str, default_base_url: str) -> tuple[
     """Prompt for the llama-server base URL, then pick a locally cached model.
 
     The base URL is still asked — the server address is what ``[hyde]``,
-    ``[rag_fusion]`` and ``[graph]`` talk to at runtime — but it does not decide
+    ``[rag_fusion]``, ``[graph]`` and ``[description]`` talk to at runtime — but it does not decide
     the model list: that comes from the local model caches
     (``_fetch_llama_cpp_models``). An empty answer keeps ``default_base_url``.
     When a cache holds models the user picks by number; when none do the
@@ -667,6 +667,64 @@ def _prompt_provider(
     return provider, "", "", ""
 
 
+_DESCRIPTION_LABEL = "collection descriptions"
+# Providers whose blank model means "use the provider's own default"; every other provider needs a named model.
+_PROVIDERS_WITHOUT_REQUIRED_MODEL = frozenset({"anthropic", "claude_cli"})
+
+
+class DescriptionChoice(NamedTuple):
+    """The operator's answers to the collection-description step (all defaults = declined)."""
+
+    enabled: bool
+    provider: str = "anthropic"
+    model: str = ""
+    ollama_base_url: str = ""
+    llama_cpp_base_url: str = ""
+    ollama_context_tokens: int | None = None
+    backfill_on_startup: bool = False
+
+
+def _prompt_description(
+    ask_yn: Callable[[str], bool],
+    ask_choice: Callable[[str, set[str], str], str],
+    ollama_base_url_default: str,
+    llama_cpp_base_url_default: str,
+    ollama_context_tokens_default: int | None,
+) -> DescriptionChoice:
+    """Ask whether to describe collections with an LLM and gather the provider settings (S44, S45).
+
+    Its own question: independent of the HyDE / RAG Fusion / graph step and of the flags that skip it.
+    A provider that needs a named model but got none leaves the feature disabled with a message,
+    because the writer would store ``model = ""`` and ``load_config`` rejects that.
+    """
+    print(
+        "\nCollection descriptions:\n"
+        "  An LLM writes a one-line description of each collection from sampled chunk excerpts;\n"
+        "  query routing and 'collection info' show it.\n"
+        "  Privacy: excerpts of your documents leave the machine for three providers\n"
+        "  (anthropic, openai and claude_cli). ollama and llama_cpp keep the text on the machine\n"
+        "  while their server runs on it; a server on another machine receives the excerpts.\n"
+        "  Default: disabled."
+    )
+    if not ask_yn("Enable collection descriptions? [y/n]: "):
+        return DescriptionChoice(enabled=False)
+
+    provider, model, ollama_url, llama_cpp_url = _prompt_provider(
+        _DESCRIPTION_LABEL, ask_choice, ollama_base_url_default, llama_cpp_base_url_default
+    )
+    if provider not in _PROVIDERS_WITHOUT_REQUIRED_MODEL and not model:
+        print(
+            f"  No model name was given for {provider}, so collection descriptions are left disabled.\n"
+            f"  Re-run the wizard to enable them."
+        )
+        return DescriptionChoice(enabled=False)
+    context = (
+        _prompt_ollama_context(_DESCRIPTION_LABEL, ollama_context_tokens_default) if provider == "ollama" else None
+    )
+    backfill = ask_yn("Fill the descriptions of existing collections at startup? [y/n]: ")
+    return DescriptionChoice(True, provider, model, ollama_url, llama_cpp_url, context, backfill)
+
+
 def _resolve_answer[T](flag: _T | None, non_interactive: bool, ask: Callable[[], _T]) -> _T | None:
     """Resolve one optional-feature question whose ``None`` means "never answered".
 
@@ -704,6 +762,9 @@ def _prompt_optional_features(
     hyde_ollama_context_tokens_default: int | None = None,
     rag_fusion_ollama_context_tokens_default: int | None = None,
     graph_ollama_context_tokens_default: int | None = None,
+    description_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
+    description_llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
+    description_ollama_context_tokens_default: int | None = None,
 ) -> WizardFeatures:
     """Ask the optional-feature questions after profile selection.
 
@@ -718,6 +779,9 @@ def _prompt_optional_features(
 
     The ``*_ollama_context_tokens_default`` values are the windows already saved in config; each
     becomes the default of that Ollama feature's context-window question (8192 when none is saved).
+
+    The collection-description question is asked whenever the wizard is interactive, whatever
+    ``enable_hyde`` / ``enable_rag_fusion`` say; non-interactive runs leave it unanswered.
     """
 
     def _ask_yn(prompt_text: str, default: bool = False) -> bool:
@@ -949,6 +1013,19 @@ def _prompt_optional_features(
         if _graph_provider_val == "ollama":
             _graph_ollama_context_val = _prompt_ollama_context("graph enrichment", graph_ollama_context_tokens_default)
 
+    # --- collection descriptions (FE-7): its own gate, asked whenever the wizard is interactive ---
+    # Deliberately outside the HyDE / RAG Fusion gate above: `--enable-hyde` / `--enable-rag-fusion` skip
+    # that step, never this question, and no flag answers it (use `config set` in scripts).
+    _description = DescriptionChoice(enabled=False)
+    if not non_interactive:
+        _description = _prompt_description(
+            _ask_yn,
+            _ask_choice,
+            description_ollama_base_url_default,
+            description_llama_cpp_base_url_default,
+            description_ollama_context_tokens_default,
+        )
+
     _warn_shared_model_contexts(
         [
             OllamaContextChoice(label, base_url, model, context)
@@ -956,6 +1033,12 @@ def _prompt_optional_features(
                 ("HyDE", _hyde_ollama_base_url_val, _hyde_model_val, _hyde_ollama_context_val),
                 ("RAG Fusion", _rag_fusion_ollama_base_url_val, _rag_fusion_model_val, _rag_fusion_ollama_context_val),
                 ("graph enrichment", _graph_ollama_base_url_val, _graph_extraction_model_val, _graph_ollama_context_val),
+                (
+                    _DESCRIPTION_LABEL,
+                    _description.ollama_base_url,
+                    _description.model,
+                    _description.ollama_context_tokens,
+                ),
             )
             if context is not None
         ]
@@ -987,6 +1070,14 @@ def _prompt_optional_features(
         graph_ollama_base_url=_graph_ollama_base_url_val,
         graph_llama_cpp_base_url=_graph_llama_cpp_base_url_val,
         graph_ollama_context_tokens=_graph_ollama_context_val,
+        # No flag answers this question: a non-interactive run leaves it unanswered (None).
+        description_enabled=None if non_interactive else _description.enabled,
+        description_provider=_description.provider,
+        description_model=_description.model,
+        description_ollama_base_url=_description.ollama_base_url,
+        description_llama_cpp_base_url=_description.llama_cpp_base_url,
+        description_ollama_context_tokens=_description.ollama_context_tokens,
+        description_backfill_on_startup=_description.backfill_on_startup,
     )
 
 

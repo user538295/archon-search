@@ -732,6 +732,9 @@ class BaseInstaller(ABC):
                 hyde_ollama_context_tokens_default=self.cfg.hyde.ollama_context_tokens,
                 rag_fusion_ollama_context_tokens_default=self.cfg.rag_fusion.ollama_context_tokens,
                 graph_ollama_context_tokens_default=self.cfg.graph.ollama_context_tokens,
+                description_ollama_base_url_default=self.cfg.description.ollama_base_url,
+                description_llama_cpp_base_url_default=self.cfg.description.llama_cpp_base_url,
+                description_ollama_context_tokens_default=self.cfg.description.ollama_context_tokens,
             )
 
             # Step 3d: overlay C15 Tier 1 flag values onto features

@@ -531,7 +531,7 @@ flowchart LR
         - #unit_test — `test_answering_no_writes_enabled_false` — a no answer is written explicitly
         - #unit_test — `test_assert_features_persisted_requires_description` — a missing section fails the post-write check
         - #integration_test — `test_overwrite_detection_managed_keys_include_description` — the re-run hand-edit lists agree
-- [ ] **FE-7** — Wizard description step in `_prompt_optional_features`: own gate (asked whenever interactive, even with `--enable-hyde` or `--enable-rag-fusion`), privacy banner, provider, model, host, Ollama context through the `FE-1` helper, backfill (default no); installer defaults from `cfg.description`; no install flag; rewrite the pinned prompt order, the 19 stdin sites and the roughly 45 call sites #frontend-role
+- [x] **FE-7** — Wizard description step in `_prompt_optional_features`: own gate (asked whenever interactive, even with `--enable-hyde` or `--enable-rag-fusion`), privacy banner, provider, model, host, Ollama context through the `FE-1` helper, backfill (default no); installer defaults from `cfg.description`; no install flag; rewrite the pinned prompt order, the 19 stdin sites and the roughly 45 call sites #frontend-role
     - Presentation · 8.0h
     - needs FE-1, FE-6 · completes S44, S45, S48, S71
     - Tests

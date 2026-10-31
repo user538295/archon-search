@@ -50,12 +50,15 @@ from archon_search.install.provisioning import (
 )
 from archon_search.paths import get_fasttext_models_dir
 from archon_search.platform.types import GpuType
+from tests._wizard_answers import DECLINE_DESCRIPTION, MISALIGNMENT_SENTINEL
 from tests.test_install_fasttext_download import _pin_digest_of
 from tests.test_install_overwrite_detection import _set_key
 from tests.test_removed_engine_repo_guard import _ENGINE_PATTERN, _files_naming_engine
 
 # installer.py's non-interactive overwrite warning, printed when a re-run detects hand edits.
 _HAND_EDIT_WARNING = "[warn] Existing config has custom values"
+# The collection-description question (FE-7): asked in every interactive run, whatever flags were passed.
+_DESCRIPTION_QUESTION = "Enable collection descriptions? [y/n]: "
 
 
 @contextmanager
@@ -263,8 +266,9 @@ def test_e2e_interactive_watch_and_telemetry(runner: CliRunner, tmp_path: Path) 
     #  8. log format: "" (default=text)
     #  9. HyDE/RAG Fusion: "n"
     # 10. graph enrichment: "n"
-    # 11. "Proceed?": "y"
-    stdin_responses = "n\nn\nn\ny\ny\nn\n\n\nn\nn\ny" + "\n"
+    # 11. collection descriptions: "n"
+    # 12. "Proceed?": "y"
+    stdin_responses = f"n\nn\nn\ny\ny\nn\n\n\nn\nn\n{DECLINE_DESCRIPTION}\ny" + "\n"
 
     with _no_anthropic_key(), _patched_wizard():
         result = runner.invoke(
@@ -297,7 +301,7 @@ def test_e2e_interactive_enter_at_bool_prompts_is_refused_and_reasked(runner: Cl
 
     # Same prompt order as test_e2e_interactive_watch_and_telemetry, with Enter (refused) then
     # `n` at prompts 4 (watch), 5 (telemetry) and 6 (eager load).
-    stdin_responses = "n\nn\nn\n\nn\n\nn\n\nn\n\n\nn\nn\ny" + "\n"
+    stdin_responses = f"n\nn\nn\n\nn\n\nn\n\nn\n\n\nn\nn\n{DECLINE_DESCRIPTION}\ny" + "\n"
 
     with _no_anthropic_key(), _patched_wizard():
         result = runner.invoke(
@@ -339,8 +343,8 @@ def test_e2e_interactive_force_delete_db_exits_zero(runner: CliRunner, tmp_path:
 
     # 1 multilingual n / 2 code n / 3 reranker n / 4 watch n / 5 telemetry n /
     # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n /
-    # 11 delete-db confirm "yes" / 12 "Proceed?" y
-    stdin_responses = "n\nn\nn\nn\nn\nn\n\n\nn\nn\nyes\ny" + "\n"
+    # 11 descriptions n / 12 delete-db confirm "yes" / 13 "Proceed?" y
+    stdin_responses = f"n\nn\nn\nn\nn\nn\n\n\nn\nn\n{DECLINE_DESCRIPTION}\nyes\ny" + "\n"
 
     with _no_anthropic_key(), _patched_wizard():
         result = runner.invoke(
@@ -380,6 +384,7 @@ _DOCUMENTED_PROMPT_ORDER = [
     "    llama_cpp  - runs against a local llama-server, no API key",
     "Enable AI query expansion (HyDE + RAG Fusion)? [y/n]: ",
     "Enable LLM-backed graph enrichment? [y/n]: ",
+    "Enable collection descriptions? [y/n]: ",
     "Proceed? [y/n]: ",
 ]
 
@@ -387,9 +392,9 @@ _DOCUMENTED_PROMPT_ORDER = [
 # Answers driving the full interactive flow above: 1 multilingual n /
 # 2 profile "" (→ minimal) / 3 code n / 4 reranker n / 5 watch n /
 # 6 telemetry n / 7 eager n / 8 routing "" / 9 log "" / 10 HyDE n /
-# 11 graph enrichment n / 12 "Proceed?" y
+# 11 graph enrichment n / 12 descriptions n / 13 "Proceed?" y
 _DOCUMENTED_FLOW_ANSWERS = (
-    "n\n\nn\nn\nn\nn\nn\n\n\nn\nn\ny" + "\n"
+    f"n\n\nn\nn\nn\nn\nn\n\n\nn\nn\n{DECLINE_DESCRIPTION}\ny" + "\n"
 )
 
 
@@ -481,9 +486,9 @@ def test_proceed_prompt_rejects_yes_and_reasks_exits_zero(runner: CliRunner, tmp
     config_path = tmp_path / "archon-search.toml"
 
     # 1 multilingual n / 2 code n / 3 reranker n / 4 watch n / 5 telemetry n /
-    # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n /
-    # 11 delete-db confirm "yes" / 12 "Proceed?" yes (refused) then y
-    stdin_responses = "n\nn\nn\nn\nn\nn\n\n\nn\nn\nyes\nyes\ny" + "\n"
+    # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n / 11 descriptions n /
+    # 12 delete-db confirm "yes" / 13 "Proceed?" yes (refused) then y
+    stdin_responses = f"n\nn\nn\nn\nn\nn\n\n\nn\nn\n{DECLINE_DESCRIPTION}\nyes\nyes\ny" + "\n"
 
     with _no_anthropic_key(), _patched_wizard():
         result = runner.invoke(
@@ -516,9 +521,9 @@ def test_proceed_prompt_eof_aborts_installation(runner: CliRunner, tmp_path: Pat
     # Same as test_proceed_prompt_accepts_yes_exits_zero but the final 'yes' for
     # Proceed? is omitted so stdin exhausts there, triggering the EOFError path.
     # 1 multilingual n / 2 code n / 3 reranker n / 4 watch n / 5 telemetry n /
-    # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n /
-    # 11 delete-db confirm "yes"  (stdin exhausted → EOFError at Proceed?)
-    stdin_responses = "n\nn\nn\nn\nn\nn\n\n\nn\nn\nyes" + "\n"
+    # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n / 11 descriptions n /
+    # 12 delete-db confirm "yes"  (stdin exhausted → EOFError at Proceed?)
+    stdin_responses = f"n\nn\nn\nn\nn\nn\n\n\nn\nn\n{DECLINE_DESCRIPTION}\nyes" + "\n"
 
     with _no_anthropic_key(), _patched_wizard():
         result = runner.invoke(
@@ -538,26 +543,29 @@ def test_proceed_prompt_eof_aborts_installation(runner: CliRunner, tmp_path: Pat
     assert "Installation aborted." in result.output, (
         f"Expected 'Installation aborted.' in output:\n{result.output}"
     )
+    # Alignment oracle: a shifted script would hand the delete-db `yes` to a y/n question, which refuses it.
+    assert "Please answer y or n." not in result.output
+    assert _DESCRIPTION_QUESTION in result.output  # asked, and answered by the script's `n`
 
 
 @pytest.mark.integration
 def test_e2e_interactive_no_profile_flag_metal_gpu_force_delete_exits_zero(
     runner: CliRunner, tmp_path: Path
 ) -> None:
-    """S03 regression: no --profile + Metal GPU path must have all 14 inputs aligned.
+    """S03 regression: no --profile + Metal GPU path must have all 15 inputs aligned.
 
     Without --profile the profile-choice prompt fires.  With Metal GPU detected
     the GPU-confirm prompt fires.  Graph enrichment (section 5i) fires right
-    after HyDE.  A test that omits the 'n' for graph enrichment sends its
-    'yes' to the wrong gate and the wizard aborts with exit 1.
+    after HyDE and the description question after it.  A test that omits the 'n' for either
+    sends its 'yes' to the wrong gate and the wizard aborts with exit 1.
     """
     config_path = tmp_path / "archon-search.toml"
 
     # 1 multilingual n / 2 profile "" (→ minimal) / 3 GPU y (accept Metal) /
     # 4 code n / 5 reranker n / 6 watch n / 7 telemetry n / 8 eager n /
-    # 9 routing "" / 10 log "" / 11 HyDE n / 12 graph enrichment n /
-    # 13 delete-db confirm "yes" / 14 "Proceed?" y
-    stdin_responses = "n\n\ny\nn\nn\nn\nn\nn\n\n\nn\nn\nyes\ny" + "\n"
+    # 9 routing "" / 10 log "" / 11 HyDE n / 12 graph enrichment n / 13 descriptions n /
+    # 14 delete-db confirm "yes" / 15 "Proceed?" y
+    stdin_responses = f"n\n\ny\nn\nn\nn\nn\nn\n\n\nn\nn\n{DECLINE_DESCRIPTION}\nyes\ny" + "\n"
 
     with _no_anthropic_key(), _patched_wizard(), patch.multiple(
         RealInstaller,
@@ -611,8 +619,9 @@ def test_e2e_interactive_multilingual_yes(runner: CliRunner, tmp_path: Path) -> 
     #  All optional features: defaults (n / "" for choices)
     #  9. HyDE/RAG Fusion: "n"
     # 10. graph enrichment: "n"
+    # 11. collection descriptions: "n"
     #  confirmation: "y"
-    stdin_responses = "y\nn\nn\nn\nn\n\n\nn\nn\ny" + "\n"
+    stdin_responses = f"y\nn\nn\nn\nn\n\n\nn\nn\n{DECLINE_DESCRIPTION}\ny" + "\n"
 
     with _no_anthropic_key(), _patched_wizard(
         **{"archon_search.install.installer._select_profile": select_profile_spy,
@@ -660,8 +669,9 @@ def test_e2e_interactive_invalid_routing_retries(runner: CliRunner, tmp_path: Pa
     #  9. log format: ""
     # 10. HyDE/RAG Fusion: "n"
     # 11. graph enrichment: "n"
-    # 12. "Proceed?": "y"
-    stdin_responses = "n\nn\nn\nn\nn\nn\nbadval\nhybrid\n\nn\nn\ny" + "\n"
+    # 12. collection descriptions: "n"
+    # 13. "Proceed?": "y"
+    stdin_responses = f"n\nn\nn\nn\nn\nn\nbadval\nhybrid\n\nn\nn\n{DECLINE_DESCRIPTION}\ny" + "\n"
 
     with _no_anthropic_key(), _patched_wizard():
         result = runner.invoke(
@@ -931,8 +941,9 @@ def test_wizard_declineProceedPrompt_revertsGraphEnabled(runner: CliRunner, tmp_
     #  8. log format: "" (default)
     #  9. HyDE/RAG Fusion: "n"
     # 10. graph enrichment: "n"
-    # 11. "Proceed?": "n"  ← decline
-    stdin_responses = "n\ny\nn\nn\nn\nn\n\n\nn\nn\nn" + "\n"
+    # 11. collection descriptions: "n"
+    # 12. "Proceed?": "n"  ← decline
+    stdin_responses = f"n\ny\nn\nn\nn\nn\n\n\nn\nn\n{DECLINE_DESCRIPTION}\nn\n{MISALIGNMENT_SENTINEL}" + "\n"
 
     with _no_anthropic_key(), _patched_wizard(
         **{
@@ -952,6 +963,7 @@ def test_wizard_declineProceedPrompt_revertsGraphEnabled(runner: CliRunner, tmp_
         )
 
     assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
+    assert _DESCRIPTION_QUESTION in result.output  # a removed or skipped question would leave `n` to decline Proceed?
     # The install calls are unreachable from this early-return path — they
     # must never fire.
     install_code_mock.assert_not_called()
@@ -1099,8 +1111,9 @@ def test_e2e_hyde_declineProceedPrompt_reverts(runner: CliRunner, tmp_path: Path
     #  6. eager load: "n"
     #  7. routing strategy: "" (default)
     #  8. log format: "" (default)
-    #  9. "Proceed?": "n"  ← decline
-    stdin_responses = "n\nn\nn\nn\nn\nn\n\n\nn" + "\n"
+    #  9. collection descriptions: "n"  (the one question no --enable-* flag skips)
+    # 10. "Proceed?": "n"  ← decline
+    stdin_responses = f"n\nn\nn\nn\nn\nn\n\n\n{DECLINE_DESCRIPTION}\nn\n{MISALIGNMENT_SENTINEL}" + "\n"
 
     with _no_anthropic_key(), _patched_wizard(
         **{"archon_search.install.installer._install_query_expansion_extras": install_mock}
@@ -1118,6 +1131,7 @@ def test_e2e_hyde_declineProceedPrompt_reverts(runner: CliRunner, tmp_path: Path
         )
 
     assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
+    assert _DESCRIPTION_QUESTION in result.output  # --enable-hyde does not skip it
     install_mock.assert_not_called()
     assert config_path.exists()
     doc = tomlkit.parse(config_path.read_text())
@@ -1149,9 +1163,10 @@ def test_wizard_llama_cpp_model_picker_cache_populated(runner: CliRunner, tmp_pa
     # 14. llama-server base URL for RAG Fusion: "" (default)
     # 15. numbered model picker for RAG Fusion: "2"
     # 16. "Enable LLM-backed graph enrichment?": "n"
-    # 17. "Proceed?": "y"
+    # 17. "Enable collection descriptions?": "n"
+    # 18. "Proceed?": "y"
     stdin_responses = (
-        "n\nn\nn\nn\nn\nn\n\n\ny\nllama_cpp\n\n1\nllama_cpp\n\n2\nn\ny"
+        f"n\nn\nn\nn\nn\nn\n\n\ny\nllama_cpp\n\n1\nllama_cpp\n\n2\nn\n{DECLINE_DESCRIPTION}\ny"
         + "\n"
     )
 
@@ -1180,10 +1195,10 @@ def test_wizard_llama_cpp_model_picker_cache_empty(runner: CliRunner, tmp_path: 
     config_path = tmp_path / "archon-search.toml"
 
     # Same queue as the reachable case, except steps 12/15 are free-text model names
-    # (no numbered picker is shown when the local cache is empty); trailing "n" declines
-    # the FE-2 graph-enrichment step before "Proceed?".
+    # (no numbered picker is shown when the local cache is empty); the first trailing "n" declines
+    # the FE-2 graph-enrichment step, the second the description question, before "Proceed?".
     stdin_responses = (
-        "n\nn\nn\nn\nn\nn\n\n\ny\nllama_cpp\n\nhmodel\nllama_cpp\n\nrmodel\nn\ny"
+        f"n\nn\nn\nn\nn\nn\n\n\ny\nllama_cpp\n\nhmodel\nllama_cpp\n\nrmodel\nn\n{DECLINE_DESCRIPTION}\ny"
         + "\n"
     )
 
@@ -1224,9 +1239,10 @@ def test_wizard_graph_provider_step_writes_all_three_fields(runner: CliRunner, t
     # 11. "Which provider for graph enrichment?": "llama_cpp"
     # 12. llama-server base URL: "http://box:8080" (custom, so the key is written)
     # 13. numbered model picker: "1"
-    # 14. "Proceed?": "y"
+    # 14. "Enable collection descriptions?": "n"
+    # 15. "Proceed?": "y"
     stdin_responses = (
-        "n\nn\nn\nn\nn\nn\n\n\nn\ny\nllama_cpp\nhttp://box:8080\n1\ny"
+        f"n\nn\nn\nn\nn\nn\n\n\nn\ny\nllama_cpp\nhttp://box:8080\n1\n{DECLINE_DESCRIPTION}\ny"
         + "\n"
     )
 
@@ -1254,8 +1270,9 @@ def test_wizard_graph_claude_cli_leg_end_to_end(runner: CliRunner, tmp_path: Pat
     # Input queue as in the llama_cpp test above, from step 11:
     # 11. "Which provider for graph enrichment?": "claude_cli"
     # 12. Claude model picker: "2" (sonnet)
-    # 13. "Proceed?": "y"
-    stdin_responses = "n\nn\nn\nn\nn\nn\n\n\nn\ny\nclaude_cli\n2\ny\n"
+    # 13. "Enable collection descriptions?": "n"
+    # 14. "Proceed?": "y"
+    stdin_responses = f"n\nn\nn\nn\nn\nn\n\n\nn\ny\nclaude_cli\n2\n{DECLINE_DESCRIPTION}\ny\n"
 
     with (
         _no_anthropic_key(),
@@ -1300,9 +1317,10 @@ def test_wizard_abort_reverts_graph_enrichment_only(runner: CliRunner, tmp_path:
     # 11. "Which provider for graph enrichment?": "llama_cpp"
     # 12. llama-server base URL: "http://box:8080"
     # 13. numbered model picker: "1"
-    # 14. "Proceed?": "n"  ← decline
+    # 14. "Enable collection descriptions?": "n"
+    # 15. "Proceed?": "n"  ← decline
     stdin_responses = (
-        "n\nn\nn\nn\nn\nn\n\n\nn\ny\nllama_cpp\nhttp://box:8080\n1\nn"
+        f"n\nn\nn\nn\nn\nn\n\n\nn\ny\nllama_cpp\nhttp://box:8080\n1\n{DECLINE_DESCRIPTION}\nn\n{MISALIGNMENT_SENTINEL}"
         + "\n"
     )
 
@@ -1314,6 +1332,7 @@ def test_wizard_abort_reverts_graph_enrichment_only(runner: CliRunner, tmp_path:
         )
 
     assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
+    assert _DESCRIPTION_QUESTION in result.output
     assert config_path.exists(), "Config should have been written before the Proceed? prompt"
     doc = tomlkit.parse(config_path.read_text())
     assert "provider" not in doc["graph"]
@@ -1327,7 +1346,7 @@ def test_wizard_abort_reverts_graph_enrichment_only(runner: CliRunner, tmp_path:
 
 # Interactive queue for a graph-enrichment-only run on the minimal English profile; the last
 # line (Proceed?) is appended by each test.
-_GRAPH_LLAMA_CPP_QUEUE = "n\nn\nn\nn\nn\nn\n\n\nn\ny\nllama_cpp\nhttp://box:8080\n1\n"
+_GRAPH_LLAMA_CPP_QUEUE = f"n\nn\nn\nn\nn\nn\n\n\nn\ny\nllama_cpp\nhttp://box:8080\n1\n{DECLINE_DESCRIPTION}\n"
 
 
 def _assert_graph_enrichment_reverted(config_path: Path) -> None:
@@ -1378,6 +1397,8 @@ def test_wizard_graph_install_failure_reverts_end_to_end(runner: CliRunner, tmp_
             input=_GRAPH_LLAMA_CPP_QUEUE + "y\n",
         )
     assert result.exit_code == 1, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    assert "not enough disk space" in result.output  # the disk check, not the Proceed? decline, ended this run
+    assert _DESCRIPTION_QUESTION in result.output
     install_mock.assert_not_called()
     _assert_graph_enrichment_reverted(config_path)
 
@@ -1391,9 +1412,10 @@ def test_wizard_graph_install_failure_reverts_end_to_end(runner: CliRunner, tmp_
         result = runner.invoke(
             main,
             ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
-            input=_GRAPH_LLAMA_CPP_QUEUE + "n\n",
+            input=_GRAPH_LLAMA_CPP_QUEUE + f"n\n{MISALIGNMENT_SENTINEL}\n",
         )
     assert result.exit_code == 1, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    assert _DESCRIPTION_QUESTION in result.output
     install_mock.assert_not_called()
     _assert_graph_enrichment_reverted(config_path)
 
@@ -1581,8 +1603,9 @@ def test_e2e_multilingual_declineProceedPrompt_reverts_flag(runner: CliRunner, t
     #  7. log format: "" (default)
     #  8. HyDE/RAG Fusion: "n"
     #  9. graph enrichment: "n"
-    # 10. "Proceed?": "n"  ← decline
-    stdin_responses = "y\nn\nn\nn\nn\n\n\nn\nn\nn" + "\n"
+    # 10. collection descriptions: "n"
+    # 11. "Proceed?": "n"  ← decline
+    stdin_responses = f"y\nn\nn\nn\nn\n\n\nn\nn\n{DECLINE_DESCRIPTION}\nn\n{MISALIGNMENT_SENTINEL}" + "\n"
 
     with _no_anthropic_key(), _patched_wizard(
         **{"archon_search.install.installer._install_multilingual_extra": install_multilingual_mock}
@@ -1599,6 +1622,7 @@ def test_e2e_multilingual_declineProceedPrompt_reverts_flag(runner: CliRunner, t
         )
 
     assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
+    assert _DESCRIPTION_QUESTION in result.output
     install_multilingual_mock.assert_not_called()
     assert config_path.exists(), "Config should have been written before the Proceed? prompt"
     doc = tomlkit.parse(config_path.read_text())
@@ -1622,7 +1646,7 @@ def test_e2e_interactive_multilingual_install_triggered(runner: CliRunner, tmp_p
     install_multilingual_mock = MagicMock()
 
     # Same interactive setup as the decline test above, but Proceed="y".
-    stdin_responses = "y\nn\nn\nn\nn\n\n\nn\nn\ny" + "\n"
+    stdin_responses = f"y\nn\nn\nn\nn\n\n\nn\nn\n{DECLINE_DESCRIPTION}\ny" + "\n"
 
     with _no_anthropic_key(), _patched_wizard(
         **{"archon_search.install.installer._install_multilingual_extra": install_multilingual_mock}
@@ -3407,9 +3431,10 @@ def _answers(*, multilingual: str, graph: str) -> str:
     """One interactive "minimal" run's answers, in prompt order.
 
     The bundled code/graph question is the second one; the AI-query-expansion step is
-    pre-answered by --enable-hyde, so its prompts never fire.
+    pre-answered by --enable-hyde, so its prompts never fire, but the description question
+    (which no flag skips) is answered "no" just before "Proceed?".
     """
-    return f"{multilingual}\n{graph}\ny\nn\nn\nn\n\n\ny" + "\n"
+    return f"{multilingual}\n{graph}\ny\nn\nn\nn\n\n\n{DECLINE_DESCRIPTION}\ny" + "\n"
 
 
 def _run_wizard(
@@ -4178,3 +4203,166 @@ def test_fresh_config_resolves_like_its_fully_defaulted_twin(
     assert written == filled
     assert written["host"] == "127.0.0.1"
     assert written["db_path"].startswith(str(data_dir)) is data_dir_set
+
+
+# ---------------------------------------------------------------------------
+# FE-7: the collection-description question (S44, S45, S46, S48, S71)
+# ---------------------------------------------------------------------------
+
+_DESCRIPTION_BACKFILL = "Fill the descriptions of existing collections at startup? [y/n]: "
+_PROVIDER_PROMPT = "Which provider for {}? (anthropic/openai/ollama/claude_cli/llama_cpp) [anthropic]: "
+_CONTEXT_PROMPT = "Ollama context window for {} (tokens) [{}]: "
+_MODEL_PICK_PROMPT = "Select a model by number [1-1]: "
+_DESCRIPTION_LABEL = "collection descriptions"
+
+
+def _answer_description_on_ollama(*, hyde_window: str | None = None) -> dict[str, str | tuple[str, ...]]:
+    """Scripted answers: descriptions on Ollama model m1, backfill yes; with *hyde_window*, HyDE on the same model
+    and server first (so the two features can share a model with different windows). The caller adds the
+    description's context-window answer."""
+    answers: dict[str, str | tuple[str, ...]] = {
+        _DESCRIPTION_QUESTION: "y",
+        _PROVIDER_PROMPT.format(_DESCRIPTION_LABEL): "ollama",
+        _DESCRIPTION_BACKFILL: "y",
+    }
+    if hyde_window is None:
+        answers[_MODEL_PICK_PROMPT] = "1"
+    else:
+        answers |= {
+            "Enable AI query expansion (HyDE + RAG Fusion)? [y/n]: ": "y",
+            _PROVIDER_PROMPT.format("HyDE"): "ollama",
+            _CONTEXT_PROMPT.format("HyDE", 8192): hyde_window,
+            _PROVIDER_PROMPT.format("RAG Fusion"): "anthropic",
+            _MODEL_PICK_PROMPT: ("1", "1"),
+        }
+    return answers
+
+
+@pytest.mark.integration
+def test_e2e_wizard_description_flow_writes_section(runner: CliRunner, tmp_path: Path) -> None:
+    """S44, S45, S46, S48 through the real wizard: the banner, each follow-up in order, the `[description]`
+    section it writes and the shared-model reload warning."""
+    config_path = tmp_path / "archon-search.toml"
+    answers = _answer_description_on_ollama(hyde_window="4096")
+    answers[_CONTEXT_PROMPT.format(_DESCRIPTION_LABEL, 8192)] = "12288"  # 8192 is the suggestion (S45)
+
+    with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["m1"]):
+        result = _run_minimal_wizard_interactive(runner, config_path, answers=answers)
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
+    banner = result.output.index("excerpts of your documents leave the machine for three providers")
+    positions = [banner]
+    for prompt in (
+        _DESCRIPTION_QUESTION,
+        _PROVIDER_PROMPT.format(_DESCRIPTION_LABEL),
+        f"Ollama base URL for {_DESCRIPTION_LABEL} [http://localhost:11434]: ",
+        _CONTEXT_PROMPT.format(_DESCRIPTION_LABEL, 8192),
+        _DESCRIPTION_BACKFILL,
+    ):
+        positions.append(result.output.index(prompt, positions[-1] + 1))
+    # S48: HyDE 4096 and the descriptions' 12288 on one model and server warn about the reload.
+    assert "HyDE 4096, collection descriptions 12288" in result.output
+    assert "reloads the model" in result.output
+    assert _written(config_path)["description"] == {
+        "enabled": True,
+        "provider": "ollama",
+        "model": "m1",
+        "ollama_context_tokens": 12288,
+        "backfill_on_startup": True,
+    }
+    description = load_config(config_path).description
+    assert (description.enabled, description.provider, description.model) == (True, "ollama", "m1")
+    assert (description.ollama_context_tokens, description.backfill_on_startup) == (12288, True)
+
+
+@pytest.mark.integration
+def test_e2e_wizard_description_rerun_offers_stored_window(runner: CliRunner, tmp_path: Path) -> None:
+    """S71: on a re-run the description's stored window is the context prompt's default, and Enter keeps it."""
+    config_path = tmp_path / "archon-search.toml"
+    first_answers = _answer_description_on_ollama()
+    first_answers[_CONTEXT_PROMPT.format(_DESCRIPTION_LABEL, 8192)] = "12288"
+    with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["m1"]):
+        first = _run_minimal_wizard_interactive(runner, config_path, answers=first_answers)
+    assert first.exit_code == 0, f"Exit {first.exit_code}:\n{first.output}"
+
+    rerun_answers = _answer_description_on_ollama()
+    rerun_answers[_CONTEXT_PROMPT.format(_DESCRIPTION_LABEL, 12288)] = ""  # the stored value, accepted with Enter
+    with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["m1"]):
+        rerun = _run_minimal_wizard_interactive(runner, config_path, answers=rerun_answers)
+
+    assert rerun.exit_code == 0, f"Exit {rerun.exit_code}:\n{rerun.output}"
+    assert load_config(config_path).description.ollama_context_tokens == 12288
+
+
+@pytest.mark.integration
+def test_e2e_wizard_description_no_writes_enabled_false(runner: CliRunner, tmp_path: Path) -> None:
+    """S46: answering no writes `[description] enabled = false` and asks nothing further."""
+    config_path = tmp_path / "archon-search.toml"
+
+    result = _run_minimal_wizard_interactive(runner, config_path)  # every y/n answered `n`
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
+    assert _DESCRIPTION_QUESTION in result.output
+    assert _PROVIDER_PROMPT.format(_DESCRIPTION_LABEL) not in result.output
+    assert _DESCRIPTION_BACKFILL not in result.output
+    assert _written(config_path)["description"] == {"enabled": False}
+    assert load_config(config_path).description.enabled is False
+
+
+@pytest.mark.integration
+def test_e2e_description_question_asked_with_enable_hyde_flag(runner: CliRunner, tmp_path: Path) -> None:
+    """S44: `--enable-hyde` skips the HyDE, RAG Fusion and graph prompts but not the description question."""
+    config_path = tmp_path / "archon-search.toml"
+
+    result = _run_minimal_wizard_interactive(
+        runner,
+        config_path,
+        "--enable-hyde",
+        answers={
+            _DESCRIPTION_QUESTION: "y",
+            _PROVIDER_PROMPT.format(_DESCRIPTION_LABEL): "claude_cli",
+            f"Model for {_DESCRIPTION_LABEL} (number, name, or blank): ": "haiku",
+        },
+    )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
+    assert "Enable AI query expansion" not in result.output
+    assert "Enable LLM-backed graph enrichment" not in result.output
+    written = _written(config_path)
+    assert written["hyde"]["enabled"] is True
+    assert written["description"] == {
+        "enabled": True,
+        "provider": "claude_cli",
+        "model": "haiku",
+        "backfill_on_startup": False,
+    }
+
+
+@pytest.mark.integration
+def test_e2e_description_question_asked_with_enable_rag_fusion_flag(runner: CliRunner, tmp_path: Path) -> None:
+    """S44: `--enable-rag-fusion` alone skips the AI query expansion prompt too, and the question is still asked."""
+    config_path = tmp_path / "archon-search.toml"
+
+    result = _run_minimal_wizard_interactive(
+        runner, config_path, "--enable-rag-fusion", answers={_DESCRIPTION_QUESTION: "n"}
+    )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
+    assert "Enable AI query expansion" not in result.output
+    assert "Enable LLM-backed graph enrichment" not in result.output
+    written = _written(config_path)
+    assert written["rag_fusion"]["enabled"] is True
+    assert written["description"] == {"enabled": False}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("command", ["wizard", "install"])
+def test_wizard_help_has_no_enable_description_flag(runner: CliRunner, command: str) -> None:
+    """S72: scripted installs configure descriptions with `config set`; there is no install flag."""
+    result = runner.invoke(main, [command, "--help"])
+    assert result.exit_code == 0, result.output
+    if command == "wizard":
+        assert "--enable-hyde" in result.output  # the sibling flag is listed, so the help text was really read
+    assert "--enable-description" not in result.output
+    options = [opt for param in main.commands[command].params for opt in param.opts]
+    assert not [opt for opt in options if "descri" in opt], options

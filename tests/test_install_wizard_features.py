@@ -53,6 +53,7 @@ from archon_search.install.wizard import (
 )
 from archon_search.platform.types import GpuType
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
+from tests._wizard_answers import DECLINE_DESCRIPTION
 
 
 @pytest.fixture(autouse=True)
@@ -435,7 +436,7 @@ class TestPromptOptionalFeatures:
         """
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3"]),
-            patch("builtins.input", side_effect=["n", "y", "ollama", "", "1", ""]),
+            patch("builtins.input", side_effect=["n", "y", "ollama", "", "1", "", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -457,9 +458,9 @@ class TestPromptOptionalFeatures:
     def test_interactive_all_yes(self) -> None:
         """All 'y' inputs (and valid choices) produce all-enabled features."""
         # 7 questions: code(y), reranker(y=keep enabled), watch(y), telemetry(y), eager_load(y),
-        # routing_strategy("hybrid"), log_format("json")
+        # routing_strategy("hybrid"), log_format("json"), then the description question (declined)
         # enable_hyde/enable_rag_fusion pre-answered False to isolate from HyDE prompt changes.
-        responses = iter(["y", "y", "y", "y", "y", "hybrid", "json"])
+        responses = iter(["y", "y", "y", "y", "y", "hybrid", "json", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -478,8 +479,8 @@ class TestPromptOptionalFeatures:
     def test_reranker_question_skipped_when_no_reranker(self) -> None:
         """When profile.reranker is None, disable_reranker stays False without prompting."""
         # 6 questions (no reranker question): code, watch, telemetry, eager_load,
-        # routing_strategy, log_format
-        responses = iter(["y", "y", "y", "y", "centroid", "text"])
+        # routing_strategy, log_format, then the description question (declined)
+        responses = iter(["y", "y", "y", "y", "centroid", "text", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -492,7 +493,7 @@ class TestPromptOptionalFeatures:
     def test_invalid_routing_strategy_retries(self) -> None:
         """First 'bad' then 'hybrid' → routing_strategy='hybrid'."""
         # questions: code(n), reranker(n), watch(n), telemetry(n), eager(n), routing("bad","hybrid"), log("")
-        responses = iter(["n", "n", "n", "n", "n", "bad", "hybrid", ""])
+        responses = iter(["n", "n", "n", "n", "n", "bad", "hybrid", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -504,7 +505,7 @@ class TestPromptOptionalFeatures:
 
     def test_invalid_routing_strategy_twice_uses_default(self) -> None:
         """Two bad routing values → routing_strategy='centroid' (default)."""
-        responses = iter(["n", "n", "n", "n", "n", "bad", "worse", ""])
+        responses = iter(["n", "n", "n", "n", "n", "bad", "worse", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -531,13 +532,14 @@ class TestPromptOptionalFeatures:
             log_format="text",
             enable_hyde=False,
             enable_rag_fusion=False,
+            description_enabled=False,
         )
 
     def test_invalid_log_format_retries(self) -> None:
         """First 'bad' then 'json' → log_format='json'."""
         # n(code), n(reranker), n(watch), n(telemetry), n(eager), ""(routing), "bad"(log retry 1),
         # "json"(log retry 2)
-        responses = iter(["n", "n", "n", "n", "n", "", "bad", "json"])
+        responses = iter(["n", "n", "n", "n", "n", "", "bad", "json", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -549,7 +551,7 @@ class TestPromptOptionalFeatures:
 
     def test_invalid_log_format_twice_uses_default(self) -> None:
         """Two bad log_format values → log_format='text' (default)."""
-        responses = iter(["n", "n", "n", "n", "n", "", "bad", "worse"])
+        responses = iter(["n", "n", "n", "n", "n", "", "bad", "worse", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -563,8 +565,8 @@ class TestPromptOptionalFeatures:
         """Some flags pre-answered; stdin only called for non-overridden questions."""
         # install_code=True, enable_watch=True, enable_hyde=False, enable_rag_fusion=False pre-answered.
         # Remaining interactive questions (with reranker profile):
-        #   reranker(y=keep enabled), telemetry(y), eager(n), routing(""), log("")
-        responses = iter(["y", "y", "n", "", ""])
+        #   reranker(y=keep enabled), telemetry(y), eager(n), routing(""), log(""), description(n)
+        responses = iter(["y", "y", "n", "", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -578,7 +580,7 @@ class TestPromptOptionalFeatures:
         assert features.enable_watch is True
         assert features.enable_telemetry is True
         assert features.disable_reranker is False
-        assert mock_input.call_count == 5  # reranker, telemetry, eager, routing, log
+        assert mock_input.call_count == 6  # reranker, telemetry, eager, routing, log, description
 
     def test_eof_midway_preserves_prior_answers(self) -> None:
         """EOF after 2 questions answered → first 2 preserved, remaining use defaults."""
@@ -617,7 +619,7 @@ class TestPromptOptionalFeatures:
         """
         # code=n, reranker=""(rejected) then "y"(keep), watch=n, telemetry=n,
         # eager=n, routing="", log=""
-        responses = iter(["n", "", "y", "n", "n", "n", "", ""])
+        responses = iter(["n", "", "y", "n", "n", "n", "", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -626,7 +628,7 @@ class TestPromptOptionalFeatures:
                 enable_rag_fusion=False,
             )
         assert features.disable_reranker is False
-        assert mock_input.call_count == 8  # 7 questions + 1 re-ask
+        assert mock_input.call_count == 9  # 8 questions + 1 re-ask
 
     def test_ask_yn_n_input_default_true_disables_reranker(self) -> None:
         """Answering 'n' at [Y/n] prompt (default=True) disables the reranker.
@@ -636,7 +638,7 @@ class TestPromptOptionalFeatures:
         """
         # code=n, reranker="n"(decline keep→disable), watch=n, telemetry=n,
         # eager=n, routing="", log=""
-        responses = iter(["n", "n", "n", "n", "n", "", ""])
+        responses = iter(["n", "n", "n", "n", "n", "", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -656,7 +658,7 @@ class TestPromptOptionalFeatures:
         test if any of the three bool prompts is skipped or consumes the wrong answer.
         """
         # code=n, reranker=n, watch=n, telemetry=n, eager=n, routing=hybrid, log=json
-        responses = iter(["n", "n", "n", "n", "n", "hybrid", "json"])
+        responses = iter(["n", "n", "n", "n", "n", "hybrid", "json", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -675,7 +677,7 @@ class TestPromptOptionalFeatures:
         """Pressing Enter at the code prompt is rejected and re-asked; a following 'n' declines it."""
         # code=""(rejected) then "n", reranker=n, watch=n,
         # telemetry=n, eager=n, routing="", log=""
-        responses = iter(["", "n", "n", "n", "n", "n", "", ""])
+        responses = iter(["", "n", "n", "n", "n", "n", "", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -684,13 +686,13 @@ class TestPromptOptionalFeatures:
                 enable_rag_fusion=False,
             )
         assert features.install_code_extra is False
-        assert mock_input.call_count == 8  # 7 questions + 1 re-ask
+        assert mock_input.call_count == 9  # 8 questions + 1 re-ask
 
     def test_ask_yn_unrecognized_input_default_true_keeps_reranker(self) -> None:
         """Unrecognized input 'yep' at the reranker prompt is rejected, NOT treated as yes."""
         # code=n, reranker="yep"(rejected) then "n"(disable), watch=n,
         # telemetry=n, eager=n, routing="", log=""
-        responses = iter(["n", "yep", "n", "n", "n", "n", "", ""])
+        responses = iter(["n", "yep", "n", "n", "n", "n", "", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -699,13 +701,13 @@ class TestPromptOptionalFeatures:
                 enable_rag_fusion=False,
             )
         assert features.disable_reranker is True, "'yep' must be rejected, not accepted as yes"
-        assert mock_input.call_count == 8
+        assert mock_input.call_count == 9
 
     def test_ask_yn_no_variant_default_true_disables_reranker(self) -> None:
         """'no' (full word) at the reranker prompt is rejected; the re-ask's 'y' keeps the reranker."""
         # code=n, reranker="no"(rejected) then "y"(keep),
         # watch=n, telemetry=n, eager=n, routing="", log=""
-        responses = iter(["n", "no", "y", "n", "n", "n", "", ""])
+        responses = iter(["n", "no", "y", "n", "n", "n", "", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -714,12 +716,12 @@ class TestPromptOptionalFeatures:
                 enable_rag_fusion=False,
             )
         assert features.disable_reranker is False, "'no' must be rejected, not accepted as n"
-        assert mock_input.call_count == 8
+        assert mock_input.call_count == 9
 
     def test_ask_yn_yes_variant_default_false_enables_code(self) -> None:
         """'yes' (full word) at the code prompt is rejected; the re-ask's 'y' enables code enrichment."""
         # code="yes"(rejected) then "y", reranker=n, watch=n, telemetry=n, eager=n, routing="", log=""
-        responses = iter(["yes", "y", "n", "n", "n", "n", "", ""])
+        responses = iter(["yes", "y", "n", "n", "n", "n", "", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -728,7 +730,7 @@ class TestPromptOptionalFeatures:
                 enable_rag_fusion=False,
             )
         assert features.install_code_extra is True
-        assert mock_input.call_count == 8
+        assert mock_input.call_count == 9
 
     def test_ask_yn_eof_default_true_keeps_reranker(self) -> None:
         """EOFError at [Y/n] prompt (default=True) keeps the reranker enabled.
@@ -776,7 +778,7 @@ class TestPromptOptionalFeaturesExplanations:
 
     def test_explanation_printed_in_interactive_mode(self, capsys) -> None:
         """interactive run prints explanation text for at least 3 prompts."""
-        responses = iter(["n", "n", "n", "n", "n", "", ""])
+        responses = iter(["n", "n", "n", "n", "n", "", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses):
             _prompt_optional_features(
                 non_interactive=False,
@@ -789,6 +791,7 @@ class TestPromptOptionalFeaturesExplanations:
         assert "Code enrichment" in out
         assert "Reranker" in out
         assert "Filesystem watcher" in out
+        assert "Collection descriptions" in out
 
     def test_no_markdown_in_explanation_output(self, capsys) -> None:
         """Explanation output must not contain raw Markdown markers."""
@@ -847,9 +850,10 @@ class TestPromptOptionalFeaturesExplanations:
             "pays the cold-load cost."
         ) in flattened
 
-    def test_prompt_count_7_with_reranker(self, capsys) -> None:
-        """Interactive mode with reranker profile (hyde/rag_fusion pre-answered): exactly 7 input() calls."""
-        responses = iter(["n", "n", "n", "n", "n", "", ""])
+    def test_prompt_count_8_with_reranker(self, capsys) -> None:
+        """Interactive mode with reranker profile (hyde/rag_fusion pre-answered): exactly 8 input() calls
+        (7 standard + the collection-description question, which no flag skips)."""
+        responses = iter(["n", "n", "n", "n", "n", "", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses) as mock_input:
             _prompt_optional_features(
                 non_interactive=False,
@@ -857,11 +861,11 @@ class TestPromptOptionalFeaturesExplanations:
                 enable_hyde=False,
                 enable_rag_fusion=False,
             )
-        assert mock_input.call_count == 7
+        assert mock_input.call_count == 8
 
-    def test_prompt_count_6_without_reranker(self, capsys) -> None:
-        """Interactive mode without reranker profile (hyde/rag_fusion pre-answered): exactly 6 input() calls."""
-        responses = iter(["n", "n", "n", "n", "", ""])
+    def test_prompt_count_7_without_reranker(self, capsys) -> None:
+        """Interactive mode without reranker profile (hyde/rag_fusion pre-answered): exactly 7 input() calls."""
+        responses = iter(["n", "n", "n", "n", "", "", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses) as mock_input:
             _prompt_optional_features(
                 non_interactive=False,
@@ -869,23 +873,23 @@ class TestPromptOptionalFeaturesExplanations:
                 enable_hyde=False,
                 enable_rag_fusion=False,
             )
-        assert mock_input.call_count == 6
+        assert mock_input.call_count == 7
 
-    def test_prompt_count_9_with_reranker_no_api_key_gate(self, capsys) -> None:
-        """Interactive mode with reranker profile: 9 input() calls (7 standard + 1 HyDE yn + 1 graph yn).
+    def test_prompt_count_10_with_reranker_no_api_key_gate(self, capsys) -> None:
+        """Interactive mode with reranker profile: 10 input() calls (7 standard + 1 HyDE yn + 1 graph yn + 1 description yn).
 
         After G10 BE-8, HyDE/RAG Fusion prompt fires regardless of ANTHROPIC_API_KEY.
         Answering 'n' to the enable question requires no further provider prompts.
-        FE-2 adds a trailing graph-enrichment yn, also declined with "n".
+        FE-2 adds a trailing graph-enrichment yn, also declined with "n"; FE-7 adds the description yn.
         """
-        # 7 standard + 1 HyDE yn (answered "n", so no provider/model prompts) + 1 graph yn ("n")
-        responses = iter(["n", "n", "n", "n", "n", "", "", "n", "n"])
+        # 7 standard + 1 HyDE yn (answered "n", so no provider/model prompts) + 1 graph yn ("n") + description yn
+        responses = iter(["n", "n", "n", "n", "n", "", "", "n", "n", DECLINE_DESCRIPTION])
         with patch("builtins.input", side_effect=responses) as mock_input:
             _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile_with_reranker,
             )
-        assert mock_input.call_count == 9
+        assert mock_input.call_count == 10
 
 
 class TestPromptOptionalFeaturesBundledDisclosure:
@@ -1042,9 +1046,11 @@ class TestPromptOptionalFeaturesHydeRagFusion:
     def test_hyde_rag_fusion_prompted_regardless_of_api_key(self) -> None:
         """HyDE/RAG Fusion prompt fires without ANTHROPIC_API_KEY (G10 BE-8: no API key gate)."""
         env_without_key = {k: v for k, v in __import__("os").environ.items() if k != "ANTHROPIC_API_KEY"}
-        # Answer "n" to enable → no further provider prompts; trailing "n" declines
-        # the FE-2 graph-enrichment step, which shares this interactive branch.
-        with patch.dict("os.environ", env_without_key, clear=True), patch("builtins.input", side_effect=["n", "n"]):
+        # Answer "n" to enable → no further provider prompts; the next "n" declines the FE-2
+        # graph-enrichment step, which shares this interactive branch; the last declines descriptions.
+        with patch.dict("os.environ", env_without_key, clear=True), patch(
+            "builtins.input", side_effect=["n", "n", DECLINE_DESCRIPTION]
+        ):
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -1061,9 +1067,10 @@ class TestPromptOptionalFeaturesHydeRagFusion:
 
     def test_hyde_rag_fusion_prompted_when_api_key_present(self) -> None:
         """Interactive + answer 'y' + 'anthropic' for both → both enabled."""
-        # 4 inputs: enable=y, hyde_provider=anthropic, rag_fusion_provider=anthropic
-        # (no model prompt for anthropic), then "n" declines the FE-2 graph-enrichment step.
-        with patch("builtins.input", side_effect=["y", "anthropic", "anthropic", "n"]):
+        # 5 inputs: enable=y, hyde_provider=anthropic, rag_fusion_provider=anthropic
+        # (no model prompt for anthropic), then "n" declines the FE-2 graph-enrichment step and
+        # the description question.
+        with patch("builtins.input", side_effect=["y", "anthropic", "anthropic", "n", DECLINE_DESCRIPTION]):
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -1080,8 +1087,8 @@ class TestPromptOptionalFeaturesHydeRagFusion:
 
     def test_hyde_rag_fusion_declined(self) -> None:
         """Interactive + answer 'n' → both remain False; no provider prompt fired."""
-        # Trailing "n" declines the FE-2 graph-enrichment step, which shares this branch.
-        with patch("builtins.input", side_effect=["n", "n"]):
+        # The second "n" declines the FE-2 graph-enrichment step, which shares this branch; the third, descriptions.
+        with patch("builtins.input", side_effect=["n", "n", DECLINE_DESCRIPTION]):
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -1107,8 +1114,8 @@ class TestPromptOptionalFeaturesHydeRagFusion:
         assert features.enable_rag_fusion is None
 
     def test_enable_hyde_flag_bypasses_prompt(self) -> None:
-        """enable_hyde=True flag pre-answers the prompt; no input() call for it."""
-        with patch("builtins.input", side_effect=AssertionError("should not prompt for hyde")):
+        """enable_hyde=True flag pre-answers the prompt: the only question still asked is descriptions."""
+        with patch("builtins.input", side_effect=[DECLINE_DESCRIPTION]) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -1122,10 +1129,11 @@ class TestPromptOptionalFeaturesHydeRagFusion:
                 enable_hyde=True,
             )
         assert features.enable_hyde is True
+        assert mock_input.call_count == 1  # the description question; nothing for HyDE, RAG Fusion or graph
 
     def test_enable_rag_fusion_flag_bypasses_prompt(self) -> None:
-        """enable_rag_fusion=True flag pre-answers the prompt; no input() call for it."""
-        with patch("builtins.input", side_effect=AssertionError("should not prompt for rag_fusion")):
+        """enable_rag_fusion=True flag pre-answers the prompt: the only question still asked is descriptions."""
+        with patch("builtins.input", side_effect=[DECLINE_DESCRIPTION]) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -1139,10 +1147,13 @@ class TestPromptOptionalFeaturesHydeRagFusion:
                 enable_rag_fusion=True,
             )
         assert features.enable_rag_fusion is True
+        assert mock_input.call_count == 1
 
     def test_enable_hyde_false_flag_bypasses_prompt(self) -> None:
         """enable_hyde=False flag pre-answers even when ANTHROPIC_API_KEY is set."""
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}), patch("builtins.input", side_effect=AssertionError("should not prompt")):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}), patch(
+            "builtins.input", side_effect=[DECLINE_DESCRIPTION]
+        ) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -1158,6 +1169,7 @@ class TestPromptOptionalFeaturesHydeRagFusion:
             )
         assert features.enable_hyde is False
         assert features.enable_rag_fusion is False
+        assert mock_input.call_count == 1
 
 
 class TestPromptGpuConfirm:
@@ -1298,7 +1310,7 @@ class TestWizardFeaturesG10:
         with (
             patch.dict("os.environ", env_without_key, clear=True),
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]),
-            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "ollama", "", "1", "", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "ollama", "", "1", "", "n", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1319,7 +1331,7 @@ class TestWizardFeaturesG10:
         """Selecting Anthropic writes enabled=True but no provider/model to TOML."""
         # Inputs: enable=y, hyde_provider=anthropic (no model prompt)
         #         rag_fusion_provider=anthropic (no model prompt), then "n" declines graph enrichment
-        with patch("builtins.input", side_effect=["y", "anthropic", "anthropic", "n"]):
+        with patch("builtins.input", side_effect=["y", "anthropic", "anthropic", "n", DECLINE_DESCRIPTION]):
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -1346,7 +1358,7 @@ class TestWizardFeaturesG10:
         # Same for rag_fusion.
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]),
-            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "ollama", "", "1", "", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "ollama", "", "1", "", "n", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1398,7 +1410,7 @@ class TestWizardFeaturesG10:
         """Two invalid provider choices fall back to default 'anthropic'."""
         # "y" = enable, "foobar" = invalid (retry), "alsobad" = invalid (fall back to anthropic)
         # Then RAG Fusion provider prompt fires — provide "anthropic"; "n" declines graph enrichment.
-        with patch("builtins.input", side_effect=["y", "foobar", "alsobad", "anthropic", "n"]):
+        with patch("builtins.input", side_effect=["y", "foobar", "alsobad", "anthropic", "n", DECLINE_DESCRIPTION]):
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -1420,7 +1432,7 @@ class TestWizardFeaturesG10:
         # "1"=valid → llama3.2, ""=context window; "ollama"=rag provider, ""=base url, "1"=valid, ""=context window.
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2", "mistral"]),
-            patch("builtins.input", side_effect=["y", "ollama", "", "9", "1", "", "ollama", "", "1", "", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "9", "1", "", "ollama", "", "1", "", "n", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1444,7 +1456,7 @@ class TestWizardFeaturesG10:
         # "openai"=rag provider, ""=empty model (retry), "gpt-4o"=valid.
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]),
-            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "openai", "", "gpt-4o", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "openai", "", "gpt-4o", "n", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1887,7 +1899,7 @@ class TestOllamaPickerIntegration:
     _profile = ENGLISH_PROFILES["minimal"]  # reranker is not None
 
     def _run(self, inputs: list[object], fetch_return, **kwargs) -> WizardFeatures:
-        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=fetch_return), patch("builtins.input", side_effect=inputs):
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=fetch_return), patch("builtins.input", side_effect=[*inputs, DECLINE_DESCRIPTION]):
             return _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -1904,6 +1916,7 @@ class TestOllamaPickerIntegration:
     def test_both_features_pick_independently(self) -> None:
         """HyDE and RAG Fusion each get their own picker; selections are independent."""
         # enable=y; hyde: ollama, base "", pick "1", ctx ""; rag: ollama, base "", pick "2", ctx ""; n=decline graph.
+        # _run appends the declined description question.
         features = self._run(
             ["y", "ollama", "", "1", "", "ollama", "", "2", "", "n"],
             fetch_return=["llama3.2", "mistral"],
@@ -1924,7 +1937,7 @@ class TestOllamaPickerIntegration:
         """A config-saved base URL pre-fills the prompt; Enter keeps it for both features."""
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch,
-            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "ollama", "", "1", "", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "ollama", "", "1", "", "n", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1955,7 +1968,7 @@ class TestOllamaContextWindowPrompt:
     ) -> tuple[WizardFeatures, list[str]]:
         """Run the optional-features flow; return the features and every prompt text asked."""
         prompts: list[str] = []
-        answers = iter(inputs)
+        answers = iter([*inputs, DECLINE_DESCRIPTION])
 
         def _input(prompt: str = "") -> str:
             prompts.append(prompt)
@@ -2080,7 +2093,7 @@ class TestOllamaContextWindowPrompt:
         self, capsys: pytest.CaptureFixture, second_answer: str, second_models: list[str]
     ) -> None:
         """Equal values on one model, or different models, print no reload warning."""
-        answers = iter(["y", "ollama", "", "1", "4096", "ollama", "", "1", second_answer, "n"])
+        answers = iter(["y", "ollama", "", "1", "4096", "ollama", "", "1", second_answer, "n", DECLINE_DESCRIPTION])
         fetches = iter([["m1"], second_models])
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", side_effect=lambda _url: next(fetches)),
@@ -2145,6 +2158,176 @@ class TestOllamaContextWindowPrompt:
         assert out == ""
 
 
+class TestDescriptionStep:
+    """FE-7 (S44, S45, S48, S71): collection descriptions are their own interactive question."""
+
+    _profile = ENGLISH_PROFILES["minimal"]
+    _QUESTION = "Enable collection descriptions? [y/n]: "
+    _BACKFILL = "Fill the descriptions of existing collections at startup? [y/n]: "
+
+    def _run(self, inputs: list[str], models: list[str] | None = None, **kwargs) -> tuple[WizardFeatures, list[str]]:
+        """Run the flow with HyDE / RAG Fusion pre-answered off (override via kwargs); return features and prompts."""
+        prompts: list[str] = []
+        answers = iter(inputs)
+
+        def _input(prompt: str = "") -> str:
+            prompts.append(prompt)
+            try:
+                return next(answers)
+            except StopIteration:
+                raise EOFError from None
+
+        with (
+            patch("archon_search.install.wizard._fetch_ollama_models", return_value=["m1"] if models is None else models),
+            patch("builtins.input", _input),
+        ):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+                enable_hyde=kwargs.pop("enable_hyde", False),
+                enable_rag_fusion=kwargs.pop("enable_rag_fusion", False),
+                **kwargs,
+            )
+        return features, prompts
+
+    def test_description_question_defaults_no_and_shows_privacy_banner(self, capsys: pytest.CaptureFixture) -> None:
+        """A closed stdin means no; the banner says excerpts leave the machine for the three cloud providers."""
+        features, prompts = self._run([])
+        banner = capsys.readouterr().out.split("Collection descriptions:")[1]
+        assert prompts == [self._QUESTION]
+        assert features.description_enabled is False
+        assert "Default: disabled." in banner
+        assert "excerpts of your documents leave the machine for three providers" in banner
+        assert "anthropic, openai and claude_cli" in banner
+        assert "ollama and llama_cpp keep the text on the machine" in banner
+        assert "while their server runs on it" in banner
+        assert "a server on another machine receives the excerpts" in banner
+
+    def test_no_answer_asks_nothing_further(self) -> None:
+        features, prompts = self._run(["n"])
+        assert prompts == [self._QUESTION]
+        assert features.description_enabled is False
+
+    def test_non_interactive_never_asks_and_leaves_it_unanswered(self) -> None:
+        with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+            features = _prompt_optional_features(non_interactive=True, profile=self._profile)
+        assert features.description_enabled is None
+
+    def test_yes_path_asks_provider_model_host_context_and_backfill(self) -> None:
+        """Each follow-up appears in order; Ollama asks the host before the model; context suggests 8192."""
+        features, prompts = self._run(["y", "ollama", "http://box:11434", "1", "", "y"])
+        assert prompts[0] == self._QUESTION
+        assert prompts[1].startswith("Which provider for collection descriptions?")
+        assert prompts[2].startswith("Ollama base URL for collection descriptions")
+        assert prompts[3].startswith("Select a model")
+        assert prompts[4] == "Ollama context window for collection descriptions (tokens) [8192]: "
+        assert prompts[5] == self._BACKFILL
+        assert len(prompts) == 6
+        assert features.description_enabled is True
+        assert features.description_provider == "ollama"
+        assert features.description_model == "m1"
+        assert features.description_ollama_base_url == "http://box:11434"
+        assert features.description_ollama_context_tokens == OLLAMA_CONTEXT_SUGGESTION_TOKENS
+        assert features.description_backfill_on_startup is True
+
+    def test_backfill_defaults_no_on_closed_stdin(self) -> None:
+        features, prompts = self._run(["y", "anthropic"])
+        assert prompts[-1] == self._BACKFILL  # asked, then the closed stdin answered it
+        assert features.description_enabled is True
+        assert features.description_provider == "anthropic"
+        assert features.description_backfill_on_startup is False
+
+    @pytest.mark.parametrize(
+        "flags",
+        [{"enable_hyde": True}, {"enable_rag_fusion": True}, {"enable_hyde": True, "enable_rag_fusion": True}],
+        ids=["hyde", "rag-fusion", "both"],
+    )
+    def test_description_asked_even_when_enable_hyde_flag_given(self, flags: dict) -> None:
+        """A pre-answered HyDE / RAG Fusion flag skips their prompts, never the description question."""
+        hyde, rag_fusion = flags.get("enable_hyde"), flags.get("enable_rag_fusion")
+        features, prompts = self._run(["y", "anthropic", "n"], enable_hyde=hyde, enable_rag_fusion=rag_fusion)
+        # Only the description question, its provider and the backfill question: nothing for HyDE, RAG Fusion, graph.
+        assert len(prompts) == 3
+        assert prompts[0] == self._QUESTION
+        assert not any("query expansion" in p or "graph enrichment" in p for p in prompts)
+        assert features.description_enabled is True
+        assert (features.enable_hyde, features.enable_rag_fusion) == (hyde, rag_fusion)
+
+    def test_installed_defaults_are_the_previous_answers(self) -> None:
+        """The saved host, llama-server address and window pre-fill the description prompts."""
+        features, prompts = self._run(
+            ["y", "ollama", "", "1", "", "n"],
+            description_ollama_base_url_default="http://saved:11434",
+            description_ollama_context_tokens_default=16384,
+        )
+        assert "[http://saved:11434]" in prompts[2]
+        assert "[16384]" in prompts[4]
+        assert features.description_ollama_base_url == "http://saved:11434"
+        assert features.description_ollama_context_tokens == 16384
+
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=[]):
+            features, prompts = self._run(
+                ["y", "llama_cpp", "", "model.gguf", "n"],
+                description_llama_cpp_base_url_default="http://saved:8080",
+            )
+        assert "[http://saved:8080]" in prompts[2]
+        assert features.description_llama_cpp_base_url == "http://saved:8080"
+        assert features.description_ollama_context_tokens is None
+
+    def test_claude_cli_blank_model_is_allowed(self) -> None:
+        features, _ = self._run(["y", "claude_cli", "", "n"])
+        assert features.description_enabled is True
+        assert features.description_provider == "claude_cli"
+        assert features.description_model == ""
+
+    @pytest.mark.parametrize(
+        ("provider", "typed"), [("openai", ["", ""]), ("ollama", ["", "", ""]), ("llama_cpp", ["", "", ""])]
+    )
+    def test_blank_model_for_a_provider_that_needs_one_leaves_descriptions_off(
+        self, provider: str, typed: list[str], capsys: pytest.CaptureFixture
+    ) -> None:
+        """A blank model would be written as `model = ""` and break `load_config`: no answer, no feature."""
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=[]):
+            features, _ = self._run(["y", provider, *typed, "n"], models=[])
+        assert features.description_enabled is False
+        assert features.description_model == ""
+        assert features.description_ollama_context_tokens is None
+        assert "left disabled" in capsys.readouterr().out
+
+    def test_shared_model_with_description_warns_naming_the_feature(self, capsys: pytest.CaptureFixture) -> None:
+        """S48: HyDE and the description feature on one Ollama model with different windows get the reload warning."""
+        self._run(
+            ["y", "ollama", "", "1", "4096", "anthropic", "n", "y", "ollama", "", "1", "8192", "n"],
+            enable_hyde=None,
+            enable_rag_fusion=None,
+        )
+        out = capsys.readouterr().out
+        assert "HyDE 4096" in out
+        assert "collection descriptions 8192" in out
+
+    def test_flow_warning_names_all_four_features(self, capsys: pytest.CaptureFixture) -> None:
+        """HyDE, RAG Fusion, graph enrichment and descriptions on one Ollama model, four windows: one warning lists all."""
+        self._run(
+            [
+                "y", "ollama", "", "1", "4096", "ollama", "", "1", "8192",
+                "y", "ollama", "", "1", "12288",  # graph enrichment
+                "y", "ollama", "", "1", "16384", "n",  # descriptions, backfill declined
+            ],
+            enable_hyde=None,
+            enable_rag_fusion=None,
+        )
+        out = capsys.readouterr().out
+        assert "HyDE 4096, RAG Fusion 8192, graph enrichment 12288, collection descriptions 16384" in out
+        assert out.lower().count("reloads the model") == 1
+
+
 class TestOllamaPickerE2E:
     """End-to-end: wizard prompt → TOML → loaded SearchConfig."""
 
@@ -2154,7 +2337,7 @@ class TestOllamaPickerE2E:
         """A model picked in the wizard reaches a real SearchConfig via the written TOML."""
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2", "mistral"]),
-            patch("builtins.input", side_effect=["y", "ollama", "", "2", "", "ollama", "", "1", "", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "2", "", "ollama", "", "1", "", "n", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -2185,7 +2368,7 @@ class TestOllamaPickerE2E:
         """A custom base URL typed in the wizard reaches the loaded SearchConfig."""
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]),
-            patch("builtins.input", side_effect=["y", "ollama", "http://box:11434", "1", "", "anthropic", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "http://box:11434", "1", "", "anthropic", "n", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -2214,7 +2397,7 @@ class TestOllamaPickerE2E:
         # enable=y; hyde=anthropic (no ollama prompt); rag=ollama, custom URL, pick "1".
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]),
-            patch("builtins.input", side_effect=["y", "anthropic", "ollama", "http://rag:11434", "1", "", "n"]),
+            patch("builtins.input", side_effect=["y", "anthropic", "ollama", "http://rag:11434", "1", "", "n", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -3044,7 +3227,7 @@ class TestLlamaCppPickerIntegration:
     _profile = ENGLISH_PROFILES["minimal"]  # reranker is not None
 
     def _run(self, inputs: list[object], fetch_return, **kwargs) -> WizardFeatures:
-        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=fetch_return), patch("builtins.input", side_effect=inputs):
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=fetch_return), patch("builtins.input", side_effect=[*inputs, DECLINE_DESCRIPTION]):
             return _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -3061,6 +3244,7 @@ class TestLlamaCppPickerIntegration:
     def test_both_features_pick_independently(self) -> None:
         """HyDE and RAG Fusion each get their own llama_cpp picker; selections are independent (S4)."""
         # enable=y; hyde: llama_cpp, base "", pick "1"; rag: llama_cpp, base "", pick "2"; n=decline graph.
+        # _run appends the declined description question.
         features = self._run(
             ["y", "llama_cpp", "", "1", "llama_cpp", "", "2", "n"],
             fetch_return=["m1", "m2"],
@@ -3220,7 +3404,7 @@ class TestWizardClaudeCLI:
         # enable=y; hyde=claude_cli, model "1" (haiku); rag=claude_cli, model "sonnet".
         with (
             patch("archon_search.install.shutil.which", return_value="/usr/bin/claude"),
-            patch("builtins.input", side_effect=["y", "claude_cli", "1", "claude_cli", "sonnet", "n"]),
+            patch("builtins.input", side_effect=["y", "claude_cli", "1", "claude_cli", "sonnet", "n", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -3242,7 +3426,7 @@ class TestWizardClaudeCLI:
         """claude not on PATH → warning printed, config still gathered."""
         with (
             patch("archon_search.install.shutil.which", return_value=None),
-            patch("builtins.input", side_effect=["y", "claude_cli", "", "anthropic", "n"]),
+            patch("builtins.input", side_effect=["y", "claude_cli", "", "anthropic", "n", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -3264,7 +3448,7 @@ class TestWizardClaudeCLI:
     def test_claude_cli_survives_to_loaded_config(self, tmp_path) -> None:
         with (
             patch("archon_search.install.shutil.which", return_value="/usr/bin/claude"),
-            patch("builtins.input", side_effect=["y", "claude_cli", "opus", "claude_cli", "", "n"]),
+            patch("builtins.input", side_effect=["y", "claude_cli", "opus", "claude_cli", "", "n", DECLINE_DESCRIPTION]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
