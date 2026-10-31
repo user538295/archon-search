@@ -71,13 +71,11 @@ def _auth(api_key: str) -> dict[str, str]:
 def test_live_hyde_via_llama_cpp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S1: ``[hyde] provider="llama_cpp"`` against a live llama-server.
 
-    No httpx mocking — ``POST /search hyde=true`` triggers a real
-    ``LlamaCppQueryExpansionProvider`` call to
-    ``{LLAMA_CPP_BASE_URL_DEFAULT}/v1/chat/completions``. The provider never
-    raises on transport failure (S6 fallback contract): when llama-server is
-    unreachable it returns ``None`` and ``hyde_applied`` stays ``False``, so
-    the assertion below fails loudly and points straight at the missing
-    server rather than masking the problem.
+    No httpx mocking — ``POST /search hyde=true`` makes a real ``LlamaCppClient`` call to
+    ``{LLAMA_CPP_BASE_URL_DEFAULT}/v1/chat/completions``. On a transport failure the client raises, the HyDE
+    generator logs it once and returns no document (S6 fallback contract), so ``hyde_applied`` stays ``False``
+    and the assertion below fails loudly and points straight at the missing server rather than masking the
+    problem.
     """
     toml_content = '[hyde]\nenabled = true\nprovider = "llama_cpp"\n'
     with make_real_app(tmp_path, monkeypatch, toml_content=toml_content, hyde_enabled=True) as (

@@ -5,8 +5,7 @@ REST ``/search`` and ``/explain`` and the MCP ``search``, ``search_with_context`
 is active (:func:`hyde_suppressed`), otherwise generated under the search budget
 (S582), embedded with the embedder serving the request — so the hypothesis lands in
 the searched collection's vector space — and kept off the request's stage timings.
-Each transport keeps its own error envelope and maps
-:class:`~archon_search.hyde.HyDEDependencyError` onto it at the edge.
+Each transport keeps its own error envelope for what escapes (an embed failure, a pipeline failure).
 """
 from __future__ import annotations
 
@@ -62,8 +61,7 @@ async def resolve_hyde_within_budget(
 
     On overrun the call is cancelled and ``None`` is returned: the caller surfaces that as
     its standard HyDE-failure warning and the search runs on the plain query.  Everything
-    the coroutine itself raises propagates unchanged (``HyDEGenerator`` raises no
-    ``HyDEDependencyError`` since BE-11; the transports' mapping stays until BE-13).
+    the coroutine itself raises propagates unchanged.
     """
     try:
         return await run_within_budget(coro, timeout=timeout)
@@ -164,8 +162,7 @@ class RequestHyDE:
         hypothesis embed — including any cold build that embed waits on — stay out of
         ``stage_timings_ms``.
 
-        Any exception the generator raises (an embed failure, or the :class:`~archon_search.hyde.HyDEDependencyError`
-        a generator stand-in may raise until BE-13 decides whether it stays) propagates to the caller's catch-all;
+        Any exception the generator raises (an embed failure) propagates to the caller's catch-all;
         a failed LLM call is not one: the generator turns it into no vector.
         """
         if not self.requested or self.suppressed:

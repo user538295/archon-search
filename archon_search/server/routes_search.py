@@ -20,7 +20,6 @@ from archon_search.embedder_cache import (
     EmbedderNotReadyError,
 )
 from archon_search.filters import SearchFilters
-from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
 from archon_search.observability import bind_stage_recorder
 from archon_search.observability import correlation_id as _correlation_id
 from archon_search.pipeline import (
@@ -30,10 +29,6 @@ from archon_search.pipeline import (
     FanoutTimeoutError,
     GraphCommunitiesNotBuiltError,
     MetadataLookupError,
-)
-from archon_search.rag_fusion import (
-    RAG_FUSION_DEPENDENCY_DETAIL,
-    RAGFusionDependencyError,
 )
 from archon_search.server._hyde import RequestHyDE
 from archon_search.server._search_budget import (
@@ -81,7 +76,7 @@ if TYPE_CHECKING:
 # cache for later requests.
 _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = EMBEDDER_WARMUP_WAIT_SECONDS
 
-# ``500`` ``detail`` for a HyDE failure other than ``HyDEDependencyError``: the caught
+# ``500`` ``detail`` for a HyDE failure: the caught
 # exception's message may embed internals (model paths), so it goes to the server log
 # only. Same text as MCP ``search``'s ``_SEARCH_FAILED_DETAIL``.
 SEARCH_FAILED_DETAIL = "search failed"
@@ -147,32 +142,10 @@ def _report_pipeline_failure(writer: TelemetryWriter | None, start: float, exc: 
 
 
 def _hyde_failure_response(writer: TelemetryWriter | None, start: float, exc: Exception) -> JSONResponse:
-    """Answer a HyDE failure other than ``HyDEDependencyError``: reported like a pipeline
-    failure, answered like ``/explain``'s HyDE catch-all — JSON ``SEARCH_FAILED_DETAIL``,
-    never the exception text."""
+    """Answer a HyDE failure: reported like a pipeline failure, answered like ``/explain``'s HyDE
+    catch-all — JSON ``SEARCH_FAILED_DETAIL``, never the exception text."""
     _report_pipeline_failure(writer, start, exc)
     return JSONResponse({"detail": SEARCH_FAILED_DETAIL}, status_code=500)
-
-
-def dependency_error_response(
-    endpoint: str,
-    exc: HyDEDependencyError | RAGFusionDependencyError,
-    *,
-    log: logging.Logger = logger,
-) -> JSONResponse:
-    """Answer a missing HyDE or RAG Fusion package with its fixed ``422`` detail (REST ``/search``, ``/explain``).
-
-    The REST twin of ``mcp._dependency_error_response``. The two branches are exhaustive
-    over *exc*'s type; the RAG Fusion one is not ``isinstance``-checked because
-    ``routes_explain`` catches the lazily imported class, which a reloaded
-    ``archon_search.rag_fusion`` no longer matches by identity. The message carries this
-    interpreter's install command, so it is logged, never sent.
-    """
-    if isinstance(exc, HyDEDependencyError):
-        log.warning("%s: HyDE unavailable — %s", endpoint, exc)
-        return JSONResponse({"detail": HYDE_DEPENDENCY_DETAIL}, status_code=422)
-    log.warning("%s: RAG Fusion unavailable — %s", endpoint, exc)
-    return JSONResponse({"detail": RAG_FUSION_DEPENDENCY_DETAIL}, status_code=422)
 
 
 class SearchRequest(BaseModel):
@@ -388,8 +361,6 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             # search_many embeds with the global embedder and excludes every collection
             # pinned to another model (embedding_model_mismatch), so HyDE embeds with it too.
             hyde_outcome = await request_hyde.resolve(pipeline.global_embedder, embedder_warm=not warmup.fts_only)
-        except HyDEDependencyError as exc:
-            return dependency_error_response("search", exc)
         except EmbedderNotReadyError:
             raise  # retryable 503 (app-level handler), as for the fan-out itself
         except Exception as exc:  # noqa: BLE001 — any HyDE/embedding failure is mapped to an internal-error response
@@ -416,8 +387,6 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 ),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
-        except RAGFusionDependencyError as exc:
-            return dependency_error_response("search", exc)
         except GraphCommunitiesNotBuiltError as exc:
             return JSONResponse(
                 {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422
@@ -583,9 +552,6 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             # a cold embedder, or the global placeholder for a pending load — skips it.
             try:
                 hyde_outcome = await request_hyde.resolve(embedder, embedder_warm=not fts_only)
-            except HyDEDependencyError as exc:
-                _emit_timings()
-                return dependency_error_response("search", exc)
             except EmbedderNotReadyError:
                 raise  # retryable 503, answered below
             except Exception as exc:  # noqa: BLE001 — any HyDE/embedding failure is mapped to an internal-error response
@@ -673,9 +639,6 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 status_code=503,
                 headers={"Retry-After": "30"},
             )
-        except RAGFusionDependencyError as exc:
-            _emit_timings()
-            return dependency_error_response("search", exc)
         except GraphCommunitiesNotBuiltError as exc:
             _emit_timings()
             return JSONResponse(

@@ -48,7 +48,7 @@ Status codes:
 
 - `200` — success (empty `results` means the search ran but matched nothing).
 - `404` — collection not found in the caller's namespace.
-- `422` — invalid selection (both/neither of `collection`/`collections`), fan-out over `max_fanout`, `top_k` over `top_k_max`, or an invalid model/parameter. A missing HyDE/RAG-Fusion provider package prevents startup entirely (see `160_troubleshooting.md`).
+- `422` — invalid selection (both/neither of `collection`/`collections`), fan-out over `max_fanout`, `top_k` over `top_k_max`, or an invalid model/parameter. (A missing HyDE/RAG-Fusion provider package is not a `422`: it prevents startup entirely, see `160_troubleshooting.md`.)
 - `503` — internal metadata lookup failed.
 - `500` — pipeline stage exception (embedder, store, or reranker raised), or an unexpected exception during HyDE generation (see [HyDE query expansion](#hyde-query-expansion-c4)).
 - `504` — pipeline call timed out (~30 s; up to ~60 s with `hyde=true`, whose ~30 s HyDE cap runs before the search budget). The timer starts after a bounded model warm-up wait (`0.5 s` per model), and a model still cold after it degrades the request instead (no reranking, or FTS only — see Principle 1), so a cold model no longer causes this on the first search after a restart.

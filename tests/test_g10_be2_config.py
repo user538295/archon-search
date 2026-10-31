@@ -445,9 +445,8 @@ def test_config_rag_fusion_llama_cpp_base_url_whitespace_raises_config_error() -
 
 
 # ---------------------------------------------------------------------------
-# BE-3: provider='llama_cpp' builds a real LlamaCppQueryExpansionProvider at
-# create_app() time (the BE-1 stopgap ConfigError guard is gone — a real
-# adapter branch now exists in _build_query_expansion_provider).
+# BE-3: provider='llama_cpp' builds a LlamaCppClient at create_app() time (the
+# BE-1 stopgap ConfigError guard is gone; BE-13 removed the old adapter builder).
 # ---------------------------------------------------------------------------
 
 
@@ -496,24 +495,8 @@ def test_config_rag_fusion_llama_cpp_provider_builds_successfully(
 
 
 # ---------------------------------------------------------------------------
-# BE-3: factory unit test, no-key no-raise dep check, no pip extra
+# BE-3: no-key no-raise dep check, no pip extra
 # ---------------------------------------------------------------------------
-
-
-def test_build_query_expansion_provider_builds_llama_cpp() -> None:
-    """_build_query_expansion_provider('llama_cpp', ...) returns the real adapter."""
-    from archon_search.providers.llama_cpp_provider import (
-        LlamaCppQueryExpansionProvider,
-    )
-    from archon_search.server.app import _build_query_expansion_provider
-
-    provider = _build_query_expansion_provider(
-        "llama_cpp", "some-model", "http://localhost:11434", "http://localhost:9090"
-    )
-
-    assert isinstance(provider, LlamaCppQueryExpansionProvider)
-    assert provider._model == "some-model"
-    assert provider._base_url == "http://localhost:9090"
 
 
 def test_check_provider_deps_llama_cpp_no_raise(monkeypatch: pytest.MonkeyPatch) -> None:

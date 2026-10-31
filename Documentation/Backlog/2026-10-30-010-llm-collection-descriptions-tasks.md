@@ -308,7 +308,7 @@ flowchart LR
         - #unit_test — `test_rag_failure_falls_back_to_single_query` — a raising client gives `rag_fusion_applied: false`
         - #unit_test — `test_rag_logs_one_warning_per_process_without_query_text` — one WARNING for many failures and no query text in logs
         - #integration_test — `test_rag_fusion_through_shared_client_over_http` — the HTTP search path still fuses variants
-- [ ] **BE-13** — Cut over: remove `archon_search/providers/`, `query_expansion_protocol.py` and `_build_query_expansion_provider`, keep HyDE and RAG Fusion refusing to start on a missing package, delete or replace the adapter-pinned tests, re-point `test_no_query_log_in_llama_cpp_provider.py` and `test_anthropic_key_guards.py`; check whether `HyDEDependencyError` and `RAGFusionDependencyError` are still reachable once providers are injected, and remove their paths if not #backend-role
+- [x] **BE-13** — Cut over: remove `archon_search/providers/`, `query_expansion_protocol.py` and `_build_query_expansion_provider`, keep HyDE and RAG Fusion refusing to start on a missing package, delete or replace the adapter-pinned tests, re-point `test_no_query_log_in_llama_cpp_provider.py` and `test_anthropic_key_guards.py`; check whether `HyDEDependencyError` and `RAGFusionDependencyError` are still reachable once providers are injected, and remove their paths if not #backend-role
     - Interface Adapters · 5.0h
     - needs BE-11, BE-12 · completes S65
     - Tests

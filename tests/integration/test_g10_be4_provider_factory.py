@@ -85,7 +85,6 @@ def _install_ollama_stub(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
 
     fake_ollama.AsyncClient = _FakeAsyncClient  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
-    monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider", raising=False)
     return fake_ollama
 
 
@@ -416,7 +415,7 @@ def test_openai_provider_starts_app_successfully(
 ) -> None:
     """C2-M-1 (updated BE-6): create_app() with provider='openai' and a valid model starts OK.
 
-    BE-6 implemented OpenAIQueryExpansionProvider; the old placeholder ConfigError
+    BE-6 implemented the OpenAI provider (now ``OpenAIClient``); the old placeholder ConfigError
     guard no longer applies when the openai package is installed (which it is as a
     dev dependency). The app must start and respond to GET /health.
     """

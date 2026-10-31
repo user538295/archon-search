@@ -298,7 +298,7 @@ Operational properties:
 - **Silent fallback:** any LLM failure (timeout, quota, missing key, network) logs a WARNING and proceeds. Communities are still built (unsummarised), entities and typed relations are still extracted locally, and **no ingest ever fails**.
 - **Typed edges are additive, not overriding:** the prose engine's directed `uses`/`implements`/`depends_on` edges are merged in alongside the normalised, undirected `related_to` co-occurrence edges (distinct `relationship_type` values produce distinct stable edge IDs) — they never replace or downgrade an existing edge. This is a separate mechanism from the def/ref extractor's `"extracted"`-always-wins-over-`"inferred"` precedence rule for code-symbol edges.
 - **Refresh:** the maintenance loop re-summarizes only communities whose membership changed since the last build.
-- **No rate limiting for `llama_cpp`:** `extraction_rate_limit_rpm` is honored by `anthropic` but ignored by the `llama_cpp` enrichment client (local inference, unthrottled) — parity with the query-expansion adapters.
+- **No rate limiting for `llama_cpp`:** `extraction_rate_limit_rpm` is honored by `anthropic` but ignored by the `llama_cpp` enrichment client (local inference, unthrottled) — parity with the shared client's `llama_cpp` wrapper (`llm_client/llama_cpp_client.py`).
 
 Set the provider credential (e.g. `ANTHROPIC_API_KEY`) in the environment or via the wizard-managed `<data-dir>/.secrets.env`. `ollama` and `llama_cpp` need no credential. Community texts and LLM prompts are never logged — the no-raw-query telemetry guarantee extends to enrichment.
 

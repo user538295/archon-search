@@ -188,8 +188,8 @@ All three wordings are sanitized constants in `archon_search/graph_extractor.py`
 The server exits with a `ConfigError` naming `[hyde]` or `[rag_fusion]`, e.g. `[hyde] enabled=true with provider='anthropic' but the 'anthropic' package is not installed; run: pip install 'archon-search[hyde]'`. The feature is enabled with a provider whose package is missing. The command after `run:` matches how archon-search is installed: in a `uv tool` install it is the `uv tool install` command that keeps the extras already recorded in the receipt.
 
 1. **Install the package**: run the command from the message. The extras are `hyde` (or `rag_fusion`; both pull `anthropic`), `openai-provider` for `provider = "openai"` and `ollama` for `provider = "ollama"`; `claude_cli` needs no package. See [Optional extras](./10_installation.md#optional-extras) for the command per install method.
-2. **Or disable**: set `[hyde].enabled = false` / `[rag_fusion].enabled = false`.
-3. This fires only when the feature is enabled — a default install (feature off) never requires `anthropic`.
+2. **Or disable**: set `[hyde].enabled = false` / `[rag_fusion].enabled = false`. For `provider = "anthropic"` that is enough. For `ollama` and `openai` the check runs whenever that provider is configured, even with the feature off, so also remove the `provider` key (or switch it to a provider whose package is installed).
+3. For `anthropic` the check fires only when the feature is enabled — a default install (feature off) never requires it.
 
 ## Symptom: `/ready` returns 503 (not ready)
 

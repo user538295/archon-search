@@ -63,7 +63,6 @@ def _install_ollama_stub(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
 
     fake_ollama.AsyncClient = _FakeAsyncClient  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
-    monkeypatch.delitem(sys.modules, "archon_search.providers.ollama_provider", raising=False)
     return fake_ollama
 
 

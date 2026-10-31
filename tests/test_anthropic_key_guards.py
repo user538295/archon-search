@@ -3,8 +3,8 @@
 This file protects the C18 Fix 1 contract on two layers:
 
 1. **Guard-existence regression tests** — parametrized assertions that each of
-   the three production early-exit guards in ``archon_search/description_generator.py``,
-   ``archon_search/hyde.py``, and ``archon_search/rag_fusion.py`` still contains
+   the production early-exit guards in ``archon_search/description_generator.py``
+   and ``archon_search/llm_client/anthropic_client.py`` still contains
    an ``if``-statement guard on ``ANTHROPIC_API_KEY`` (matched by ``_GUARD_PATTERN``).
    If a future refactor removes the guard, Fix 1's autouse ``delenv`` in
    ``tests/conftest.py`` silently stops doing useful work and the 30 s SDK timeout
@@ -35,7 +35,7 @@ import pytest
 # Accepted forms:
 #   - ``if ... os.environ.get("ANTHROPIC_API_KEY"`` — direct env-var check (original C18 form)
 #   - ``if ... self.is_key_available()`` — delegation to the canonical method (E0b BE-8 form;
-#     ``is_key_available()`` calls ``os.environ.get("ANTHROPIC_API_KEY")`` internally)
+#     ``is_key_available()`` reads ``ANTHROPIC_API_KEY`` through ``provider_key_available``)
 # Rules:
 # - ``^\s*if\b`` — line must start with ``if`` (possibly indented); rules out ``#``-prefixed comments.
 # - ``[^#\n]*`` — no ``#`` before the guard expression.
@@ -53,13 +53,10 @@ _GUARD_PATTERN = re.compile(
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GUARD_FILES = [
     REPO_ROOT / "archon_search" / "description_generator.py",
-    # G10 BE-1: Anthropic API-key guard moved to the provider adapter (Root-3).
-    # hyde.py and rag_fusion.py no longer contain the runtime if-guard in their
-    # generate() / generate_variants() methods — it lives in
-    # AnthropicQueryExpansionProvider.is_key_available() + generate_hypothetical_doc()
-    # / decompose_query() instead. hyde.py retains is_key_available() for the
-    # status endpoint but has no early-exit if-guard in generate().
-    REPO_ROOT / "archon_search" / "providers" / "anthropic_provider.py",
+    # Collection descriptions BE-7/BE-13: the HyDE and RAG Fusion call path to Anthropic is the shared client's
+    # wrapper, whose ``call`` raises an ``LlmCallFailure`` before it builds an SDK client when no key is set.
+    # hyde.py and rag_fusion.py hold no early-exit guard of their own (they only report ``is_key_available``).
+    REPO_ROOT / "archon_search" / "llm_client" / "anthropic_client.py",
 ]
 
 # ---------------------------------------------------------------------------

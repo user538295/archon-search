@@ -46,11 +46,6 @@ from archon_search.embedder_cache import (
     EmbedderNotReadyError,
 )
 from archon_search.filters import SearchFilters
-from archon_search.hyde import (
-    HYDE_DEPENDENCY_CODE,
-    HYDE_DEPENDENCY_DETAIL,
-    HyDEDependencyError,
-)
 from archon_search.ingest_path_policy import ingest_path_policy
 from archon_search.jobs.export_archive import (
     ARCHIVE_NAMESPACE_MISMATCH_DETAIL,
@@ -98,10 +93,6 @@ from archon_search.pipeline import (
     context_window_error,
 )
 from archon_search.progress import IndexingState, IndexingStatus
-from archon_search.rag_fusion import (
-    RAG_FUSION_DEPENDENCY_CODE,
-    RAG_FUSION_DEPENDENCY_DETAIL,
-)
 from archon_search.router import MultiCollectionRouter
 from archon_search.server._hyde import RequestHyDE
 from archon_search.server._search_budget import (
@@ -167,7 +158,7 @@ if TYPE_CHECKING:
     from archon_search.graph_store import GraphStore
     from archon_search.hyde import HyDEGenerator
     from archon_search.jobs.store import JobStore
-    from archon_search.rag_fusion import RAGFusionDependencyError, RAGFusionGenerator
+    from archon_search.rag_fusion import RAGFusionGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -259,23 +250,6 @@ def _enqueue_internal_error(writer: TelemetryWriter | None, endpoint: str, start
         )
     except Exception:
         logger.warning("telemetry: %s error entry enqueue failed", endpoint, exc_info=True)
-
-
-def _dependency_error_response(
-    tool: str, exc: HyDEDependencyError | RAGFusionDependencyError
-) -> McpErrorResponse:
-    """Answer a missing HyDE or RAG Fusion package with its fixed wire pair.
-
-    The two branches are exhaustive over *exc*'s type.  The RAG Fusion one is not
-    ``isinstance``-checked: callers catch the class ``create_app`` bound lazily, which a
-    reloaded ``archon_search.rag_fusion`` no longer matches by identity.  The message
-    carries this interpreter's install command, so it is logged, never sent.
-    """
-    if isinstance(exc, HyDEDependencyError):
-        logger.warning("%s: HyDE unavailable — %s", tool, exc)
-        return McpErrorResponse(error=HYDE_DEPENDENCY_DETAIL, code=HYDE_DEPENDENCY_CODE)
-    logger.warning("%s: RAG Fusion unavailable — %s", tool, exc)
-    return McpErrorResponse(error=RAG_FUSION_DEPENDENCY_DETAIL, code=RAG_FUSION_DEPENDENCY_CODE)
 
 
 def _validate_scope_filter(scope_filter: str | None) -> McpErrorResponse | None:
@@ -498,11 +472,6 @@ def create_app(
     retire from it and publishes the new key to it, exactly like ``POST /keys/rotate``. When
     omitted, ``rotate_key`` re-reads ``.search.env`` and publishes nothing.
     """
-    # Late-bound import: archon_search.rag_fusion may be reloaded in tests,
-    # so we import lazily here (inside create_app) so the closures below always
-    # capture the current class from sys.modules at app-creation time.
-    from archon_search.rag_fusion import RAGFusionDependencyError
-
     # An ordinary exception escaping a tool reaches the client as a bare "Error calling
     # tool <name>" instead of "<name>: <exception text>". Not a full safety net: FastMCP
     # re-raises a pydantic ValidationError and any FastMCPError (ToolError, ...) unmasked,
@@ -674,8 +643,6 @@ def create_app(
                     ),
                     timeout=_SEARCH_TIMEOUT_SECONDS,
                 )
-            except (HyDEDependencyError, RAGFusionDependencyError) as exc:
-                return _dependency_error_response("search", exc)
             except GraphCommunitiesNotBuiltError as exc:
                 return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
             except CollectionNotFoundError:
@@ -842,8 +809,6 @@ def create_app(
                 # The ValidationError text embeds the rejected values: log it, never send it.
                 logger.exception("search: response schema validation failed")
                 return McpErrorResponse(error=_INVALID_SEARCH_RESPONSE_DETAIL, code=_ERR_SCHEMA)
-        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
-            return _dependency_error_response("search", exc)
         except GraphCommunitiesNotBuiltError as exc:
             return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
         except EmbedderNotReadyError as exc:
@@ -1038,8 +1003,6 @@ def create_app(
                 # The ValidationError text embeds the rejected values: log it, never send it.
                 logger.exception("search_with_context: response schema validation failed")
                 return McpErrorResponse(error=_INVALID_SEARCH_RESPONSE_DETAIL, code=_ERR_SCHEMA)
-        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
-            return _dependency_error_response("search_with_context", exc)
         except EmbedderNotReadyError as exc:
             # The model is still loading (or its load is wedged) — retryable.
             logger.warning("search_with_context: embedder not ready — %s", exc)
@@ -1188,8 +1151,6 @@ def create_app(
                     rag_fusion_config=_explain_rf_config,
                     scope_filter=scope_filter,
                 )
-            except (HyDEDependencyError, RAGFusionDependencyError) as exc:
-                return _dependency_error_response("explain", exc)
             except GraphCommunitiesNotBuiltError as exc:
                 return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
             except CollectionNotFoundError:
@@ -1361,8 +1322,6 @@ def create_app(
                 # The ValidationError text embeds the rejected values: log it, never send it.
                 logger.exception("explain: response schema validation failed")
                 return McpErrorResponse(error=_INVALID_EXPLAIN_RESPONSE_DETAIL, code=_ERR_SCHEMA)
-        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
-            return _dependency_error_response("explain", exc)
         except GraphCommunitiesNotBuiltError as exc:
             return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
         except ExplainStageError as exc:

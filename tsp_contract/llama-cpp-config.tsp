@@ -27,7 +27,7 @@ alias OllamaBaseUrlDefault = "http://localhost:11434";
 // allowlist. Also used for HyDE/RAG-Fusion query-expansion provider
 // selection.
 // SYNCHRONIZATION: this must be kept identical to the ProviderKind
-// definition in llama-cpp-provider-factory.tsp — these four files do not use
+// definition in llama-cpp-provider-factory.tsp — these files do not use
 // cross-file TypeSpec imports, so the two copies are synchronized by
 // convention/comment, not by import.
 // Registry shape (documentation-only — no separate model needed): this

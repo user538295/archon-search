@@ -24,7 +24,6 @@ from httpx import Response
 from pydantic import BaseModel, ValidationError
 
 from archon_search.config import SearchConfig
-from archon_search.hyde import HyDEDependencyError
 from archon_search.jobs.store import JobStore
 from archon_search.pipeline import (
     CollectionNotFoundError,
@@ -117,7 +116,6 @@ def _post(client: TestClient, route: str, body: dict[str, Any], hyde_raises: Exc
 
 _SINGLE = {"query": "q", "collection": "c"}
 _FANOUT = {"query": "q", "collections": ["a", "b"]}
-_HYDE_MISSING = HyDEDependencyError("pip install 'archon-search[hyde]'")
 _INTERNAL = RuntimeError("/srv/store/c.lance: internal")
 
 # (case id, request body, exception the pipeline call raises, exception HyDE raises, status, model)
@@ -125,7 +123,6 @@ _CASES = [
     ("invalid-scope-filter", {**_SINGLE, "scope_filter": "*"}, None, None, 400, CodedErrorDetail.__name__),
     ("request-validation", {"query": "   ", "collection": "c"}, None, None, 422, _HTTP_VALIDATION_ERROR),
     ("graph-mode-disabled", {**_SINGLE, "graph_mode": "local"}, None, None, 422, ErrorDetail.__name__),
-    ("hyde-dependency", {**_SINGLE, "hyde": True}, None, _HYDE_MISSING, 422, ErrorDetail.__name__),
     ("communities-not-built", _FANOUT, GraphCommunitiesNotBuiltError("a"), None, 422, CodedErrorDetail.__name__),
     (
         "communities-not-built-single",

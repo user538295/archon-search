@@ -15,8 +15,8 @@ Contract (C1):
 - Input is sized AHEAD of the call to :meth:`LlmClient.context_window`; there is no truncation
   detection after the call.
 
-Pattern mirrors ``graph_enrichment_protocol.py`` and ``query_expansion_protocol.py``: a
-``runtime_checkable`` :class:`~typing.Protocol` owned by the consumer. This module is stdlib-only.
+Pattern mirrors ``graph_enrichment_protocol.py``: a ``runtime_checkable`` :class:`~typing.Protocol` owned by
+the consumer. This module is stdlib-only.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 Tests the OpenAI enrichment adapter that implements LLMEnrichmentClientProtocol
 over raw ``httpx`` — deliberately NOT the ``openai`` SDK used by
-``providers/openai_provider.py`` (query-expansion adapter). Narrowed to
+``llm_client/openai_client.py``. Narrowed to
 community summarisation only (BE-17).
 
 Mocking convention: patch ``archon_search.enrichment.openai.httpx.AsyncClient``

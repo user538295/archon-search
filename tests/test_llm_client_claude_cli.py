@@ -114,12 +114,40 @@ async def test_call_returns_the_binary_stdout(fake: _fake_claude.FakeClaude) -> 
     assert result.text == "a one line description"
 
 
-async def test_ansi_sequences_are_stripped_from_the_reply(tmp_path: Path) -> None:
-    fake = _fake_claude.install(tmp_path / "bin", reply="\x1b[1mbold\x1b[0m text")
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        pytest.param("\x1b[1mbold\x1b[0m text", "bold text", id="sgr"),
+        pytest.param("\x1b[38:2:1:2:3mcolour\x1b[0m", "colour", id="colon-parameters"),
+        pytest.param("\x1b[>4;2mtext", "text", id="private-parameter-prefix"),
+        pytest.param("\x1b]8;;http://example.test\x07link\x1b]8;;\x07", "link", id="osc-hyperlink"),
+        pytest.param("a\x1bMb", "ab", id="two-character-escape"),
+    ],
+)
+async def test_terminal_escape_sequences_are_stripped_from_the_reply(tmp_path: Path, reply: str, expected: str) -> None:
+    fake = _fake_claude.install(tmp_path / "bin", reply=reply)
 
     result = await _client(fake).call(_request())
 
-    assert result.text == "bold text"
+    assert result.text == expected
+
+
+async def test_bare_control_characters_are_stripped_but_tabs_and_line_feeds_stay(tmp_path: Path) -> None:
+    fake = _fake_claude.install(tmp_path / "bin", reply="clean\x00\x1btext\x07 with\ttab\nand a line")
+
+    result = await _client(fake).call(_request())
+
+    assert result.text == "cleantext with\ttab\nand a line"
+
+
+async def test_reply_that_is_not_valid_utf8_is_decoded_with_replacement_characters(tmp_path: Path) -> None:
+    binary = tmp_path / "claude-printing-binary"
+    binary.write_text("#!/bin/sh\ncat >/dev/null\nprintf 'hello \\377\\376 world'\n", encoding="utf-8")
+    binary.chmod(stat.S_IRWXU)
+
+    result = await ClaudeCliClient(model="", binary=str(binary)).call(_request())
+
+    assert result.text == "hello \ufffd\ufffd world"
 
 
 async def test_window_and_budget_are_unbounded_like_a_cloud_provider(fake: _fake_claude.FakeClaude) -> None:
@@ -360,6 +388,15 @@ async def test_failure_text_never_carries_the_prompt(tmp_path: Path) -> None:
 
     assert _SECRET_PROMPT not in str(raised.value)
     assert _SECRET_PROMPT not in raised.value.reason
+
+
+async def test_failure_text_carries_no_escape_sequence_or_control_character(tmp_path: Path) -> None:
+    fake = _fake_claude.install(tmp_path / "bin", exit_codes=(1,), stderr="\x1b[31mnot logged in\x1b[0m\x00\x07 please run /login")
+
+    with pytest.raises(LlmCallFailure) as raised:
+        await _client(fake).call(_request())
+
+    assert raised.value.reason == "exit status 1: not logged in please run /login"
 
 
 async def test_non_zero_exit_is_retried_once_when_the_caller_asks(tmp_path: Path) -> None:

@@ -26,12 +26,6 @@ from archon_search.llm_client.provider_key import provider_key_available
 
 _logger = logging.getLogger(__name__)
 
-# Wire-safe pair for HyDEDependencyError. The transports answer it with this fixed detail; the exception's
-# own message (which may carry the install command, a receipt-derived string in a uv tool environment) is
-# logged, never sent to the client.
-HYDE_DEPENDENCY_DETAIL = "Install archon-search[hyde] to use HyDE"
-HYDE_DEPENDENCY_CODE = "validation_error"
-
 HYDE_PROMPT_TEMPLATE: Final = """\
 Write a short passage that would directly answer the following question.
 Output only the passage — no preamble, no explanation.
@@ -49,16 +43,6 @@ _HYDE_WARN_KEY: Final = "hyde_generation"
 _RATE_BUCKET_WINDOW_SECONDS: Final = 60.0
 #: Providers with no request cap of their own to protect: local or login-billed, so the bucket skips them.
 _UNTHROTTLED_PROVIDERS: Final = ("ollama", "claude_cli", "llama_cpp")
-
-
-class HyDEDependencyError(RuntimeError):
-    """A missing ``hyde`` provider package, answered by every transport with the fixed detail.
-
-    :class:`HyDEGenerator` no longer raises it: the shared client reports a missing package as a call failure
-    and the search falls back. The transports' mapping stays until BE-13 decides whether the error remains
-    reachable. Transports answer it with :data:`HYDE_DEPENDENCY_DETAIL` / :data:`HYDE_DEPENDENCY_CODE`, never
-    ``str(exc)``.
-    """
 
 
 class HyDEGenerator:

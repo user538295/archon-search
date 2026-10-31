@@ -344,6 +344,17 @@ async def test_llama_cpp_call_malformed_base_url_raises_failure_not_a_raw_except
     assert (await client.probe_context_window(_TIMEOUT_SECONDS)).source is ContextWindowSource.ASSUMED
 
 
+async def test_llama_cpp_call_dropped_connection_raises_failure_naming_only_the_error_type() -> None:
+    def server(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadError("connection dropped", request=request)
+
+    with pytest.raises(LlmCallFailure) as raised:
+        await _client(server).call(_request())
+
+    assert raised.value.reason == "the connection to the llama-server failed (ReadError)"
+    assert not isinstance(raised.value, LlmCallTimeout)
+
+
 async def test_llama_cpp_call_non_utf8_answer_raises_failure() -> None:
     def server(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"\xff\xfe\x00")

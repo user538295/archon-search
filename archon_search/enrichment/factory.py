@@ -1,8 +1,7 @@
 """EnrichmentClientFactory — Interface Adapters layer, composition root (LLCP BE-7).
 
 Routes ``GraphConfig.provider`` to a concrete ``LLMEnrichmentClientProtocol``
-implementation, mirroring ``_build_query_expansion_provider`` in
-``archon_search/server/app.py`` (C3 contract).
+implementation from the composition root in ``archon_search/server/app.py`` (C3 contract).
 
 ``provider=None`` (the default, air-gap-safe) returns ``None`` -- callers
 (``CommunityBuilder``, ``GraphExtractor``) treat a ``None`` client as

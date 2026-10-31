@@ -1320,43 +1320,6 @@ def test_search_hyde_is_skipped_when_the_collection_embedder_is_cold_but_the_glo
     app.state.pipeline.warmup_models.assert_awaited_once()
 
 
-_LEAKY_INSTALL_HINT = "printf '%s\\n' secret-exclude | uv tool install /opt/private/wheelhouse"
-
-
-@pytest.mark.parametrize("target", [{"collection": "col"}, {"collections": ["a", "b"]}])
-def test_search_hyde_package_not_installed_returns_422(
-    tmp_path: Path, target: dict, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A missing HyDE package → 422 with the fixed install message, not the exception's install command.
-
-    The install command stays in the server log (C2-T-10), and the single-collection 422
-    still emits its stage timings.
-    """
-    import archon_search.server.routes_search as routes_search_mod
-
-    app, client = _make_app(tmp_path)
-    app.state.config.observability.stage_timings_enabled = True
-    app.state.pipeline = _make_pipeline_mock()
-    app.state.pipeline.search_many = AsyncMock()
-    # The class routes_search catches, whatever module reloads ran before.
-    dependency_error = routes_search_mod.HyDEDependencyError(
-        f"Install archon-search[hyde] to use HyDE ({_LEAKY_INSTALL_HINT})"
-    )
-
-    with rest_hyde_generating(app, side_effect=dependency_error), caplog.at_level(
-        logging.INFO, logger="archon_search.server.routes_search"
-    ):
-        response = client.post("/search", json={"query": "q", "hyde": True, **target})
-
-    assert response.status_code == 422
-    assert response.json() == {"detail": "Install archon-search[hyde] to use HyDE"}
-    assert _LEAKY_INSTALL_HINT in caplog.text
-    app.state.pipeline.search.assert_not_awaited()
-    app.state.pipeline.search_many.assert_not_awaited()
-    if "collection" in target:
-        assert len(_stage_timing_records(caplog)) == 1
-
-
 def _fan_out_ready(app) -> None:
     app.state.pipeline.search_many = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
 
@@ -1411,10 +1374,10 @@ _LEAKY_HYDE_FAILURE = "ONNXRuntimeError: /Users/ops/.archon-search/models/onnx/m
 
 
 @pytest.mark.parametrize("target", [{"collection": "col"}, {"collections": ["a", "b"]}])
-def test_search_non_dependency_hyde_failure_is_a_logged_sanitized_500(
+def test_search_hyde_failure_is_a_logged_sanitized_500(
     tmp_path: Path, target: dict, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """C2-T-2/C2-I-8: any other HyDE exception is a pipeline failure — telemetry, log, plain 500.
+    """C2-T-2/C2-I-8: a HyDE exception is a pipeline failure — telemetry, log, plain 500.
 
     On the fan-out it used to escape before any try: a bare 500 with no log or telemetry.
     """
@@ -1623,34 +1586,6 @@ def test_search_rag_fusion_false_hyde_still_works(tmp_path: Path) -> None:
     assert response.status_code == 200
     mock_hyde.assert_called_once()
     assert response.json()["hyde_applied"] is True
-
-
-_LEAKY_RAG_FUSION_HINT = "uv tool install /opt/private/wheelhouse 'archon-search[rag_fusion]'"
-
-
-@pytest.mark.parametrize("target", [{"collection": "col"}, {"collections": ["a", "b"]}])
-def test_search_rag_fusion_package_not_installed_returns_422(
-    tmp_path: Path, target: dict, caplog: pytest.LogCaptureFixture
-) -> None:
-    """RAGFusionDependencyError → 422 with fixed text; the install command goes to the log only (G2)."""
-    import archon_search.server.routes_search as routes_search_mod
-
-    app, client = _make_app(tmp_path)
-    pipeline_mock = _make_pipeline_mock()
-    # The class routes_search catches, whatever module reloads ran before.
-    dependency_error = routes_search_mod.RAGFusionDependencyError(
-        f"{routes_search_mod.RAG_FUSION_DEPENDENCY_DETAIL} ({_LEAKY_RAG_FUSION_HINT})"
-    )
-    pipeline_mock.search = AsyncMock(side_effect=dependency_error)
-    pipeline_mock.search_many = AsyncMock(side_effect=dependency_error)
-    app.state.pipeline = pipeline_mock
-
-    with caplog.at_level(logging.WARNING, logger="archon_search.server.routes_search"):
-        response = client.post("/search", json={"query": "q", "rag_fusion": True, **target})
-
-    assert response.status_code == 422
-    assert response.json() == {"detail": "Install archon-search[rag_fusion] to use RAG Fusion"}
-    assert _LEAKY_RAG_FUSION_HINT in caplog.text
 
 
 def test_search_many_rag_fusion_true(tmp_path: Path) -> None:

@@ -259,36 +259,6 @@ def test_explain_hyde_false_passes_none(tmp_path: Path) -> None:
     assert kwargs.get("query_vector") is None
 
 
-def test_explain_hyde_package_not_installed_returns_422(tmp_path: Path) -> None:
-    """If HyDE generation raises HyDEDependencyError (package not installed), respond with 422.
-
-    The detail is the fixed install message; the exception's install command (which
-    describes the server's own install) stays in the log.
-    """
-
-    import archon_search.server.routes_explain as routes_explain_mod
-
-    app, client = _make_app(tmp_path)
-    pipeline = MagicMock()
-    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
-    pipeline.get_collection_meta = AsyncMock(return_value=meta)
-    pipeline.explain = AsyncMock()
-    app.state.pipeline = pipeline
-
-    dependency_error = routes_explain_mod.HyDEDependencyError(
-        "Install archon-search[hyde] to use HyDE (pip install 'archon-search[hyde]')"
-    )
-    with rest_hyde_generating(app, side_effect=dependency_error):
-        response = client.post("/explain", json={"collection": "col", "query": "test", "hyde": True})
-        multi_response = client.post("/explain", json={"collections": ["col", "c2"], "query": "test", "hyde": True})
-
-    assert response.status_code == 422
-    assert response.json() == {"detail": "Install archon-search[hyde] to use HyDE"}
-    assert multi_response.status_code == 422
-    assert multi_response.json() == {"detail": "Install archon-search[hyde] to use HyDE"}
-    pipeline.explain.assert_not_awaited()
-
-
 _SLOW_HYDE_SECONDS = 0.5
 
 
@@ -653,27 +623,6 @@ def test_explain_rag_fusion_sub_queries_mapped_to_schema(tmp_path: Path) -> None
     assert data["rag_fusion_sub_queries"][1]["variant_index"] == 1
 
 
-def test_explain_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
-    """Pipeline raises RAGFusionDependencyError (package not installed): response is 422."""
-    from archon_search.rag_fusion import (
-        RAG_FUSION_DEPENDENCY_DETAIL,
-        RAGFusionDependencyError,
-    )
-
-    pipeline = MagicMock()
-    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
-    pipeline.get_collection_meta = AsyncMock(return_value=meta)
-    pipeline.explain = AsyncMock(side_effect=RAGFusionDependencyError("Install archon-search[rag_fusion]"))
-    cache = _make_embedder_cache_mock()
-    app, client = _make_app(tmp_path)
-    app.state.pipeline = pipeline
-    app.state.embedder_cache = cache
-
-    response = client.post("/explain", json={"collection": "col", "query": "test", "rag_fusion": True})
-    assert response.status_code == 422
-    assert response.json() == {"detail": RAG_FUSION_DEPENDENCY_DETAIL}
-
-
 def test_explain_rag_fusion_false_hyde_still_works(tmp_path: Path) -> None:
     """rag_fusion=False, hyde=True: HyDE generate IS called (mutual exclusion is directional)."""
 
@@ -719,60 +668,6 @@ def test_explain_multi_collection_rag_fusion_passes_to_pipeline(tmp_path: Path) 
     assert "rag_fusion_config" in kwargs
 
 
-def test_explain_multi_collection_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
-    """Multi-collection path: RAGFusionDependencyError from pipeline returns 422."""
-    from archon_search.rag_fusion import (
-        RAG_FUSION_DEPENDENCY_DETAIL,
-        RAGFusionDependencyError,
-    )
-
-    app, client = _make_app(tmp_path)
-    pipeline = MagicMock()
-    pipeline.explain = AsyncMock(side_effect=RAGFusionDependencyError("Install archon-search[rag_fusion]"))
-    app.state.pipeline = pipeline
-
-    response = client.post(
-        "/explain",
-        json={"collections": ["col1", "col2"], "query": "test", "rag_fusion": True},
-    )
-    assert response.status_code == 422
-    assert response.json() == {"detail": RAG_FUSION_DEPENDENCY_DETAIL}
-
-
-_LEAKY_RAG_FUSION_HINT = "uv tool install /opt/private/wheelhouse 'archon-search[rag_fusion]'"
-
-
-@pytest.mark.parametrize("target", [{"collection": "col"}, {"collections": ["col1", "col2"]}])
-def test_explain_rag_fusion_dependency_error_keeps_the_install_command_in_the_log(
-    tmp_path: Path, target: dict, caplog: pytest.LogCaptureFixture
-) -> None:
-    """G2: fixed 422 text on the wire; the install command for the server's own env is logged."""
-    import logging
-
-    from archon_search.rag_fusion import (
-        RAG_FUSION_DEPENDENCY_DETAIL,
-        RAGFusionDependencyError,
-    )
-
-    app, client = _make_app(tmp_path)
-    pipeline = MagicMock()
-    pipeline.get_collection_meta = AsyncMock(
-        return_value=CollectionMeta(name="col", namespace="default", active_embedding_model="")
-    )
-    pipeline.explain = AsyncMock(
-        side_effect=RAGFusionDependencyError(f"{RAG_FUSION_DEPENDENCY_DETAIL} ({_LEAKY_RAG_FUSION_HINT})")
-    )
-    app.state.pipeline = pipeline
-    app.state.embedder_cache = _make_embedder_cache_mock()
-
-    with caplog.at_level(logging.WARNING, logger="archon_search.server.routes_explain"):
-        response = client.post("/explain", json={"query": "test", "rag_fusion": True, **target})
-
-    assert response.status_code == 422
-    assert response.json() == {"detail": "Install archon-search[rag_fusion] to use RAG Fusion"}
-    assert _LEAKY_RAG_FUSION_HINT in caplog.text
-
-
 def _hyde_explain_app(tmp_path: Path, **generate: object) -> tuple:
     """App whose real HyDE path runs against :func:`stub_hyde_generator` (``**generate``)."""
     app, client = _make_app(tmp_path)
@@ -793,8 +688,8 @@ _LEAKY_HYDE_FAILURE = "ONNXRuntimeError: /Users/ops/.archon-search/models/onnx/m
 
 
 @pytest.mark.parametrize("target", [{"collection": "col"}, {"collections": ["col1", "col2"]}])
-def test_explain_non_dependency_hyde_failure_is_a_sanitized_500(tmp_path: Path, target: dict) -> None:
-    """C2-T-2: any other HyDE exception falls to the catch-all — fixed "explain failed", no raw text."""
+def test_explain_hyde_failure_is_a_sanitized_500(tmp_path: Path, target: dict) -> None:
+    """C2-T-2: a HyDE exception falls to the catch-all — fixed "explain failed", no raw text."""
     app, client, pipeline, _embedder = _hyde_explain_app(tmp_path, side_effect=RuntimeError(_LEAKY_HYDE_FAILURE))
     client = TestClient(app, raise_server_exceptions=False, headers=client.headers)
 

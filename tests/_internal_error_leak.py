@@ -13,25 +13,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from archon_search import uv_tool
 from archon_search.chunker import DocumentChunker
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import GraphConfig, HyDEConfig
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.defref_extractor import DefRefExtractor
 from archon_search.embedder import Embedder
-from archon_search.hyde import (
-    HYDE_DEPENDENCY_DETAIL,
-    HyDEDependencyError,
-    HyDEGenerator,
-)
+from archon_search.hyde import HyDEGenerator
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import MetadataLookupError, SearchPipeline
-from archon_search.rag_fusion import (
-    RAG_FUSION_DEPENDENCY_DETAIL,
-    RAGFusionDependencyError,
-    RAGFusionGenerator,
-)
 from tests._hyde_stubs import ScriptedLlmClient
 
 # Internal-looking marker: an absolute path under the runtime data dir.
@@ -111,37 +101,6 @@ def hyde_generator(config: HyDEConfig, embed_error: BaseException) -> tuple[HyDE
 
     generator.generate = _generate  # type: ignore[method-assign]
     return generator, embed_one
-
-
-def hyde_generator_missing_extra() -> MagicMock:
-    """A ``HyDEGenerator`` stand-in whose ``generate`` raises ``HyDEDependencyError`` like a missing ``hyde`` extra.
-
-    The message carries the install command from ``uv_tool.extra_install_hint`` (patched by
-    ``patch_install_hint(monkeypatch, "archon_search.uv_tool")``); the transports must log it and send only the
-    fixed ``HYDE_DEPENDENCY_DETAIL``. The shared-client generator reports a missing package as a call failure, so
-    this stand-in serves the transport-mapping tests until BE-13 decides whether the error stays reachable.
-    """
-
-    async def _generate(*_args: Any, **_kwargs: Any) -> None:
-        raise HyDEDependencyError(f"{HYDE_DEPENDENCY_DETAIL} ({uv_tool.extra_install_hint('hyde')})")
-
-    return MagicMock(spec=HyDEGenerator, generate=AsyncMock(side_effect=_generate))
-
-
-def rag_fusion_generator_missing_extra() -> MagicMock:
-    """A ``RAGFusionGenerator`` stand-in whose ``generate_variants`` raises ``RAGFusionDependencyError`` like a missing extra.
-
-    The message carries the install command from ``uv_tool.extra_install_hint`` (patched by
-    ``patch_install_hint(monkeypatch, "archon_search.uv_tool")``); the transports must log it and send only the
-    fixed ``RAG_FUSION_DEPENDENCY_DETAIL``. The shared-client generator reports a missing package as a call
-    failure, so this stand-in serves the transport-mapping tests until BE-13 decides whether the error stays
-    reachable.
-    """
-
-    async def _generate_variants(*_args: Any, **_kwargs: Any) -> None:
-        raise RAGFusionDependencyError(f"{RAG_FUSION_DEPENDENCY_DETAIL} ({uv_tool.extra_install_hint('rag_fusion')})")
-
-    return MagicMock(spec=RAGFusionGenerator, generate_variants=AsyncMock(side_effect=_generate_variants))
 
 
 class _StubEmbedderBackend:

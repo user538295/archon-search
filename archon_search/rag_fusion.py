@@ -66,23 +66,6 @@ _RATE_BUCKET_WINDOW_SECONDS: Final = 60.0
 _UNTHROTTLED_PROVIDERS: Final = ("ollama", "claude_cli", "llama_cpp")
 
 
-# Wire-safe pair for RAGFusionDependencyError. The exception message also carries the
-# install command for this interpreter (``extra_install_hint``), which describes the
-# server's own install — it is logged, never sent to the client.
-RAG_FUSION_DEPENDENCY_DETAIL = "Install archon-search[rag_fusion] to use RAG Fusion"
-RAG_FUSION_DEPENDENCY_CODE = "validation_error"
-
-
-class RAGFusionDependencyError(RuntimeError):
-    """A missing ``rag_fusion`` provider package, answered by every transport with the fixed detail.
-
-    :class:`RAGFusionGenerator` no longer raises it: the shared client reports a missing package as a call
-    failure and the search falls back to the single query. The transports' mapping stays until BE-13 decides
-    whether the error remains reachable. Transports answer it with :data:`RAG_FUSION_DEPENDENCY_DETAIL` /
-    :data:`RAG_FUSION_DEPENDENCY_CODE`, never ``str(exc)``.
-    """
-
-
 class RAGFusionGenerator:
     """Generates semantic query variants for RAG Fusion.
 

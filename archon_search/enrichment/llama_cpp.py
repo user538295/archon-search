@@ -3,7 +3,7 @@
 Concrete implementation of LLMEnrichmentClientProtocol backed by a local
 llama-server's OpenAI-compatible ``POST /v1/chat/completions`` endpoint,
 over raw ``httpx`` (httpx is a core dependency — no lazy-import guard,
-mirroring ``providers/llama_cpp_provider.py``).
+like ``llm_client/llama_cpp_client.py``).
 
 Narrowed to community summarisation only (BE-17, ADR 12).
 

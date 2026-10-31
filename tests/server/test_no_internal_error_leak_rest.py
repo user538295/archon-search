@@ -7,8 +7,8 @@ embedder, networkx inside ``to_graphml``) and asserts the path never reaches the
 HTTP response, with a presence anchor (status code / exact body / the raise point
 was hit) so the absence check cannot pass vacuously.
 
-The missing-extra tests pin the fixed ``*_DEPENDENCY_DETAIL`` texts: the exceptions'
-own messages embed a receipt-derived install command (possibly index credentials),
+The missing-extra test pins the fixed ``GRAPHML_DEPENDENCY_DETAIL`` text: the exception's
+own message embeds a receipt-derived install command (possibly index credentials),
 so it is logged and never sent.
 """
 from __future__ import annotations
@@ -34,7 +34,6 @@ from archon_search.graph_inspector import (
     CollectionGraphView,
     CrossCollectionGraphView,
 )
-from archon_search.hyde import HYDE_DEPENDENCY_DETAIL
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import (
     ROTATE_KEYS_JSON_FAILED_DETAIL,
@@ -47,7 +46,6 @@ from archon_search.pipeline import (
     ExplainStageError,
     SearchPipelineResult,
 )
-from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL
 from archon_search.server.app import create_app
 from archon_search.server.routes_explain import (
     EXPLAIN_FAILED_DETAIL,
@@ -58,7 +56,6 @@ from archon_search.server.routes_search import SEARCH_FAILED_DETAIL
 from tests._install_hint_leak import (
     assert_install_hint_logged_not_sent,
     patch_install_hint,
-    rag_fusion_dependency_raiser,
 )
 from tests._internal_error_leak import (
     LANCE_MSG,
@@ -66,7 +63,6 @@ from tests._internal_error_leak import (
     ONNX_MSG,
     assert_logged_with_traceback,
     hyde_generator,
-    hyde_generator_missing_extra,
     metadata_lookup_error,
     mock_pipeline,
     permission_error,
@@ -76,7 +72,6 @@ _NETWORKX_IMPORT_MSG = (
     "cannot import name 'lxml_etree' from 'networkx.readwrite.graphml' "
     f"({LEAK_NEEDLE}/.venv/lib/python3.13/site-packages/networkx/readwrite/graphml.py)"
 )
-_HTTP_UNPROCESSABLE = 422
 _HTTP_INTERNAL_ERROR = 500
 # Starlette's own plain-text body for an exception no route handler caught.
 _STARLETTE_UNHANDLED_BODY = "Internal Server Error"
@@ -113,7 +108,7 @@ def _wire_app(tmp_path: Path) -> tuple[Any, TestClient]:
 
 
 # ---------------------------------------------------------------------------
-# C — a HyDE failure other than HyDEDependencyError -> 500 without the exception text
+# C — a HyDE failure -> 500 without the exception text
 # ---------------------------------------------------------------------------
 
 
@@ -516,55 +511,6 @@ def test_rotate_keys_json_failure_after_the_key_file_write_is_an_incomplete_rota
 # ---------------------------------------------------------------------------
 # F — missing optional extra: fixed detail on the wire, install command in the log
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("route", ["/search", "/explain"])
-def test_hyde_missing_extra_answers_fixed_detail_and_logs_install_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, route: str
-) -> None:
-    patch_install_hint(monkeypatch, "archon_search.uv_tool")
-    app, client = _wire_app(tmp_path)
-    app.state.config.hyde.enabled = True
-    app.state.hyde_generator = hyde_generator_missing_extra()
-
-    with caplog.at_level(logging.WARNING):
-        response = client.post(route, json={"collection": "col", "query": "q", "hyde": True})
-
-    assert response.status_code == _HTTP_UNPROCESSABLE, response.text
-    assert response.json() == {"detail": HYDE_DEPENDENCY_DETAIL}
-    assert_install_hint_logged_not_sent(caplog, response.text)
-
-
-# (route, request body extras, pipeline method the route awaits)
-_RAG_FUSION_ROUTES: list[tuple[str, dict[str, Any], str]] = [
-    ("/search", {"collection": "col"}, "search"),
-    ("/search", {"collections": ["a", "b"]}, "search_many"),
-    ("/explain", {"collection": "col"}, "explain"),
-    ("/explain", {"collections": ["a", "b"]}, "explain"),
-]
-
-
-@pytest.mark.parametrize(
-    ("route", "body", "method"), _RAG_FUSION_ROUTES,
-    ids=["search", "search-multi", "explain", "explain-multi"],
-)
-def test_rag_fusion_missing_extra_answers_fixed_detail_and_logs_install_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-    route: str, body: dict[str, Any], method: str,
-) -> None:
-    patch_install_hint(monkeypatch, "archon_search.uv_tool")
-    app, client = _wire_app(tmp_path)
-    app.state.config.rag_fusion.enabled = True
-    raiser = rag_fusion_dependency_raiser()
-    setattr(app.state.pipeline, method, raiser)
-
-    with caplog.at_level(logging.WARNING):
-        response = client.post(route, json={**body, "query": "q", "rag_fusion": True})
-
-    raiser.assert_awaited_once()
-    assert response.status_code == _HTTP_UNPROCESSABLE, response.text
-    assert response.json() == {"detail": RAG_FUSION_DEPENDENCY_DETAIL}
-    assert_install_hint_logged_not_sent(caplog, response.text)
 
 
 @pytest.mark.parametrize(("url", "inspect_name", "view_factory"), _GRAPHML_ROUTES, ids=["single", "cross"])

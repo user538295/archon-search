@@ -1,6 +1,6 @@
 # Manual Test: G10 T-2 — Live Ollama + Live OpenAI Provider Verification
 
-S1 (Anthropic path unchanged) is covered by automated integration tests (see `tests/test_anthropic_provider.py`). This checklist covers live-infrastructure scenarios requiring real LLM providers.
+S1 (Anthropic path unchanged) is covered by automated integration tests (see `tests/test_llm_client_cloud.py`). This checklist covers live-infrastructure scenarios requiring real LLM providers.
 
 ## Prerequisites
 

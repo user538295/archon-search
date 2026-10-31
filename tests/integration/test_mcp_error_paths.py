@@ -5,8 +5,6 @@ Exercises MCP tool error paths with real pipelines:
 - Nonexistent collection → not_found
 - FanoutTimeoutError from pipeline → timeout code
 - explain rerank=False + multi-collection → validation_error
-- HyDE dependency absent → error with dependency message
-- RAG fusion dependency absent → error with dependency message
 
 Run with:
     uv run pytest tests/integration/test_mcp_error_paths.py -v
@@ -18,7 +16,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 pytestmark = pytest.mark.integration
@@ -192,109 +189,3 @@ async def test_mcp_explain_rerank_false_multi_collections_returns_error() -> Non
     assert any(
         kw in error_msg for kw in ("rerank", "reranking", "multi-collection", "disabled")
     ), f"expected rerank/multi-collection constraint message, got: {result['error']!r}"
-
-
-# ---------------------------------------------------------------------------
-# Test 5 — search_with_context + hyde=True, dependency absent → error
-# ---------------------------------------------------------------------------
-
-
-async def test_mcp_search_with_context_hyde_dependency_absent_returns_error() -> None:
-    """MCP search_with_context with hyde=True and missing anthropic dep returns error.
-
-    Monkeypatches a hyde_generator.generate() to raise HyDEDependencyError (mimicking
-    the behavior of HyDEGenerator when the anthropic package is absent).
-    The MCP tool catches it and returns the fixed message with code='validation_error'.
-    """
-    from archon_search.hyde import HYDE_DEPENDENCY_DETAIL
-
-    pipeline = MagicMock()
-    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
-    embedder = MagicMock()
-    embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
-    pipeline._global_embedder = embedder
-    # HyDE resolves after the collection lookup: it embeds with the collection's embedder.
-    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
-    pipeline.warmup_models = AsyncMock(return_value=True)
-
-    # Mock a hyde_generator whose generate() raises HyDEDependencyError (dependency
-    # absent) — the class mcp.py itself catches, whatever reloads ran before.
-    from archon_search.server import mcp as mcp_module
-
-    hyde_generator = MagicMock()
-    hyde_generator.generate = AsyncMock(
-        side_effect=mcp_module.HyDEDependencyError(
-            "Install archon-search[hyde] to use HyDE (pip install 'archon-search[hyde]')"
-        )
-    )
-
-    # hyde config must have enabled=True for RequestHyDE.resolve to call generate()
-    from archon_search.config import HyDEConfig
-
-    config = MagicMock()
-    config.hyde = HyDEConfig(enabled=True)
-    config.rag_fusion = MagicMock()
-    config.rag_fusion.enabled = False
-    config.observability = MagicMock()
-    config.observability.stage_timings_enabled = False
-    config.embedding_model = ""
-
-    app = _make_mcp_app(pipeline, hyde_generator=hyde_generator, config=config)
-
-    result = await app.tools["search_with_context"](
-        query="test query",
-        collection="col",
-        hyde=True,
-    )
-
-    assert isinstance(result, dict), f"expected dict, got {type(result)}"
-    assert result.get("code") == "validation_error", (
-        f"expected validation_error for missing HyDE dependency, got: {result}"
-    )
-    assert result["error"] == HYDE_DEPENDENCY_DETAIL
-
-
-# ---------------------------------------------------------------------------
-# Test 6 — search + rag_fusion=True, dependency absent → error
-# ---------------------------------------------------------------------------
-
-
-async def test_mcp_search_rag_fusion_dependency_absent_returns_error() -> None:
-    """MCP search with rag_fusion=True and missing anthropic dep returns error.
-
-    Monkeypatches pipeline.search to raise RAGFusionDependencyError (the error
-    raised when the anthropic package is absent for RAG fusion). Asserts the
-    MCP tool catches it and returns code='validation_error'.
-    """
-    from archon_search.rag_fusion import (
-        RAG_FUSION_DEPENDENCY_DETAIL,
-        RAGFusionDependencyError,
-    )
-
-    pipeline = MagicMock()
-    embedder = MagicMock()
-    embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
-    pipeline._global_embedder = embedder
-    # Namespace gate calls await pipeline.get_collection_meta(); must return a truthy value
-    # so the gate passes and the test can exercise the RAGFusionDependencyError path.
-    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
-    pipeline.search = AsyncMock(
-        side_effect=RAGFusionDependencyError(
-            "Install archon-search[rag-fusion] to use RAG Fusion"
-        )
-    )
-    pipeline.warmup_models = AsyncMock(return_value=True)
-
-    app = _make_mcp_app(pipeline)
-
-    result = await app.tools["search"](
-        query="test rag fusion query",
-        collection="col",
-        rag_fusion=True,
-    )
-
-    assert isinstance(result, dict), f"expected dict, got {type(result)}"
-    assert result.get("code") == "validation_error", (
-        f"expected validation_error for missing RAG Fusion dependency, got: {result}"
-    )
-    assert result["error"] == RAG_FUSION_DEPENDENCY_DETAIL

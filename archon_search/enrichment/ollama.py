@@ -3,7 +3,7 @@
 Concrete implementation of LLMEnrichmentClientProtocol backed by a local
 Ollama server's OpenAI-compatible ``POST /v1/chat/completions`` endpoint,
 over raw ``httpx`` — deliberately **not** the ``ollama`` SDK used by
-``providers/ollama_provider.py`` (query-expansion adapter); httpx is a core
+``llm_client/ollama_client.py``; httpx is a core
 dependency, so enrichment needs no lazy-import availability guard.
 
 Narrowed to community summarisation only (BE-17, ADR 12).

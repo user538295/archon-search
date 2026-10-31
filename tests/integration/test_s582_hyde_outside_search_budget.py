@@ -6,8 +6,8 @@ pipeline call. The ``embedder_warm`` gate only skips HyDE on a cold *embedder*; 
 ``_hyde.resolve_hyde_within_budget`` nothing would bound the provider's HTTP call to
 the LLM. With ``[hyde] provider = "llama_cpp"``
 pointed at a llama-server that accepts the connection but never answers — a server
-still loading its model, the exact case ``llama_cpp_provider._post_chat_completion``
-documents — the request parks for the whole ``[hyde].timeout_seconds`` (unclamped by
+still loading its model, the exact case the ``LlamaCppClient`` call timeout
+guards against — the request parks for the whole ``[hyde].timeout_seconds`` (unclamped by
 ``config.py`` ``_apply_toml``) outside any server-side budget, and a client whose read
 timeout is shorter gets no response at all: the ``status=0``/``body=None`` symptom of
 the S278/S288/S290 out-of-budget-wait family, this time via the HyDE leg.

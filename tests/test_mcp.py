@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import archon_search.rag_fusion as rag_fusion_mod
 import archon_search.server.mcp as mcp_module
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.progress import (
@@ -390,37 +389,6 @@ def test_mcp_search_tool_hyde_applied_false_when_hyde_false() -> None:
     assert result.get("hyde_applied") is False
 
 
-_LEAKY_INSTALL_HINT = "printf '%s\\n' secret-exclude | uv tool install /opt/private/wheelhouse"
-
-
-@pytest.mark.parametrize(
-    ("tool_name", "kwargs"),
-    [
-        ("search", {"collection": "col1"}),
-        ("search", {"collections": ["col1", "col2"]}),
-        ("search_with_context", {"collection": "col1"}),
-        ("explain", {"collection": "col1"}),
-        ("explain", {"collections": ["col1", "col2"]}),
-    ],
-)
-def test_mcp_hyde_package_not_installed_returns_the_fixed_dependency_error(tool_name: str, kwargs: dict) -> None:
-    """A missing HyDE package answers the fixed install message, never the exception's install command."""
-    import asyncio
-
-    import archon_search.hyde as hyde_mod
-
-    pipeline = _make_hyde_pipeline_mock()
-    gen = _make_hyde_generator_mock()
-    tool_fn = _get_hyde_tool_fn(tool_name, pipeline, config=_make_config_with_hyde(enabled=True), hyde_generator=gen)
-    gen.generate = AsyncMock(
-        side_effect=hyde_mod.HyDEDependencyError(f"{hyde_mod.HYDE_DEPENDENCY_DETAIL} ({_LEAKY_INSTALL_HINT})")
-    )
-
-    result = asyncio.run(tool_fn(query="test query", hyde=True, **kwargs))
-
-    assert result == {"error": "Install archon-search[hyde] to use HyDE", "code": "validation_error"}
-
-
 _LEAKY_EMBED_ERROR = "ONNXRuntimeError: /Users/ops/.archon-search/models/onnx/model.onnx failed to load"
 
 
@@ -437,7 +405,7 @@ _LEAKY_EMBED_ERROR = "ONNXRuntimeError: /Users/ops/.archon-search/models/onnx/mo
 def test_mcp_hyde_embed_failure_does_not_leak_its_text(tool_name: str, kwargs: dict, expected: dict) -> None:
     """Any other RuntimeError during HyDE (the embedder's embed_one) is sanitized like a pipeline failure.
 
-    Only ``HyDEDependencyError`` is a client-facing HyDE error; the fan-out paths used to
+    A HyDE failure is never a client-facing error; the fan-out paths used to
     resolve HyDE outside the catch-all, echoing the raw text as a ``validation_error``.
     """
     import asyncio
@@ -700,39 +668,6 @@ def test_mcp_search_fan_out_skips_hyde_on_a_cold_global_embedder_with_one_warmup
     assert result["hyde_applied"] is False, result
     assert result["expansion_warning"] == "HyDE expansion failed"
     assert pipeline.search_many.await_args.kwargs["fts_only"] is True
-
-
-_LEAKY_RAG_FUSION_HINT = "uv tool install /opt/private/wheelhouse 'archon-search[rag_fusion]'"
-
-
-@pytest.mark.parametrize(
-    ("tool_name", "pipeline_method", "kwargs"),
-    [
-        ("search", "search", {"collection": "col1"}),
-        ("search", "search_many", {"collections": ["col1", "col2"]}),
-        ("search_with_context", "search_with_context", {"collection": "col1"}),
-        ("explain", "explain", {"collection": "col1"}),
-        ("explain", "explain", {"collections": ["col1", "col2"]}),
-    ],
-)
-def test_mcp_rag_fusion_package_not_installed_returns_the_fixed_dependency_error(
-    tool_name: str, pipeline_method: str, kwargs: dict, caplog: pytest.LogCaptureFixture
-) -> None:
-    """G2: a missing RAG Fusion package answers fixed text; the install command stays in the log."""
-    import asyncio
-    import logging
-
-    pipeline = _make_hyde_pipeline_mock()
-    tool_fn = _get_hyde_tool_fn(tool_name, pipeline, config=_make_config_with_hyde(enabled=False))
-    setattr(pipeline, pipeline_method, AsyncMock(side_effect=rag_fusion_mod.RAGFusionDependencyError(
-        f"{rag_fusion_mod.RAG_FUSION_DEPENDENCY_DETAIL} ({_LEAKY_RAG_FUSION_HINT})"
-    )))
-
-    with caplog.at_level(logging.WARNING, logger="archon_search.server.mcp"):
-        result = asyncio.run(tool_fn(query="test query", rag_fusion=True, **kwargs))
-
-    assert result == {"error": "Install archon-search[rag_fusion] to use RAG Fusion", "code": "validation_error"}
-    assert _LEAKY_RAG_FUSION_HINT in caplog.text
 
 
 def _schema_drift(*_args: object, **_kwargs: object) -> None:

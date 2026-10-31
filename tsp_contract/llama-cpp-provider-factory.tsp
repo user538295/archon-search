@@ -1,12 +1,13 @@
-// C3 — Provider factory seams (INTERNAL LOGICAL SEAM)
+// C3 — Provider factory seam (INTERNAL LOGICAL SEAM)
 // Composition-root factories in the Interface Adapters layer
 // (archon_search/server/app.py). A `_enrichment_client` local is built in
 // the create_app() body and stored as `app.state.enrichment_client`; all
 // five construction sites use it via constructor injection or `app.state`
-// access (team-plan.md C3 text). Two factories:
-//   1. _build_query_expansion_provider — EXISTS; gains a `llama_cpp` branch
-//      and a llama_cpp base-url input (signature widens).
-//   2. Enrichment client factory — DOES NOT EXIST TODAY; greenfield.
+// access (team-plan.md C3 text). One factory remains: the former
+// query-expansion factory (_build_query_expansion_provider) was removed by
+// collection-descriptions BE-13; HyDE and RAG Fusion now compose a shared
+// LlmClient in archon_search/server/llm_composition.py.
+//   Enrichment client factory (EnrichmentClientFactory in archon_search/enrichment/factory.py).
 //      Routes an enrichment-provider selection to a concrete client and is
 //      injected into CommunityBuilder / GraphExtractor at construction
 //      sites including app.py:639, routes_graph.py:99, and
@@ -46,7 +47,7 @@ namespace ArchonSearch.ProviderFactory;
 // "Done when" bullet + Scenario S16; tasks.md BE-4) — there is no narrower
 // enrichment-only allowlist.
 // SYNCHRONIZATION: this must be kept identical to the ProviderKind
-// definition in llama-cpp-config.tsp — these four files do not use
+// definition in llama-cpp-config.tsp — these files do not use
 // cross-file TypeSpec imports, so the two copies are synchronized by
 // convention/comment, not by import.
 enum ProviderKind {
@@ -57,25 +58,7 @@ enum ProviderKind {
   llama_cpp,
 }
 
-// Seam 1 — query-expansion factory input. The `llamaCppBaseUrl` field is
-// the additive signature change; both call sites (HyDE, RAG Fusion) must
-// pass it through from their config section.
-model BuildQueryExpansionProviderInput {
-  provider: ProviderKind;
-  "model": string;
-  ollamaBaseUrl: string;
-  llamaCppBaseUrl: string;
-}
-
-// Opaque placeholder standing in for the real `QueryExpansionProvider`
-// interface, whose shape is defined in the sibling C1 contract
-// (llama-cpp-query-expansion-protocol.tsp) — referenced by name only, since
-// these four files do not cross-import. Always constructed, never null.
-model QueryExpansionProviderRef {}
-
-op buildQueryExpansionProvider(input: BuildQueryExpansionProviderInput): QueryExpansionProviderRef;
-
-// Seam 2 — enrichment factory input (greenfield). Provider comes from the
+// Enrichment factory input (greenfield). Provider comes from the
 // discrete GraphConfig.provider field (Q7=A resolved — no "provider:model"
 // prefix parser); "model" is GraphConfig.extraction_model, always a bare
 // model name (nullable per S28 — provider set but extraction_model absent
@@ -149,9 +132,9 @@ model BuildEnrichmentClientInput {
 }
 
 // Opaque placeholder standing in for the real `LLMEnrichmentClient`
-// interface, whose shape is defined in the sibling C2 contract
+// interface, whose shape is defined in the sibling enrichment-protocol contract
 // (llama-cpp-enrichment-protocol.tsp) — referenced by name only, since
-// these four files do not cross-import.
+// these files do not cross-import.
 model LLMEnrichmentClientRef {}
 
 // Return type of the enrichment factory — nullable, per S27 (provider=null

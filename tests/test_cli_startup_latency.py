@@ -11,6 +11,9 @@ transitive deps), so CliRunner cannot reliably prove absence — see plan Q4.
 Packages guarded:
 - ``claude_agent_sdk`` — deferred into ``_call_haiku()`` by BE-1 (S1, S6)
 - ``torch`` / ``transformers`` — deferred into the model loaders; ``serve()`` defers ``run_server`` (BE-2, S1)
+- ``archon_search.llm_client`` — absent after ``config show`` (BE-2)
+- ``anthropic`` / ``openai`` / ``ollama`` — absent after ``config show``, and not loaded by importing every
+  ``llm_client`` module either (BE-13): the wrappers import their SDK on the first call
 
 NOT guarded:
 - ``mcp`` — enters only via ``server/mcp.py`` (lazy FastMCP mount at serve
@@ -28,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-# xdist_group serialises the two tests in this file onto one worker so the
+# xdist_group serialises the tests in this file onto one worker so the
 # module-scoped ``loaded_modules`` fixture is never split across workers.
 # The subprocess spawned here is intentionally lightweight — ``config show``
 # must NOT load torch, transformers or claude_agent_sdk (that is what the tests prove),
@@ -213,3 +216,59 @@ def test_lightweight_cmd_does_not_import_llm_client_package(loaded_modules: set[
         "The shared LLM client package has leaked into CLI start-up — check which module imports it "
         "at module scope and move the import to the point of use."
     )
+
+
+_PROVIDER_SDKS = ("anthropic", "openai", "ollama")
+_WRAPPER_MODULE_SUFFIX = "_client"
+_MIN_WRAPPER_MODULES = 5  # anthropic, claude_cli, llama_cpp, ollama, openai
+_SUBPROCESS_TIMEOUT_SECONDS = 60
+
+_IMPORT_EVERY_CLIENT_MODULE_SCRIPT = """\
+import importlib
+import pkgutil
+import sys
+
+import archon_search.llm_client as package
+
+imported = [module.name for module in pkgutil.iter_modules(package.__path__, "archon_search.llm_client.")]
+for name in imported:
+    importlib.import_module(name)
+import archon_search.server.llm_composition  # noqa: F401  (builds the clients of every provider)
+leaked = sorted(set({sdks!r}) & set(sys.modules))
+sys.stdout.write(",".join(leaked) + "|" + ",".join(imported))
+"""
+
+
+def test_lightweight_cmd_does_not_import_the_provider_sdks(loaded_modules: set[str]) -> None:
+    """The ``anthropic``, ``openai`` and ``ollama`` SDKs must be absent from sys.modules after ``archon-search config show``.
+
+    A command that never calls a model pays for no SDK, whoever would import it: this check names no module of its own.
+    The next test covers the shared client's own modules.
+    """
+    leaked = sorted(set(_PROVIDER_SDKS) & loaded_modules)
+    assert not leaked, (
+        f"{leaked} appeared in sys.modules after 'archon-search config show'. "
+        "A provider SDK is imported at module scope somewhere on the CLI start-up path."
+    )
+
+
+def test_importing_every_llm_client_module_loads_no_provider_sdk() -> None:
+    """Importing every ``archon_search.llm_client`` module and the composition root loads no provider SDK.
+
+    The wrappers import their SDK on the first call, never at module scope, so a new wrapper module (found by the
+    package walk, not a list) that imports its SDK at the top fails here even though ``config show`` never loads it.
+    The subprocess reports the modules it walked, so a walk that finds no wrapper cannot pass vacuously.
+    """
+    completed = subprocess.run(
+        [sys.executable, "-c", _IMPORT_EVERY_CLIENT_MODULE_SCRIPT.format(sdks=_PROVIDER_SDKS)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    leaked, _, walked = completed.stdout.partition("|")
+    wrappers = [name for name in walked.split(",") if name.endswith(_WRAPPER_MODULE_SUFFIX)]
+    assert len(wrappers) >= _MIN_WRAPPER_MODULES, f"the package walk found only {wrappers}"
+    assert leaked == "", f"{leaked} imported at module scope by archon_search/llm_client/*.py"

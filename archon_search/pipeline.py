@@ -1504,8 +1504,6 @@ class SearchPipeline:
             and rag_fusion_config is not None
             and rag_fusion_config.enabled
         ):
-            from archon_search.rag_fusion import RAGFusionDependencyError
-
             # 0. Vector conflict guard: ignore caller-supplied query_vector when RAG Fusion active.
             if query_vector is not None:
                 logger.warning(
@@ -1527,8 +1525,6 @@ class SearchPipeline:
             # 2. Generate variants from the ORIGINAL (unexpanded) query.
             try:
                 variants = await rag_fusion_generator.generate_variants(query)
-            except RAGFusionDependencyError:
-                raise
             except TimeoutError:
                 logger.warning(
                     "rag_fusion generate_variants timed out for query=%s; falling back",
@@ -2421,8 +2417,6 @@ class SearchPipeline:
             and rag_fusion_config is not None
             and rag_fusion_config.enabled
         ):
-            from archon_search.rag_fusion import RAGFusionDependencyError
-
             _single_embedder = embedder if embedder is not None else self._global_embedder
             candidate_depth = max(self._top_k_retrieve * 3, 20)
 
@@ -2438,8 +2432,6 @@ class SearchPipeline:
             # Generate variants.
             try:
                 variants = await rag_fusion_generator.generate_variants(query)
-            except RAGFusionDependencyError:
-                raise
             except Exception as exc:  # noqa: BLE001 — pluggable LLM variant generator; any failure falls back to standard explain
                 logger.warning(
                     "rag_fusion explain generate_variants failed for query=%s; falling back",
@@ -3158,8 +3150,6 @@ class SearchPipeline:
             and rag_fusion_config is not None
             and rag_fusion_config.enabled
         ):
-            from archon_search.rag_fusion import RAGFusionDependencyError
-
             candidate_depth = max(self._top_k_retrieve * 3, 20)
             if filters and filters.source_path_glob:
                 candidate_depth = max(candidate_depth * GLOB_OVERFETCH_FACTOR, 60)
@@ -3168,8 +3158,6 @@ class SearchPipeline:
             _rag_fusion_warning: str | None = None
             try:
                 variants = await rag_fusion_generator.generate_variants(query)
-            except RAGFusionDependencyError:
-                raise
             except TimeoutError:
                 logger.warning(
                     "rag_fusion search_many generate_variants timed out for query=%s; falling back",

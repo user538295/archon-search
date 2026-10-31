@@ -22,7 +22,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from archon_search._types import IngestedBy
 from archon_search.config import resolve_active_model
-from archon_search.hyde import HyDEDependencyError
 from archon_search.observability import bind_stage_recorder
 from archon_search.observability import correlation_id as _correlation_id
 from archon_search.pipeline import (
@@ -42,7 +41,6 @@ from archon_search.server._search_budget import (
 from archon_search.server._validators import (
     validate_scope_filter as _check_scope_filter,
 )
-from archon_search.server.routes_search import dependency_error_response
 from archon_search.server.schemas import (
     GRAPH_COMMUNITIES_NOT_BUILT_CODE,
     INVALID_SCOPE_FILTER_CODE,
@@ -442,10 +440,6 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
     taxonomy); pipeline-stage failures (store / reranker) surface as 500 with a
     stage-specific detail. The query is never echoed in the response or telemetry.
     """
-    # Late-bound import: archon_search.rag_fusion may be reloaded in tests,
-    # so we import lazily to always get the current class from sys.modules.
-    from archon_search.rag_fusion import RAGFusionDependencyError
-
     start = monotonic()
     pipeline = request.app.state.pipeline
     config = request.app.state.config
@@ -572,8 +566,6 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     rag_fusion_config=config.rag_fusion,
                     scope_filter=body.scope_filter,
                 )
-            except (HyDEDependencyError, RAGFusionDependencyError) as exc:
-                return dependency_error_response("explain", exc, log=logger)
             except GraphCommunitiesNotBuiltError as exc:
                 # Defensive: the S14 guard above prevents graph_mode+collections from
                 # reaching this path, and the multi-collection call does not currently
@@ -730,8 +722,6 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 graph_mode=body.graph_mode,
                 scope_filter=body.scope_filter,
             )
-        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
-            return dependency_error_response("explain", exc, log=logger)
         except GraphCommunitiesNotBuiltError as exc:
             return JSONResponse(
                 {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422

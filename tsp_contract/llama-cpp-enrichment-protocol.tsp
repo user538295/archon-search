@@ -13,17 +13,18 @@
 // removed from the protocol and from all four adapters. This file declares the
 // single surviving method.
 //
-// Load-bearing contract — the INVERSE of the query-expansion seam:
-// the operation MAY RAISE on failure. The caller (CommunityBuilder) catches
+// Load-bearing contract: the operation MAY RAISE on failure (as the shared
+// LlmClient of HyDE and RAG Fusion does). The caller (CommunityBuilder) catches
 // and substitutes null. Adapters must not swallow errors into a
 // degraded-but-silent success. A null return means only an entirely
 // empty/missing response, never a swallowed transport failure.
 //
 // Privacy: no raw chunk/community text is ever logged. This is a related but
-// distinct invariant from ADR 05, which covers raw QUERY text (see the C1
-// contract, llama-cpp-query-expansion-protocol.tsp, where the ADR 05
-// attribution is correct). Entity names are already-abstracted graph metadata,
-// not raw input content, and the reference AnthropicEnrichmentClient logs them.
+// distinct invariant from ADR 05, which covers raw QUERY text (the shared
+// LlmClient of HyDE and RAG Fusion, archon_search/llm_client/, is held to it by
+// tests/test_no_query_log_in_llm_client.py). Entity names are already-abstracted
+// graph metadata, not raw input content, and the reference
+// AnthropicEnrichmentClient logs them.
 
 namespace ArchonSearch.GraphEnrichment;
 

@@ -2,7 +2,7 @@
 
 Tests the Ollama enrichment adapter that implements LLMEnrichmentClientProtocol
 over raw ``httpx`` — deliberately NOT the ``ollama`` SDK used by
-``providers/ollama_provider.py`` (query-expansion adapter). Narrowed to
+``llm_client/ollama_client.py``. Narrowed to
 community summarisation only (BE-17).
 
 Mocking convention: patch ``archon_search.enrichment.ollama.httpx.AsyncClient``

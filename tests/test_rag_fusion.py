@@ -88,12 +88,6 @@ def test_fingerprint_importable_from_hyde() -> None:
     assert hyde_fp("test") == privacy_fp("test")
 
 
-def test_rag_fusion_dependency_error_is_runtime_error() -> None:
-    from archon_search.rag_fusion import RAGFusionDependencyError
-
-    assert issubclass(RAGFusionDependencyError, RuntimeError)
-
-
 # ---------------------------------------------------------------------------
 # RAGFusionGenerator._validate_variant
 # ---------------------------------------------------------------------------

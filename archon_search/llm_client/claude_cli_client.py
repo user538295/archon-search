@@ -110,8 +110,12 @@ _ENV_NAMES: Final = frozenset(
 )
 _ENV_PREFIXES: Final = ("LC_",)
 
-# ANSI escape sequences: belt and braces, ``--output-format text`` is plain but older versions may emit status codes.
-_ANSI_RE: Final = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+# Terminal escape sequences: belt and braces, ``--output-format text`` is plain but older versions may emit status codes.
+# A CSI sequence (parameter bytes, intermediates, a final byte), an OSC string up to BEL or ST, and a two-character escape.
+_ANSI_RE: Final = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
+# What is left of the control characters once the sequences are gone (a bare ESC, NUL, BEL ...): never text, and an
+# embedder, a one-line description or a failure message must not carry them. Tab, line feed and carriage return stay.
+_CONTROL_RE: Final = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 _ATTEMPTS_WITHOUT_RETRY: Final = 1
 _ATTEMPTS_WITH_RETRY: Final = 2  # one retry
@@ -119,6 +123,11 @@ _ATTEMPTS_WITH_RETRY: Final = 2  # one retry
 # POSIX: the child gets its own session so a kill reaches its descendants too (one that holds the output pipes would
 # otherwise outlive the call). Elsewhere only the child itself is killed.
 _HAS_PROCESS_GROUPS: Final = hasattr(os, "killpg")
+
+
+def _clean_reply(reply: str) -> str:
+    """*reply* without terminal escape sequences and without control characters (tab, line feed, carriage return stay)."""
+    return _CONTROL_RE.sub("", _ANSI_RE.sub("", reply))
 
 
 def child_environment(source: Mapping[str, str]) -> dict[str, str]:
@@ -166,10 +175,10 @@ class ClaudeCliClient:
                 await asyncio.sleep(RETRY_BACKOFF_SECONDS)
             exit_status, stdout, stderr = await self._run_once(argv, request)
             if exit_status == 0:
-                return LlmCallResult(text=_ANSI_RE.sub("", stdout.decode("utf-8", errors="replace")))
+                return LlmCallResult(text=_clean_reply(stdout.decode("utf-8", errors="replace")))
         # ``claude -p`` reports a failed login ("Not logged in") on standard output with stderr empty, so fall back to it.
         detail = stderr.strip() or stdout
-        reason = bounded_server_text(detail.decode("utf-8", errors="replace"), request.prompt)
+        reason = bounded_server_text(_clean_reply(detail.decode("utf-8", errors="replace")), request.prompt)
         raise LlmCallFailure(PROVIDER_NAME, f"exit status {exit_status}: {reason}" if reason else f"exit status {exit_status}")
 
     def context_window(self) -> ContextWindow:

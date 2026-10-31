@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search.config import HyDEConfig
-from archon_search.hyde import HyDEDependencyError
 from archon_search.observability import _stage_recorder, bind_stage_recorder
 from archon_search.server._hyde import (
     HYDE_EXPANSION_FAILED_WARNING,
@@ -129,14 +128,6 @@ async def test_a_silent_provider_is_bounded_by_the_budget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_dependency_error_propagates() -> None:
-    generator = stub_hyde_generator(side_effect=HyDEDependencyError("Install archon-search[hyde] to use HyDE"))
-
-    with pytest.raises(HyDEDependencyError):
-        await _resolve(generator=generator)
-
-
-@pytest.mark.asyncio
 async def test_hyde_runs_off_the_stage_recorder() -> None:
     """F6: the LLM call and the hypothesis embed stay out of ``stage_timings_ms``."""
     seen: list[object] = []
@@ -236,17 +227,6 @@ async def test_resolve_hyde_within_budget_cancels_and_degrades_on_overrun(
     assert observed == ["cancelled", "cancelled"]
     assert "HyDE generation exceeded" in caplog.text
     assert caplog.text.count("HyDE generation exceeded") == 1, "one WARNING per process (S2)"
-
-
-@pytest.mark.asyncio
-async def test_resolve_hyde_within_budget_propagates_the_dependency_error() -> None:
-    """The missing-provider-package error still reaches each transport's 422 mapping."""
-
-    async def _missing_package() -> list[float]:
-        raise HyDEDependencyError("Install archon-search[hyde] to use HyDE")
-
-    with pytest.raises(HyDEDependencyError):
-        await resolve_hyde_within_budget(_missing_package(), timeout=_BOUNDED_CALL_CEILING_SECONDS)
 
 
 @pytest.mark.asyncio

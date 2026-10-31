@@ -1374,49 +1374,6 @@ async def test_search_rag_fusion_ignores_caller_query_vector() -> None:
     assert result.rag_fusion_applied is True
 
 
-@pytest.mark.asyncio
-async def test_search_rag_fusion_dependency_error_reraises() -> None:
-    """RAGFusionDependencyError from generate_variants must propagate (not be swallowed)."""
-    from unittest.mock import AsyncMock
-
-    from archon_search.chunker import DocumentChunker
-    from archon_search.config import RAGFusionConfig
-    from archon_search.parser import DocumentParser
-    from archon_search.pipeline import SearchPipeline
-    from archon_search.rag_fusion import RAGFusionDependencyError
-
-    mock_store = MagicMock()
-    mock_store.has_vector_index = AsyncMock(return_value=True)
-
-    mock_generator = MagicMock()
-    mock_generator.generate_variants = AsyncMock(
-        side_effect=RAGFusionDependencyError("Install archon-search[rag_fusion]")
-    )
-
-    rag_config = RAGFusionConfig(enabled=True)
-
-    pipeline = SearchPipeline(
-        store=mock_store,
-        embedder=make_embedder(),
-        reranker=make_reranker(),
-        chunker=DocumentChunker(chunk_size=128),
-        parser=DocumentParser(),
-        top_k_retrieve=10,
-        top_k_return=5,
-    )
-    await pipeline._global_embedder.embed(["warmup"])
-
-    with pytest.raises(RAGFusionDependencyError, match="Install archon-search"):
-        await pipeline.search(
-            "query",
-            "col",
-            embedder=pipeline._global_embedder,
-            rag_fusion=True,
-            rag_fusion_generator=mock_generator,
-            rag_fusion_config=rag_config,
-        )
-
-
 # ===========================================================================
 # C5 Task 2.3 — search_many() RAG Fusion orchestration
 # ===========================================================================

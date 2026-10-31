@@ -9,9 +9,7 @@ the path never reaches the MCP wire output, while a presence anchor (error code,
 and that the injected raise point was actually hit) keeps the absence check from
 passing vacuously.
 
-The missing-extra tests pin the fixed ``*_DEPENDENCY_DETAIL`` texts (the exceptions'
-own messages embed a receipt-derived install command, so it is logged, never sent);
-the KEEP test pins the deliberately user-facing store-busy message.
+The KEEP test pins the deliberately user-facing store-busy message.
 """
 from __future__ import annotations
 
@@ -36,7 +34,6 @@ from archon_search import parser as archon_parser
 from archon_search._types import PARSE_ERROR_CODE, SearchResult
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
-from archon_search.hyde import HYDE_DEPENDENCY_DETAIL
 from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION
 from archon_search.key_manager import (
     ENV_VAR,
@@ -58,7 +55,6 @@ from archon_search.pipeline import (
     SearchPipelineResult,
     SearchWithContextResult,
 )
-from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL
 from archon_search.server.mcp import (
     _INVALID_EXPLAIN_RESPONSE_DETAIL,
     _INVALID_SEARCH_FILTERS_DETAIL,
@@ -81,11 +77,6 @@ from archon_search.store import StoreBusyError
 from tests._collection_lock_stub import with_locked_collection_meta
 from tests._docling_stubs import reset_parser_worker_globals  # noqa: F401 — autouse fixture
 from tests._fastmcp_stub import stub_mcp_tools, stubbed_fastmcp
-from tests._install_hint_leak import (
-    assert_install_hint_logged_not_sent,
-    patch_install_hint,
-    rag_fusion_dependency_raiser,
-)
 from tests._internal_error_leak import (
     DEFREF_PARSE_MSG,
     LANCE_MSG,
@@ -95,7 +86,6 @@ from tests._internal_error_leak import (
     assert_logged_with_traceback,
     defref_pipeline,
     hyde_generator,
-    hyde_generator_missing_extra,
     metadata_lookup_error,
     mock_pipeline,
     permission_error,
@@ -465,7 +455,7 @@ async def test_filter_validation_error_does_not_echo_input_value(tool: str, kwar
 
 
 # ---------------------------------------------------------------------------
-# C — a HyDE failure other than HyDEDependencyError -> code internal_error
+# C — a HyDE failure -> code internal_error
 # ---------------------------------------------------------------------------
 
 
@@ -883,57 +873,6 @@ def test_create_app_turns_fastmcp_error_masking_on() -> None:
 # ---------------------------------------------------------------------------
 # KEEP — deliberately user-facing messages still pass through unchanged
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("tool", [t for t, _ in _HYDE_TOOLS])
-async def test_hyde_missing_extra_answers_fixed_detail_and_logs_install_command(
-    tool: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    patch_install_hint(monkeypatch, "archon_search.uv_tool")
-    config = _hyde_config()
-    generator = hyde_generator_missing_extra()
-
-    with caplog.at_level(logging.WARNING):
-        result, wire = await _wire(
-            _tools(_hyde_pipeline(), config=config, hyde_generator=generator),
-            tool, query="q", collection="col", hyde=True,
-        )
-
-    assert result == {"error": HYDE_DEPENDENCY_DETAIL, "code": "validation_error"}, wire
-    assert_install_hint_logged_not_sent(caplog, wire)
-
-
-# (tool, tool kwargs, pipeline method the tool awaits)
-_RAG_FUSION_TOOLS: list[tuple[str, dict[str, Any], str]] = [
-    ("search", {"collection": "col"}, "search"),
-    ("search", {"collections": ["a", "b"]}, "search_many"),
-    ("search_with_context", {"collection": "col"}, "search_with_context"),
-    ("explain", {"collection": "col"}, "explain"),
-    ("explain", {"collections": ["a", "b"]}, "explain"),
-]
-
-
-@pytest.mark.parametrize(
-    ("tool", "kwargs", "method"), _RAG_FUSION_TOOLS,
-    ids=["search", "search-multi", "search_with_context", "explain", "explain-multi"],
-)
-async def test_rag_fusion_missing_extra_answers_fixed_detail_and_logs_install_command(
-    tool: str, kwargs: dict[str, Any], method: str, monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    patch_install_hint(monkeypatch, "archon_search.uv_tool")
-    config = SearchConfig()
-    config.rag_fusion.enabled = True
-    pipeline = mock_pipeline()
-    raiser = rag_fusion_dependency_raiser()
-    setattr(pipeline, method, raiser)
-
-    with caplog.at_level(logging.WARNING):
-        result, wire = await _wire(_tools(pipeline, config=config), tool, query="q", rag_fusion=True, **kwargs)
-
-    raiser.assert_awaited_once()
-    assert result == {"error": RAG_FUSION_DEPENDENCY_DETAIL, "code": "validation_error"}, wire
-    assert_install_hint_logged_not_sent(caplog, wire)
 
 
 async def test_keep_store_busy_message_reaches_store_busy() -> None:
