@@ -193,7 +193,7 @@ def test_session_key_block_fires_before_test_body() -> None:
 def test_anthropic_client_instantiation_raises_in_test_context() -> None:
     """anthropic.Anthropic() raises RuntimeError in the test suite.
 
-    Proves the session fixture _block_anthropic_client is active and that no
+    Proves the session fixture _block_model_providers is active and that no
     code path can reach the Anthropic network during tests, even if the env-var
     guard is bypassed or the API key leaks in via some other route.
 

@@ -15,14 +15,19 @@ on ``127.0.0.1`` with an OS-chosen port and runs in a daemon thread; use it as a
 
 Tokenizing counts one token per whitespace-separated word, like ``tests/_token_counter_stub.StubTokenizer``.
 Response shapes follow the Ollama API documentation (``docs/api.md``) and the llama.cpp server README.
+
+While a server is entered, :func:`is_fake_server_port` answers ``True`` for its port: the session guard of
+``tests/conftest.py`` (``tests/_model_host_guard.py``) lets an ``openai`` or ``ollama`` SDK client be built only for one.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import socket
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, Self
@@ -47,6 +52,34 @@ _POLL_INTERVAL_SECONDS = 0.01  # how soon ``shutdown`` is noticed; the default 0
 _LLAMA_PATHS = frozenset({"/props", "/tokenize", "/v1/chat/completions"})
 _LLAMA_ERROR_TYPES = {400: "invalid_request_error", 404: "not_found_error", 503: "unavailable_error"}
 _LLAMA_OTHER_ERROR_TYPE = "server_error"
+
+_listening_ports: set[int] = set()
+_listening_lock = threading.Lock()
+
+
+def is_fake_server_port(port: int) -> bool:
+    """Whether a ``FakeModelServer`` is entered, or an :func:`unreachable_port` is held, on loopback ``port`` right now."""
+    with _listening_lock:
+        return port in _listening_ports
+
+
+@contextlib.contextmanager
+def unreachable_port() -> Iterator[int]:
+    """A loopback port that refuses every connection, for the test of a server that is down.
+
+    A bound socket that never listens refuses every connection, and keeps its port from being handed to another test. The
+    session guard counts the port as a fake server's, so an SDK client may be built for it.
+    """
+    with socket.socket() as refusing:
+        refusing.bind((_LOOPBACK, 0))
+        port = refusing.getsockname()[1]
+        with _listening_lock:
+            _listening_ports.add(port)
+        try:
+            yield port
+        finally:
+            with _listening_lock:
+                _listening_ports.discard(port)
 
 
 @dataclass(frozen=True)
@@ -111,9 +144,13 @@ class FakeModelServer:
             daemon=True,
         )
         self._thread.start()
+        with _listening_lock:
+            _listening_ports.add(self._httpd.server_address[1])
         return self
 
     def __exit__(self, *exc_info: object) -> None:
+        with _listening_lock:
+            _listening_ports.discard(self._httpd.server_address[1])
         self._httpd.shutdown()
         self._httpd.server_close()
         self._thread.join()

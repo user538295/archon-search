@@ -104,7 +104,7 @@ def _archon_worker_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# C18 Fix 2 — session-level Anthropic token-burn prevention
+# C18 Fix 2 + BE-9 — session-level token-burn and real-provider prevention
 # ---------------------------------------------------------------------------
 
 
@@ -121,34 +121,44 @@ def _block_anthropic_key_at_session() -> None:
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _block_anthropic_client() -> Generator[None]:
-    """Mock anthropic.Anthropic and anthropic.AsyncAnthropic to raise if instantiated.
+def _block_model_providers() -> Generator[None]:
+    """Refuse every door a real model provider is reached through, for the whole session.
 
-    Guards against token burns even when the env-var guard is bypassed — e.g. a
-    future code path that constructs the client without checking ANTHROPIC_API_KEY.
-    Only active when the `anthropic` package is installed (hyde/rag_fusion extras).
-    Existing tests that patch sys.modules["anthropic"] with a mock module are
-    unaffected: patch.dict replaces the module object entirely, so the lazy
-    `import anthropic` inside generators gets the mock, not the real module.
+    * ``anthropic.Anthropic`` and ``anthropic.AsyncAnthropic`` raise if instantiated: a guard against token burns even
+      when the env-var guard is bypassed — e.g. a future code path that constructs the client without checking
+      ``ANTHROPIC_API_KEY``. Only active when the `anthropic` package is installed (hyde/rag_fusion extras). Existing
+      tests that patch ``sys.modules["anthropic"]`` with a mock module are unaffected: ``patch.dict`` replaces the module
+      object entirely, so the lazy ``import anthropic`` inside the clients gets the mock, not the real module.
+    * ``openai`` and ``ollama`` clients, httpx calls through the real network transports to a model host, and ``claude``
+      spawns from an unresolved path or any binary that is not a fake of ``tests/_fake_claude.py``: the rules and their
+      opt-outs live in ``tests/_model_host_guard.py``; ``pytest_runtest_setup`` below lifts them for the live lanes.
     """
-    try:
-        import anthropic as _anthropic_mod
-    except ImportError:
-        yield  # anthropic extra not installed — nothing to block
-        return
+    from tests import _model_host_guard
 
-    def _raise(*a: object, **kw: object) -> None:
-        raise RuntimeError(
-            "Test suite attempted to instantiate the Anthropic client — "
-            "this would burn real tokens. Add monkeypatch.setenv('ANTHROPIC_API_KEY', ...) "
-            "and patch the client in your test instead."
-        )
-
-    with (
-        patch.object(_anthropic_mod, "Anthropic", side_effect=_raise),
-        patch.object(_anthropic_mod, "AsyncAnthropic", side_effect=_raise),
-    ):
+    with contextlib.ExitStack() as stack:
+        _model_host_guard.install_guards(stack)
         yield
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Lift the ``_model_host_guard`` rules for a test of a lane whose purpose is to reach the real thing.
+
+    Runs before the item's fixtures are set up, so the module- and session-scoped fixtures a live test pulls in (real
+    models, a real server) run unguarded too; ``pytest_runtest_teardown`` restores the guard after they are torn down.
+    Every other test, and every session fixture that no live test is waiting for, runs guarded.
+    """
+    from tests import _model_host_guard
+
+    _model_host_guard.suspend_for_markers(marker.name for marker in item.iter_markers())
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item: pytest.Item) -> None:
+    """Restore the guard once the item's fixtures are torn down (see ``pytest_runtest_setup``)."""
+    from tests import _model_host_guard
+
+    _model_host_guard.set_suspended(False)
 
 
 @pytest.fixture(autouse=True)
@@ -176,31 +186,33 @@ def _archon_isolated_data_dir(
         monkeypatch.delenv(var, raising=False)
 
     # ANTHROPIC_API_KEY is a third-party vendor key (not archon-namespace).
-    # When developers have it exported in their shell, every test that calls
-    # `ingest_directory` on a new collection triggers `generate_description`,
-    # which then sits in a 30 s asyncio.wait_for around the Claude SDK.
-    # Clearing it here lets the SDK-calling modules that have early-exit guards
-    # (`description_generator.generate_description`, `hyde.HyDEGenerator.generate`,
-    # `rag_fusion.RAGFusionGenerator.generate_variants`) short-circuit on their
-    # `os.environ.get("ANTHROPIC_API_KEY")` check. Other production paths that
-    # read this key (e.g., `install.py` wizard prompts, `cli/install_cmd.py`) are
-    # safely tested either in branches that are only entered when the key IS set
-    # (so clearing it harmlessly skips those branches) or via explicit
-    # `patch.dict("os.environ", {"ANTHROPIC_API_KEY": ...})` overrides, which
-    # operate independently of monkeypatch and override the cleared state.
+    # Exported in a developer's shell, it would let any test that reaches an
+    # Anthropic code path call the real API: billed, and slow, because an SDK
+    # call waits behind a timeout of up to 30 s. Clearing it here is the first
+    # of two layers: the shared client's `AnthropicClient.call` (it raises
+    # `LlmCallFailure` before any SDK client exists) and every other path that
+    # checks the variable itself then fail or return at once. The second layer
+    # is the session guard `_block_model_providers` above: it refuses the
+    # client, the HTTP call or the `claude` spawn itself, for paths that never
+    # read the variable and for a test that sets the key on purpose.
+    # Other production paths that read this key (e.g., `install.py` wizard
+    # prompts, `cli/install_cmd.py`) are safely tested either in branches that
+    # are only entered when the key IS set (so clearing it harmlessly skips
+    # those branches) or via explicit `patch.dict("os.environ",
+    # {"ANTHROPIC_API_KEY": ...})` overrides, which operate independently of
+    # monkeypatch and override the cleared state.
     # Tests that need the key set use `monkeypatch.setenv` themselves —
     # setenv on the same monkeypatch instance overwrites the cleared state, so
     # the per-test override wins. Uses raising=False so this is a no-op when the
     # key is absent (CI, fresh shells, tests that already cleared it themselves).
-    # Side-effect: `live`/`live_eval` tests that gate on ANTHROPIC_API_KEY (e.g.,
-    # `test_live_rag_fusion.py`) will always skip in the default suite because
-    # this fixture clears the key before _skip_if_no_api_key() runs. There is
-    # currently no supported way to run those tests within the standard test tree
-    # while this autouse fixture is active; they must be invoked via a separate
-    # mechanism that sets the key after fixture setup (e.g., a live conftest that
-    # re-injects it via monkeypatch.setenv).
+    # Side-effect: a live test that gates on ANTHROPIC_API_KEY (e.g.,
+    # `tests/eval/live/test_live_rag_fusion.py`, which then falls back to the
+    # `claude` CLI when one is on PATH) finds no key here, and
+    # `_block_model_providers` refuses `anthropic` clients for every test,
+    # live ones included. There is currently no supported way to run a test
+    # against the Anthropic API within the standard test tree.
     # Downside: if the SDK ever renames ANTHROPIC_API_KEY upstream, this line
-    # becomes dead and the 30 s floor returns — the guard-existence regression test
+    # becomes dead and the slow SDK timeouts return — the guard-existence regression test
     # in tests/test_anthropic_key_guards.py mitigates that risk.
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
@@ -221,13 +233,19 @@ _REAL_BACKEND_MARKERS = frozenset({"real_torch_backends", "live_eval", "live_ben
 
 @pytest.fixture(autouse=True)
 def _stub_model_backends(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep the default suite free of PyTorch, transformers and model weights.
+    """Keep the default suite free of PyTorch, transformers, model weights and model downloads.
 
     ``ModelEmbedder.encode`` returns zero vectors of the spec's dimension and
     ``ModelReranker.predict`` returns uniform 0.5 scores. Both mark the backend warm on
     first use, as loading the real weights would, so warm-up and the warm/cold search
     gates behave as in production. Construction is untouched: a model name outside the
     registry still raises ``UnsupportedModelError``, so tests pick registered models.
+
+    The install pre-warm downloads a model (``ensure_model``) before it loads it; the
+    download half is stubbed to a stand-in that reports the snapshot as present, so a test that runs the
+    install flow never fetches weights from the hub (slow, and flaky on a bad connection;
+    the model-host guard refuses it). The graph model's download is not stubbed here: a
+    test that fakes ``gliner`` seeds its snapshot (``tests/_graph_engine_stub.py``).
 
     Tests of the real backends opt out with ``pytestmark = pytest.mark.real_torch_backends``;
     the real-weights lanes (``live_eval``, ``live_benchmark``, ``runtime_parity``) are opted
@@ -236,6 +254,7 @@ def _stub_model_backends(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     if _REAL_BACKEND_MARKERS & set(request.keywords):
         return
     from archon_search.embedder import ModelEmbedder
+    from archon_search.paths import get_models_dir
     from archon_search.reranker import ModelReranker
 
     loaded = object()
@@ -258,6 +277,7 @@ def _stub_model_backends(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     from tests._token_counter_stub import StubTokenizer
 
     monkeypatch.setattr("archon_search.llm_client.token_counter.load_gpt2_tokenizer", StubTokenizer)
+    monkeypatch.setattr("archon_search.install.prewarm.ensure_model", lambda spec: get_models_dir() / spec.repo)
 
 
 @pytest.fixture(autouse=True)

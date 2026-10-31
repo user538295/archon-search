@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import socket
-
 import pytest
 
 from archon_search.constants import ANSWER_RESERVE_TOKENS
@@ -15,7 +13,11 @@ from archon_search.llm_client.protocol import (
     ThinkSetting,
 )
 from archon_search.llm_client.token_counter import TokenCounter
-from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
+from tests._fake_model_server import (
+    FakeModelServer,
+    keep_loopback_out_of_proxies,
+    unreachable_port,
+)
 from tests._token_counter_stub import StubTokenizer
 
 pytestmark = pytest.mark.integration
@@ -98,10 +100,8 @@ async def test_unknown_model_on_show_becomes_call_failure() -> None:
 
 
 async def test_unreachable_server_becomes_call_failure() -> None:
-    # A bound socket that never listens refuses every connection, and keeps its port from being handed to another test.
-    with socket.socket() as refusing:
-        refusing.bind((_LOOPBACK, 0))
-        wrapper = _wrapper(f"http://{_LOOPBACK}:{refusing.getsockname()[1]}", None)
+    with unreachable_port() as port:
+        wrapper = _wrapper(f"http://{_LOOPBACK}:{port}", None)
 
         with pytest.raises(LlmCallFailure) as raised:
             await wrapper.call(_request())

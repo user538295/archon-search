@@ -559,3 +559,18 @@ def test_prewarm_embedder_failure_skips_the_token_counter(monkeypatch):
         _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
 
     assert loads == []
+
+
+def test_prewarm_runs_offline_under_the_suite_stubs(caplog):
+    """The pre-warm downloads the embedder and the reranker, then loads them; the suite stubs both halves.
+
+    Without the stub of ``ensure_model`` (``tests/conftest.py``, ``_stub_model_backends``) every test that runs the install
+    flow fetches real weights from the Hub: the model-host guard refuses it, and before the guard such tests were slow and
+    flaky on a bad connection. Only the embedder's failure is fatal, so the reranker and token counter steps are checked
+    through their warnings.
+    """
+    with caplog.at_level("WARNING"):
+        device = _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)  # no _Rig: the conftest stubs alone keep it offline
+
+    assert device is None
+    assert [record.getMessage() for record in caplog.records] == []

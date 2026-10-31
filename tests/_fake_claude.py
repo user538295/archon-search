@@ -26,7 +26,8 @@ Behaviour (keyword arguments of :func:`install`):
 
 Every invocation is recorded atomically before it replies or hangs (argv, environment, working directory, process id,
 standard input), so a test can wait for the record, then act on the live process. The module is stdlib-only: it also runs
-as the child.
+as the child. :func:`install` registers the launcher, and :func:`is_installed_fake` answers for its resolved path: the
+session guard of ``tests/conftest.py`` (``tests/_model_host_guard.py``) refuses every other binary named ``claude``.
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ _LAUNCHER_NAME = "claude"
 _DEFAULT_REPLY = "fake claude reply"
 _SLOT_DIGITS = 6
 _GRANDCHILD_LIFETIME_SECONDS = 120
+_installed_launchers: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -110,7 +112,13 @@ def install(
         encoding="utf-8",
     )
     launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    _installed_launchers.add(os.path.realpath(launcher))
     return FakeClaude(path=launcher, records_dir=records_dir)
+
+
+def is_installed_fake(path: str) -> bool:
+    """Whether ``path`` resolves to a launcher that :func:`install` wrote in this process."""
+    return os.path.realpath(path) in _installed_launchers
 
 
 def _record(records_dir: Path, body: dict[str, Any]) -> int:

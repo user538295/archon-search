@@ -68,15 +68,34 @@ def _reuse_shared_graph_model_cache(tmp_path, monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.fixture(autouse=True)
 def _stub_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> None:
-    """anthropic is an optional extra absent from the test env. create_app's
+    """The real anthropic package is an optional extra (the dev group installs it, but every integration test gets a stub
+    module instead, so none depends on it). create_app's
     provider guard (_check_provider_deps) imports it when anthropic-backed
     HyDE/RAG Fusion is enabled, and AnthropicQueryExpansionProvider.__init__
     reads anthropic.APIError, so provide a bare stub for every integration test
     (make_real_app enables features with the default anthropic provider). No
     integration test asserts anthropic-absence behavior — those unit tests live
-    in tests/test_hyde.py / tests/test_rag_fusion.py and are unaffected."""
+    in tests/test_hyde.py / tests/test_rag_fusion.py and are unaffected.
+
+    The stub replaces the module the session guard `_block_model_providers`
+    patched, so it carries the same refusal: AnthropicClient builds
+    ``anthropic.AsyncAnthropic`` on its first call, and a test that reaches it
+    either patches that attribute (which needs it to exist) or gets the
+    refusal, never a real endpoint. AnthropicClient maps every error through
+    the three exception classes below, so the refusal reaches the caller as an
+    LlmCallFailure and not as an AttributeError of the stub."""
+    from tests._model_host_guard import ANTHROPIC_REFUSAL
+
     stub = types.ModuleType("anthropic")
     stub.APIError = type("APIError", (Exception,), {})  # type: ignore[attr-defined]
+    stub.APIConnectionError = type("APIConnectionError", (stub.APIError,), {})  # type: ignore[attr-defined]
+    stub.APITimeoutError = type("APITimeoutError", (stub.APIConnectionError,), {})  # type: ignore[attr-defined]
+    stub.APIStatusError = type("APIStatusError", (stub.APIError,), {})  # type: ignore[attr-defined]
+
+    def _refuse_async_anthropic(*args: object, **kwargs: object) -> None:
+        raise RuntimeError(ANTHROPIC_REFUSAL)
+
+    stub.AsyncAnthropic = _refuse_async_anthropic  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "anthropic", stub)
 
 

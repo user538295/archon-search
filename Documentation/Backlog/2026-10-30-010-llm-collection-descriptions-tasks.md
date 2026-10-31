@@ -252,7 +252,7 @@ flowchart LR
         - #unit_test — `test_environment_holds_only_allowlisted_variables` — no `CLAUDECODE`, API key or bearer token reaches the child
         - #unit_test — `test_child_killed_on_timeout_and_on_cancellation` — both paths kill the subprocess
         - #integration_test — `test_fake_claude_gets_large_prompt_on_stdin_and_records_argv_env` — a real subprocess receives a very large prompt on stdin with the locked-down argv and environment
-- [ ] **BE-9** — Extend the session guards in `tests/conftest.py` to the `openai` and `ollama` clients, model-host `httpx` calls and `claude` spawns keyed on the resolved binary path, give the integration anthropic stub `AsyncAnthropic`, and rewrite the stale comment around line 180 #backend-role
+- [x] **BE-9** — Extend the session guards in `tests/conftest.py` to the `openai` and `ollama` clients, model-host `httpx` calls and `claude` spawns keyed on the resolved binary path, give the integration anthropic stub `AsyncAnthropic`, and rewrite the stale comment around line 180 #backend-role
     - Frameworks & Drivers · 3.0h
     - needs BE-5, BE-6, BE-7, BE-8 · completes C1
     - Tests

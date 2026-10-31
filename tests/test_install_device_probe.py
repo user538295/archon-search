@@ -28,6 +28,7 @@ from archon_search.install.provisioning import (
     TORCH_DEVICE_MPS,
     ProvisionFailureKind,
 )
+from tests._graph_engine_stub import seed_graph_model_snapshot
 
 
 def _fake_torch(cuda_available: bool = False, mps_available: bool = False) -> types.ModuleType:
@@ -191,6 +192,7 @@ def test_contradictory_device_probe_result_raises() -> None:
 
 @pytest.mark.integration
 def test_stage_two_validates_against_a_real_pre_warmed_load() -> None:
+    seed_graph_model_snapshot()  # a cache hit: the fake gliner below stands in for the load, not for the download
     # A fake gliner whose loaded model reports CUDA — a device this host cannot
     # provide, proving the answer comes from the pre-warmed load, not the host.
     fake_model = types.SimpleNamespace(device=types.SimpleNamespace(type=TORCH_DEVICE_CUDA))

@@ -28,6 +28,7 @@ from archon_search.install.wizard import (
     _prompt_graph_accelerator,
 )
 from archon_search.platform.types import GpuType
+from tests._graph_engine_stub import seed_graph_model_snapshot
 
 
 def _make_config(tmp_path: Path, extra: str = "") -> Path:
@@ -318,6 +319,8 @@ def test_prewarm_graph_model_places_the_model_on_the_resolved_device() -> None:
     """The pre-warm must place the model where the runtime will, so the device
     stage 2 probes is the real one (mirrors _load_sync)."""
     from archon_search.install import prewarm
+
+    seed_graph_model_snapshot()  # a cache hit: the fake gliner below stands in for the load, not for the download
 
     placed = MagicMock()
     placed.device.type = TORCH_DEVICE_CUDA

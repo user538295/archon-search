@@ -56,3 +56,5 @@
 - **[2026-10-12] (×1) untrusted JSON parse**: `json.loads` raises `RecursionError` (a RuntimeError) on deep nesting and a plain `ValueError` on >4300-digit ints — catch `(ValueError, RecursionError)`; reject non-dict lines explicitly. _(evicted from learnings.md 2026-10-21 — lowest N)_
 
 - **[2026-10-14] (×1) release.sh runs**: `tee` masks the exit code (log `RELEASE_SH_EXIT`); a full disk kills runs silently. Stub `docker` in release.sh tests (wedged daemon hangs `docker info`); probe it with `gtimeout -k 2 8`, not perl alarm. _(evicted from learnings.md 2026-10-21 — lowest N)_
+
+- **[2026-10-31] (×1) compacted from install/wizard and 3rd-party wiring**: force-reinstall `rmtree` needs `db_path.exists()`; interactive guard: optional prompts eat input(), assert prompt TEXT not the count. fastembed with no `cache_dir` lands in `<tmp>/fastembed_cache`; ORT>=1.31 F_GETPATH + APFS hardlinks flake ~5%, macOS-only retry.

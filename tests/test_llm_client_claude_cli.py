@@ -391,7 +391,7 @@ async def test_missing_binary_is_raised_as_a_failure(tmp_path: Path, monkeypatch
 
 
 async def test_binary_that_cannot_start_is_raised_as_a_failure(tmp_path: Path) -> None:
-    not_executable = tmp_path / "claude"
+    not_executable = tmp_path / "claude-without-the-exec-bit"
     not_executable.write_text("#!/bin/sh\n", encoding="utf-8")
     not_executable.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
