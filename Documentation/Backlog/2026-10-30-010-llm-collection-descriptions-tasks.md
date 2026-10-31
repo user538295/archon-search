@@ -555,7 +555,7 @@ flowchart LR
         - #unit_test — `test_default_toml_includes_description_enabled_false` — the generated default lists the section
         - #unit_test — `test_config_set_description_enabled_validates` — `config set` accepts the key and rejects a wrong type
         - #integration_test — `test_fresh_config_resolves_like_its_fully_defaulted_twin` — the defaulted twin round-trip includes `description`
-- [ ] **T-8** — Manual checklist `tests/integration/test_lcd_t8_manual_checklist.md`: a real wizard walk for the description step, and verification of the dev-written wizard run #tester-role
+- [x] **T-8** — Manual checklist `tests/integration/test_lcd_t8_manual_checklist.md`: a real wizard walk for the description step, and verification of the dev-written wizard run #tester-role
     - — · 3.0h
     - needs FE-8, FE-9, BE-25 · completes S44, S45, S46, S47, S48, S71
     - Tests
