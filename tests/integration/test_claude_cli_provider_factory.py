@@ -1,7 +1,8 @@
 """Integration tests — claude_cli provider factory wiring and rate-limit skip.
 
 Mirrors the Ollama coverage in test_g10_be4_provider_factory.py:
-- factory injects a ClaudeCliClient (HyDE) and a ClaudeCLIQueryExpansionProvider (RAG Fusion) for provider='claude_cli'
+- factory injects a ClaudeCliClient into HyDE and into RAG Fusion for provider='claude_cli'
+- RAG Fusion over the fake ``claude`` binary: prompt on stdin, one transport retry, timeout fallback
 - claude_cli skips the token bucket (local/free path, like Ollama)
 - app starts with provider='claude_cli' and a blank model (no ConfigError)
 
@@ -17,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from archon_search.llm_client import claude_cli_client
 from tests import _fake_claude
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
@@ -42,11 +44,8 @@ def _install_fake_claude(
 def test_factory_injects_claude_cli_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """provider='claude_cli' → HyDE gets a ClaudeCliClient, RAG Fusion its ClaudeCLIQueryExpansionProvider."""
+    """provider='claude_cli' → HyDE and RAG Fusion each get a ClaudeCliClient, handed to their generator."""
     from archon_search.llm_client.claude_cli_client import ClaudeCliClient
-    from archon_search.providers.claude_cli_provider import (
-        ClaudeCLIQueryExpansionProvider,
-    )
 
     toml = (
         "[hyde]\n"
@@ -60,11 +59,13 @@ def test_factory_injects_claude_cli_provider(
         assert cfg.rag_fusion.provider == "claude_cli"
 
         hyde_client = client.app.state.hyde_client
-        rag_provider = client.app.state.rag_fusion_generator._provider
+        rag_client = client.app.state.rag_fusion_client
 
         assert isinstance(hyde_client, ClaudeCliClient)
         assert client.app.state.hyde_generator._client is hyde_client
-        assert isinstance(rag_provider, ClaudeCLIQueryExpansionProvider)
+        assert isinstance(rag_client, ClaudeCliClient)
+        assert client.app.state.rag_fusion_generator._client is rag_client
+        assert rag_client is not hyde_client
 
 
 def test_claude_cli_blank_model_starts_app(
@@ -99,25 +100,22 @@ def test_claude_cli_rate_limit_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_claude_cli_rag_fusion_rate_limit_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """claude_cli RAG Fusion provider bypasses the token bucket."""
+    """claude_cli RAG Fusion bypasses the token bucket."""
     from archon_search.config import RAGFusionConfig
-    from archon_search.providers.claude_cli_provider import (
-        ClaudeCLIQueryExpansionProvider,
-    )
     from archon_search.rag_fusion import RAGFusionGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
 
-    mock_provider = MagicMock(spec=ClaudeCLIQueryExpansionProvider)
-    mock_provider.decompose_query = AsyncMock(return_value=["q1", "q2"])
-
+    client = ScriptedLlmClient(reply="q1\nq2")
     config = RAGFusionConfig(provider="claude_cli", model="haiku")
-    generator = RAGFusionGenerator(config=config, provider=mock_provider)
+    generator = RAGFusionGenerator(config=config, client=client)
 
     generator._rpm_tokens = 0
 
     result = asyncio.run(generator.generate_variants("test query"))
 
     assert result == ["q1", "q2"], "claude_cli RAG Fusion should bypass the token bucket"
-    mock_provider.decompose_query.assert_called_once()
+    assert len(client.requests) == 1
+    assert generator._rpm_tokens == 0, "claude_cli must not decrement the bucket"
 
 
 def test_search_hyde_claude_cli_end_to_end(
@@ -180,3 +178,91 @@ def test_search_hyde_claude_cli_timeout_fallback(
 
     [invocation] = fake.invocations()
     assert "graceful fallback" in invocation.stdin, "the call must have reached the hanging binary"
+
+
+_RAG_FUSION_CLAUDE_CLI_TOML = (
+    "[rag_fusion]\nenabled = true\nprovider = \"claude_cli\"\nmodel = \"haiku\"\n"
+)
+_RAG_FUSION_REPLY = "documentation variant one\ndocumentation variant two"
+_RAG_FUSION_TIMEOUT_SECONDS = _HYDE_TIMEOUT_SECONDS  # same fake-binary start-up allowance as the HyDE twin
+
+
+def test_search_rag_fusion_claude_cli_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E2E: HTTP /search with rag_fusion=True and provider=claude_cli fuses the variants the ``claude`` binary printed.
+
+    HTTP → pipeline → RAGFusionGenerator → ClaudeCliClient → fake binary (decomposition prompt on standard input).
+    """
+    fake = _install_fake_claude(tmp_path, monkeypatch, reply=_RAG_FUSION_REPLY)
+    doc = tmp_path / "claude_cli_rag_fusion.md"
+    doc.write_text("# Claude CLI RAG Fusion\n\nQuery decomposition via the Claude CLI.\n" * 4)
+
+    with make_real_app(tmp_path, monkeypatch, toml_content=_RAG_FUSION_CLAUDE_CLI_TOML) as (client, cfg, api_key):
+        assert cfg.rag_fusion.provider == "claude_cli"
+        col = "claude-cli-rag-fusion"
+        ingest_file_via_path(client, col, str(doc), api_key=api_key)
+
+        resp = client.post(
+            "/search",
+            json={"collection": col, "query": "query decomposition", "rag_fusion": True},
+            headers=_auth(api_key),
+        )
+        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json()["rag_fusion_applied"] is True
+        assert resp.json()["rag_fusion_queries_used"] == 2
+
+    [invocation] = fake.invocations()
+    assert "query decomposition" in invocation.stdin
+    assert "generate 2 alternative" in invocation.stdin
+    assert "query decomposition" not in " ".join(invocation.argv)
+
+
+def test_search_rag_fusion_claude_cli_retries_one_nonzero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RAG Fusion's ``claude_cli`` client keeps the one transport retry (Q38): a first non-zero exit is absorbed."""
+    monkeypatch.setattr(claude_cli_client, "RETRY_BACKOFF_SECONDS", 0.0)
+    fake = _install_fake_claude(tmp_path, monkeypatch, reply=_RAG_FUSION_REPLY, exit_codes=(1, 0))
+    doc = tmp_path / "claude_cli_rag_fusion_retry.md"
+    doc.write_text("# Retry\n\nThe second attempt answers.\n" * 4)
+
+    with make_real_app(tmp_path, monkeypatch, toml_content=_RAG_FUSION_CLAUDE_CLI_TOML) as (client, _cfg, api_key):
+        col = "claude-cli-rag-fusion-retry"
+        ingest_file_via_path(client, col, str(doc), api_key=api_key)
+
+        resp = client.post(
+            "/search",
+            json={"collection": col, "query": "second attempt", "rag_fusion": True},
+            headers=_auth(api_key),
+        )
+        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json()["rag_fusion_applied"] is True
+
+    assert len(fake.invocations()) == 2
+
+
+def test_search_rag_fusion_claude_cli_timeout_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """claude subprocess outlives ``[rag_fusion].timeout_seconds`` → search still 200 with rag_fusion_applied=False."""
+    fake = _install_fake_claude(tmp_path, monkeypatch, hang_seconds=_HANG_SECONDS)
+    doc = tmp_path / "claude_cli_rag_fusion_timeout.md"
+    doc.write_text("# Timeout\n\nGraceful fallback content.\n" * 4)
+    toml = _RAG_FUSION_CLAUDE_CLI_TOML + f"timeout_seconds = {_RAG_FUSION_TIMEOUT_SECONDS}\n"
+
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
+        col = "claude-cli-rag-fusion-timeout"
+        ingest_file_via_path(client, col, str(doc), api_key=api_key)
+
+        resp = client.post(
+            "/search",
+            json={"collection": col, "query": "graceful fallback", "rag_fusion": True},
+            headers=_auth(api_key),
+        )
+        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json()["rag_fusion_applied"] is False
+        assert resp.json()["rag_fusion_attempted"] is True
+
+    [invocation] = fake.invocations()
+    assert "graceful fallback" in invocation.stdin, "the decomposition prompt must have reached the hanging binary"

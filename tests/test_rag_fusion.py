@@ -1,22 +1,30 @@
-"""Tests for archon_search.rag_fusion — TDD for RAGFusionGenerator and _query_fingerprint.
+"""Tests for archon_search.rag_fusion — RAGFusionGenerator over the shared LLM client, and _query_fingerprint.
 
-All tests use mocked Anthropic clients to avoid real API calls.
+The generator takes an injected ``LlmClient`` (``app.state.rag_fusion_client``); every test here drives it with the
+scripted stand-in of ``tests/_hyde_stubs.py``, so no provider package or network is involved.
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from archon_search.config import RAGFusionConfig
+from archon_search.llm_client.protocol import LlmCallFailure, LlmCallTimeout
+from archon_search.rag_fusion import (
+    RAG_FUSION_MAX_QUERY_CHARS,
+    RAG_FUSION_MAX_VARIANT_CHARS,
+    RAG_FUSION_TOKENS_PER_QUERY,
+    RAGFusionGenerator,
+)
+from tests._hyde_stubs import ScriptedLlmClient
 
-# ---------------------------------------------------------------------------
-# Helpers / fixtures
-# ---------------------------------------------------------------------------
+_WARN_LOGGER = "archon_search.rag_fusion"
+_SECRET_QUERY = "very-unique-secret-query-rag-12345"
 
 
 def _make_config(**kwargs: Any) -> RAGFusionConfig:
@@ -31,28 +39,13 @@ def _make_config(**kwargs: Any) -> RAGFusionConfig:
     return RAGFusionConfig(**defaults)
 
 
-def _make_mock_anthropic_response(text: str) -> Any:
-    content_block = MagicMock()
-    content_block.text = text
-    response = MagicMock()
-    response.content = [content_block]
-    return response
+def _generator(reply: str = "v1\nv2", failure: Exception | None = None, **config: Any) -> tuple[RAGFusionGenerator, ScriptedLlmClient]:
+    client = ScriptedLlmClient(reply=reply, failure=failure)
+    return RAGFusionGenerator(_make_config(**config), client), client
 
 
-def _make_mock_anthropic_module(response_text: str | None = None, side_effect: Any = None) -> Any:
-    """Return a mock anthropic module with a client whose messages.create returns response_text."""
-    mock_client = MagicMock()
-    mock_client.messages = MagicMock()
-    if side_effect is not None:
-        mock_client.messages.create = AsyncMock(side_effect=side_effect)
-    else:
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_mock_anthropic_response(response_text or "")
-        )
-    mock_mod = MagicMock()
-    mock_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
-    mock_mod.APIError = Exception
-    return mock_mod
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 # ---------------------------------------------------------------------------
@@ -92,13 +85,7 @@ def test_fingerprint_importable_from_hyde() -> None:
     from archon_search._privacy import _query_fingerprint as privacy_fp
     from archon_search.hyde import _query_fingerprint as hyde_fp
 
-    # Both should return the same result (same function or same implementation)
     assert hyde_fp("test") == privacy_fp("test")
-
-
-# ---------------------------------------------------------------------------
-# RAGFusionDependencyError
-# ---------------------------------------------------------------------------
 
 
 def test_rag_fusion_dependency_error_is_runtime_error() -> None:
@@ -114,395 +101,301 @@ def test_rag_fusion_dependency_error_is_runtime_error() -> None:
 
 def test_validate_variant_valid() -> None:
     """Normal text ≤500 chars returns stripped text."""
-
-    config = _make_config()
-    with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = gen._validate_variant("  hello world  ")
-
-    assert result == "hello world"
+    assert _generator()[0]._validate_variant("  hello world  ") == "hello world"
 
 
 def test_validate_variant_too_long() -> None:
     """Variant of 501 chars returns None."""
-
-    config = _make_config()
-    with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = gen._validate_variant("a" * 501)
-
-    assert result is None
+    assert _generator()[0]._validate_variant("a" * 501) is None
 
 
 def test_validate_variant_exactly_500_chars() -> None:
     """Variant of exactly 500 chars is valid."""
-
-    config = _make_config()
-    with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = gen._validate_variant("a" * 500)
-
-    assert result == "a" * 500
+    assert _generator()[0]._validate_variant("a" * 500) == "a" * 500
 
 
-def test_validate_variant_control_sequences() -> None:
-    """Variant containing \\x00 returns None."""
-
-    config = _make_config()
-    with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = gen._validate_variant("hello\x00world")
-
-    assert result is None
-
-
-def test_validate_variant_del_char_rejected() -> None:
-    """Variant containing \\x7F (DEL) returns None."""
-
-    config = _make_config()
-    with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = gen._validate_variant("hello\x7fworld")
-
-    assert result is None
-
-
-def test_validate_variant_c1_control_rejected() -> None:
-    """Variant containing \\x80 (C1 control) returns None."""
-
-    config = _make_config()
-    with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = gen._validate_variant("hello\x80world")
-
-    assert result is None
+@pytest.mark.parametrize("control", ["\x00", "\x7f", "\x80", "\x9f", "\x1b"])
+def test_validate_variant_control_characters_rejected(control: str) -> None:
+    """NUL, ESC, DEL and the C1 controls reject the variant."""
+    assert _generator()[0]._validate_variant(f"hello{control}world") is None
 
 
 def test_validate_variant_tab_allowed() -> None:
     """Variant containing \\t returns stripped text (not rejected)."""
-
-    config = _make_config()
-    with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = gen._validate_variant("hello\tworld")
-
-    assert result == "hello\tworld"
+    assert _generator()[0]._validate_variant("hello\tworld") == "hello\tworld"
 
 
-def test_validate_variant_newline_in_content() -> None:
-    """Single line with trailing \\n strips to valid text."""
-
-    config = _make_config()
-    with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = gen._validate_variant("hello world\n")
-
-    assert result == "hello world"
+def test_validate_variant_trailing_newline_stripped() -> None:
+    assert _generator()[0]._validate_variant("hello world\n") == "hello world"
 
 
 def test_validate_variant_empty_after_strip() -> None:
     """Variant of only whitespace returns None."""
-
-    config = _make_config()
-    with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = gen._validate_variant("   \n\t  ")
-
-    assert result is None
+    assert _generator()[0]._validate_variant("   \n\t  ") is None
 
 
 # ---------------------------------------------------------------------------
-# generate_variants — package not installed
+# generate_variants — the call, and parsing (S15: _validate_variant is live)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_generate_variants_package_not_installed() -> None:
-    """generate_variants() raises RAGFusionDependencyError when anthropic is not installed."""
-    # G10 BE-1: must also patch the provider module so the try/except ImportError
-    # in RAGFusionGenerator.__init__ fires (the provider is lazy-imported there).
-    with patch.dict(  # type: ignore[dict-item]
-        "sys.modules",
-        {
-            "anthropic": None,
-            "archon_search.providers.anthropic_provider": None,
-        },
-    ):
-        import archon_search.rag_fusion as rf_mod
+async def test_generate_variants_success() -> None:
+    """The client's two lines become two variants, each ≤500 chars."""
+    generator, _client = _generator("variant one alternative query\nvariant two different phrasing")
 
-        gen = rf_mod.RAGFusionGenerator(_make_config())
-        with pytest.raises(rf_mod.RAGFusionDependencyError, match="Install archon-search\\[rag_fusion\\]"):
-            await gen.generate_variants("test query")
+    result = await generator.generate_variants("original query")
 
-
-# ---------------------------------------------------------------------------
-# generate_variants — happy path
-# ---------------------------------------------------------------------------
+    assert result == ["variant one alternative query", "variant two different phrasing"]
 
 
 @pytest.mark.asyncio
-async def test_generate_variants_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mock returns 2 valid variant lines; result is list of 2 strings, each ≤500 chars."""
-    config = _make_config(num_queries=2)
-    response_text = "variant one alternative query\nvariant two different phrasing"
-    mock_mod = _make_mock_anthropic_module(response_text)
+async def test_generate_variants_sends_one_request_with_template_ceiling_and_timeout() -> None:
+    """One call: the decomposition template around the query and num_queries, ceiling 150 per query, the section timeout."""
+    generator, client = _generator("v1\nv2\nv3", num_queries=3, timeout_seconds=7.5)
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    await generator.generate_variants("my query")
 
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = await gen.generate_variants("original query")
-
-    assert isinstance(result, list)
-    assert len(result) == 2
-    for v in result:
-        assert isinstance(v, str)
-        assert len(v) <= 500
-
-
-# ---------------------------------------------------------------------------
-# generate_variants — fallback paths
-# ---------------------------------------------------------------------------
+    [request] = client.requests
+    assert "my query" in request.prompt
+    assert "generate 3 alternative" in request.prompt
+    assert "Output exactly 3 queries" in request.prompt
+    assert f"under {RAG_FUSION_MAX_VARIANT_CHARS} characters" in request.prompt
+    assert request.max_output_tokens == RAG_FUSION_TOKENS_PER_QUERY * 3 == 450
+    assert request.timeout_seconds == 7.5
 
 
 @pytest.mark.asyncio
-async def test_generate_variants_timeout_fallback(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """generate_variants() returns [] and logs WARNING when LLM times out.
+async def test_query_truncated_to_2000_chars() -> None:
+    """A query longer than the cut is truncated in the prompt sent to the client."""
+    generator, client = _generator()
 
-    G10 BE-1: generate_variants() now returns [] on timeout (provider absorbs
-    TimeoutError internally per the QueryExpansionProvider contract).  A WARNING
-    is logged (by the provider) and the generator returns [].
-    """
-    config = _make_config()
-    mock_mod = _make_mock_anthropic_module(side_effect=TimeoutError())
+    await generator.generate_variants("x" * (RAG_FUSION_MAX_QUERY_CHARS + 1000))
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        with caplog.at_level(logging.WARNING):
-            result = await gen.generate_variants("original query")
-
-    assert result == [], f"expected [] on timeout, got: {result!r}"
-    warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert warning_records, "WARNING should be logged on timeout"
-    # Verify 16-char hex fingerprint appears in logs
-    log_text = " ".join(r.getMessage() for r in warning_records)
-    import re
-
-    hex_pattern = re.compile(r"[0-9a-f]{16}")
-    assert hex_pattern.search(log_text), f"16-char hex fingerprint not found in log: {log_text!r}"
+    [request] = client.requests
+    assert "x" * RAG_FUSION_MAX_QUERY_CHARS in request.prompt
+    assert "x" * (RAG_FUSION_MAX_QUERY_CHARS + 1) not in request.prompt
 
 
 @pytest.mark.asyncio
-async def test_generate_variants_api_error_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """generate_variants() returns [] when anthropic.APIError is raised.
+async def test_variants_validated_and_trimmed_to_num_queries(caplog: pytest.LogCaptureFixture) -> None:
+    """Over-long, control-character and blank lines are dropped, and the survivors are cut to num_queries."""
+    reply = "\n".join(
+        [
+            "  first good variant  ",
+            "x" * 501,
+            "",
+            "control\x00character",
+            "escape\x1bsequence",
+            "second good variant",
+            "surplus variant one",
+            "surplus variant two",
+        ]
+    )
+    generator, _client = _generator(reply, num_queries=2)
 
-    G10 BE-1: generate_variants() now returns [] on API error (provider absorbs
-    exceptions internally per the QueryExpansionProvider contract).
-    """
-    config = _make_config()
+    with caplog.at_level(logging.WARNING):
+        result = await generator.generate_variants("original query")
 
-    class MockAPIError(Exception):
-        pass
-
-    mock_mod = _make_mock_anthropic_module(side_effect=MockAPIError("rate limited"))
-    mock_mod.APIError = MockAPIError
-
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = await gen.generate_variants("test query")
-
-    assert result == [], f"expected [] on API error, got: {result!r}"
+    assert result == ["first good variant", "second good variant"]
+    assert not _warnings(caplog), "a full set of valid variants must not warn"
 
 
 @pytest.mark.asyncio
-async def test_generate_variants_empty_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mock returns only whitespace lines; result is []."""
-    config = _make_config()
-    mock_mod = _make_mock_anthropic_module("   \n  \n  ")
+@pytest.mark.parametrize("separator", ["\n", "\r\n", "\r"], ids=["lf", "crlf", "bare-cr"])
+async def test_each_line_break_style_separates_variants(separator: str) -> None:
+    """LF, CRLF and a bare CR each end a variant: two lines are two variants, not one with a control character."""
+    generator, _client = _generator(separator.join(["first variant", "second variant"]))
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    assert await generator.generate_variants("original query") == ["first variant", "second variant"]
 
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
 
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = await gen.generate_variants("test query")
+@pytest.mark.asyncio
+async def test_a_line_with_an_inner_control_character_is_dropped_not_split() -> None:
+    """Vertical tab and form feed are control characters: the line is rejected whole instead of becoming two variants."""
+    generator, _client = _generator("good variant\nbad\x0bvariant\nbad\x0cvariant\nlast good", num_queries=3)
+
+    assert await generator.generate_variants("original query") == ["good variant", "last good"]
+
+@pytest.mark.asyncio
+async def test_variants_fewer_than_requested_keep_the_valid_ones_and_warn_once(caplog: pytest.LogCaptureFixture) -> None:
+    """Only valid lines survive; a shortfall is one WARNING per process, with a count and no variant text."""
+    generator, _client = _generator(f"valid variant\n{'x' * 501}\nhello\x00world", num_queries=3)
+
+    with caplog.at_level(logging.WARNING):
+        first = await generator.generate_variants("query 1")
+        second = await generator.generate_variants("query 2")
+
+    assert first == second == ["valid variant"]
+    [warning] = _warnings(caplog)
+    assert "requested 3 variants but got 1 valid ones" in warning.getMessage()
+    assert "valid variant" not in warning.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_a_shortfall_does_not_use_up_the_failure_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """A shortfall and a failed call are different conditions: each one logs its own first WARNING."""
+    short, _ = _generator("only one variant", num_queries=3)
+    failing, _ = _generator(failure=LlmCallFailure("ollama", "connection refused"))
+
+    with caplog.at_level(logging.WARNING):
+        await short.generate_variants("query 1")
+        await failing.generate_variants("query 2")
+        await failing.generate_variants("query 3")
+
+    messages = [warning.getMessage() for warning in _warnings(caplog)]
+    assert len(messages) == 2
+    assert "requested 3 variants" in messages[0]
+    assert "generation failed" in messages[1]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_call_and_an_answer_without_variants_share_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """Both mean 'no variants this time': one WARNING per process between them, whichever comes first."""
+    failing, _ = _generator(failure=LlmCallFailure("ollama", "connection refused"))
+    empty, _ = _generator("   \n  ")
+
+    with caplog.at_level(logging.WARNING):
+        await failing.generate_variants("query 1")
+        await empty.generate_variants("query 2")
+
+    assert len(_warnings(caplog)) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_variants_only_blank_lines_is_empty_with_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+    generator, _client = _generator("   \n  \n  ")
+
+    with caplog.at_level(logging.WARNING):
+        result = await generator.generate_variants("test query")
 
     assert result == []
+    assert len(_warnings(caplog)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Failure -> [] (the pipeline then searches the single query)
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_generate_variants_no_api_key(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """generate_variants() returns [] and logs WARNING exactly once when no API key is set."""
-    config = _make_config()
-    mock_mod = _make_mock_anthropic_module("v1\nv2")
+@pytest.mark.parametrize(
+    "failure",
+    [LlmCallFailure("anthropic", "the ANTHROPIC_API_KEY is not set"), LlmCallTimeout("ollama", "no answer in 5s")],
+    ids=["failure", "timeout"],
+)
+async def test_generate_variants_failure_returns_empty(failure: LlmCallFailure) -> None:
+    """A raised LlmCallFailure (or its timeout subclass) is absorbed: no variants, never an exception."""
+    generator, client = _generator(failure=failure)
 
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert await generator.generate_variants("original query") == []
+    assert len(client.requests) == 1
 
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
 
-        gen = rf_mod.RAGFusionGenerator(config)
-        with caplog.at_level(logging.WARNING, logger="archon_search.rag_fusion"):
-            result1 = await gen.generate_variants("query 1")
-            result2 = await gen.generate_variants("query 2")
+@pytest.mark.asyncio
+async def test_rag_logs_one_warning_per_process_without_query_text(caplog: pytest.LogCaptureFixture) -> None:
+    """Many failing calls log one WARNING: the query fingerprint, the failure reason, and neither query nor prompt."""
+    from archon_search._privacy import _query_fingerprint
 
-    assert result1 == []
-    assert result2 == []
-    warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert len(warning_records) == 1, (
-        f"Expected exactly 1 WARNING for missing API key, got {len(warning_records)}: "
-        + str([r.getMessage() for r in warning_records])
+    first_query = f"{_SECRET_QUERY} 0"
+    generator, client = _generator(failure=LlmCallFailure("ollama", f"server said: bad request for {first_query}"))
+
+    with caplog.at_level(logging.INFO):
+        results = [await generator.generate_variants(f"{_SECRET_QUERY} {attempt}") for attempt in range(5)]
+
+    assert results == [[]] * 5
+    assert len(client.requests) == 5
+    [warning] = [r for r in caplog.records if r.levelno >= logging.WARNING and r.name == _WARN_LOGGER]
+    assert _query_fingerprint(f"{_SECRET_QUERY} 0") in warning.getMessage()
+    assert "bad request for" in warning.getMessage(), "the failure reason must stay readable"
+    log_text = " ".join(r.getMessage() for r in caplog.records)
+    assert _SECRET_QUERY not in log_text
+    assert "search query decomposer" not in log_text, "the prompt must never be logged"
+
+
+@pytest.mark.asyncio
+async def test_failure_text_echoing_the_query_is_masked(caplog: pytest.LogCaptureFixture) -> None:
+    """A server that echoes the query back (even JSON-escaped or whitespace-collapsed) never puts it in the log."""
+    query = 'say "hello"\n  to   the café'
+    echoes = " / ".join(
+        [json.dumps(query)[1:-1], json.dumps(query, ensure_ascii=False)[1:-1], " ".join(query.split())]
     )
+    generator, _client = _generator(failure=LlmCallFailure("openai", f"rejected: {echoes}"))
 
+    with caplog.at_level(logging.WARNING):
+        await generator.generate_variants(query)
 
-# ---------------------------------------------------------------------------
-# Rate limiting
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_rate_limit_fallback(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """When token bucket is exhausted, generate_variants() returns [] with WARNING."""
-    config = _make_config(max_requests_per_minute=1)
-    mock_mod = _make_mock_anthropic_module("v1\nv2")
-
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-
-        # First call should succeed (1 token available)
-        result1 = await gen.generate_variants("query 1")
-        # Second call should be rate-limited (0 tokens left)
-        with caplog.at_level(logging.WARNING, logger="archon_search.rag_fusion"):
-            result2 = await gen.generate_variants("query 2")
-
-    assert result1 == ["v1", "v2"] or len(result1) > 0, "First call should succeed"
-    assert result2 == [], "Second call should be rate-limited"
-    warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert warning_records, "WARNING should be logged on rate limit"
+    [warning] = _warnings(caplog)
+    assert "rejected:" in warning.getMessage()
+    assert "hello" not in warning.getMessage()
+    assert "café" not in warning.getMessage()
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_skip_includes_llama_cpp_rag_fusion() -> None:
-    """provider='llama_cpp' must skip rate limiting, mirroring ollama/claude_cli."""
-    from archon_search.rag_fusion import RAGFusionGenerator
+async def test_failures_in_one_generator_silence_the_next_in_the_same_process(caplog: pytest.LogCaptureFixture) -> None:
+    """The once-per-process key is not per generator instance: a second generator stays quiet."""
+    failure = LlmCallFailure("ollama", "connection refused")
+    with caplog.at_level(logging.WARNING):
+        await _generator(failure=failure)[0].generate_variants("q1")
+        await _generator(failure=failure)[0].generate_variants("q2")
 
-    config = _make_config(provider="llama_cpp", max_requests_per_minute=1)
-
-    mock_provider = MagicMock()
-    mock_provider.decompose_query = AsyncMock(return_value=["v1", "v2"])
-
-    gen = RAGFusionGenerator(config, provider=mock_provider)
-
-    result1 = await gen.generate_variants("query 1")
-    result2 = await gen.generate_variants("query 2")
-
-    assert result1, "First call should succeed"
-    assert result2, "llama_cpp must skip rate limiting like ollama/claude_cli"
-
-
-@pytest.mark.asyncio
-async def test_concurrent_generate_variants_respects_token_limit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """With capacity 2, exactly 2 calls return results and 3 return []."""
-    config = _make_config(max_requests_per_minute=2, num_queries=2)
-    mock_mod = _make_mock_anthropic_module("v1\nv2")
-
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-
-        results = await asyncio.gather(*[gen.generate_variants(f"query {i}") for i in range(5)])
-
-    successful = [r for r in results if r]
-    rate_limited = [r for r in results if not r]
-    assert len(successful) == 2, f"Expected 2 successful calls, got {len(successful)}: {results}"
-    assert len(rate_limited) == 3, f"Expected 3 rate-limited calls, got {len(rate_limited)}: {results}"
+    assert len(_warnings(caplog)) == 1
 
 
 # ---------------------------------------------------------------------------
-# Validation edge cases
+# Rate limiting (generator-level token bucket stays; the client has none for RAG Fusion)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_generate_variants_malformed_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mock returns 3 lines: 1 valid, 1 too-long, 1 with control seq; result is [valid_one]."""
-    config = _make_config(num_queries=3)
-    response_text = f"valid variant\n{'x' * 501}\nhello\x00world"
-    mock_mod = _make_mock_anthropic_module(response_text)
+async def test_rate_limit_fallback(caplog: pytest.LogCaptureFixture) -> None:
+    """When the token bucket is exhausted, generate_variants() returns [] with a WARNING and makes no call."""
+    generator, client = _generator("v1\nv2", max_requests_per_minute=1)
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    result1 = await generator.generate_variants("query 1")
+    with caplog.at_level(logging.WARNING, logger=_WARN_LOGGER):
+        result2 = await generator.generate_variants("query 2")
 
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = await gen.generate_variants("original query")
-
-    assert result == ["valid variant"]
+    assert result1 == ["v1", "v2"]
+    assert result2 == []
+    assert len(client.requests) == 1, "the rate-limited call must not reach the client"
+    assert _warnings(caplog), "WARNING should be logged on rate limit"
 
 
 @pytest.mark.asyncio
-async def test_generate_variants_more_than_requested_truncated(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Mock returns 5 lines for num_queries=2; result has ≤2 items."""
-    config = _make_config(num_queries=2)
-    response_text = "v1\nv2\nv3\nv4\nv5"
-    mock_mod = _make_mock_anthropic_module(response_text)
+@pytest.mark.parametrize("provider", ["llama_cpp", "ollama", "claude_cli"])
+async def test_rate_limit_skipped_for_local_providers(provider: str) -> None:
+    """llama_cpp, ollama and claude_cli have no API cap: the bucket is never consulted."""
+    generator, client = _generator("v1\nv2", provider=provider, max_requests_per_minute=1)
+    generator._rpm_tokens = 0
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    results = [await generator.generate_variants(f"query {i}") for i in range(3)]
 
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
+    assert results == [["v1", "v2"]] * 3
+    assert len(client.requests) == 3
+    assert generator._rpm_tokens == 0
 
-        gen = rf_mod.RAGFusionGenerator(config)
-        result = await gen.generate_variants("test query")
 
-    assert len(result) <= 2
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+async def test_rate_limit_applies_to_cloud_providers(provider: str) -> None:
+    generator, client = _generator("v1\nv2", provider=provider)
+    generator._rpm_tokens = 0
+
+    assert await generator.generate_variants("test query") == []
+    assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_generate_variants_respects_token_limit() -> None:
+    """With capacity 2, exactly 2 of 5 concurrent calls return variants and 3 return []."""
+    generator, client = _generator("v1\nv2", max_requests_per_minute=2, num_queries=2)
+
+    results = await asyncio.gather(*[generator.generate_variants(f"query {i}") for i in range(5)])
+
+    assert len([r for r in results if r]) == 2
+    assert len([r for r in results if not r]) == 3
+    assert len(client.requests) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -511,116 +404,89 @@ async def test_generate_variants_more_than_requested_truncated(
 
 
 @pytest.mark.asyncio
-async def test_fingerprint_no_raw_query_in_log(
+async def test_fingerprint_no_raw_query_in_log(caplog: pytest.LogCaptureFixture) -> None:
+    """The WARNING holds the fingerprint, not the raw query string."""
+    from archon_search._privacy import _query_fingerprint
+
+    generator, _client = _generator(failure=LlmCallTimeout("ollama", "no answer"))
+
+    with caplog.at_level(logging.WARNING):
+        result = await generator.generate_variants(_SECRET_QUERY)
+
+    assert result == []
+    log_text = " ".join(r.getMessage() for r in caplog.records)
+    assert _SECRET_QUERY not in log_text, f"Raw query leaked into log: {log_text!r}"
+    assert _query_fingerprint(_SECRET_QUERY) in log_text
+
+
+@pytest.mark.asyncio
+async def test_variant_text_never_in_log(caplog: pytest.LogCaptureFixture) -> None:
+    """Even a shortfall WARNING never carries the variant text the model produced."""
+    generator, _client = _generator("secret variant text alpha", num_queries=3)
+
+    with caplog.at_level(logging.DEBUG):
+        await generator.generate_variants("original query")
+
+    assert len(_warnings(caplog)) == 1, "the shortfall must have been logged for this test to mean anything"
+    assert "secret variant text alpha" not in " ".join(r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# /status
+# ---------------------------------------------------------------------------
+
+
+def test_is_key_available_reads_the_environment_at_call_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    generator, _client = _generator(provider="openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert generator.is_key_available() is False
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-late-set")
+    assert generator.is_key_available() is True
+
+
+# ---------------------------------------------------------------------------
+# Real LlamaCppClient against a loopback fake llama-server (S2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rag_fusion_end_to_end_with_llama_cpp_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S2: a RAGFusionGenerator over a real ``LlamaCppClient`` decomposes the query from the server's two lines."""
+    from archon_search.llm_client.llama_cpp_client import LlamaCppClient
+    from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
+
+    keep_loopback_out_of_proxies(monkeypatch)
+
+    with FakeModelServer(reply_text="variant one\nvariant two") as server:
+        config = _make_config(provider="llama_cpp", llama_cpp_base_url=server.base_url, num_queries=2)
+        generator = RAGFusionGenerator(config, LlamaCppClient(model="local-model", base_url=server.base_url))
+        variants = await generator.generate_variants("archon search query")
+
+    assert variants == ["variant one", "variant two"]
+    [chat] = server.requests_to("/v1/chat/completions")
+    assert chat.body is not None
+    assert chat.body["max_tokens"] == RAG_FUSION_TOKENS_PER_QUERY * 2
+    assert "archon search query" in chat.body["messages"][0]["content"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rag_fusion_llama_cpp_unreachable_returns_no_variants(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """WARNING log must contain the fingerprint but NOT the raw query string.
+    """llama-server unreachable → the client raises, RAG Fusion yields no variants with one WARNING and no exception."""
+    from archon_search.llm_client.llama_cpp_client import LlamaCppClient
+    from tests._fake_model_server import keep_loopback_out_of_proxies, unreachable_port
 
-    G10 BE-1: generate_variants() now returns [] on timeout (provider absorbs
-    TimeoutError per the QueryExpansionProvider contract), but the privacy
-    invariant still holds — logs contain only the fingerprint.
-    """
-    query = "very-unique-secret-query-rag-12345"
-    config = _make_config()
-    mock_mod = _make_mock_anthropic_module(side_effect=TimeoutError())
+    keep_loopback_out_of_proxies(monkeypatch)
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    with unreachable_port() as port, caplog.at_level(logging.WARNING):
+        base_url = f"http://127.0.0.1:{port}"
+        config = _make_config(provider="llama_cpp", llama_cpp_base_url=base_url)
+        generator = RAGFusionGenerator(config, LlamaCppClient(model="local-model", base_url=base_url))
+        variants = [await generator.generate_variants("archon search query") for _ in range(2)]
 
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        fp = rf_mod._query_fingerprint(query)
-        assert len(fp) == 16
-        assert all(c in "0123456789abcdef" for c in fp)
-
-        with caplog.at_level(logging.WARNING):
-            result = await gen.generate_variants(query)
-
-    assert result == [], f"expected [] on timeout, got: {result!r}"
-    log_text = " ".join(r.getMessage() for r in caplog.records)
-    assert query not in log_text, f"Raw query leaked into log: {log_text!r}"
-    assert fp in log_text, f"Fingerprint not found in log: {log_text!r}"
-
-
-# ---------------------------------------------------------------------------
-# Query truncation
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_query_truncated_to_2000_chars(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Queries longer than 2000 chars are truncated in the prompt sent to the LLM."""
-    config = _make_config(num_queries=2)
-    prompt_capture: list[dict[str, Any]] = []
-
-    async def capture_create(**kwargs: Any) -> Any:
-        prompt_capture.append(kwargs)
-        return _make_mock_anthropic_response("v1\nv2")
-
-    mock_mod = MagicMock()
-    mock_client = MagicMock()
-    mock_client.messages = MagicMock()
-    mock_client.messages.create = capture_create
-    mock_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
-    mock_mod.APIError = Exception
-
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    long_query = "x" * 3000
-
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        await gen.generate_variants(long_query)
-
-    assert prompt_capture, "No prompt was captured"
-    messages = prompt_capture[0].get("messages", [])
-    assert messages, "No messages in captured prompt"
-    prompt_content = messages[0]["content"]
-    assert "x" * 2001 not in prompt_content, "Query was not truncated to ≤2000 chars"
-    assert "x" * 2000 in prompt_content, "Truncated query (2000 chars) not found in prompt"
-
-
-# ---------------------------------------------------------------------------
-# Prompt structure
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_generate_variants_prompt_contains_query_and_num_queries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Prompt must contain query text and num_queries; max_tokens = 150 * num_queries."""
-    config = _make_config(num_queries=3)
-    prompt_capture: list[dict[str, Any]] = []
-    max_tokens_capture: list[int] = []
-
-    async def capture_create(**kwargs: Any) -> Any:
-        prompt_capture.append(kwargs)
-        max_tokens_capture.append(kwargs.get("max_tokens", 0))
-        return _make_mock_anthropic_response("v1\nv2\nv3")
-
-    mock_mod = MagicMock()
-    mock_client = MagicMock()
-    mock_client.messages = MagicMock()
-    mock_client.messages.create = capture_create
-    mock_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
-    mock_mod.APIError = Exception
-
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import archon_search.rag_fusion as rf_mod
-
-        gen = rf_mod.RAGFusionGenerator(config)
-        await gen.generate_variants("my query")
-
-    assert prompt_capture, "No prompt captured"
-    messages = prompt_capture[0].get("messages", [])
-    prompt_text = messages[0]["content"]
-    assert "my query" in prompt_text, f"Query not found in prompt: {prompt_text!r}"
-    assert "3" in prompt_text, f"num_queries=3 not found in prompt: {prompt_text!r}"
-    assert max_tokens_capture[0] == 150 * 3, (
-        f"Expected max_tokens={150 * 3}, got {max_tokens_capture[0]}"
-    )
+    assert variants == [[], []]
+    assert len([r for r in _warnings(caplog) if r.name == _WARN_LOGGER]) == 1

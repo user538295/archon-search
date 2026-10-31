@@ -317,7 +317,7 @@ Pass `rag_fusion: true` on any `/search` or `/explain` request. The response add
 
 ### Fallback behaviour
 
-Same silent-fallback contract as HyDE (`rag_fusion_applied: false`), plus: `rag_fusion=true` is silently ignored for FTS-only collections (no vector index). When the generator returns no variants, the original query is still searched normally. The `/explain` response additionally surfaces `rag_fusion_failure_reason` and a per-sub-query `rag_fusion_sub_queries` breakdown.
+Same silent-fallback contract as HyDE (`rag_fusion_applied: false`), plus: `rag_fusion=true` is silently ignored for FTS-only collections (no vector index). When the generator returns no variants — the provider is down, a key or package is missing, the call times out, the answer holds no valid variant, or the per-process rate limit is exhausted — the original query is still searched normally. A failed call or an answer with no valid variant logs one WARNING per process (the query fingerprint and the failure, never the query); an exhausted rate limit logs its own WARNING at most once a minute. The `/explain` response additionally surfaces `rag_fusion_failure_reason` and a per-sub-query `rag_fusion_sub_queries` breakdown.
 
 ## Permission-aware snippets (`acl_context` → G15)
 

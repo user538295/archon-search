@@ -477,15 +477,13 @@ def test_config_rag_fusion_llama_cpp_provider_builds_successfully(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """create_app() with [rag_fusion].provider='llama_cpp' builds the real adapter (BE-3)."""
+    """create_app() with [rag_fusion].provider='llama_cpp' composes a LlamaCppClient and hands it to the generator."""
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "ab" * 32)
 
     from archon_search.config import RAGFusionConfig, SearchConfig
     from archon_search.jobs.store import JobStore
-    from archon_search.providers.llama_cpp_provider import (
-        LlamaCppQueryExpansionProvider,
-    )
+    from archon_search.llm_client.llama_cpp_client import LlamaCppClient
     from archon_search.server.app import create_app
 
     config = SearchConfig()
@@ -493,7 +491,8 @@ def test_config_rag_fusion_llama_cpp_provider_builds_successfully(
 
     app = create_app(config, JobStore())
 
-    assert isinstance(app.state.rag_fusion_generator._provider, LlamaCppQueryExpansionProvider)
+    assert isinstance(app.state.rag_fusion_client, LlamaCppClient)
+    assert app.state.rag_fusion_generator._client is app.state.rag_fusion_client
 
 
 # ---------------------------------------------------------------------------

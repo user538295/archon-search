@@ -2,8 +2,9 @@
 
 Uses the real ``create_app()`` + ``TestClient`` pattern (matching
 ``tests/test_integration_hyde.py``) with a real LanceDB store but mocks
-``RAGFusionGenerator.generate_variants`` to return deterministic variants,
-avoiding real Anthropic API calls.
+``RAGFusionGenerator.generate_variants`` to return deterministic variants, avoiding real provider calls;
+``test_rag_fusion_through_shared_client_over_http`` instead serves the variants from a fake Ollama server through
+the real shared client.
 
 MCP tool tests take the real pipeline from the FastAPI app's ``app.state``, register
 the MCP tools against it on the tool-capturing ``StubFastMCP`` via ``stub_mcp_tool()``
@@ -40,13 +41,10 @@ pytestmark = pytest.mark.integration
 @pytest.fixture(autouse=True)
 def _stub_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> None:
     """anthropic is an optional extra absent from the test env. create_app's
-    provider guard (_check_provider_deps) now imports it when anthropic-backed
+    provider guard (_check_provider_deps) imports it when anthropic-backed
     RAG Fusion is enabled, so provide a bare stub for these startup-path tests.
-    Actual generation is mocked elsewhere; this only satisfies the import guard."""
+    Actual generation is mocked or served by a fake model server; this only satisfies the import guard."""
     stub = types.ModuleType("anthropic")
-    # AnthropicQueryExpansionProvider.__init__ reads anthropic.APIError; give it
-    # a real exception class so construction (and any except clause) is valid.
-    stub.APIError = type("APIError", (Exception,), {})  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "anthropic", stub)
 
 
@@ -105,6 +103,61 @@ def _make_app(tmp_path: Path, *, rag_fusion_enabled: bool = True, hyde_enabled: 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+_FAKE_REPLY = "\n".join(_FIXED_VARIANTS)
+_SHARED_CLIENT_NUM_CTX = 8192
+_SHARED_CLIENT_NUM_QUERIES = 2
+_TOKENS_PER_QUERY = 150
+
+
+@pytest.mark.asyncio
+async def test_rag_fusion_through_shared_client_over_http(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The HTTP search path still fuses variants, now produced by the shared client on a fake Ollama server.
+
+    The real app composes ``app.state.rag_fusion_client`` from ``[rag_fusion]``; the loopback server sees exactly one
+    chat call carrying the decomposition template around the query, the configured ``num_ctx`` and a 150-per-query
+    answer ceiling, and the two variants it answered are searched and fused (``rag_fusion_queries_used == 2``).
+    """
+    from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
+
+    keep_loopback_out_of_proxies(monkeypatch)
+    await _ingest_chunk(tmp_path)
+
+    with FakeModelServer(reply_text=_FAKE_REPLY) as server:
+        config = SearchConfig()
+        config.db_path = str(tmp_path / "search")
+        config.rag_fusion = RAGFusionConfig(
+            enabled=True,
+            provider="ollama",
+            model="rag-model",
+            ollama_base_url=server.base_url,
+            ollama_context_tokens=_SHARED_CLIENT_NUM_CTX,
+            num_queries=_SHARED_CLIENT_NUM_QUERIES,
+        )
+        app = create_app(config, JobStore(path=tmp_path / "jobs.json"))
+
+        with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
+            assert app.state.rag_fusion_generator._client is app.state.rag_fusion_client
+            response = client.post(
+                "/search",
+                json={"query": "hello world", "collection": _COLLECTION, "rag_fusion": True},
+            )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["rag_fusion_applied"] is True
+    assert data["rag_fusion_attempted"] is True
+    assert data["rag_fusion_queries_used"] == _SHARED_CLIENT_NUM_QUERIES
+    assert data["results"]
+    [chat] = server.requests_to("/api/chat")
+    assert chat.body is not None
+    [message] = chat.body["messages"]
+    assert message["role"] == "user"
+    assert "---\nhello world\n---" in message["content"]
+    assert f"generate {_SHARED_CLIENT_NUM_QUERIES} alternative" in message["content"]
+    assert chat.body["options"]["num_ctx"] == _SHARED_CLIENT_NUM_CTX
+    assert chat.body["options"]["num_predict"] == _TOKENS_PER_QUERY * _SHARED_CLIENT_NUM_QUERIES
 
 
 @pytest.mark.asyncio

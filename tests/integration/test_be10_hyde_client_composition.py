@@ -1,6 +1,6 @@
 """BE-10 (collection-descriptions plan, C1, S5, S67, S68): the server composes each feature's client from its own section.
 
-A real app (``make_real_app``) boots with ``[hyde]`` on a loopback fake model server; the lifespan resolves the window
+A real app (``make_real_app``) boots with ``[hyde]`` (and, from BE-12, ``[rag_fusion]``) on a loopback fake model server; the lifespan resolves the window
 of every enabled feature's client in the background and logs the startup WARNINGs, and the server answers either way.
 """
 
@@ -235,3 +235,105 @@ def test_hyde_and_graph_keep_their_own_provider_model_and_host(boot: Boot) -> No
     assert hyde_request.body["model"] == _HYDE_MODEL
     assert graph_request.body is not None
     assert graph_request.body["model"] == _GRAPH_MODEL
+
+
+# ---------------------------------------------------------------------------
+# BE-12: RAG Fusion composes its own client from [rag_fusion] the same way
+# ---------------------------------------------------------------------------
+
+_RAG_FUSION_MODEL = "rag-fusion-model"
+_RAG_FUSION_REPLY = "rag fusion reply"
+
+
+def _rag_fusion_toml(*, base_url: str, enabled: bool = True, context: int | None = None) -> str:
+    lines = [
+        "[rag_fusion]",
+        f"enabled = {str(enabled).lower()}",
+        'provider = "ollama"',
+        f'model = "{_RAG_FUSION_MODEL}"',
+        f'ollama_base_url = "{base_url}"',
+    ]
+    if context is not None:
+        lines.append(f"ollama_context_tokens = {context}")
+    return "\n".join(lines) + "\n"
+
+
+def test_unset_rag_fusion_ollama_window_warns_at_startup_naming_its_own_section(
+    boot: Boot, caplog: pytest.LogCaptureFixture
+) -> None:
+    with FakeModelServer(reply_text=_RAG_FUSION_REPLY) as server, caplog.at_level(logging.WARNING):
+        client, _config = boot(_rag_fusion_toml(base_url=server.base_url))
+        rag_fusion_client = client.app.state.rag_fusion_client
+
+        reply = _call(rag_fusion_client)
+
+    [warning] = _composition_warnings(caplog)
+    assert "[rag_fusion].ollama_context_tokens" in warning.getMessage()
+    assert rag_fusion_client.context_window() == ContextWindowTokens(
+        size=ASSUMED_CONTEXT_TOKENS, source=ContextWindowSource.ASSUMED
+    )
+    assert reply == _RAG_FUSION_REPLY
+    [chat] = server.requests_to("/api/chat")
+    assert chat.body is not None
+    assert chat.body["model"] == _RAG_FUSION_MODEL
+    assert "num_ctx" not in chat.body["options"]
+    assert server.requests_to("/api/show") == []
+
+
+def test_oversized_rag_fusion_ollama_window_warns_with_model_maximum(
+    boot: Boot, caplog: pytest.LogCaptureFixture
+) -> None:
+    with FakeModelServer(ollama_context_length=_MODEL_MAXIMUM) as server, caplog.at_level(logging.WARNING):
+        boot(_rag_fusion_toml(base_url=server.base_url, context=_ABOVE_THE_MAXIMUM))
+
+    [warning] = _composition_warnings(caplog)
+    message = warning.getMessage()
+    assert "[rag_fusion].ollama_context_tokens" in message
+    assert str(_ABOVE_THE_MAXIMUM) in message
+    assert str(_MODEL_MAXIMUM) in message
+    assert len(server.requests_to("/api/show")) == 1
+
+
+def test_set_rag_fusion_ollama_window_is_sent_and_warns_nothing(boot: Boot, caplog: pytest.LogCaptureFixture) -> None:
+    with FakeModelServer(ollama_context_length=_MODEL_MAXIMUM) as server, caplog.at_level(logging.WARNING):
+        client, _config = boot(_rag_fusion_toml(base_url=server.base_url, context=_CONFIGURED_WINDOW))
+        _call(client.app.state.rag_fusion_client)
+
+    assert _composition_warnings(caplog) == []
+    [chat] = server.requests_to("/api/chat")
+    assert chat.body is not None
+    assert chat.body["options"]["num_ctx"] == _CONFIGURED_WINDOW
+
+
+def test_disabled_rag_fusion_resolves_nothing_and_warns_nothing(boot: Boot, caplog: pytest.LogCaptureFixture) -> None:
+    with FakeModelServer() as server, caplog.at_level(logging.WARNING):
+        boot(_rag_fusion_toml(base_url=server.base_url, enabled=False))
+
+    assert _composition_warnings(caplog) == []
+    assert server.requests == []
+
+
+def test_rag_fusion_and_hyde_each_warn_once_for_their_own_unset_window(
+    boot: Boot, caplog: pytest.LogCaptureFixture
+) -> None:
+    with FakeModelServer() as server, caplog.at_level(logging.WARNING):
+        boot(_hyde_toml(base_url=server.base_url) + _rag_fusion_toml(base_url=server.base_url))
+
+    messages = [warning.getMessage() for warning in _composition_warnings(caplog)]
+    assert len(messages) == 2
+    assert any("[hyde].ollama_context_tokens" in message for message in messages)
+    assert any("[rag_fusion].ollama_context_tokens" in message for message in messages)
+
+
+def test_rag_fusion_claude_cli_client_retries_a_non_zero_exit_once(
+    boot: Boot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(claude_cli_client, "RETRY_BACKOFF_SECONDS", 0.0)
+    fake = _fake_claude.install(tmp_path / "bin", reply=_RAG_FUSION_REPLY, exit_codes=(1, 0))
+    monkeypatch.setenv("PATH", f"{fake.path.parent}{os.pathsep}{os.environ['PATH']}")
+    client, _config = boot('[rag_fusion]\nenabled = true\nprovider = "claude_cli"\n')
+
+    reply = _call(client.app.state.rag_fusion_client)
+
+    assert reply == _RAG_FUSION_REPLY
+    assert len(fake.invocations()) == 2

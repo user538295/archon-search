@@ -21,9 +21,6 @@ def _stub_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> None:
     import sys
     import types
     stub = types.ModuleType("anthropic")
-    # AnthropicQueryExpansionProvider.__init__ reads anthropic.APIError; give it
-    # a real exception class so construction (and any except clause) is valid.
-    stub.APIError = type("APIError", (Exception,), {})  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "anthropic", stub)
 
 

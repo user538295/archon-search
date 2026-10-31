@@ -153,18 +153,14 @@ def test_rag_fusion_is_key_available_ollama_always_true(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """RAGFusionGenerator.is_key_available() returns True for ollama regardless of env keys (C1-I-21)."""
-    from unittest.mock import MagicMock
-
     from archon_search.rag_fusion import RAGFusionGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
 
     # Even with no API keys present, ollama must return True
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    generator = RAGFusionGenerator(
-        config=RAGFusionConfig(provider="ollama"),
-        provider=MagicMock(),  # stub provider so no ImportError
-    )
+    generator = RAGFusionGenerator(config=RAGFusionConfig(provider="ollama"), client=ScriptedLlmClient())
     assert generator.is_key_available() is True
 
     # Also True when keys happen to be set
@@ -176,16 +172,12 @@ def test_rag_fusion_is_key_available_openai_checks_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """RAGFusionGenerator.is_key_available() reads OPENAI_API_KEY for openai provider (C1-I-21)."""
-    from unittest.mock import MagicMock
-
     from archon_search.rag_fusion import RAGFusionGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    generator = RAGFusionGenerator(
-        config=RAGFusionConfig(provider="openai"),
-        provider=MagicMock(),  # stub provider so no ImportError
-    )
+    generator = RAGFusionGenerator(config=RAGFusionConfig(provider="openai"), client=ScriptedLlmClient())
     assert generator.is_key_available() is False
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")

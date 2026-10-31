@@ -7,6 +7,7 @@ Exercises the full HTTP layer for:
 - RAG Fusion dependency absent returns 4xx with the fixed dependency detail (single-collection path)
 - RAG Fusion dependency absent returns 4xx with the fixed dependency detail (multi-collection path)
 - BE-11: HyDE through the shared LLM client (``app.state.hyde_client``), success and provider-down fallback
+- BE-12: RAG Fusion provider-down fallback through the shared client (``app.state.rag_fusion_client``)
 
 Run with:
     uv run pytest tests/integration/test_http_hyde_rag_fusion.py -v
@@ -14,11 +15,15 @@ Run with:
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
 from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
-from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL
+from archon_search.rag_fusion import (
+    RAG_FUSION_DEPENDENCY_DETAIL,
+    RAGFusionDependencyError,
+)
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
@@ -190,15 +195,12 @@ def test_hyde_dependency_absent_returns_clear_error(
 def test_rag_fusion_dependency_absent_returns_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """RAGFusionGenerator._anthropic_available=False simulates missing dep (single-collection).
+    """A ``RAGFusionDependencyError`` out of the generator (single-collection) is answered 422 with the fixed detail.
 
     POST /search with rag_fusion=True must return 422 with a clear message.
-    RAGFusionDependencyError is raised by generate_variants() and caught by
-    the route handler (pipeline.search() path), which returns a 422 JSONResponse.
+    The error is caught by the route handler (pipeline.search() path), which returns a 422 JSONResponse.
 
-    Note: config.rag_fusion.enabled must be True so the pipeline invokes
-    generate_variants(). The generator's _anthropic_available flag is patched
-    via monkeypatch.setattr on the app.state instance after startup.
+    Note: config.rag_fusion.enabled must be True so the pipeline invokes generate_variants().
     """
     doc = tmp_path / "rag_dep_absent.md"
     doc.write_text(
@@ -212,9 +214,12 @@ def test_rag_fusion_dependency_absent_returns_error(
         col = "rag-dep-absent"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
-        # Patch via monkeypatch.setattr so any rename of the attribute causes a clear error.
+        # The shared-client generator reports a missing package as a call failure, so serve the error through the
+        # generator: this pins the route's mapping of the exception (BE-13 decides whether it stays reachable).
         generator = client.app.state.rag_fusion_generator
-        monkeypatch.setattr(generator, "_provider_available", False)
+        monkeypatch.setattr(
+            generator, "generate_variants", AsyncMock(side_effect=RAGFusionDependencyError("rag_fusion extra missing"))
+        )
 
         resp = client.post(
             "/search",
@@ -237,11 +242,10 @@ def test_rag_fusion_dependency_absent_returns_error(
 def test_rag_fusion_dependency_absent_returns_error_multi_collection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """RAGFusionGenerator._anthropic_available=False simulates missing dep (multi-collection).
+    """A ``RAGFusionDependencyError`` out of the generator on the multi-collection path is answered 422.
 
-    POST /search with rag_fusion=True and collections=[...] must return 422.
-    RAGFusionDependencyError is raised by generate_variants() and caught by
-    the route handler (pipeline.search_many() path), which returns a 422 JSONResponse.
+    POST /search with rag_fusion=True and collections=[...] must return 422 with the fixed detail.
+    The error is caught by the route handler (pipeline.search_many() path), which returns a 422 JSONResponse.
 
     This covers the search_many() code path separately from the single-collection
     search() path tested in test_rag_fusion_dependency_absent_returns_error.
@@ -264,9 +268,12 @@ def test_rag_fusion_dependency_absent_returns_error_multi_collection(
         ingest_file_via_path(client, col_a, str(doc_a), api_key=api_key)
         ingest_file_via_path(client, col_b, str(doc_b), api_key=api_key)
 
-        # Patch via monkeypatch.setattr so any rename of the attribute causes a clear error.
+        # The shared-client generator reports a missing package as a call failure, so serve the error through the
+        # generator: this pins the transport's mapping of the exception (BE-13 decides whether it stays reachable).
         generator = client.app.state.rag_fusion_generator
-        monkeypatch.setattr(generator, "_provider_available", False)
+        monkeypatch.setattr(
+            generator, "generate_variants", AsyncMock(side_effect=RAGFusionDependencyError("rag_fusion extra missing"))
+        )
 
         resp = client.post(
             "/search",
@@ -388,59 +395,51 @@ def test_hyde_provider_down_over_http_falls_back_to_the_plain_query(
 
 
 # ---------------------------------------------------------------------------
-# Test 7 — BE-1: RAG Fusion behaviour unchanged after AnthropicQueryExpansionProvider extraction
+# Test 7 — BE-12: RAG Fusion provider down, over HTTP
 # ---------------------------------------------------------------------------
 
-def test_rag_fusion_anthropic_behaviour_unchanged_after_refactor(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+_RAG_FUSION_QUERY = "decompose this unique rag question"
+
+
+def test_rag_fusion_provider_down_over_http_falls_back_to_the_single_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """BE-1 regression: RAG Fusion returns rag_fusion_applied=True after adapter extraction.
+    """A failing RAG Fusion provider leaves the search answering with ``rag_fusion_applied: false`` and one query-free WARNING."""
+    import logging
 
-    After the BE-1 refactor, RAGFusionGenerator delegates text generation to
-    AnthropicQueryExpansionProvider.  This test verifies that:
-    1. The provider's decompose_query is called and returns variants.
-    2. RAGFusionGenerator uses the variants for multi-query search.
-    3. The HTTP response carries rag_fusion_applied=True.
+    from tests._fake_model_server import keep_loopback_out_of_proxies, unreachable_port
 
-    The provider's _client is replaced with a mock AFTER app startup (inside the
-    with-block) so the session fixture's RuntimeError guard does not interfere.
-    """
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock, MagicMock
-
-    doc = tmp_path / "rag_fusion_refactor_test.md"
-    doc.write_text(
-        "# RAG Fusion Test\n\nRAG Fusion decomposes queries into variants.\n" * 6
+    keep_loopback_out_of_proxies(monkeypatch)
+    doc = tmp_path / "rag_fusion_provider_down.md"
+    doc.write_text("# Fallback\n\nThe search must still answer when RAG Fusion cannot.\n" * 6)
+    toml = (
+        "[rag_fusion]\n"
+        "enabled = true\n"
+        'provider = "ollama"\n'
+        'model = "rag-model"\n'
     )
 
-    with make_real_app(tmp_path, monkeypatch, rag_fusion_enabled=True) as (client, _cfg, api_key):
-        col = "rag-fusion-refactor"
+    with unreachable_port() as down_port, make_real_app(
+        tmp_path, monkeypatch, toml_content=toml + f'ollama_base_url = "http://127.0.0.1:{down_port}"\n'
+    ) as (client, _cfg, api_key), caplog.at_level(logging.INFO):
+        col = "rag-fusion-provider-down"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
+        responses = [
+            client.post(
+                "/search",
+                json={"collection": col, "query": f"{_RAG_FUSION_QUERY} {attempt}", "rag_fusion": True},
+                headers=_auth(api_key),
+            )
+            for attempt in range(3)
+        ]
 
-        generator = client.app.state.rag_fusion_generator
-        provider = generator._provider
-
-        # Return 2 variants from the provider
-        mock_content = SimpleNamespace(text="variant one query\nvariant two query")
-        mock_response = SimpleNamespace(content=[mock_content])
-        mock_messages = MagicMock()
-        mock_messages.create = AsyncMock(return_value=mock_response)
-        mock_client = MagicMock()
-        mock_client.messages = mock_messages
-
-        monkeypatch.setattr(provider, "_client", mock_client)
-        monkeypatch.setattr(provider, "_anthropic_available", True)
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-integration-key")
-
-        resp = client.post(
-            "/search",
-            json={"collection": col, "query": "rag fusion test", "rag_fusion": True},
-            headers=_auth(api_key),
-        )
-        assert resp.status_code == 200, (
-            f"expected 200 from RAG Fusion search, got {resp.status_code}: {resp.text}"
-        )
-        data = resp.json()
-        assert data["rag_fusion_applied"] is True, (
-            f"expected rag_fusion_applied=True after BE-1 refactor, got: {data['rag_fusion_applied']}"
-        )
+    for resp in responses:
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["rag_fusion_applied"] is False
+        assert resp.json()["rag_fusion_attempted"] is True
+        assert resp.json()["results"]
+    rag_warnings = [
+        r for r in caplog.records if r.levelno >= logging.WARNING and r.name == "archon_search.rag_fusion"
+    ]
+    assert len(rag_warnings) == 1
+    assert _RAG_FUSION_QUERY not in " ".join(r.getMessage() for r in caplog.records)

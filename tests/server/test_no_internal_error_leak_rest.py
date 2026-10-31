@@ -552,7 +552,7 @@ def test_rag_fusion_missing_extra_answers_fixed_detail_and_logs_install_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     route: str, body: dict[str, Any], method: str,
 ) -> None:
-    patch_install_hint(monkeypatch, "archon_search.rag_fusion")
+    patch_install_hint(monkeypatch, "archon_search.uv_tool")
     app, client = _wire_app(tmp_path)
     app.state.config.rag_fusion.enabled = True
     raiser = rag_fusion_dependency_raiser()

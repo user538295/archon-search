@@ -921,7 +921,7 @@ async def test_rag_fusion_missing_extra_answers_fixed_detail_and_logs_install_co
     tool: str, kwargs: dict[str, Any], method: str, monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    patch_install_hint(monkeypatch, "archon_search.rag_fusion")
+    patch_install_hint(monkeypatch, "archon_search.uv_tool")
     config = SearchConfig()
     config.rag_fusion.enabled = True
     pipeline = mock_pipeline()

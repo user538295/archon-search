@@ -7,17 +7,16 @@ never reaches the wire, while the cause is still logged with its traceback.
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from archon_search import uv_tool
 from archon_search.chunker import DocumentChunker
 from archon_search.collection_meta import CollectionMeta
-from archon_search.config import GraphConfig, HyDEConfig, RAGFusionConfig
+from archon_search.config import GraphConfig, HyDEConfig
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.defref_extractor import DefRefExtractor
 from archon_search.embedder import Embedder
@@ -28,7 +27,11 @@ from archon_search.hyde import (
 )
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import MetadataLookupError, SearchPipeline
-from archon_search.rag_fusion import RAGFusionGenerator
+from archon_search.rag_fusion import (
+    RAG_FUSION_DEPENDENCY_DETAIL,
+    RAGFusionDependencyError,
+    RAGFusionGenerator,
+)
 from tests._hyde_stubs import ScriptedLlmClient
 
 # Internal-looking marker: an absolute path under the runtime data dir.
@@ -48,10 +51,6 @@ DEFREF_PARSE_MSG = f"tree_sitter: failed to load language from {LEAK_NEEDLE}/.ar
 _DEFREF_SOURCE_NAME = "module.py"
 _DEFREF_SOURCE = "def caller():\n    return callee()\n\n\ndef callee():\n    return 1\n"
 _STUB_EMBEDDING_DIM = 4
-
-# Making the provider module unimportable is how a missing `hyde` / `rag_fusion`
-# extra reaches RAGFusionGenerator __init__ (HyDEGenerator no longer builds a provider: BE-11).
-_NO_ANTHROPIC_PROVIDER = {"archon_search.providers.anthropic_provider": None}
 
 
 def assert_logged_with_traceback(caplog: pytest.LogCaptureFixture, message: str) -> None:
@@ -129,10 +128,20 @@ def hyde_generator_missing_extra() -> MagicMock:
     return MagicMock(spec=HyDEGenerator, generate=AsyncMock(side_effect=_generate))
 
 
-def rag_fusion_generator_without_provider(config: RAGFusionConfig) -> RAGFusionGenerator:
-    """A real RAGFusionGenerator built while the `rag_fusion` extra's provider module is absent."""
-    with patch.dict(sys.modules, _NO_ANTHROPIC_PROVIDER):
-        return RAGFusionGenerator(config)
+def rag_fusion_generator_missing_extra() -> MagicMock:
+    """A ``RAGFusionGenerator`` stand-in whose ``generate_variants`` raises ``RAGFusionDependencyError`` like a missing extra.
+
+    The message carries the install command from ``uv_tool.extra_install_hint`` (patched by
+    ``patch_install_hint(monkeypatch, "archon_search.uv_tool")``); the transports must log it and send only the
+    fixed ``RAG_FUSION_DEPENDENCY_DETAIL``. The shared-client generator reports a missing package as a call
+    failure, so this stand-in serves the transport-mapping tests until BE-13 decides whether the error stays
+    reachable.
+    """
+
+    async def _generate_variants(*_args: Any, **_kwargs: Any) -> None:
+        raise RAGFusionDependencyError(f"{RAG_FUSION_DEPENDENCY_DETAIL} ({uv_tool.extra_install_hint('rag_fusion')})")
+
+    return MagicMock(spec=RAGFusionGenerator, generate_variants=AsyncMock(side_effect=_generate_variants))
 
 
 class _StubEmbedderBackend:

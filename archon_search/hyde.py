@@ -10,7 +10,6 @@ the plain query — and logs it once per process with the query fingerprint only
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from typing import TYPE_CHECKING, Final
@@ -19,7 +18,7 @@ if TYPE_CHECKING:
     from archon_search.embedder import Embedder
     from archon_search.llm_client.protocol import LlmClient
 
-from archon_search._privacy import _query_fingerprint
+from archon_search._privacy import _query_fingerprint, mask_query_echo
 from archon_search.config import HyDEConfig
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.protocol import LlmCallFailure, LlmCallRequest
@@ -50,35 +49,6 @@ _HYDE_WARN_KEY: Final = "hyde_generation"
 _RATE_BUCKET_WINDOW_SECONDS: Final = 60.0
 #: Providers with no request cap of their own to protect: local or login-billed, so the bucket skips them.
 _UNTHROTTLED_PROVIDERS: Final = ("ollama", "claude_cli", "llama_cpp")
-_QUERY_MASK: Final = "[query]"
-
-
-def _echo_forms(query: str) -> list[str]:
-    """Every form in which a server may echo *query* back, longest first.
-
-    As sent, cut to the prompt length, whitespace-collapsed (the clients collapse it in server text), and
-    JSON- or escape-encoded.
-    """
-    forms: set[str] = set()
-    for text in (query, query[:HYDE_MAX_QUERY_CHARS]):
-        forms.update(
-            {
-                text,
-                " ".join(text.split()),
-                json.dumps(text)[1:-1],
-                json.dumps(text, ensure_ascii=False)[1:-1],
-                text.encode("unicode_escape").decode("ascii"),
-            }
-        )
-    return sorted((form for form in forms if form), key=len, reverse=True)
-
-
-def _mask(text: str, query: str) -> str:
-    """*text* with every echo of the query replaced by a marker, so it can be logged."""
-    masked = text
-    for form in _echo_forms(query):
-        masked = masked.replace(form, _QUERY_MASK)
-    return masked
 
 
 class HyDEDependencyError(RuntimeError):
@@ -128,7 +98,7 @@ class HyDEGenerator:
         rate limit exhausted (its own WARNING, at most once a minute), the client failed (unreachable, key
         missing, timeout, provider error) or the hypothesis is empty. The first failure or empty hypothesis
         per process logs one WARNING with the query fingerprint — never the query or the hypothesis; the
-        failure text goes through :func:`_mask` first.
+        failure text goes through :func:`~archon_search._privacy.mask_query_echo` first.
         """
         # Ollama, claude_cli, and llama_cpp are local/free paths with no API cap —
         # skip rate limiting entirely.
@@ -161,7 +131,7 @@ class HyDEGenerator:
             hypothesis_text = (await self._client.call(request)).text.strip()
         except LlmCallFailure as failure:
             # C1: the failure text never holds the prompt, but a server may echo part of it back; mask the query.
-            reason = _mask(str(failure), query)
+            reason = mask_query_echo(str(failure), query, cut_chars=HYDE_MAX_QUERY_CHARS)
             warn_once(
                 _logger,
                 _HYDE_WARN_KEY,

@@ -109,10 +109,9 @@ def test_live_hyde_via_llama_cpp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_live_rag_fusion_via_llama_cpp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S2: ``[rag_fusion] provider="llama_cpp"`` against a live llama-server.
 
-    ``POST /search rag_fusion=true`` triggers a real
-    ``LlamaCppQueryExpansionProvider.decompose_query`` call. On transport
-    failure it returns ``[]`` (never raises), so ``rag_fusion_applied`` stays
-    ``False`` — the assertion below fails loudly when llama-server is down.
+    ``POST /search rag_fusion=true`` makes a real RAG Fusion call through ``LlamaCppClient``. On a transport failure the
+    client raises and the generator logs it once and returns no variants, so ``rag_fusion_applied`` stays ``False`` —
+    the assertion below fails loudly when llama-server is down.
     """
     toml_content = '[rag_fusion]\nenabled = true\nprovider = "llama_cpp"\n'
     with make_real_app(tmp_path, monkeypatch, toml_content=toml_content, rag_fusion_enabled=True) as (

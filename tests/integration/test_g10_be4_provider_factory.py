@@ -4,7 +4,7 @@ Tests:
 - S7: HyDE with Ollama falls back gracefully on timeout → hyde_applied=False
 - S8: RAG Fusion with Ollama falls back gracefully on timeout → rag_fusion_applied=False
 - S6: Hyde=Ollama, RAG Fusion=Anthropic operate independently with no cross-contamination
-- C1-B-8: factory injects the shared LlmClient (HyDE) and a QueryExpansionProvider (RAG Fusion)
+- C1-B-8: factory injects the shared LlmClient of each feature (HyDE and RAG Fusion)
 - S6 (rate-limit): Ollama provider skips rate limiting; non-Ollama provider respects it
 - C1-T-3: ollama_base_url is the host the HyDE client calls
 - C1-T-4: non-Ollama (Anthropic) provider IS blocked when token bucket exhausted
@@ -30,6 +30,7 @@ pytestmark = pytest.mark.integration
 
 _SLOW_ANSWER_SECONDS = 3.0
 _HYDE_TIMEOUT_SECONDS = 0.5
+_RAG_FUSION_TIMEOUT_SECONDS = 0.5
 _REQUEST_TIMEOUT_SECONDS = 10.0
 _MAX_OUTPUT_TOKENS = 200
 
@@ -103,14 +104,19 @@ def _toml_hyde_ollama(
     return toml
 
 
-def _toml_rag_fusion_ollama(rag_fusion_enabled: bool = True) -> str:
-    return (
+def _toml_rag_fusion_ollama(
+    rag_fusion_enabled: bool = True, base_url: str = "http://localhost:11434", timeout_seconds: float | None = None
+) -> str:
+    toml = (
         f"[rag_fusion]\n"
         f"enabled = {'true' if rag_fusion_enabled else 'false'}\n"
         f'provider = "ollama"\n'
         f'model = "llama3.2"\n'
-        f'ollama_base_url = "http://localhost:11434"\n'
+        f'ollama_base_url = "{base_url}"\n'
     )
+    if timeout_seconds is not None:
+        toml += f"timeout_seconds = {timeout_seconds}\n"
+    return toml
 
 
 # ---------------------------------------------------------------------------
@@ -161,40 +167,37 @@ def test_search_rag_fusion_ollama_fallback_on_timeout(
 ) -> None:
     """S8: Ollama RAG Fusion provider times out → rag_fusion_applied=False (graceful fallback).
 
-    Verifies that when the Ollama AsyncClient.chat() raises TimeoutError for
-    RAG Fusion, the search returns 200 with rag_fusion_applied=False.
+    The fake Ollama server answers later than ``[rag_fusion].timeout_seconds``: the shared client raises a timeout,
+    the search still returns 200 with rag_fusion_applied=False (not a 500 error).
     """
     doc = tmp_path / "rag_fusion_test.md"
     doc.write_text("# RAG Fusion Test\n\nQuery decomposition test content.\n" * 4)
 
-    _install_ollama_stub(monkeypatch)
-
-    toml = _toml_rag_fusion_ollama(rag_fusion_enabled=True)
-
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
-        assert cfg.rag_fusion.provider == "ollama", "expected provider=ollama from TOML"
-        assert cfg.rag_fusion.enabled, "expected rag_fusion.enabled=True"
-
-        col = "rag-fusion-ollama-timeout"
-        ingest_file_via_path(client, col, str(doc), api_key=api_key)
-
-        # After startup, replace the provider's _get_client to raise TimeoutError
-        provider = client.app.state.rag_fusion_generator._provider
-        mock_client = MagicMock()
-        mock_client.chat = AsyncMock(side_effect=TimeoutError("simulated timeout"))
-        monkeypatch.setattr(provider, "_get_client", lambda: mock_client)
-
-        resp = client.post(
-            "/search",
-            json={"collection": col, "query": "query decomposition test", "rag_fusion": True},
-            headers=_auth(api_key),
+    with FakeModelServer(response_delay_seconds=_SLOW_ANSWER_SECONDS) as server:
+        toml = _toml_rag_fusion_ollama(
+            rag_fusion_enabled=True, base_url=server.base_url, timeout_seconds=_RAG_FUSION_TIMEOUT_SECONDS
         )
-        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
-        data = resp.json()
-        assert "results" in data
-        assert data["rag_fusion_applied"] is False, (
-            f"expected rag_fusion_applied=False on Ollama timeout, got: {data['rag_fusion_applied']}"
-        )
+
+        with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+            assert cfg.rag_fusion.provider == "ollama", "expected provider=ollama from TOML"
+            assert cfg.rag_fusion.enabled, "expected rag_fusion.enabled=True"
+
+            col = "rag-fusion-ollama-timeout"
+            ingest_file_via_path(client, col, str(doc), api_key=api_key)
+
+            resp = client.post(
+                "/search",
+                json={"collection": col, "query": "query decomposition test", "rag_fusion": True},
+                headers=_auth(api_key),
+            )
+            assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+            data = resp.json()
+            assert "results" in data
+            assert data["rag_fusion_applied"] is False, (
+                f"expected rag_fusion_applied=False on Ollama timeout, got: {data['rag_fusion_applied']}"
+            )
+            assert data["rag_fusion_attempted"] is True
+            assert len(server.requests_to("/api/chat")) == 1, "the call must have reached the slow provider"
 
 
 # ---------------------------------------------------------------------------
@@ -208,12 +211,13 @@ def test_search_hyde_ollama_rag_fusion_anthropic_independent(
 
     Verifies that each generator uses its configured client independently:
     - HyDE uses an OllamaClient on its own fake server
-    - RAG Fusion uses AnthropicQueryExpansionProvider (or the Anthropic default)
+    - RAG Fusion uses an AnthropicClient of its own (the Anthropic default)
     They must not share state or interfere with each other.
 
     Also verifies behavioral independence: Ollama HyDE actually calls through
     to produce hyde_applied=True, proving the Ollama path works end-to-end.
     """
+    from archon_search.llm_client.anthropic_client import AnthropicClient
     from archon_search.llm_client.ollama_client import OllamaClient
 
     doc = tmp_path / "independence_test.md"
@@ -237,18 +241,16 @@ def test_search_hyde_ollama_rag_fusion_anthropic_independent(
             assert cfg.hyde.provider == "ollama", "expected hyde provider=ollama"
             assert cfg.rag_fusion.provider == "anthropic", "expected rag_fusion provider=anthropic"
 
-            # Verify the two generators sit on different kinds of caller (construction wiring)
+            # Verify the two features sit on different clients (construction wiring)
             hyde_client = client.app.state.hyde_client
-            rag_provider = client.app.state.rag_fusion_generator._provider
+            rag_client = client.app.state.rag_fusion_client
             assert isinstance(hyde_client, OllamaClient), (
                 f"HyDE should use an OllamaClient, got: {type(hyde_client)}"
             )
-            from archon_search.providers.anthropic_provider import (
-                AnthropicQueryExpansionProvider,
+            assert isinstance(rag_client, AnthropicClient), (
+                f"RAG Fusion should use an AnthropicClient, got: {type(rag_client)}"
             )
-            assert isinstance(rag_provider, AnthropicQueryExpansionProvider), (
-                f"RAG Fusion should use AnthropicQueryExpansionProvider, got: {type(rag_provider)}"
-            )
+            assert client.app.state.rag_fusion_generator._client is rag_client
 
             # Behavioral independence: ingest a document and run Ollama HyDE search
             col = "s6-independence"
@@ -262,40 +264,41 @@ def test_search_hyde_ollama_rag_fusion_anthropic_independent(
             assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
             data = resp.json()
             assert data["hyde_applied"] is True, (
-                f"Ollama HyDE should succeed independently of the Anthropic RAG Fusion provider, "
+                f"Ollama HyDE should succeed independently of the Anthropic RAG Fusion client, "
                 f"got hyde_applied={data['hyde_applied']}"
             )
-    assert len(server.requests_to("/api/chat")) == 1
+
+    assert len(server.requests_to("/api/chat")) == 1, "only HyDE talks to the Ollama server"
 
 
 # ---------------------------------------------------------------------------
-# C1-B-8 — Factory injects correct provider type (QueryExpansionProvider protocol)
+# C1-B-8 — Factory injects a shared LlmClient of the feature's own provider, for HyDE and RAG Fusion
 # ---------------------------------------------------------------------------
 
 def test_factory_injects_correct_provider_type(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """C1-B-8: HyDE gets a shared ``LlmClient`` of its own provider; RAG Fusion keeps a QueryExpansionProvider.
+    """C1-B-8: HyDE and RAG Fusion each get a shared ``LlmClient`` of their own provider, handed to their generator.
 
-    isinstance checks work because both protocols are @runtime_checkable.
-    Tests both the default (anthropic) and ollama paths.
+    isinstance checks work because the protocol is @runtime_checkable. Tests both the default (anthropic) and
+    ollama paths; the two features never share a client.
     """
     from archon_search.llm_client.anthropic_client import AnthropicClient
     from archon_search.llm_client.ollama_client import OllamaClient
     from archon_search.llm_client.protocol import LlmClient
-    from archon_search.query_expansion_protocol import QueryExpansionProvider
 
     # --- Default (anthropic) provider path ---
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, _api_key):
         hyde_client = client.app.state.hyde_client
-        rag_provider = client.app.state.rag_fusion_generator._provider
+        rag_client = client.app.state.rag_fusion_client
 
         assert isinstance(hyde_client, AnthropicClient)
         assert isinstance(hyde_client, LlmClient)
         assert client.app.state.hyde_generator._client is hyde_client
-        assert isinstance(rag_provider, QueryExpansionProvider), (
-            f"RAG Fusion provider must satisfy QueryExpansionProvider protocol, got: {type(rag_provider)}"
-        )
+        assert isinstance(rag_client, AnthropicClient)
+        assert isinstance(rag_client, LlmClient)
+        assert client.app.state.rag_fusion_generator._client is rag_client
+        assert rag_client is not hyde_client
 
     # --- Ollama provider path ---
     _install_ollama_stub(monkeypatch)
@@ -312,13 +315,12 @@ def test_factory_injects_correct_provider_type(
     ollama_tmp.mkdir()
     with make_real_app(ollama_tmp, monkeypatch, toml_content=toml) as (client2, _cfg2, _api_key2):
         ollama_hyde_client = client2.app.state.hyde_client
-        ollama_rag_provider = client2.app.state.rag_fusion_generator._provider
+        ollama_rag_client = client2.app.state.rag_fusion_client
 
         assert isinstance(ollama_hyde_client, OllamaClient)
-        assert isinstance(ollama_hyde_client, LlmClient)
-        assert isinstance(ollama_rag_provider, QueryExpansionProvider), (
-            f"Ollama RAG Fusion provider must satisfy QueryExpansionProvider protocol, got: {type(ollama_rag_provider)}"
-        )
+        assert isinstance(ollama_rag_client, OllamaClient)
+        assert ollama_rag_client is not ollama_hyde_client
+        assert client2.app.state.rag_fusion_generator._client is ollama_rag_client
 
 
 # ---------------------------------------------------------------------------
@@ -440,20 +442,15 @@ def test_rag_fusion_non_ollama_provider_respects_rate_limit(
 ) -> None:
     """C2-M-3: Non-Ollama RAG Fusion provider IS blocked when _rpm_tokens=0.
 
-    Covers the `if not _is_ollama:` branch in rag_fusion.py that would be
-    bypassed if _is_ollama were ever erroneously True for Anthropic providers.
+    Covers the cloud branch of the generator's token bucket: with the bucket empty the shared client is never called.
     """
     from archon_search.config import RAGFusionConfig
-    from archon_search.providers.anthropic_provider import (
-        AnthropicQueryExpansionProvider,
-    )
     from archon_search.rag_fusion import RAGFusionGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
 
-    mock_provider = MagicMock(spec=AnthropicQueryExpansionProvider)
-    mock_provider.decompose_query = AsyncMock(return_value=["q1", "q2"])
-
+    client = ScriptedLlmClient(reply="q1\nq2")
     config = RAGFusionConfig(provider="anthropic", model="claude-haiku-4-5")
-    generator = RAGFusionGenerator(config=config, provider=mock_provider)
+    generator = RAGFusionGenerator(config=config, client=client)
 
     # Exhaust the token bucket
     generator._rpm_tokens = 0
@@ -463,4 +460,4 @@ def test_rag_fusion_non_ollama_provider_respects_rate_limit(
     assert result == [], (
         f"Non-Ollama RAG Fusion must return [] when _rpm_tokens=0 (rate limited), got: {result}"
     )
-    mock_provider.decompose_query.assert_not_called()
+    assert client.requests == []

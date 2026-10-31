@@ -766,7 +766,14 @@ def create_app(
         # WARNINGs (unset or oversized Ollama window, failed llama_cpp probe; BE-10, C1). A background task, like
         # the validation above: a provider host that does not answer must never hold the port closed. Always
         # created, so the task is awaitable even when no feature is enabled.
-        window_features = [FeatureClient("hyde", app.state.hyde_client)] if config.hyde.enabled else []
+        window_features = [
+            FeatureClient(feature, client)
+            for feature, enabled, client in (
+                ("hyde", config.hyde.enabled, app.state.hyde_client),
+                ("rag_fusion", config.rag_fusion.enabled, app.state.rag_fusion_client),
+            )
+            if enabled
+        ]
         app.state._llm_window_task = asyncio.create_task(resolve_context_windows(window_features))
         app.state._background_tasks.add(app.state._llm_window_task)
         app.state._llm_window_task.add_done_callback(app.state._background_tasks.discard)
@@ -1316,16 +1323,25 @@ def create_app(
             config.hyde.model,
         )
 
-    _rag_fusion_provider = _build_query_expansion_provider(
-        config.rag_fusion.provider, config.rag_fusion.model, config.rag_fusion.ollama_base_url, config.rag_fusion.llama_cpp_base_url
+    # The shared LLM client of RAG Fusion, composed from [rag_fusion] and injected into the generator (BE-12).
+    app.state.rag_fusion_client = build_llm_client(
+        provider=config.rag_fusion.provider,
+        model=config.rag_fusion.model,
+        ollama_base_url=config.rag_fusion.ollama_base_url,
+        llama_cpp_base_url=config.rag_fusion.llama_cpp_base_url,
+        ollama_context_tokens=config.rag_fusion.ollama_context_tokens,
+        retry_on_nonzero_exit=True,
     )
-    app.state.rag_fusion_generator = RAGFusionGenerator(config=config.rag_fusion, provider=_rag_fusion_provider)
+    app.state.rag_fusion_generator = RAGFusionGenerator(
+        config=config.rag_fusion, client=app.state.rag_fusion_client
+    )
     if config.rag_fusion.enabled:
         logger.info(
             "RAG Fusion is enabled — search query text will be sent to %s (model: %s)",
             config.rag_fusion.provider,
             config.rag_fusion.model,
         )
+
     @app.exception_handler(EmbedderNotReadyError)
     async def _embedder_not_ready_handler(request: Request, exc: EmbedderNotReadyError) -> JSONResponse:
         """Map a wedged/slow model load to a uniform 503 across every HTTP route.

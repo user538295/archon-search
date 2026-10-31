@@ -300,7 +300,7 @@ flowchart LR
         - #manual_test — Real claude login — stdin prompt, `--safe-mode` and `--max-turns 1` accepted, billed to the login (non-automatable: needs a real `claude` login)
 
 ### Phase 2 · Expand queries with RAG Fusion through the shared client *(RAG Fusion cut over, the old query-expansion adapters removed)*
-- [ ] **BE-12** — Move `RAGFusionGenerator` onto the shared client: decomposition template, `max_tokens=150*num_queries`, variant parsing and `_validate_variant` move in and become live, fallback to the single query, one WARNING per process; rewrite `test_rag_fusion.py` and `test_integration_rag_fusion.py` #backend-role
+- [x] **BE-12** — Move `RAGFusionGenerator` onto the shared client: decomposition template, `max_tokens=150*num_queries`, variant parsing and `_validate_variant` move in and become live, fallback to the single query, one WARNING per process; rewrite `test_rag_fusion.py` and `test_integration_rag_fusion.py` #backend-role
     - Use Cases · 4.0h
     - needs BE-10 · completes S3, S15
     - Tests

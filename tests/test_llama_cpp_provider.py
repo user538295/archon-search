@@ -403,34 +403,3 @@ async def test_httpx_target_base_url_matches_configured_llama_cpp_base_url() -> 
     assert mock_cls.call_args is not None
     _, kwargs = mock_cls.call_args
     assert kwargs.get("base_url") == custom_base_url
-
-
-# ---------------------------------------------------------------------------
-# End-to-end via RAGFusionGenerator (S2); HyDE's llama_cpp end-to-end lives in tests/test_hyde.py
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_rag_fusion_end_to_end_with_llama_cpp() -> None:
-    """S2: RAGFusionGenerator wired with LlamaCppQueryExpansionProvider decomposes the query."""
-    from archon_search.config import RAGFusionConfig
-    from archon_search.providers.llama_cpp_provider import (
-        LlamaCppQueryExpansionProvider,
-    )
-    from archon_search.rag_fusion import RAGFusionGenerator
-
-    response = _make_response(_choices_body("variant one\nvariant two"))
-    mock_cls = _make_async_client_cls(response=response)
-
-    provider = LlamaCppQueryExpansionProvider(model="local-model", base_url=_BASE_URL)
-    config = RAGFusionConfig(
-        enabled=True, provider="llama_cpp", llama_cpp_base_url=_BASE_URL, num_queries=2
-    )
-
-    generator = RAGFusionGenerator(config=config, provider=provider)
-
-    with patch("archon_search.providers.llama_cpp_provider.httpx.AsyncClient", mock_cls):
-        variants = await generator.generate_variants("archon search query")
-
-    assert variants == ["variant one", "variant two"]

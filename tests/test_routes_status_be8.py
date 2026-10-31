@@ -138,8 +138,9 @@ def test_rag_fusion_generator_is_key_available_true(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
 
     from archon_search.rag_fusion import RAGFusionGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
 
-    generator = RAGFusionGenerator(config=RAGFusionConfig())
+    generator = RAGFusionGenerator(config=RAGFusionConfig(), client=ScriptedLlmClient())
     assert generator.is_key_available() is True
 
 
@@ -149,8 +150,9 @@ def test_rag_fusion_generator_is_key_available_false(
     """RAGFusionGenerator.is_key_available() returns False when ANTHROPIC_API_KEY is absent."""
     # ANTHROPIC_API_KEY already cleared by conftest.py.
     from archon_search.rag_fusion import RAGFusionGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
 
-    generator = RAGFusionGenerator(config=RAGFusionConfig())
+    generator = RAGFusionGenerator(config=RAGFusionConfig(), client=ScriptedLlmClient())
     assert generator.is_key_available() is False
 
 
@@ -262,8 +264,9 @@ def test_rag_fusion_generator_is_key_available_reflects_call_time_env(
 ) -> None:
     """RAGFusionGenerator.is_key_available() reads ANTHROPIC_API_KEY at call time, not construction time."""
     from archon_search.rag_fusion import RAGFusionGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
 
-    generator = RAGFusionGenerator(config=RAGFusionConfig())
+    generator = RAGFusionGenerator(config=RAGFusionConfig(), client=ScriptedLlmClient())
     assert generator.is_key_available() is False
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-late-set")

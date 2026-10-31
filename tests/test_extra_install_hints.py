@@ -28,11 +28,7 @@ from archon_search.graph_inspector import (
 )
 from archon_search.hyde import HyDEGenerator
 from archon_search.llm_client.anthropic_client import AnthropicClient
-from archon_search.rag_fusion import (
-    RAG_FUSION_DEPENDENCY_DETAIL,
-    RAGFusionDependencyError,
-)
-from tests._internal_error_leak import rag_fusion_generator_without_provider
+from archon_search.rag_fusion import RAGFusionGenerator
 
 _INSTALL_METHODS = pytest.mark.parametrize(
     ("prefix_fixture", "command"),
@@ -105,14 +101,22 @@ async def test_missing_hyde_provider_names_the_install_command(
 
 @_INSTALL_METHODS
 async def test_missing_rag_fusion_provider_names_the_install_command(
-    request: pytest.FixtureRequest, prefix_fixture: str, command: str
+    request: pytest.FixtureRequest,
+    prefix_fixture: str,
+    command: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """A RAG Fusion call on an Anthropic client without its package searches the single query and logs the install command."""
     request.getfixturevalue(prefix_fixture)
-    generator = rag_fusion_generator_without_provider(RAGFusionConfig(enabled=True))
-    with pytest.raises(RAGFusionDependencyError) as excinfo:
-        await generator.generate_variants("query")
-    assert str(excinfo.value) == (
-        f"Install archon-search[rag_fusion] to use RAG Fusion ({command} 'archon-search[rag_fusion]')"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    generator = RAGFusionGenerator(
+        RAGFusionConfig(enabled=True), AnthropicClient(model="claude-haiku-4-5-20251001")
     )
-    # The wire-safe half is the message minus the install command (G2).
-    assert str(excinfo.value).startswith(f"{RAG_FUSION_DEPENDENCY_DETAIL} (")
+
+    with patch.dict(sys.modules, {"anthropic": None}), caplog.at_level(logging.WARNING):
+        result = await generator.generate_variants("query")
+
+    assert result == []
+    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert f"run: {command} 'archon-search[hyde]'" in warning.getMessage()

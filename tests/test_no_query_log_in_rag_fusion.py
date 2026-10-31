@@ -30,13 +30,19 @@ Banned variable names checked (in addition to ``query``):
   - ``variant`` — a single variant string during iteration
   - ``all_queries`` — the combined [query] + variants list
   - ``truncated_query`` — the 2000-char-truncated query fed to the LLM
+  - ``prompt`` and ``raw_text`` — the prompt wrapping the query and the model's raw answer (BE-12)
+  - ``failure`` — the provider's failure: its text may echo the query, so only the masked ``reason`` is logged
+
+Log calls are the logger methods AND ``warn_once(...)`` (RAG Fusion's once-per-process WARNING route, S15).
 
 NOTE: ``text`` and ``line`` are too generic for reliable static analysis and
 are NOT checked.  The ``rag_fusion.py`` implementation MUST NOT use bare local
-variable names containing user-derived text as logging arguments.
+variable names containing user-derived text as logging arguments.  The f-string regex cannot see a quote before the
+placeholder, so ``test_rag_fusion_py_logs_with_no_f_string`` bans f-strings in log calls outright (AST based).
 """
 from __future__ import annotations
 
+import ast
 import re
 import textwrap
 from pathlib import Path
@@ -47,6 +53,12 @@ from pathlib import Path
 # The alternation is ordered longest-first to avoid partial matches.
 # ---------------------------------------------------------------------------
 _LOG_PREFIX = r"(?:logging\.|_logger\.|(?<![_\w])logger\.)"
+# A logging call: a logger method, or ``warn_once(...)`` — RAG Fusion's once-per-process WARNING route (S15).
+_LOG_CALL = rf"(?:{_LOG_PREFIX}\w+|(?<![_\w])warn_once)"
+
+#: The log calls of rag_fusion.py: the rate-limit WARNING and the three ``warn_once`` calls (failure, no valid
+#: variant, variant shortfall).
+_EXPECTED_RAG_FUSION_LOG_CALLS = 4
 
 # ---------------------------------------------------------------------------
 # Banned variable names that must never appear as raw log arguments.
@@ -57,6 +69,9 @@ _BANNED_VAR_NAMES: tuple[str, ...] = (
     "variant",
     "all_queries",
     "truncated_query",
+    "prompt",
+    "raw_text",
+    "failure",
 )
 
 # ---------------------------------------------------------------------------
@@ -72,7 +87,7 @@ _BANNED_VAR_NAMES: tuple[str, ...] = (
 def _build_fstring_pattern(var_name: str) -> re.Pattern[str]:
     """Build the f-string pattern for a specific banned variable name."""
     return re.compile(
-        _LOG_PREFIX + r"\w+\s*\([^)]*f['\"][^'\"]*\{" + re.escape(var_name) + r"(?![_\w(])",
+        _LOG_CALL + r"\s*\([^)]*f['\"][^'\"]*\{" + re.escape(var_name) + r"(?![_\w(])",
         re.DOTALL,
     )
 
@@ -88,7 +103,7 @@ _FSTRING_QUERY_IN_LOG = _FSTRING_PATTERNS["query"]
 # ---------------------------------------------------------------------------
 # Pattern 2 — bare banned-var positional arg in a logging call (full-file scan)
 # ---------------------------------------------------------------------------
-_LOG_OPENER = re.compile(_LOG_PREFIX + r"\w+\s*\(", re.DOTALL)
+_LOG_OPENER = re.compile(_LOG_CALL + r"\s*\(", re.DOTALL)
 _FINGERPRINT_CALL = re.compile(r"_query_fingerprint\s*\([^)]*\)")
 # Matches single- or double-quoted string literals (with escape sequences).
 # Stripping these prevents the word "query" inside a log format-string from
@@ -521,3 +536,109 @@ def test_no_raw_query_in_rag_fusion_logging() -> None:
         + "\n".join(violations)
         + "\nUse _query_fingerprint(query) in all logging calls."
     )
+
+
+# ---------------------------------------------------------------------------
+# BE-12: the guard also sees ``warn_once`` calls, the prompt and the raw model answer (S15)
+# ---------------------------------------------------------------------------
+
+
+def test_guard_detects_bare_query_arg_in_warn_once() -> None:
+    """Guard must fire on a ``warn_once(...)`` call (RAG Fusion's WARNING route) that passes query."""
+    content = 'warn_once(_logger, "rag_fusion", "raw query: %s", query)\n'
+    assert _bare_query_in_log_violations(content)
+
+
+def test_guard_detects_fstring_query_in_warn_once() -> None:
+    """Guard must fire on a ``warn_once(...)`` call whose message is an f-string holding {query}."""
+    content = 'warn_once(_logger, "rag_fusion", f"q={query}")\n'
+    assert _FSTRING_QUERY_IN_LOG.search(content)
+
+
+def test_guard_ignores_fingerprint_only_warn_once() -> None:
+    """Guard must NOT fire when a ``warn_once(...)`` call only carries the query fingerprint."""
+    content = 'warn_once(_logger, "rag_fusion", "failed (fp=%s)", _query_fingerprint(query))\n'
+    assert not _FSTRING_QUERY_IN_LOG.search(content)
+    assert not _bare_query_in_log_violations(content)
+
+
+def test_guard_detects_prompt_and_raw_answer_in_warn_once() -> None:
+    """Guard must fire when a log call receives the prompt or the model's raw answer (S15: no log line holds them)."""
+    for argument in ("request.prompt", "prompt", "raw_text"):
+        content = f'warn_once(_logger, "rag_fusion", "bad: %s", {argument})\n'
+        assert _bare_vars_in_log_violations(content), f"Guard failed to detect {argument} in a warn_once call"
+
+
+def test_guard_ignores_masked_reason_count_and_fingerprint_in_warn_once() -> None:
+    """Guard must NOT fire on the shapes rag_fusion.py uses: fingerprint plus masked failure text, or a variant count."""
+    failure = 'warn_once(_logger, "rag_fusion", "failed (fp=%s): %s", _query_fingerprint(query), reason)\n'
+    shortfall = 'warn_once(_logger, "rag_fusion", "%d of %d (fp=%s)", len(variants), num_queries, _query_fingerprint(query))\n'
+    assert not _bare_vars_in_log_violations(failure)
+    assert not _bare_vars_in_log_violations(shortfall)
+
+
+def test_guard_scans_every_logging_call_of_rag_fusion_py() -> None:
+    """The real guard is not vacuous: rag_fusion.py's four log calls are found and their arguments parsed."""
+    source = (Path(__file__).parent.parent / "archon_search" / "rag_fusion.py").read_text(encoding="utf-8")
+
+    openers = [m for m in _LOG_OPENER.finditer(source) if "getLogger" not in m.group()]
+
+    assert len(openers) == _EXPECTED_RAG_FUSION_LOG_CALLS
+    assert all(_extract_call_args(source, opener.end() - 1) for opener in openers)
+
+
+def _log_calls(tree: ast.AST) -> list[ast.Call]:
+    """Every ``warn_once(...)`` or logger-method call of a module."""
+    calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_warn_once = isinstance(func, ast.Name) and func.id == "warn_once"
+        is_logger_call = (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id in {"_logger", "logger", "logging"}
+            and func.attr != "getLogger"
+        )
+        if is_warn_once or is_logger_call:
+            calls.append(node)
+    return calls
+
+
+def test_rag_fusion_py_logs_with_no_f_string() -> None:
+    """No log call of rag_fusion.py is given an f-string: placeholders are the only way a value reaches a log line.
+
+    The regex guard above cannot see a quote before a ``{query}`` placeholder, so this AST check closes that gap.
+    """
+    source = (Path(__file__).parent.parent / "archon_search" / "rag_fusion.py").read_text(encoding="utf-8")
+
+    calls = _log_calls(ast.parse(source))
+
+    assert len(calls) == _EXPECTED_RAG_FUSION_LOG_CALLS
+    f_string_calls = [call.lineno for call in calls if any(isinstance(arg, ast.JoinedStr) for arg in call.args)]
+    assert not f_string_calls, f"f-string passed to a log call at lines {f_string_calls}"
+
+
+def test_rag_fusion_py_masks_the_failure_text_before_logging_it() -> None:
+    """The failure text reaches ``warn_once`` only through ``mask_query_echo`` (a provider may echo the query back)."""
+    source = (Path(__file__).parent.parent / "archon_search" / "rag_fusion.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    handlers = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ExceptHandler) and isinstance(node.type, ast.Name) and node.type.id == "LlmCallFailure"
+    ]
+
+    [handler] = handlers
+    masked_calls = [
+        call
+        for call in ast.walk(handler)
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "mask_query_echo"
+    ]
+    assert len(masked_calls) == 1
+    assert any(
+        isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id == "str"
+        for arg in masked_calls[0].args
+    ), "mask_query_echo must be given str(failure)"

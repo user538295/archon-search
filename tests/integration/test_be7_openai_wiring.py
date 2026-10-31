@@ -150,19 +150,20 @@ def test_search_rag_fusion_openai_provider_mocked(
 ) -> None:
     """S5/C2: RAG Fusion with OpenAI provider mocked → rag_fusion_applied=True.
 
-    Wires the OpenAI provider into RAGFusionGenerator via the factory in app.py,
-    mocks AsyncOpenAI.chat.completions.create to return multiple query variants,
-    searches with rag_fusion=true, and asserts rag_fusion_applied=True.
+    Wires the shared ``OpenAIClient`` into RAGFusionGenerator through ``create_app``, mocks the SDK's
+    ``chat.completions.create`` to return multiple query variants, searches with rag_fusion=true, and asserts
+    rag_fusion_applied=True — the request carries the decomposition template and the 150-per-query ceiling.
 
-    OPENAI_API_KEY must be set or the key-check guard in the provider returns []
-    before the mock is reached.
+    OPENAI_API_KEY must be set or the client's key guard raises before the mock is reached.
     """
+    from archon_search.llm_client.openai_client import OpenAIClient
+
     doc = tmp_path / "openai_rag_fusion_test.md"
     doc.write_text(
         "# OpenAI RAG Fusion Test\n\nQuery decomposition via OpenAI provider.\n" * 4
     )
 
-    # Set API key so the provider's is_key_available() guard passes
+    # Set API key so the client's key guard passes
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key-be7-rag-fusion")
 
     toml = _toml_rag_fusion_openai(rag_fusion_enabled=True)
@@ -176,15 +177,12 @@ def test_search_rag_fusion_openai_provider_mocked(
         col = "be7-rag-fusion-openai-mocked"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
-        # Mock AsyncOpenAI.chat.completions.create on the provider's client
-        provider = client.app.state.rag_fusion_generator._provider
-
-        from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider
-        assert isinstance(provider, OpenAIQueryExpansionProvider), (
-            f"RAG Fusion generator must use OpenAIQueryExpansionProvider, got: {type(provider)}"
+        rag_client = client.app.state.rag_fusion_client
+        assert isinstance(rag_client, OpenAIClient), (
+            f"RAG Fusion generator must use OpenAIClient, got: {type(rag_client)}"
         )
 
-        # RAG Fusion decompose_query expects newline-separated variant queries
+        # RAG Fusion expects newline-separated variant queries
         mock_response = _make_openai_mock_completion(
             "OpenAI query variant one\nOpenAI query variant two\nOpenAI query variant three"
         )
@@ -193,7 +191,8 @@ def test_search_rag_fusion_openai_provider_mocked(
         mock_openai_client.chat.completions = MagicMock()
         mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-        monkeypatch.setattr(provider, "_get_client", lambda: mock_openai_client)
+        # The wrapper caches its SDK client on first call; seed it with the mock.
+        monkeypatch.setattr(rag_client, "_client", mock_openai_client)
 
         resp = client.post(
             "/search",
@@ -209,10 +208,18 @@ def test_search_rag_fusion_openai_provider_mocked(
         data = resp.json()
         assert "results" in data, "response must contain 'results'"
         assert data["rag_fusion_applied"] is True, (
-            f"expected rag_fusion_applied=True with mocked OpenAI provider, "
+            f"expected rag_fusion_applied=True with mocked OpenAI client, "
             f"got: {data['rag_fusion_applied']}"
         )
+        # num_queries defaults to 2: the third line is surplus, the ceiling is 150 per requested variant.
+        assert data["rag_fusion_queries_used"] == 2
         mock_openai_client.chat.completions.create.assert_awaited_once()
+        sent = mock_openai_client.chat.completions.create.await_args.kwargs
+        assert sent["max_completion_tokens"] == 300
+        [message] = sent["messages"]
+        assert message["role"] == "user"
+        assert "OpenAI query decomposition test" in message["content"]
+        assert "generate 2 alternative" in message["content"]
 
 
 # ---------------------------------------------------------------------------

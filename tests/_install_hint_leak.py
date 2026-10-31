@@ -13,8 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from archon_search.config import RAGFusionConfig
-from tests._internal_error_leak import rag_fusion_generator_without_provider
+from tests._internal_error_leak import rag_fusion_generator_missing_extra
 
 INSTALL_HINT_SECRET = "https://ci:t0ken@pypi.corp.example/simple"
 INSTALL_HINT_PATH = "/Users/secret/wheels"
@@ -38,8 +37,8 @@ def assert_install_hint_logged_not_sent(caplog: pytest.LogCaptureFixture, wire: 
 
 
 def rag_fusion_dependency_raiser() -> AsyncMock:
-    """A pipeline-method stand-in failing at the real raise point: a provider-less RAG Fusion generator."""
-    generator = rag_fusion_generator_without_provider(RAGFusionConfig(enabled=True))
+    """A pipeline-method stand-in failing like a missing RAG Fusion extra: ``RAGFusionDependencyError`` with the install command."""
+    generator = rag_fusion_generator_missing_extra()
 
     async def _generate(*args: Any, **kwargs: Any) -> None:
         await generator.generate_variants("q")

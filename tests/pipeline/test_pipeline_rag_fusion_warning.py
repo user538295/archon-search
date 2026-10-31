@@ -3,9 +3,9 @@
 Tests for SearchPipelineResult.rag_fusion_warning field and the pipeline
 capturing asyncio.TimeoutError / generic Exception from RAG Fusion.
 
-BE-2 critical requirement: generate_variants() must re-raise asyncio.TimeoutError
-(and other exceptions) so the pipeline can distinguish failure from empty-variant
-success. Tests here verify propagation via monkeypatched generate_variants().
+The pipeline-level cases monkeypatch ``generate_variants()`` to raise, so the pipeline can distinguish a failure from
+an empty-variant success. The real ``RAGFusionGenerator`` no longer raises on a provider failure (BE-12): it returns
+no variants, and ``test_rag_failure_falls_back_to_single_query`` runs it over a failing client.
 """
 from __future__ import annotations
 
@@ -319,3 +319,58 @@ async def test_search_embedding_failure_sets_rag_fusion_warning(
     assert isinstance(result, SearchPipelineResult)
     assert result.rag_fusion_warning is not None
     assert "RAG Fusion expansion failed" in result.rag_fusion_warning
+
+
+# ---------------------------------------------------------------------------
+# BE-12 (S3): a failing shared client leaves the real generator returning no variants -> single-query search
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["search", "search_many"])
+async def test_rag_failure_falls_back_to_single_query(connected_store, col_name, tmp_path, caplog, path):
+    """A client that raises LlmCallFailure gives rag_fusion_applied=False with the single-query results.
+
+    The real generator absorbs the failure itself (one WARNING of its own, no variants): the pipeline's catch-all for a
+    raising generator is never reached, so there is no "failed unexpectedly" log and no ``rag_fusion_warning``.
+    """
+    import logging
+
+    from archon_search.config import RAGFusionConfig
+    from archon_search.llm_client.protocol import LlmCallFailure
+    from archon_search.rag_fusion import RAGFusionGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
+
+    pipeline = make_pipeline(connected_store)
+    doc = tmp_path / "doc.md"
+    doc.write_text("# Search content\n\nThis is a searchable document.\n" * 10)
+    await pipeline.ingest_file(doc, col_name, embedder=pipeline._global_embedder)
+    client = ScriptedLlmClient(failure=LlmCallFailure("ollama", "connection refused"))
+    config = RAGFusionConfig(enabled=True)
+    generator = RAGFusionGenerator(config, client)
+    fusion = {"rag_fusion": True, "rag_fusion_generator": generator, "rag_fusion_config": config}
+
+    with caplog.at_level(logging.WARNING):
+        if path == "search":
+            with_fusion = await pipeline.search(
+                "searchable document", col_name, embedder=pipeline._global_embedder, **fusion
+            )
+            plain = await pipeline.search("searchable document", col_name, embedder=pipeline._global_embedder)
+        else:
+            with_fusion = await pipeline.search_many("searchable document", [col_name], **fusion)
+            plain = await pipeline.search_many("searchable document", [col_name])
+
+    assert len(client.requests) == 1, "the generator must have been asked, and failed"
+    assert with_fusion.rag_fusion_attempted is True
+    assert with_fusion.rag_fusion_applied is False
+    assert with_fusion.rag_fusion_queries_used == 0
+    assert with_fusion.rag_fusion_warning is None
+    assert with_fusion.results, "the search must still answer"
+    assert {r.chunk_id for r in with_fusion.results} == {r.chunk_id for r in plain.results}
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and r.name == "archon_search.rag_fusion"
+    ]
+    assert len(warnings) == 1 and "RAG Fusion generation failed" in warnings[0], warnings
+    assert not [r for r in caplog.records if "failed unexpectedly" in r.getMessage()], "the pipeline catch-all must not run"

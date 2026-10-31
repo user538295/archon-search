@@ -6,7 +6,7 @@ Requires:
     installed, archon-search[rag_fusion]) OR the `claude` CLI on PATH and
     logged in — the tests prefer the real Anthropic API when a key is
     configured (matches the production default) and fall back to
-    `claude -p` (archon_search.providers.claude_cli_provider) otherwise, so
+    `claude -p` (the shared ClaudeCliClient, `[rag_fusion].provider = "claude_cli"`) otherwise, so
     the lane still exercises a real LLM without paid API access.
 
 Run with:
@@ -75,9 +75,9 @@ def _skip_if_no_llm_available() -> None:
 # longer than the 10s default tuned for the direct Anthropic API call.
 _CLAUDE_CLI_TIMEOUT_SECONDS = 30.0
 
-# Measured on 2026-09-08, 156 sequential `claude -p` calls, retry-with-backoff
-# already applied (archon_search/providers/claude_cli_provider.py): recall@5
-# landed at 0.53-0.55 across two full runs (roughly half the decompose_query
+# Measured on 2026-09-08 on the former claude_cli adapter (not re-measured on the shared
+# ClaudeCliClient, whose transport retry is the same single one), 156 sequential `claude -p`
+# calls: recall@5 landed at 0.53-0.55 across two full runs (roughly half the RAG Fusion
 # calls fail under sustained load — a nested/concurrent Claude Code session
 # appears to contend with the CLI's own session state; a single retry did not
 # close the gap). The real Anthropic API's 0.9848 floor (thresholds.toml)
@@ -93,25 +93,26 @@ def _make_live_rag_fusion_generator(num_queries: int = 2):
 
     Prefers the real Anthropic API (matches the production default) when
     ANTHROPIC_API_KEY is configured; otherwise falls back to the Claude Code
-    CLI (`claude -p`, no API key needed) via the same
-    ClaudeCLIQueryExpansionProvider production wires in for
-    `[rag_fusion].provider = "claude_cli"` (archon_search/server/app.py).
+    CLI (`claude -p`, no API key needed) via the same shared client production
+    composes for `[rag_fusion].provider = "claude_cli"` (archon_search/server/app.py).
     """
     from archon_search.config import RAGFusionConfig
     from archon_search.rag_fusion import RAGFusionGenerator
+    from archon_search.server.llm_composition import build_llm_client
 
     config = RAGFusionConfig(enabled=True, num_queries=num_queries)
-    if _has_anthropic_key():
-        return config, RAGFusionGenerator(config)
-
-    from archon_search.providers.claude_cli_provider import (
-        ClaudeCLIQueryExpansionProvider,
+    if not _has_anthropic_key():
+        config.provider = "claude_cli"
+        config.timeout_seconds = _CLAUDE_CLI_TIMEOUT_SECONDS
+    client = build_llm_client(
+        provider=config.provider,
+        model=config.model,
+        ollama_base_url=config.ollama_base_url,
+        llama_cpp_base_url=config.llama_cpp_base_url,
+        ollama_context_tokens=config.ollama_context_tokens,
+        retry_on_nonzero_exit=True,
     )
-
-    config.provider = "claude_cli"
-    config.timeout_seconds = _CLAUDE_CLI_TIMEOUT_SECONDS
-    provider = ClaudeCLIQueryExpansionProvider(model=config.model)
-    return config, RAGFusionGenerator(config, provider=provider)
+    return config, RAGFusionGenerator(config, client)
 
 
 def _configure_rag_fusion_provider(rag_fusion_config) -> None:
@@ -122,8 +123,8 @@ def _configure_rag_fusion_provider(rag_fusion_config) -> None:
 
 
 # Retry budget for the two rag_fusion_applied assertions below: the claude_cli
-# fallback provider fails ~45-55% of individual decompose_query calls under
-# load (see _CLAUDE_CLI_RECALL_FLOOR above) even with its own internal 2-attempt
+# fallback provider failed ~45-55% of individual RAG Fusion calls under
+# load when measured (see _CLAUDE_CLI_RECALL_FLOOR above) even with its own internal 2-attempt
 # retry, so a single pipeline call isn't reliable enough to gate a release on.
 _RAG_FUSION_APPLIED_RETRY_ATTEMPTS = 3
 
@@ -355,6 +356,7 @@ async def test_live_rag_fusion_fallback_on_missing_key(
     _skip_if_anthropic_not_installed()
 
     from archon_search.config import RAGFusionConfig
+    from archon_search.llm_client.anthropic_client import AnthropicClient
     from archon_search.rag_fusion import RAGFusionGenerator
 
     # Build pipeline and ingest corpus BEFORE removing the key
@@ -365,7 +367,7 @@ async def test_live_rag_fusion_fallback_on_missing_key(
 
     try:
         config = RAGFusionConfig(enabled=True, num_queries=2)
-        generator = RAGFusionGenerator(config)
+        generator = RAGFusionGenerator(config, AnthropicClient(model=config.model))
 
         result = await pipeline.search(
             "test query for fallback verification",
