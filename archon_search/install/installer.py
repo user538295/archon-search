@@ -911,7 +911,7 @@ class BaseInstaller(ABC):
                     _revert_multilingual_flag(config_path, self.dry_run)
                 if features.enable_hyde or features.enable_rag_fusion:
                     _revert_query_expansion_flags(config_path, self.dry_run)
-                if features.graph_provider:
+                if features.graph_enrichment_written:
                     _revert_graph_enrichment_flags(config_path, self.dry_run)
                 return 1
 
@@ -937,7 +937,7 @@ class BaseInstaller(ABC):
                     _revert_multilingual_flag(config_path, self.dry_run)
                 if features.enable_hyde or features.enable_rag_fusion:
                     _revert_query_expansion_flags(config_path, self.dry_run)
-                if features.graph_provider:
+                if features.graph_enrichment_written:
                     _revert_graph_enrichment_flags(config_path, self.dry_run)
                 return 1
 
@@ -998,16 +998,19 @@ class BaseInstaller(ABC):
                     print(f"Warning: multilingual install failed: {exc}", file=sys.stderr)
                     _revert_multilingual_flag(config_path, self.dry_run)
 
-            # Before Step 14: install provider packages for enabled HyDE / RAG Fusion.
-            # Same shape as the graph/multilingual installs above: non-fatal, and
-            # roll back the already-written enabled=true flags on failure so the next
-            # server start does not hard-fail on the missing provider package
-            # (the anthropic guard in app.py's _check_provider_deps).
+            # Before Step 14: install provider packages for enabled HyDE / RAG Fusion and the
+            # graph enrichment provider. Same shape as the graph/multilingual installs above:
+            # non-fatal, and roll back the already-written flags of each failed section so the
+            # next server start does not hard-fail on the missing provider package (the
+            # anthropic guard in app.py's _check_provider_deps) or run graph enrichment without it.
             # ponytail: revert wiring is triplicated across the disk-space/decline/install exit paths (mirrors the pre-existing graph & multilingual reverts); consolidate into one _revert_optional_feature_flags helper if a 4th revertable feature is added.
-            if features.enable_hyde or features.enable_rag_fusion:
+            if features.enable_hyde or features.enable_rag_fusion or features.graph_enrichment_written:
                 _failed_sections = _install_query_expansion_extras(features, dry_run=self.dry_run)
-                if _failed_sections:
-                    _revert_query_expansion_flags(config_path, self.dry_run, sections=tuple(_failed_sections))
+                _failed_expansion = tuple(s for s in _failed_sections if s != "graph")
+                if _failed_expansion:
+                    _revert_query_expansion_flags(config_path, self.dry_run, sections=_failed_expansion)
+                if "graph" in _failed_sections:
+                    _revert_graph_enrichment_flags(config_path, self.dry_run)
 
             # Before Step 14b: create .secrets.env when AI query expansion is enabled
             if features.enable_hyde or features.enable_rag_fusion:

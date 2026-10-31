@@ -482,7 +482,7 @@ Only non-default optional features are listed. When you enable AI query expansio
 Proceed? [y/n]:
 ```
 
-Type `y` to continue or `n` to abort; anything else is asked again (see [Answering the yes/no questions](#answering-the-yesno-questions)). Only a closed stdin (EOF) aborts without an answer. On abort, graph-enabled, multilingual, and query-expansion flags are reverted in the config file, but the config file itself was already written to disk before this prompt appeared. No GPU check, model download or provider write has happened at that point.
+Type `y` to continue or `n` to abort; anything else is asked again (see [Answering the yes/no questions](#answering-the-yesno-questions)). Only a closed stdin (EOF) aborts without an answer. On abort, graph-enabled, multilingual, query-expansion and graph-enrichment-provider flags are reverted in the config file, but the config file itself was already written to disk before this prompt appeared. No GPU check, model download or provider write has happened at that point.
 
 ### Step 7 — Optional extras install (if requested)
 
@@ -498,6 +498,8 @@ Code enrichment installed.
 If the install fails, a warning is shown but the overall wizard continues — code enrichment is optional.
 
 If you enabled the **graph** (Step 5a), the `archon-search[graph]` extra is installed at this step too. Its prose extraction model is *not* fetched here — that happens in Step 8, together with the embedder and reranker weights. If the package install fails, the wizard prints `Warning: graph enrichment install failed: ...`, reverts `graph.enabled` to `false`, and continues; see Step 5a for the exact copy.
+
+If you chose an LLM-backed **graph enrichment** provider (Step 5i) of `anthropic`, `openai` or `ollama` and gave it a model, the matching provider package is installed at this step too, with the same extra HyDE and RAG Fusion use (`hyde` for `anthropic`, `openai-provider`, `ollama`); an extra shared with HyDE or RAG Fusion is installed once. `llama_cpp` and `claude_cli` need no package. If that install fails, the wizard prints `Warning: graph enrichment provider install failed for archon-search[<extra>]: ...` (also naming AI query expansion when HyDE or RAG Fusion share the extra), strips the `[graph]` provider, model, host and context keys (`graph.enabled` is untouched) and continues. The same keys are stripped when the disk-space check fails or you answer `n` at `Proceed?`; a run that left graph enrichment off (no provider, or no model) does not touch them.
 
 If you chose a **multilingual** profile, the wizard also installs the `archon-search[multilingual]` extra (`fasttext-predict`, used for language detection) at this step — the server needs it to start when `multilingual = true`. If that install fails, the wizard reverts `multilingual = false` in the config so the server still starts (in English-only mode) instead of crashing on the next start. You can install it separately at any time (see [Optional extras](./10_installation.md#optional-extras)), e.g. `pip install "archon-search[multilingual]"`.
 

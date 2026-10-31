@@ -37,6 +37,7 @@ from archon_search.install.config_writer import _wizard_record_path
 from archon_search.install.extras import (
     CODE_EXTRA_SIZE_ESTIMATE,
     GRAPH_MODEL_SIZE_ESTIMATE,
+    _install_query_expansion_extras,
 )
 from archon_search.install.licenses import (
     _download_fasttext_model,
@@ -1324,6 +1325,79 @@ def test_wizard_abort_reverts_graph_enrichment_only(runner: CliRunner, tmp_path:
     )
 
 
+# Interactive queue for a graph-enrichment-only run on the minimal English profile; the last
+# line (Proceed?) is appended by each test.
+_GRAPH_LLAMA_CPP_QUEUE = "n\nn\nn\nn\nn\nn\n\n\nn\ny\nllama_cpp\nhttp://box:8080\n1\n"
+
+
+def _assert_graph_enrichment_reverted(config_path: Path) -> None:
+    doc = tomlkit.parse(config_path.read_text())
+    for key in ("provider", "extraction_model", "llama_cpp_base_url"):
+        assert key not in doc["graph"]
+
+
+@pytest.mark.integration
+def test_wizard_graph_install_failure_reverts_end_to_end(runner: CliRunner, tmp_path: Path) -> None:
+    """FE-3 S71: the extras pass receives the graph provider and, when it reports the graph
+    section failed, the wizard strips the graph enrichment keys; the disk-space and
+    decline-Proceed exits strip them too, and none of those exits installs a package."""
+    install_mock = MagicMock(return_value=["graph"])
+    config_path = tmp_path / "failure.toml"
+    with (
+        _no_anthropic_key(),
+        patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]),
+        _patched_wizard(**{"archon_search.install.installer._install_query_expansion_extras": install_mock}),
+    ):
+        result = runner.invoke(
+            main,
+            ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+            input=_GRAPH_LLAMA_CPP_QUEUE + "y\n",
+        )
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    install_mock.assert_called_once()
+    assert install_mock.call_args.args[0].graph_provider == "llama_cpp"
+    _assert_graph_enrichment_reverted(config_path)
+    assert "LLM-backed graph enrichment has been disabled" in result.output
+
+    disk_mock = MagicMock(side_effect=InstallError("not enough disk space"))
+    install_mock = MagicMock(return_value=[])
+    config_path = tmp_path / "disk.toml"
+    with (
+        _no_anthropic_key(),
+        patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]),
+        _patched_wizard(
+            **{
+                "archon_search.install.installer._install_query_expansion_extras": install_mock,
+                "archon_search.install.installer._check_disk_space": disk_mock,
+            }
+        ),
+    ):
+        result = runner.invoke(
+            main,
+            ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+            input=_GRAPH_LLAMA_CPP_QUEUE + "y\n",
+        )
+    assert result.exit_code == 1, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    install_mock.assert_not_called()
+    _assert_graph_enrichment_reverted(config_path)
+
+    install_mock = MagicMock(return_value=[])
+    config_path = tmp_path / "decline.toml"
+    with (
+        _no_anthropic_key(),
+        patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]),
+        _patched_wizard(**{"archon_search.install.installer._install_query_expansion_extras": install_mock}),
+    ):
+        result = runner.invoke(
+            main,
+            ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+            input=_GRAPH_LLAMA_CPP_QUEUE + "n\n",
+        )
+    assert result.exit_code == 1, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    install_mock.assert_not_called()
+    _assert_graph_enrichment_reverted(config_path)
+
+
 @pytest.mark.integration
 def test_e2e_summary_shows_hyde_bullet(runner: CliRunner, tmp_path: Path) -> None:
     """The install summary must visibly confirm HyDE was enabled (mandatory confirmation)."""
@@ -2558,7 +2632,11 @@ _HAND_ADDED_MANAGED_KEYS = [
 
 
 def _run_minimal_wizard_interactive(
-    runner: CliRunner, config_path: Path, *extra: str, answers: dict[str, str | tuple[str, ...]] | None = None
+    runner: CliRunner,
+    config_path: Path,
+    *extra: str,
+    answers: dict[str, str | tuple[str, ...]] | None = None,
+    wizard_patches: dict[str, Any] | None = None,
 ) -> Result:
     """Interactive minimal-profile re-run: Enter at every non-y/n prompt, `y` at the
     questions that default to yes (Proceed, Keep reranker) and `n` at every other y/n
@@ -2581,7 +2659,7 @@ def _run_minimal_wizard_interactive(
             return "y" if prompt.startswith(_YES_BY_DEFAULT_PROMPTS) else "n"
         return typed
 
-    with _no_anthropic_key(), _patched_wizard(), patch("builtins.input", _answer):
+    with _no_anthropic_key(), _patched_wizard(**(wizard_patches or {})), patch("builtins.input", _answer):
         result = runner.invoke(
             main,
             [
@@ -3957,6 +4035,79 @@ def test_wizard_writes_ollama_context_per_feature(runner: CliRunner, tmp_path: P
         8192,
         16384,
     )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("failing_extra", "hyde_enabled", "graph_provider"),
+    [("ollama", True, None), ("hyde", False, "ollama")],
+    ids=["graph-fails-hyde-stays", "hyde-fails-graph-stays"],
+)
+def test_wizard_failed_extra_reverts_only_its_own_sections(
+    runner: CliRunner, tmp_path: Path, failing_extra: str, hyde_enabled: bool, graph_provider: str | None
+) -> None:
+    """FE-3 S71: through the real extras pass, HyDE + RAG Fusion on anthropic (`hyde` extra) and
+    graph on ollama (`ollama` extra) install one extra each; the failed extra reverts only the
+    sections that needed it."""
+    config_path = tmp_path / "archon-search.toml"
+    installed: list[str] = []
+
+    def _fake_install(extra: str, label: str, dry_run: bool = False) -> None:
+        installed.append(extra)
+        if extra == failing_extra:
+            raise InstallError("boom")
+
+    with (
+        patch("archon_search.install.wizard._fetch_ollama_models", return_value=["m1"]),
+        patch("archon_search.install.extras._install_extra", side_effect=_fake_install),
+    ):
+        result = _run_minimal_wizard_interactive(
+            runner,
+            config_path,
+            answers={
+                "Enable AI query expansion (HyDE + RAG Fusion)? [y/n]: ": "y",
+                "Enable LLM-backed graph enrichment? [y/n]: ": "y",
+                "Which provider for graph enrichment? (anthropic/openai/ollama/claude_cli/llama_cpp) [anthropic]: ": "ollama",
+                "Select a model by number [1-1]: ": "1",
+            },
+            wizard_patches={
+                "archon_search.install.installer._install_query_expansion_extras": _install_query_expansion_extras
+            },
+        )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
+    assert installed == ["hyde", "ollama"]
+    doc = _written(config_path)
+    assert doc["hyde"]["enabled"] is hyde_enabled
+    assert doc["rag_fusion"]["enabled"] is hyde_enabled
+    assert doc["graph"].get("provider") == graph_provider
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("graph_answers", [None, "ollama-no-model"], ids=["graph-declined", "model-less"])
+def test_declined_proceed_leaves_graph_keys_of_a_run_that_wrote_none(
+    runner: CliRunner, tmp_path: Path, graph_answers: str | None
+) -> None:
+    """FE-3: a run that left graph enrichment off (declined, or a provider with no model) writes no
+    graph keys, so declining `Proceed?` must not strip the earlier run's working provider."""
+    config_path = tmp_path / "archon-search.toml"
+    config_path.write_text('[graph]\nprovider = "llama_cpp"\nextraction_model = "earlier"\n')
+    answers: dict[str, str | tuple[str, ...]] = {
+        "Existing config has custom values. Overwrite with profile defaults? [y/n]: ": "y",
+        "Proceed? [y/n]: ": "n",
+    }
+    if graph_answers:
+        answers |= {
+            "Enable LLM-backed graph enrichment? [y/n]: ": "y",
+            "Which provider for graph enrichment? (anthropic/openai/ollama/claude_cli/llama_cpp) [anthropic]: ": "ollama",
+        }
+
+    with patch("archon_search.install.wizard._fetch_ollama_models", return_value=[]):
+        result = _run_minimal_wizard_interactive(runner, config_path, answers=answers)
+
+    assert result.exit_code == 1, f"Exit {result.exit_code}:\n{result.output}"
+    graph = _written(config_path)["graph"]
+    assert (graph["provider"], graph["extraction_model"]) == ("llama_cpp", "earlier")
 
 
 @pytest.mark.integration

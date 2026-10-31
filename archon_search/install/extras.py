@@ -1,4 +1,4 @@
-"""Extra-package installers plus the query-expansion flag revert."""
+"""Extra-package installers plus the query-expansion and graph-enrichment flag reverts."""
 from __future__ import annotations
 
 import importlib.metadata
@@ -86,7 +86,7 @@ def _install_extra(extra: str, label: str, dry_run: bool = False) -> None:
         _uv_or_pip_install([package], [], f"Failed to install {package}")
     else:
         _uv_tool_install_extra(receipt_path, extra, package)
-    click.echo(f"{label.capitalize()} installed.")
+    click.echo(f"{label[:1].upper()}{label[1:]} installed.")
 
 
 def _uv_tool_install_extra(receipt_path: Path, extra: str, package: str) -> None:
@@ -296,29 +296,37 @@ def _install_multilingual_extra(dry_run: bool = False) -> None:
     _install_extra("multilingual", "multilingual language detection", dry_run)
 
 
-# Maps a HyDE / RAG Fusion provider to the archon-search extra that supplies its package.
-# 'claude_cli' is absent by design: it has no pip package (availability is the
-# `claude` binary on PATH). [hyde] and [rag_fusion] are byte-identical extras
-# (both pull anthropic>=0.40), so anthropic maps to a single name — this is what
-# lets the dedup below collapse anthropic-backed HyDE + RAG Fusion to one install.
+# Maps a HyDE / RAG Fusion / graph-enrichment provider to the archon-search extra that supplies its package.
+# 'claude_cli' and 'llama_cpp' are absent by design: they have no pip package (claude_cli's availability
+# is the `claude` binary on PATH; llama_cpp speaks plain HTTP). [hyde] and [rag_fusion] are byte-identical
+# extras (both pull anthropic>=2.3), so anthropic maps to a single name — this is what lets the dedup
+# below collapse anthropic-backed HyDE + RAG Fusion + graph to one install.
 _PROVIDER_EXTRA: dict[str, str] = {
     "anthropic": "hyde",
     "openai": "openai-provider",
     "ollama": "ollama",
 }
 
+# Section name -> the label failure and success messages use for it.
+_SECTION_LABELS: dict[str, str] = {
+    "hyde": "AI query expansion",
+    "rag_fusion": "AI query expansion",
+    "graph": "graph enrichment provider",
+}
+
 
 def _install_query_expansion_extras(features: WizardFeatures, dry_run: bool = False) -> list[str]:
-    """Install provider packages for enabled HyDE / RAG Fusion features.
+    """Install provider packages for enabled HyDE / RAG Fusion features and the graph provider.
 
     Resolves each enabled feature's provider to its archon-search extra and
-    installs each unique extra once (so the common case — both features on the
+    installs each unique extra once (so the common case — features sharing the
     default anthropic provider — installs a single extra, while mixed providers
-    install each). ``claude_cli`` needs no package and is skipped. Returns the
-    list of feature SECTIONS (``"hyde"`` / ``"rag_fusion"``) whose provider extra
-    failed to install (empty when all succeeded); never raises, so the caller can
-    revert exactly the flags whose extra failed. When both features share an
-    extra (both on anthropic), a single failure marks BOTH sections failed.
+    install each). ``claude_cli`` and ``llama_cpp`` need no package and are
+    skipped. Returns the list of SECTIONS (``"hyde"`` / ``"rag_fusion"`` /
+    ``"graph"``) whose provider extra failed to install (empty when all
+    succeeded); never raises, so the caller can revert exactly the flags whose
+    extra failed. When sections share an extra, a single failure marks ALL of
+    them failed, and the message names every feature that needed it.
     """
     # Map each enabled section to its provider extra (None = no package, e.g. claude_cli).
     section_extras: list[tuple[str, str | None]] = []
@@ -326,24 +334,28 @@ def _install_query_expansion_extras(features: WizardFeatures, dry_run: bool = Fa
         section_extras.append(("hyde", _PROVIDER_EXTRA.get(features.hyde_provider)))
     if features.enable_rag_fusion:
         section_extras.append(("rag_fusion", _PROVIDER_EXTRA.get(features.rag_fusion_provider)))
+    if features.graph_enrichment_written:
+        section_extras.append(("graph", _PROVIDER_EXTRA.get(features.graph_provider)))
 
-    # Install each distinct extra once.
+    # Install each distinct extra once, labelled by every feature that needs it.
     extras: list[str] = []
     for _section, extra in section_extras:
         if extra and extra not in extras:
             extras.append(extra)
     failed_extras: list[str] = []
     for extra in extras:
+        labels = list(dict.fromkeys(_SECTION_LABELS[s] for s, e in section_extras if e == extra))
+        label = " and ".join(labels)
         try:
-            _install_extra(extra, "AI query expansion", dry_run)
+            _install_extra(extra, label, dry_run)
         except InstallError as exc:
             print(
-                f"Warning: AI query expansion install failed for {TOOL_NAME}[{extra}]: {exc}",
+                f"Warning: {label} install failed for {TOOL_NAME}[{extra}]: {exc}",
                 file=sys.stderr,
             )
             failed_extras.append(extra)
 
-    # Report the sections whose extra failed (a shared failed extra fails both).
+    # Report the sections whose extra failed (a shared failed extra fails all its sections).
     return [section for section, extra in section_extras if extra is not None and extra in failed_extras]
 
 
@@ -388,7 +400,7 @@ def _revert_query_expansion_flags(
 
 
 def _revert_graph_enrichment_flags(config_path: Path, dry_run: bool) -> None:
-    """Strip the LLM-backed graph-enrichment keys the wizard wrote, on abort.
+    """Strip the LLM-backed graph-enrichment keys from ``[graph]``, on abort or a failed provider install.
 
     Mirrors :func:`_revert_query_expansion_flags`, but scoped to ``[graph]``'s
     enrichment fields only. Unlike HyDE/RAG Fusion (which have their own

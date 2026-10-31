@@ -261,6 +261,91 @@ class TestInstallQueryExpansionExtras:
             failed = _install_query_expansion_extras(features, dry_run=False)
         assert set(failed) == {"hyde", "rag_fusion"}
 
+    def test_graph_provider_without_model_installs_nothing(self) -> None:
+        """The writer leaves a model-less graph provider off, so no package is installed for it."""
+        features = WizardFeatures(graph_provider="ollama", graph_extraction_model="")
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
+            assert _install_query_expansion_extras(features, dry_run=False) == []
+        mock_extra.assert_not_called()
+
+    def test_three_features_sharing_one_extra_install_once_with_one_label(self) -> None:
+        features = WizardFeatures(
+            enable_hyde=True, enable_rag_fusion=True, hyde_provider="anthropic",
+            rag_fusion_provider="anthropic", graph_provider="anthropic", graph_extraction_model="m",
+        )
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
+            _install_query_expansion_extras(features, dry_run=False)
+        mock_extra.assert_called_once()
+        assert mock_extra.call_args[0][:2] == ("hyde", "AI query expansion and graph enrichment provider")
+
+    def test_dry_run_with_graph_provider_reports_nothing_failed(self) -> None:
+        features = WizardFeatures(graph_provider="openai", graph_extraction_model="gpt-4o-mini")
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
+            assert _install_query_expansion_extras(features, dry_run=True) == []
+        assert mock_extra.call_args[0][2] is True
+
+    def test_graph_extra_installed_once_with_hyde_dedup(self) -> None:
+        """FE-3 S71: graph on anthropic + HyDE on anthropic share the `hyde` extra → one install;
+        graph on ollama adds the `ollama` extra; llama_cpp / claude_cli / no provider add none."""
+        shared = WizardFeatures(
+            enable_hyde=True, hyde_provider="anthropic",
+            graph_provider="anthropic", graph_extraction_model="claude-haiku-4-5",
+        )
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
+            assert _install_query_expansion_extras(shared, dry_run=False) == []
+        mock_extra.assert_called_once()
+        assert mock_extra.call_args[0][0] == "hyde"
+
+        mixed = WizardFeatures(
+            enable_hyde=True, hyde_provider="anthropic",
+            graph_provider="ollama", graph_extraction_model="qwen2.5:3b",
+        )
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
+            _install_query_expansion_extras(mixed, dry_run=False)
+        assert [c[0][0] for c in mock_extra.call_args_list] == ["hyde", "ollama"]
+
+        graph_only = WizardFeatures(graph_provider="openai", graph_extraction_model="gpt-4o-mini")
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
+            _install_query_expansion_extras(graph_only, dry_run=False)
+        assert [c[0][0] for c in mock_extra.call_args_list] == ["openai-provider"]
+
+        for provider in ("llama_cpp", "claude_cli", ""):
+            with patch("archon_search.install.extras._install_extra") as mock_extra:
+                _install_query_expansion_extras(
+                    WizardFeatures(graph_provider=provider, graph_extraction_model="m"), dry_run=False
+                )
+            mock_extra.assert_not_called()
+
+    def test_failed_graph_install_reverts_graph_flags(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """FE-3 S71: a failed graph extra is reported as the `graph` section, the warning names graph
+        enrichment, and the graph revert (called here directly; the installer wiring is covered by the wizard tests) strips exactly the graph provider keys."""
+        features = WizardFeatures(graph_provider="ollama", graph_extraction_model="qwen2.5:3b")
+        with patch("archon_search.install.extras._install_extra", side_effect=InstallError("boom")):
+            failed = _install_query_expansion_extras(features, dry_run=False)
+        assert failed == ["graph"]
+        err = capsys.readouterr().err
+        assert "graph enrichment provider install failed for archon-search[ollama]: boom" in err
+        assert "AI query expansion" not in err
+
+        cfg = tmp_path / "archon-search.toml"
+        cfg.write_text(
+            '[graph]\nenabled = true\nprovider = "ollama"\nextraction_model = "qwen2.5:3b"\n'
+            'ollama_base_url = "http://h:11434"\nollama_context_tokens = 8192\n'
+        )
+        _revert_graph_enrichment_flags(cfg, dry_run=False)
+        graph = tomlkit.parse(cfg.read_text())["graph"]
+        assert dict(graph) == {"enabled": True}
+
+    def test_shared_extra_failure_label_names_both_features(self, capsys: pytest.CaptureFixture) -> None:
+        features = WizardFeatures(
+            enable_hyde=True, hyde_provider="anthropic",
+            graph_provider="anthropic", graph_extraction_model="m",
+        )
+        with patch("archon_search.install.extras._install_extra", side_effect=InstallError("boom")):
+            failed = _install_query_expansion_extras(features, dry_run=False)
+        assert set(failed) == {"hyde", "graph"}
+        assert "AI query expansion and graph enrichment provider install failed" in capsys.readouterr().err
+
 
 # ---------------------------------------------------------------------------
 # _revert_query_expansion_flags — rollback on failure/abort

@@ -64,6 +64,11 @@ class WizardFeatures:
     graph_ollama_base_url: str = ""           # empty = use config default
     graph_ollama_context_tokens: int | None = None
 
+    @property
+    def graph_enrichment_written(self) -> bool:
+        """True when the writer stores the graph provider: one is chosen and has a model (``claude_cli`` may omit it)."""
+        return bool(self.graph_provider) and (bool(self.graph_extraction_model) or self.graph_provider == "claude_cli")
+
 
 # Tri-state optional keys written by `_apply_wizard_features_to_toml`:
 # (TOML section, TOML key, WizardFeatures field, dotted SearchConfig attribute holding the default).
@@ -400,12 +405,12 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
     # and enrichment stays disabled instead. `claude_cli` is the exception, as
     # for [hyde]/[rag_fusion]: a blank model means Claude Code's own default,
     # so the provider is written and only the key is omitted (config.py fills it).
-    if features.graph_provider and not features.graph_extraction_model and features.graph_provider != "claude_cli":
+    if features.graph_provider and not features.graph_enrichment_written:
         print(
             "Warning: graph enrichment was left disabled because no model was chosen.",
             file=sys.stderr,
         )
-    elif features.graph_provider:
+    elif features.graph_enrichment_written:
         _ensure_section("graph")
         doc["graph"]["provider"] = features.graph_provider
         if features.graph_extraction_model:

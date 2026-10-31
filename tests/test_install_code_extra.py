@@ -141,6 +141,13 @@ class TestInstallExtra:
             cmd = mock_run.call_args_list[0][0][0]
             assert cmd == ["uv", "pip", "install", "--python", sys.executable, "archon-search[hyde]"]
 
+    def test_install_extra_success_message_keeps_acronym_casing(self, pip_prefix, capsys):
+        """The success line only upper-cases the first letter: `AI` must not become `Ai`."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _install_extra("hyde", "AI query expansion")
+        assert "AI query expansion installed." in capsys.readouterr().out
+
     def test_install_extra_falls_back_to_pip_when_uv_absent(self, pip_prefix):
         """FileNotFoundError from uv must trigger pip fallback with correct package."""
         with patch("subprocess.run") as mock_run:

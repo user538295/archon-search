@@ -352,7 +352,7 @@ flowchart LR
         - #unit_test — `test_graph_prompt_offers_claude_cli_with_model_pick` — choosing `claude_cli` runs the presence check and the model prompt
         - #unit_test — `test_graph_claude_cli_writes_provider_and_model` — the writer stores provider and model for graph
         - #integration_test — `test_wizard_graph_claude_cli_leg_end_to_end` — the wizard end-to-end writes a `claude_cli` graph section
-- [ ] **FE-3** — Install the graph provider's extra and revert on failure: extend the extras pass with the graph section (`hyde`, `openai-provider`, `ollama`), gate on `features.graph_provider` in `installer.py`, section-aware failure labels, `_revert_graph_enrichment_flags` on a failed install #frontend-role
+- [x] **FE-3** — Install the graph provider's extra and revert on failure: extend the extras pass with the graph section (`hyde`, `openai-provider`, `ollama`), gate on `features.graph_provider` in `installer.py`, section-aware failure labels, `_revert_graph_enrichment_flags` on a failed install #frontend-role
     - Presentation · 4.0h
     - needs FE-2 · completes S16, S71
     - Tests
