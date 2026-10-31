@@ -365,7 +365,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_graph_prompt_provider_set_equals_registry` — the graph prompt offers exactly the five registered providers
         - #unit_test — `test_graph_extractor_detects_drift` — the extractor fails when a provider is dropped from the prompt
-- [ ] **T-4** — e2e: graph build on `claude_cli` through a fake `claude`, and the provider-down build; manual large prompt on a real login #tester-role
+- [x] **T-4** — e2e: graph build on `claude_cli` through a fake `claude`, and the provider-down build; manual large prompt on a real login #tester-role
     - — · 5.0h
     - needs BE-16, FE-3 · completes S4, S64
     - Tests

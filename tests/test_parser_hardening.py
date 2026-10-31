@@ -24,6 +24,7 @@ from archon_search.parser import (
 _TIMEOUT_S = 0.3
 _WAIT_BOUND_S = 10.0
 _SLOW_WORKER_S = 1.0
+_HANG_BOUND_S = 1.0
 _MIB = 1024 * 1024
 _WORKER_TIMEOUT_MESSAGE = "raised by the worker itself"
 _PARSED_TEXT = "parsed text"
@@ -127,11 +128,12 @@ async def test_a_timed_out_pdf_does_not_wedge_concurrent_ingests(tmp_path: Path,
 
 def test_a_real_worker_process_that_hangs_is_killed_and_replaced(tmp_path: Path) -> None:
     """Real spawned worker: the hung task is abandoned, its process dies, and the next task runs in a fresh one."""
-    parser = DocumentParser(parse_timeout_seconds=1.0)
+    parser = DocumentParser(parse_timeout_seconds=_WAIT_BOUND_S)  # generous while a worker is spawned; tightened for the hang
     document = _pdf(tmp_path)
     try:
         # Warm the pool so the timeout below measures the hung task, not the spawn.
         assert parser._run_in_worker(_echo_worker, document) == f"echo:{document.name}"
+        parser._parse_timeout_seconds = _HANG_BOUND_S
         hung_pool = parser._pool
         assert hung_pool is not None
         workers = list(hung_pool._processes.values())
@@ -144,6 +146,7 @@ def test_a_real_worker_process_that_hangs_is_killed_and_replaced(tmp_path: Path)
         for worker in workers:
             worker.join(timeout=_WAIT_BOUND_S)
             assert not worker.is_alive()
+        parser._parse_timeout_seconds = _WAIT_BOUND_S  # a fresh worker's spawn must not race the short hang bound under load
         assert parser._run_in_worker(_echo_worker, document) == f"echo:{document.name}"
         assert parser._pool is not hung_pool
     finally:
