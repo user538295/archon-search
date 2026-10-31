@@ -344,6 +344,21 @@ class TestRevertQueryExpansionFlags:
         assert doc["rag_fusion"]["enabled"] is False
         assert "llama_cpp_base_url" not in doc["rag_fusion"]
 
+    def test_revert_strips_ollama_context_tokens(self, tmp_path: Path) -> None:
+        """A failed install removes ollama_context_tokens from every reverted section (FE-1, S71)."""
+        cfg = self._write(
+            tmp_path,
+            '[hyde]\nenabled = true\nprovider = "ollama"\nmodel = "x"\nollama_context_tokens = 8192\n'
+            '[rag_fusion]\nenabled = true\nprovider = "ollama"\nmodel = "y"\nollama_context_tokens = 4096\n'
+            '[graph]\nprovider = "ollama"\nextraction_model = "z"\nollama_context_tokens = 16384\n',
+        )
+        _revert_query_expansion_flags(cfg, dry_run=False)
+        _revert_graph_enrichment_flags(cfg, dry_run=False)
+        doc = tomlkit.parse(cfg.read_text())
+        assert "ollama_context_tokens" not in doc["hyde"]
+        assert "ollama_context_tokens" not in doc["rag_fusion"]
+        assert "ollama_context_tokens" not in doc["graph"]
+
 
 class TestRevertGraphEnrichmentFlags:
     """FE-2: _revert_graph_enrichment_flags — strips [graph] enrichment keys on abort (S22)."""

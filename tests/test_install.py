@@ -28,6 +28,7 @@ def _make_search_config(tmp_path: Path) -> object:
     class FakeProviderConfig:
         ollama_base_url: str = "http://localhost:11434"
         llama_cpp_base_url: str = "http://localhost:8080"
+        ollama_context_tokens: int | None = None
 
     @dataclass
     class FakeSearchConfig:
@@ -611,6 +612,9 @@ class TestRun:
         installer.cfg.rag_fusion.llama_cpp_base_url = "http://saved-rag:8080"
         installer.cfg.graph.llama_cpp_base_url = "http://saved-graph:8080"
         installer.cfg.graph.ollama_base_url = "http://saved-graph:11434"
+        installer.cfg.hyde.ollama_context_tokens = 16384
+        installer.cfg.rag_fusion.ollama_context_tokens = 4096
+        installer.cfg.graph.ollama_context_tokens = 12288
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
@@ -642,6 +646,9 @@ class TestRun:
         assert captured["rag_fusion_llama_cpp_base_url_default"] == "http://saved-rag:8080"
         assert captured["graph_llama_cpp_base_url_default"] == "http://saved-graph:8080"
         assert captured["graph_ollama_base_url_default"] == "http://saved-graph:11434"
+        assert captured["hyde_ollama_context_tokens_default"] == 16384
+        assert captured["rag_fusion_ollama_context_tokens_default"] == 4096
+        assert captured["graph_ollama_context_tokens_default"] == 12288
 
     def test_run_prints_apple_gpu_device_when_validation_passes(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """METAL GPU whose models pass on mps: the summary names the Apple GPU as the device."""

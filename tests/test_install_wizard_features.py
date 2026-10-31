@@ -43,9 +43,13 @@ from archon_search.install.extras import (
 from archon_search.install.wizard import (
     _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS,
     _LLAMA_CPP_DEFAULT_PORT,
+    OLLAMA_CONTEXT_SUGGESTION_TOKENS,
+    OllamaContextChoice,
     _gguf_cache_roots,
     _normalise_base_url,
+    _prompt_ollama_context,
     _strip_root_qualifier,
+    _warn_shared_model_contexts,
 )
 from archon_search.platform.types import GpuType
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
@@ -402,7 +406,7 @@ class TestPromptOptionalFeatures:
         """
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3"]),
-            patch("builtins.input", side_effect=["n", "y", "ollama", "", "1"]),
+            patch("builtins.input", side_effect=["n", "y", "ollama", "", "1", ""]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -419,6 +423,7 @@ class TestPromptOptionalFeatures:
             )
         assert features.graph_provider == "ollama"
         assert features.graph_ollama_base_url == "http://saved-graph:11434"
+        assert features.graph_ollama_context_tokens == OLLAMA_CONTEXT_SUGGESTION_TOKENS
 
     def test_interactive_all_yes(self) -> None:
         """All 'y' inputs (and valid choices) produce all-enabled features."""
@@ -1259,11 +1264,12 @@ class TestWizardFeaturesG10:
         """HyDE/RAG Fusion prompt fires without ANTHROPIC_API_KEY; Ollama selected."""
         env_without_key = {k: v for k, v in __import__("os").environ.items() if k != "ANTHROPIC_API_KEY"}
         # New flow — inputs: enable=y, hyde_provider=ollama, hyde_base_url="",
-        #   pick "1" from fetched list; rag_fusion_provider=ollama, base_url="", pick "1".
+        #   pick "1" from fetched list, ""=context window (default); rag_fusion_provider=ollama,
+        #   base_url="", pick "1", ""=context window; "n"=decline graph.
         with (
             patch.dict("os.environ", env_without_key, clear=True),
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]),
-            patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "ollama", "", "1", "", "n"]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1307,11 +1313,11 @@ class TestWizardFeaturesG10:
 
     def test_wizard_ollama_default_base_url_on_empty_input(self) -> None:
         """Empty input for Ollama base URL stores empty string (config uses default)."""
-        # New flow — inputs: enable=y, provider=ollama, base_url="" (default), pick "1".
+        # New flow — inputs: enable=y, provider=ollama, base_url="" (default), pick "1", ""=context window.
         # Same for rag_fusion.
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]),
-            patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "ollama", "", "1", "", "n"]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1382,10 +1388,10 @@ class TestWizardFeaturesG10:
     def test_wizard_picker_invalid_number_then_valid(self) -> None:
         """An out-of-range picker entry re-prompts; a valid number on retry is accepted."""
         # "y"=enable, "ollama"=hyde provider, ""=base url (default), "9"=out of range (retry),
-        # "1"=valid → llama3.2; "ollama"=rag provider, ""=base url, "1"=valid → llama3.2.
+        # "1"=valid → llama3.2, ""=context window; "ollama"=rag provider, ""=base url, "1"=valid, ""=context window.
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2", "mistral"]),
-            patch("builtins.input", side_effect=["y", "ollama", "", "9", "1", "ollama", "", "1", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "9", "1", "", "ollama", "", "1", "", "n"]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1405,11 +1411,11 @@ class TestWizardFeaturesG10:
 
     def test_wizard_rag_fusion_openai_model_retry_on_empty_then_valid(self) -> None:
         """RAG Fusion OpenAI free-text model re-prompts on empty; valid accepted on retry."""
-        # "y"=enable, "ollama"=hyde provider, ""=hyde base url, "1"=pick llama3.2;
+        # "y"=enable, "ollama"=hyde provider, ""=hyde base url, "1"=pick llama3.2, ""=context window;
         # "openai"=rag provider, ""=empty model (retry), "gpt-4o"=valid.
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]),
-            patch("builtins.input", side_effect=["y", "ollama", "", "1", "openai", "", "gpt-4o", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "openai", "", "gpt-4o", "n"]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1868,9 +1874,9 @@ class TestOllamaPickerIntegration:
 
     def test_both_features_pick_independently(self) -> None:
         """HyDE and RAG Fusion each get their own picker; selections are independent."""
-        # enable=y; hyde: ollama, base "", pick "1"; rag: ollama, base "", pick "2"; n=decline graph.
+        # enable=y; hyde: ollama, base "", pick "1", ctx ""; rag: ollama, base "", pick "2", ctx ""; n=decline graph.
         features = self._run(
-            ["y", "ollama", "", "1", "ollama", "", "2", "n"],
+            ["y", "ollama", "", "1", "", "ollama", "", "2", "", "n"],
             fetch_return=["llama3.2", "mistral"],
         )
         assert features.hyde_model == "llama3.2"
@@ -1879,7 +1885,7 @@ class TestOllamaPickerIntegration:
     def test_unreachable_server_falls_back_for_both(self) -> None:
         """Unreachable Ollama → free-text fallback for both features."""
         features = self._run(
-            ["y", "ollama", "", "hmodel", "ollama", "", "rmodel", "n"],
+            ["y", "ollama", "", "hmodel", "", "ollama", "", "rmodel", "", "n"],
             fetch_return=[],
         )
         assert features.hyde_model == "hmodel"
@@ -1889,7 +1895,7 @@ class TestOllamaPickerIntegration:
         """A config-saved base URL pre-fills the prompt; Enter keeps it for both features."""
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch,
-            patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "1", "", "ollama", "", "1", "", "n"]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1910,6 +1916,206 @@ class TestOllamaPickerIntegration:
         assert features.rag_fusion_ollama_base_url == "http://rag-box:11434"
 
 
+class TestOllamaContextWindowPrompt:
+    """FE-1 (S48, S71): the Ollama context window is asked per feature through one helper."""
+
+    _profile = ENGLISH_PROFILES["minimal"]
+
+    def _run(
+        self, inputs: list[str], models: list[str] | None = None, **kwargs
+    ) -> tuple[WizardFeatures, list[str]]:
+        """Run the optional-features flow; return the features and every prompt text asked."""
+        prompts: list[str] = []
+        answers = iter(inputs)
+
+        def _input(prompt: str = "") -> str:
+            prompts.append(prompt)
+            return next(answers)
+
+        with (
+            patch("archon_search.install.wizard._fetch_ollama_models", return_value=models or ["m1"]),
+            patch("builtins.input", _input),
+        ):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+                **kwargs,
+            )
+        return features, prompts
+
+    @staticmethod
+    def _context_prompts(prompts: list[str]) -> list[str]:
+        return [p for p in prompts if "context window" in p.lower()]
+
+    def test_context_prompt_suggests_8192(self) -> None:
+        """With no previous value the question offers 8192, and Enter accepts it for each Ollama feature."""
+        features, prompts = self._run(
+            ["y", "ollama", "", "1", "", "ollama", "", "1", "", "y", "ollama", "", "1", ""]
+        )
+        asked = self._context_prompts(prompts)
+        assert len(asked) == 3
+        assert all("[8192]" in p for p in asked)
+        assert features.hyde_ollama_context_tokens == 8192
+        assert features.rag_fusion_ollama_context_tokens == 8192
+        assert features.graph_ollama_context_tokens == 8192
+
+    def test_context_default_is_previous_value(self) -> None:
+        """A stored value becomes the prompt default, per feature, and Enter keeps it."""
+        features, prompts = self._run(
+            ["y", "ollama", "", "1", "", "ollama", "", "1", "", "n"],
+            hyde_ollama_context_tokens_default=16384,
+            rag_fusion_ollama_context_tokens_default=4096,
+        )
+        asked = self._context_prompts(prompts)
+        assert "[16384]" in asked[0]
+        assert "[4096]" in asked[1]
+        assert features.hyde_ollama_context_tokens == 16384
+        assert features.rag_fusion_ollama_context_tokens == 4096
+
+    def test_typed_value_wins_and_invalid_value_is_reasked(self) -> None:
+        """A typed number is taken; a non-number or zero is refused once, then the default applies."""
+        features, prompts = self._run(
+            ["y", "ollama", "", "1", "12000", "ollama", "", "1", "abc", "0", "n"],
+        )
+        assert features.hyde_ollama_context_tokens == 12000
+        assert features.rag_fusion_ollama_context_tokens == 8192
+        assert len(self._context_prompts(prompts)) == 3
+
+    def test_graph_default_is_its_own_stored_value(self) -> None:
+        """The graph question defaults to the graph's stored window, not HyDE's or RAG Fusion's."""
+        features, prompts = self._run(
+            ["y", "anthropic", "anthropic", "y", "ollama", "", "1", ""],
+            hyde_ollama_context_tokens_default=16384,
+            rag_fusion_ollama_context_tokens_default=4096,
+            graph_ollama_context_tokens_default=12288,
+        )
+        asked = self._context_prompts(prompts)
+        assert len(asked) == 1
+        assert "graph enrichment" in asked[0]
+        assert "[12288]" in asked[0]
+        assert features.graph_ollama_context_tokens == 12288
+
+    @pytest.mark.parametrize(
+        ("typed", "expected"),
+        [
+            (["-5", "12000"], 12000),
+            (["4.5", "7"], 7),
+            (["²", "9"], 9),
+            (["9" * 5000, "5"], 5),
+            (["abc", "0"], OLLAMA_CONTEXT_SUGGESTION_TOKENS),
+            ([""], OLLAMA_CONTEXT_SUGGESTION_TOKENS),
+            (["  16000  "], 16000),
+        ],
+        ids=["negative-then-valid", "decimal-then-valid", "superscript-then-valid", "huge-then-valid",
+             "two-invalid-keeps-default", "enter-keeps-default", "whitespace-trimmed"],
+    )
+    def test_prompt_parses_the_answer(self, typed: list[str], expected: int) -> None:
+        """A refused answer is asked once more; the second answer or the default decides."""
+        with patch("builtins.input", side_effect=typed):
+            assert _prompt_ollama_context("HyDE", None) == expected
+
+    def test_prompt_closed_stdin_keeps_default(self) -> None:
+        with patch("builtins.input", side_effect=EOFError):
+            assert _prompt_ollama_context("HyDE", 12288) == 12288
+
+    def test_context_not_asked_for_other_providers(self) -> None:
+        """Only a feature whose provider is ollama is asked; the others keep None."""
+        features, prompts = self._run(["y", "anthropic", "anthropic", "n"])
+        assert self._context_prompts(prompts) == []
+        assert features.hyde_ollama_context_tokens is None
+        assert features.rag_fusion_ollama_context_tokens is None
+        assert features.graph_ollama_context_tokens is None
+
+    def test_shared_model_with_different_context_warns(self, capsys: pytest.CaptureFixture) -> None:
+        """Two Ollama features on one model and server with different values print the reload warning."""
+        self._run(["y", "ollama", "", "1", "4096", "ollama", "", "1", "8192", "n"])
+        out = capsys.readouterr().out
+        assert "HyDE 4096" in out
+        assert "RAG Fusion 8192" in out
+        assert "Ollama model m1 at http://localhost:11434" in out
+        assert out.lower().count("reloads the model") == 1
+
+    @pytest.mark.parametrize(
+        ("second_answer", "second_models"),
+        [("4096", ["m1"]), ("8192", ["m2"])],
+        ids=["same-value-same-model", "different-model"],
+    )
+    def test_no_warning_when_value_or_model_differs_appropriately(
+        self, capsys: pytest.CaptureFixture, second_answer: str, second_models: list[str]
+    ) -> None:
+        """Equal values on one model, or different models, print no reload warning."""
+        answers = iter(["y", "ollama", "", "1", "4096", "ollama", "", "1", second_answer, "n"])
+        fetches = iter([["m1"], second_models])
+        with (
+            patch("archon_search.install.wizard._fetch_ollama_models", side_effect=lambda _url: next(fetches)),
+            patch("builtins.input", lambda _prompt="": next(answers)),
+        ):
+            _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
+        assert "reload" not in capsys.readouterr().out.lower()
+
+    @staticmethod
+    def _warning(choices: list[OllamaContextChoice], capsys: pytest.CaptureFixture) -> str:
+        _warn_shared_model_contexts(choices)
+        return capsys.readouterr().out
+
+    def test_warning_names_a_graph_only_mismatch(self, capsys: pytest.CaptureFixture) -> None:
+        """HyDE and RAG Fusion agree; graph enrichment on the same model differs, so graph is named."""
+        out = self._warning(
+            [
+                OllamaContextChoice("HyDE", "", "m1", 8192),
+                OllamaContextChoice("RAG Fusion", "", "m1", 8192),
+                OllamaContextChoice("graph enrichment", "", "m1", 16384),
+            ],
+            capsys,
+        )
+        assert "HyDE 8192, RAG Fusion 8192, graph enrichment 16384" in out
+
+    def test_same_model_on_different_servers_does_not_warn(self, capsys: pytest.CaptureFixture) -> None:
+        out = self._warning(
+            [
+                OllamaContextChoice("HyDE", "http://box-a:11434", "m1", 4096),
+                OllamaContextChoice("RAG Fusion", "http://box-b:11434", "m1", 8192),
+            ],
+            capsys,
+        )
+        assert out == ""
+
+    def test_default_address_spellings_are_one_server(self, capsys: pytest.CaptureFixture) -> None:
+        """"" (built-in default) and the scheme-less default address are the same server."""
+        out = self._warning(
+            [
+                OllamaContextChoice("HyDE", "", "m1", 4096),
+                OllamaContextChoice("RAG Fusion", "localhost:11434", "m1", 8192),
+            ],
+            capsys,
+        )
+        assert "HyDE 4096, RAG Fusion 8192" in out
+
+    def test_empty_model_never_warns(self, capsys: pytest.CaptureFixture) -> None:
+        """A skipped model pick (EOF) leaves no model to share."""
+        out = self._warning(
+            [OllamaContextChoice("HyDE", "", "", 4096), OllamaContextChoice("RAG Fusion", "", "", 8192)], capsys
+        )
+        assert out == ""
+
+
 class TestOllamaPickerE2E:
     """End-to-end: wizard prompt → TOML → loaded SearchConfig."""
 
@@ -1919,7 +2125,7 @@ class TestOllamaPickerE2E:
         """A model picked in the wizard reaches a real SearchConfig via the written TOML."""
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2", "mistral"]),
-            patch("builtins.input", side_effect=["y", "ollama", "", "2", "ollama", "", "1", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "2", "", "ollama", "", "1", "", "n"]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1950,7 +2156,7 @@ class TestOllamaPickerE2E:
         """A custom base URL typed in the wizard reaches the loaded SearchConfig."""
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]),
-            patch("builtins.input", side_effect=["y", "ollama", "http://box:11434", "1", "anthropic", "n"]),
+            patch("builtins.input", side_effect=["y", "ollama", "http://box:11434", "1", "", "anthropic", "n"]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -1979,7 +2185,7 @@ class TestOllamaPickerE2E:
         # enable=y; hyde=anthropic (no ollama prompt); rag=ollama, custom URL, pick "1".
         with (
             patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]),
-            patch("builtins.input", side_effect=["y", "anthropic", "ollama", "http://rag:11434", "1", "n"]),
+            patch("builtins.input", side_effect=["y", "anthropic", "ollama", "http://rag:11434", "1", "", "n"]),
         ):
             features = _prompt_optional_features(
                 non_interactive=False,

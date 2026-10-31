@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import NamedTuple, TypeVar
 
 import click
 
@@ -214,6 +214,68 @@ def _prompt_ollama_model(feature_label: str, default_base_url: str) -> tuple[str
         f"  Falling back to manual model-name entry."
     )
     return stored, _prompt_model_freetext(feature_label)
+
+
+# The window the wizard suggests when no value is stored yet (the server assumes 4096 when none
+# is configured).
+OLLAMA_CONTEXT_SUGGESTION_TOKENS = 8192
+
+
+def _prompt_ollama_context(feature_label: str, previous: int | None) -> int:
+    """Ask the Ollama context window (tokens) for *feature_label*; shared by every Ollama feature.
+
+    The default is *previous* (the value already stored in config) or, with none stored,
+    ``OLLAMA_CONTEXT_SUGGESTION_TOKENS``. Enter and a closed stdin accept it; a non-number or a
+    value below 1 is refused once, then the default applies.
+    """
+    default = previous if previous is not None else OLLAMA_CONTEXT_SUGGESTION_TOKENS
+    for attempt in range(2):
+        try:
+            raw = input(f"Ollama context window for {feature_label} (tokens) [{default}]: ").strip()
+        except EOFError:
+            return default
+        if not raw:
+            return default
+        with contextlib.suppress(ValueError):  # not a number, or too many digits for int()
+            tokens = int(raw)
+            if tokens >= 1:
+                return tokens
+        if attempt == 0:
+            print("  Enter a whole number of tokens, at least 1.")
+    return default
+
+
+class OllamaContextChoice(NamedTuple):
+    """One feature's answer: where its Ollama model runs and the window it asked for."""
+
+    feature_label: str
+    ollama_base_url: str  # "" = the built-in default address
+    model: str
+    context_tokens: int
+
+
+def _warn_shared_model_contexts(choices: list[OllamaContextChoice]) -> None:
+    """Warn once per Ollama model that features share with different context windows (S48).
+
+    Ollama reloads a model whenever a request changes its ``num_ctx``, so features that alternate
+    on one model with different windows pay a reload on every switch.
+    """
+    by_model: dict[tuple[str, str], list[OllamaContextChoice]] = {}
+    for choice in choices:
+        if not choice.model:
+            continue
+        url = _normalise_base_url(choice.ollama_base_url or OLLAMA_BASE_URL_DEFAULT, _OLLAMA_DEFAULT_PORT)
+        by_model.setdefault((url, choice.model), []).append(choice)
+    for (url, model), sharing in by_model.items():
+        if len({choice.context_tokens for choice in sharing}) < 2:
+            continue
+        windows = ", ".join(f"{choice.feature_label} {choice.context_tokens}" for choice in sharing)
+        print(
+            f"\nWarning: these features share the Ollama model {model} at {url} but use different "
+            f"context windows ({windows}).\n"
+            f"  Ollama reloads the model whenever the window changes, so alternating requests reload it\n"
+            f"  each time. Use one value for all of them to avoid the reloads."
+        )
 
 
 _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS = 5
@@ -627,6 +689,9 @@ def _prompt_optional_features(
     hyde_llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
     rag_fusion_llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
     graph_llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
+    hyde_ollama_context_tokens_default: int | None = None,
+    rag_fusion_ollama_context_tokens_default: int | None = None,
+    graph_ollama_context_tokens_default: int | None = None,
 ) -> WizardFeatures:
     """Ask the optional-feature questions after profile selection.
 
@@ -638,6 +703,9 @@ def _prompt_optional_features(
     ``*_llama_cpp_base_url_default`` values pre-fill the Ollama / llama-server
     base-URL prompts so a re-run keeps the address already saved in config with
     a single Enter.
+
+    The ``*_ollama_context_tokens_default`` values are the windows already saved in config; each
+    becomes the default of that Ollama feature's context-window question (8192 when none is saved).
     """
 
     def _ask_yn(prompt_text: str, default: bool = False) -> bool:
@@ -799,6 +867,9 @@ def _prompt_optional_features(
     _graph_extraction_model_val = ""
     _graph_ollama_base_url_val = ""
     _graph_llama_cpp_base_url_val = ""
+    _hyde_ollama_context_val: int | None = None
+    _rag_fusion_ollama_context_val: int | None = None
+    _graph_ollama_context_val: int | None = None
 
     # A pre-answered flag answers only its own feature; the other stays None (never
     # answered), as do both when nobody can be asked — the config writer then leaves
@@ -832,6 +903,8 @@ def _prompt_optional_features(
                 _hyde_ollama_base_url_val,
                 _hyde_llama_cpp_base_url_val,
             ) = _prompt_provider("HyDE", _ask_choice, hyde_ollama_base_url_default, hyde_llama_cpp_base_url_default)
+            if _hyde_provider_val == "ollama":
+                _hyde_ollama_context_val = _prompt_ollama_context("HyDE", hyde_ollama_context_tokens_default)
 
             # Provider selection for RAG Fusion (same flow, independent picker).
             (
@@ -842,6 +915,10 @@ def _prompt_optional_features(
             ) = _prompt_provider(
                 "RAG Fusion", _ask_choice, rag_fusion_ollama_base_url_default, rag_fusion_llama_cpp_base_url_default
             )
+            if _rag_fusion_provider_val == "ollama":
+                _rag_fusion_ollama_context_val = _prompt_ollama_context(
+                    "RAG Fusion", rag_fusion_ollama_context_tokens_default
+                )
         else:
             _enable_hyde_val = False
             _enable_rag_fusion_val = False
@@ -857,6 +934,20 @@ def _prompt_optional_features(
         ) = _prompt_graph_provider(
             _ask_yn, _ask_choice, graph_ollama_base_url_default, graph_llama_cpp_base_url_default
         )
+        if _graph_provider_val == "ollama":
+            _graph_ollama_context_val = _prompt_ollama_context("graph enrichment", graph_ollama_context_tokens_default)
+
+    _warn_shared_model_contexts(
+        [
+            OllamaContextChoice(label, base_url, model, context)
+            for label, base_url, model, context in (
+                ("HyDE", _hyde_ollama_base_url_val, _hyde_model_val, _hyde_ollama_context_val),
+                ("RAG Fusion", _rag_fusion_ollama_base_url_val, _rag_fusion_model_val, _rag_fusion_ollama_context_val),
+                ("graph enrichment", _graph_ollama_base_url_val, _graph_extraction_model_val, _graph_ollama_context_val),
+            )
+            if context is not None
+        ]
+    )
 
     return WizardFeatures(
         install_code_extra=_install_code_extra_val,
@@ -873,14 +964,17 @@ def _prompt_optional_features(
         hyde_model=_hyde_model_val,
         hyde_ollama_base_url=_hyde_ollama_base_url_val,
         hyde_llama_cpp_base_url=_hyde_llama_cpp_base_url_val,
+        hyde_ollama_context_tokens=_hyde_ollama_context_val,
         rag_fusion_provider=_rag_fusion_provider_val,
         rag_fusion_model=_rag_fusion_model_val,
         rag_fusion_ollama_base_url=_rag_fusion_ollama_base_url_val,
         rag_fusion_llama_cpp_base_url=_rag_fusion_llama_cpp_base_url_val,
+        rag_fusion_ollama_context_tokens=_rag_fusion_ollama_context_val,
         graph_provider=_graph_provider_val,
         graph_extraction_model=_graph_extraction_model_val,
         graph_ollama_base_url=_graph_ollama_base_url_val,
         graph_llama_cpp_base_url=_graph_llama_cpp_base_url_val,
+        graph_ollama_context_tokens=_graph_ollama_context_val,
     )
 
 

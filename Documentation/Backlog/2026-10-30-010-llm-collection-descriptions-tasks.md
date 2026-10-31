@@ -275,7 +275,7 @@ flowchart LR
         - #unit_test — `test_hyde_logs_one_warning_per_process_without_query_text` — many failures log one WARNING and no line holds the query or hypothesis
         - #integration_test — `test_hyde_search_through_shared_client_over_http` — `test_http_hyde_rag_fusion.py` HyDE path returns the hypothetical document as before
         - #integration_test — `test_hyde_per_collection_embedder_with_shared_client` — the per-collection embedder test runs on the new composition
-- [ ] **FE-1** — Ask the Ollama context window per feature in the wizard (HyDE, RAG Fusion, graph): suggest 8192, offer the previous value, warn when two features share a model with different values; `WizardFeatures` fields, `config_writer` reconcile, installer defaults, revert strips the key #frontend-role
+- [x] **FE-1** — Ask the Ollama context window per feature in the wizard (HyDE, RAG Fusion, graph): suggest 8192, offer the previous value, warn when two features share a model with different values; `WizardFeatures` fields, `config_writer` reconcile, installer defaults, revert strips the key #frontend-role
     - Presentation · 6.0h
     - needs BE-1 · completes S48, S71
     - Tests

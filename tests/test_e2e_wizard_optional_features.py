@@ -3889,6 +3889,45 @@ def test_interactive_no_to_query_expansion_writes_both_disabled(
 
 
 @pytest.mark.integration
+def test_wizard_writes_ollama_context_per_feature(runner: CliRunner, tmp_path: Path) -> None:
+    """FE-1 (S48, S71): HyDE, RAG Fusion and graph on Ollama each get their own context window,
+    written into their own section; a model shared with different values warns about the reload."""
+    config_path = tmp_path / "archon-search.toml"
+    provider_prompt = "Which provider for {}? (anthropic/openai/ollama/claude_cli/llama_cpp) [anthropic]: "
+    context_prompt = "Ollama context window for {} (tokens) [8192]: "
+
+    with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["m1"]):
+        result = _run_minimal_wizard_interactive(
+            runner,
+            config_path,
+            answers={
+                "Enable AI query expansion (HyDE + RAG Fusion)? [y/n]: ": "y",
+                provider_prompt.format("HyDE"): "ollama",
+                provider_prompt.format("RAG Fusion"): "ollama",
+                "Enable LLM-backed graph enrichment? [y/n]: ": "y",
+                "Which provider for graph enrichment? (anthropic/openai/ollama/llama_cpp) [anthropic]: ": "ollama",
+                "Select a model by number [1-1]: ": ("1", "1", "1"),
+                context_prompt.format("HyDE"): "4096",
+                context_prompt.format("RAG Fusion"): "",
+                context_prompt.format("graph enrichment"): "16384",
+            },
+        )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
+    doc = _written(config_path)
+    assert doc["hyde"]["ollama_context_tokens"] == 4096
+    assert doc["rag_fusion"]["ollama_context_tokens"] == 8192
+    assert doc["graph"]["ollama_context_tokens"] == 16384
+    assert "reload" in result.output.lower()
+    cfg = load_config(config_path)
+    assert (cfg.hyde.ollama_context_tokens, cfg.rag_fusion.ollama_context_tokens, cfg.graph.ollama_context_tokens) == (
+        4096,
+        8192,
+        16384,
+    )
+
+
+@pytest.mark.integration
 def test_fresh_non_interactive_install_writes_no_telemetry_table(
     runner: CliRunner, tmp_path: Path
 ) -> None:

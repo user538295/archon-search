@@ -678,6 +678,44 @@ class TestApplyWizardFeaturesFE2LlamaCppAndGraph:
         _apply_wizard_features_to_toml(doc, features)
         assert "ollama_base_url" not in doc["graph"]
 
+    @pytest.mark.parametrize(
+        ("section", "provider_field", "model_field", "context_field"),
+        [
+            ("hyde", "hyde_provider", "hyde_model", "hyde_ollama_context_tokens"),
+            ("rag_fusion", "rag_fusion_provider", "rag_fusion_model", "rag_fusion_ollama_context_tokens"),
+            ("graph", "graph_provider", "graph_extraction_model", "graph_ollama_context_tokens"),
+        ],
+    )
+    def test_ollama_context_tokens_written_then_cleared_per_section(
+        self, section: str, provider_field: str, model_field: str, context_field: str
+    ) -> None:
+        """FE-1: a chosen window lands in its own section; a re-run answering None drops the stale key."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        base: dict[str, object] = {provider_field: "ollama", model_field: "m1"}
+        if section != "graph":
+            base[f"enable_{section}"] = True
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(**base, **{context_field: 12288}))
+        assert doc[section]["ollama_context_tokens"] == 12288
+        _apply_wizard_features_to_toml(doc, WizardFeatures(**base))
+        assert "ollama_context_tokens" not in doc[section]
+
+    @pytest.mark.parametrize("provider", ["openai", "llama_cpp", "anthropic", "claude_cli"])
+    def test_ollama_context_tokens_not_written_for_other_providers(self, provider: str) -> None:
+        """The window only means something to Ollama: any other provider writes no key."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        features = WizardFeatures(
+            enable_hyde=True,
+            hyde_provider=provider,
+            hyde_model="m1",
+            hyde_ollama_context_tokens=8192,
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert "ollama_context_tokens" not in doc["hyde"]
+
     def test_graph_provider_empty_writes_nothing(self) -> None:
         """graph_provider='' (declined enrichment) writes no [graph] section at all."""
         from archon_search.install import _apply_wizard_features_to_toml

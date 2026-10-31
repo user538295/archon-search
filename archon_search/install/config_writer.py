@@ -51,15 +51,18 @@ class WizardFeatures:
     hyde_model: str = ""                      # empty = use provider default
     hyde_ollama_base_url: str = ""            # empty = use config default
     hyde_llama_cpp_base_url: str = ""         # empty = use config default
+    hyde_ollama_context_tokens: int | None = None  # None = unset (key removed); only written for provider "ollama"
     rag_fusion_provider: str = "anthropic"
     rag_fusion_model: str = ""
     rag_fusion_ollama_base_url: str = ""
     rag_fusion_llama_cpp_base_url: str = ""
+    rag_fusion_ollama_context_tokens: int | None = None
     # FE-2: [graph] LLM-backed enrichment provider (independent of install_graph_extra/graph.enabled)
     graph_provider: str = ""                  # "" = enrichment disabled (GraphConfig.provider stays None)
     graph_extraction_model: str = ""
     graph_llama_cpp_base_url: str = ""        # empty = use config default
     graph_ollama_base_url: str = ""           # empty = use config default
+    graph_ollama_context_tokens: int | None = None
 
 
 # Tri-state optional keys written by `_apply_wizard_features_to_toml`:
@@ -227,6 +230,18 @@ def _reconcile_llama_cpp_base_url(section: tomlkit.items.Table, base_url: str) -
         del section["llama_cpp_base_url"]
 
 
+def _reconcile_ollama_context_tokens(section: tomlkit.items.Table, context_tokens: int | None) -> None:
+    """Set or clear ``ollama_context_tokens`` on a config *section* table.
+
+    Authoritative like :func:`_reconcile_ollama_base_url`: a re-run that no longer
+    answers a window (``None``) must not leave the previous run's value behind.
+    """
+    if context_tokens is not None:
+        section["ollama_context_tokens"] = context_tokens
+    elif "ollama_context_tokens" in section:
+        del section["ollama_context_tokens"]
+
+
 def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None:
     """Write WizardFeatures fields to *doc* in-place.
 
@@ -284,6 +299,7 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         model: str,
         ollama_base_url: str,
         llama_cpp_base_url: str,
+        ollama_context_tokens: int | None,
     ) -> None:
         """Write one C15 Tier 2 query-expansion table (``[hyde]`` or ``[rag_fusion]``).
 
@@ -313,6 +329,7 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         table["model"] = model
         if provider == "ollama":
             _reconcile_ollama_base_url(table, ollama_base_url)
+            _reconcile_ollama_context_tokens(table, ollama_context_tokens)
         elif provider == "llama_cpp":
             _reconcile_llama_cpp_base_url(table, llama_cpp_base_url)
 
@@ -362,6 +379,7 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         features.hyde_model,
         features.hyde_ollama_base_url,
         features.hyde_llama_cpp_base_url,
+        features.hyde_ollama_context_tokens,
     )
     _apply_query_expansion(
         "rag_fusion",
@@ -370,6 +388,7 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         features.rag_fusion_model,
         features.rag_fusion_ollama_base_url,
         features.rag_fusion_llama_cpp_base_url,
+        features.rag_fusion_ollama_context_tokens,
     )
 
     # FE-2: LLM-backed graph enrichment provider — independent of graph.enabled
@@ -392,6 +411,7 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
             _reconcile_llama_cpp_base_url(doc["graph"], features.graph_llama_cpp_base_url)
         elif features.graph_provider == "ollama":
             _reconcile_ollama_base_url(doc["graph"], features.graph_ollama_base_url)
+            _reconcile_ollama_context_tokens(doc["graph"], features.graph_ollama_context_tokens)
 
     # BE-11: [graph] enabled must be written whenever the [graph] extras were
     # auto-installed, or the install is inert — see C1-I-1 / C1-A-4.

@@ -354,7 +354,8 @@ def _revert_query_expansion_flags(
     the wizard wrote, so no startup guard fires post-rollback.
 
     Mirrors :func:`_revert_graph_enabled_flag`. ``run()`` writes ``enabled=true``
-    (and, for non-anthropic providers, ``provider``/``model``/``ollama_base_url``)
+    (and, for non-anthropic providers, ``provider``/``model``/``ollama_base_url``/
+    ``llama_cpp_base_url``/``ollama_context_tokens``)
     early — before the provider package is installed. If a later step aborts or an
     install fails, leaving those keys on disk would hard-fail the next server start
     via app.py's ``_check_provider_deps``: the anthropic guard is enabled-gated, but
@@ -369,7 +370,7 @@ def _revert_query_expansion_flags(
     for section in sections:
         if section in doc and doc[section].get("enabled"):
             doc[section]["enabled"] = False
-            for key in ("provider", "model", "ollama_base_url", "llama_cpp_base_url"):
+            for key in ("provider", "model", "ollama_base_url", "llama_cpp_base_url", "ollama_context_tokens"):
                 if key in doc[section]:
                     del doc[section][key]
             changed = True
@@ -393,7 +394,7 @@ def _revert_graph_enrichment_flags(config_path: Path, dry_run: bool) -> None:
     enrichment fields only. Unlike HyDE/RAG Fusion (which have their own
     ``enabled`` gate), ``[graph].provider`` IS the enrichment gate — this only
     strips ``provider``/``extraction_model``/``llama_cpp_base_url``/
-    ``ollama_base_url``, and deliberately does NOT touch ``graph.enabled``,
+    ``ollama_base_url``/``ollama_context_tokens``, and deliberately does NOT touch ``graph.enabled``,
     which independently gates the graph subsystem itself (entity extraction,
     PPR, communities) via
     :func:`archon_search.install.config_writer._revert_graph_enabled_flag`.
@@ -404,7 +405,7 @@ def _revert_graph_enrichment_flags(config_path: Path, dry_run: bool) -> None:
     if "graph" not in doc:
         return
     changed = False
-    for key in ("provider", "extraction_model", "llama_cpp_base_url", "ollama_base_url"):
+    for key in ("provider", "extraction_model", "llama_cpp_base_url", "ollama_base_url", "ollama_context_tokens"):
         if key in doc["graph"]:
             del doc["graph"][key]
             changed = True
