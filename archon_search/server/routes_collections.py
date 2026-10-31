@@ -18,7 +18,7 @@ from archon_search._path_safety import (
     unsafe_path_detail,
     validate_ingest_source,
 )
-from archon_search.collection_meta import CollectionMeta
+from archon_search.collection_meta import CollectionMeta, visible_description_status
 from archon_search.config import SearchConfig, resolve_active_model, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
@@ -309,6 +309,7 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
     state_store = request.app.state.state_store
     search_store = request.app.state.search_store
     ns: str = request.state.namespace
+    description_lifecycle = getattr(request.app.state, "description_lifecycle", None)
 
     all_meta = await search_store.get_all_collections_meta()
     ns_names = {m.name for m in all_meta if m.namespace == ns}
@@ -357,6 +358,10 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
             status=status,
             active_embedding_model=resolve_active_model(col_meta, config),
             needs_reindex=col_meta.needs_reindex if col_meta is not None else False,
+            description_source=col_meta.description_source if col_meta is not None else None,
+            description_status=(
+                visible_description_status(col_meta, description_lifecycle) if col_meta is not None else None
+            ),
         ))
 
     return result
@@ -699,11 +704,76 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
     return DeleteResponse(name=name, deleted=True)
 
 
+async def _build_collection_detail(
+    request: Request, name: str, meta: CollectionMeta | None, resolved: str
+) -> CollectionDetail:
+    """The one ``CollectionDetail`` builder: GET /collections/{name} and the PATCH response share it.
+
+    *meta* is ``None`` for a configured collection that has no meta row yet (and when the store is absent); every
+    count is best-effort and falls back to 0. ``description_status`` carries the lifecycle's ``pending`` overlay while a
+    generation is in flight and the stored status otherwise (C6).
+    """
+    config: SearchConfig = request.app.state.config
+    state_store = request.app.state.state_store
+    ns: str = request.state.namespace
+    search_store = getattr(request.app.state, "search_store", None)
+    description_lifecycle = getattr(request.app.state, "description_lifecycle", None)
+
+    # Pull extra detail from state if available
+    last_indexed: str | None = None
+    try:
+        state = state_store.read()
+        if state and name in state.collections:
+            cp = state.collections[name]
+            last_indexed = getattr(cp, "completed_at", None)
+    except Exception:  # noqa: BLE001, S110 — last_indexed is best-effort detail; any state-store read failure leaves it None
+        pass
+
+    doc_count = 0
+    chunk_count = 0
+    acl_protected = 0
+    acl_open = 0
+    if search_store is not None:
+        try:
+            doc_count = await search_store.count_documents(name)
+        except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
+            doc_count = 0
+        try:
+            chunk_count = await search_store.count_chunks(name, namespace=ns)
+        except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
+            chunk_count = 0
+        try:
+            acl_protected, acl_open = await search_store.get_acl_stats(name)
+        except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
+            acl_protected, acl_open = 0, 0
+
+    return CollectionDetail(
+        name=name,
+        path=resolved,
+        description=(meta.description or "") if meta is not None else "",
+        description_source=meta.description_source if meta is not None else None,
+        description_status=visible_description_status(meta, description_lifecycle) if meta is not None else None,
+        doc_count=doc_count,
+        chunk_count=chunk_count,
+        status=_collection_status(config, state_store, name),
+        active_embedding_model=resolve_active_model(meta, config),
+        pending_embedding_model=meta.pending_embedding_model if meta is not None else None,
+        needs_reindex=meta.needs_reindex if meta is not None else False,
+        reindex_job_id=meta.reindex_job_id if meta is not None else None,
+        centroid_present=bool(meta is not None and meta.centroid),
+        last_indexed=last_indexed,
+        namespace=meta.namespace if meta is not None else DEFAULT_NAMESPACE,
+        acl_protected_count=acl_protected,
+        acl_open_count=acl_open,
+        default_ttl_seconds=meta.default_ttl_seconds if meta is not None else None,
+        schema_version=meta.schema_version if meta is not None else 0,
+    )
+
+
 @router.get("/{name}", response_model=CollectionDetail, responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}})
 async def get_collection_info(name: str, request: Request) -> CollectionDetail:
     """Return CollectionDetail for a single collection. 404 if not found."""
     config: SearchConfig = request.app.state.config
-    state_store = request.app.state.state_store
     ns: str = request.state.namespace
 
     path_to_name = _all_collection_paths(config)
@@ -719,59 +789,7 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
     elif name not in path_to_name:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
-    resolved = path_to_name.get(name, "")
-    status = _collection_status(config, state_store, name)
-
-    # Pull extra detail from state if available
-    last_indexed: str | None = None
-    try:
-        state = state_store.read()
-        if state and name in state.collections:
-            cp = state.collections[name]
-            last_indexed = getattr(cp, "completed_at", None)
-    except Exception:  # noqa: BLE001, S110 — last_indexed is best-effort detail; any state-store read failure leaves it None
-        pass
-
-    # Fetch real doc_count and ACL stats from search store; reuse already-fetched meta for centroid.
-    doc_count = 0
-    centroid_present = bool(meta is not None and meta.centroid)
-    acl_protected = 0
-    acl_open = 0
-    chunk_count = 0
-    if search_store is not None:
-        try:
-            doc_count = await search_store.count_documents(name)
-        except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
-            doc_count = 0
-        try:
-            chunk_count = await search_store.count_chunks(name, namespace=ns)
-        except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
-            chunk_count = 0
-        try:
-            acl_protected, acl_open = await search_store.get_acl_stats(name)
-        except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
-            acl_protected, acl_open = 0, 0
-
-    data = {
-        "name": name,
-        "path": resolved,
-        "description": (meta.description or "") if meta is not None else "",
-        "doc_count": doc_count,
-        "chunk_count": chunk_count,
-        "status": status,
-        "active_embedding_model": resolve_active_model(meta, config),
-        "pending_embedding_model": meta.pending_embedding_model if meta is not None else None,
-        "needs_reindex": meta.needs_reindex if meta is not None else False,
-        "reindex_job_id": meta.reindex_job_id if meta is not None else None,
-        "centroid_present": centroid_present,
-        "last_indexed": last_indexed,
-        "namespace": meta.namespace if meta is not None else DEFAULT_NAMESPACE,
-        "acl_protected_count": acl_protected,
-        "acl_open_count": acl_open,
-        "default_ttl_seconds": meta.default_ttl_seconds if meta is not None else None,
-        "schema_version": meta.schema_version if meta is not None else 0,
-    }
-    return CollectionDetail(**data)
+    return await _build_collection_detail(request, name, meta, path_to_name.get(name, ""))
 
 
 @router.get("/{name}/documents", response_model=DocumentListResponse, responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 422: {"model": ErrorDetail}})
@@ -971,57 +989,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
     except StoreBusyError:
         return store_busy_503(STORE_BUSY_DETAIL)
 
-    # Build CollectionDetail response
-    state_store = request.app.state.state_store
-    resolved = path_to_name[name]
-    status = _collection_status(config, state_store, name)
-
-    last_indexed: str | None = None
-    try:
-        state = state_store.read()
-        if state and name in state.collections:
-            cp = state.collections[name]
-            last_indexed = getattr(cp, "completed_at", None)
-    except Exception:  # noqa: BLE001, S110 — last_indexed is best-effort detail; any state-store read failure leaves it None
-        pass
-
-    doc_count = 0
-    chunk_count = 0
-    centroid_present = bool(meta.centroid)
-    acl_protected = 0
-    acl_open = 0
-    try:
-        doc_count = await search_store.count_documents(name)
-    except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
-        doc_count = 0
-    try:
-        chunk_count = await search_store.count_chunks(name, namespace=ns)
-    except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
-        chunk_count = 0
-    try:
-        acl_protected, acl_open = await search_store.get_acl_stats(name)
-    except Exception:  # noqa: BLE001 — stat is best-effort detail data; any store failure falls back to 0
-        acl_protected, acl_open = 0, 0
-
-    return CollectionDetail(
-        name=name,
-        path=resolved,
-        description=meta.description or "",
-        doc_count=doc_count,
-        chunk_count=chunk_count,
-        status=status,
-        active_embedding_model=resolve_active_model(meta, config),
-        pending_embedding_model=meta.pending_embedding_model,
-        needs_reindex=meta.needs_reindex,
-        reindex_job_id=meta.reindex_job_id,
-        centroid_present=centroid_present,
-        last_indexed=last_indexed,
-        namespace=meta.namespace,
-        acl_protected_count=acl_protected,
-        acl_open_count=acl_open,
-        default_ttl_seconds=meta.default_ttl_seconds,
-        schema_version=meta.schema_version,
-    )
+    return await _build_collection_detail(request, name, meta, path_to_name[name])
 
 
 _ERROR_REINDEX = {

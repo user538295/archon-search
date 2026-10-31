@@ -75,6 +75,8 @@ _SEARCH_RESPONSE_PUBLIC_FIELDS = {
 _COLLECTION_LIST_PUBLIC_FIELDS = {
     "name",
     "description",
+    "description_source",
+    "description_status",
     "doc_count",
     "chunk_count",
     "last_indexed",

@@ -449,7 +449,7 @@ flowchart LR
         - #integration_test — `test_request_after_shutdown_began_is_refused` — a cancelled ingest asking late gets `closed` and starts nothing
         - #integration_test — `test_description_feature_uses_its_own_provider_model_and_host` — the description arm of the per-feature provider check
         - #integration_test — `test_live_local_model_generates_description_when_model_is_pulled` — an auto-skipping lane in the style of `test_llama_cpp_e2e.py` that skips unless the Ollama model is present, not only when the port answers
-- [ ] **BE-26** — Expose `description_source` and `description_status` in the REST list and detail (`schemas.py`) and the three MCP collection schemas (`mcp_schemas.py`, labelled as data derived from document content), with the `pending` overlay from the lifecycle (tolerant of its absence), a shared detail builder replacing the hand copies, regenerated OpenAPI snapshots #backend-role
+- [x] **BE-26** — Expose `description_source` and `description_status` in the REST list and detail (`schemas.py`) and the three MCP collection schemas (`mcp_schemas.py`, labelled as data derived from document content), with the `pending` overlay from the lifecycle (tolerant of its absence), a shared detail builder replacing the hand copies, regenerated OpenAPI snapshots #backend-role
     - Interface Adapters · 5.0h
     - needs BE-18, BE-23 · completes C6, C8, S40, S70
     - Tests

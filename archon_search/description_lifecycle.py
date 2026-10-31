@@ -44,11 +44,13 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Final, Literal, Protocol
+from typing import Final, Protocol
 
 from archon_search.collection_meta import (
     DESCRIPTION_SOURCE_MANUAL,
+    DESCRIPTION_STATUS_PENDING,
     CollectionMeta,
+    DescriptionStatus,
     DescriptionStoredStatus,
 )
 from archon_search.constants import DEFAULT_NAMESPACE, MAX_QUEUED_GENERATIONS
@@ -68,9 +70,6 @@ from archon_search.llm_client.once_per_process import warn_once
 
 logger = logging.getLogger(__name__)
 
-#: What a reader sees: the stored status with ``pending`` laid over it while a generation is in flight.
-type DescriptionStatus = Literal["ok", "failed", "pending"]
-DESCRIPTION_STATUS_PENDING: Final = "pending"
 #: ``warn_once`` key: one WARNING per process for every dropped ingest or backfill request.
 _QUEUE_FULL_WARN_KEY: Final = "description_generation_queue_full"
 GENERATION_TASK_NAME_PREFIX: Final = "description-generation:"

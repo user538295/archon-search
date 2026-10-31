@@ -18,6 +18,7 @@ from pydantic import (
     field_validator,
 )
 
+from archon_search.collection_meta import DescriptionSource, DescriptionStatus
 from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
 
 # Inclusive valid range for TTL seconds — shared by IngestRequest and PatchCollectionBody.
@@ -524,6 +525,8 @@ class CollectionSummary(BaseModel):
     status: str
     active_embedding_model: str = ""
     needs_reindex: bool = False
+    description_source: DescriptionSource | None = None
+    description_status: DescriptionStatus | None = None
 
 
 class CollectionDetail(CollectionSummary):

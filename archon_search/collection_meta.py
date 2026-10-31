@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import datetime
-from typing import Literal, get_args
+from typing import Literal, Protocol, get_args
 
 from archon_search.constants import DEFAULT_NAMESPACE
 
@@ -17,6 +17,16 @@ DESCRIPTION_STATUS_OK: DescriptionStoredStatus = "ok"
 DESCRIPTION_STATUS_FAILED: DescriptionStoredStatus = "failed"
 DESCRIPTION_SOURCES: tuple[str, ...] = get_args(DescriptionSource)
 DESCRIPTION_STORED_STATUSES: tuple[str, ...] = get_args(DescriptionStoredStatus)
+
+#: What a reader sees: the stored status with ``pending`` laid over it while a generation is in flight.
+type DescriptionStatus = Literal["ok", "failed", "pending"]
+DESCRIPTION_STATUS_PENDING: DescriptionStatus = "pending"
+
+
+class DescriptionStatusOverlay(Protocol):
+    """The reader side of the description lifecycle: ``pending`` laid over a stored status."""
+
+    def overlay_status(self, collection: str, stored: DescriptionStoredStatus | None) -> DescriptionStatus | None: ...
 
 
 def check_stored_description_value(column: str, value: str | None, allowed: tuple[str, ...]) -> None:
@@ -60,3 +70,11 @@ class CollectionMeta:
     description_status: DescriptionStoredStatus | None = None
     """C3: stored outcome of the last description attempt, ``ok`` or ``failed``; None = no description and no failed
     attempt. A legacy row with a description reads ``ok``. ``pending`` is never stored."""
+
+
+def visible_description_status(meta: CollectionMeta, overlay: DescriptionStatusOverlay | None) -> DescriptionStatus | None:
+    """The description status a reader sees for *meta*: the stored value, or ``pending`` while the lifecycle has a
+    generation of the collection in flight. *overlay* is ``None`` while ``[description]`` is off, which reads the
+    stored value as it is. Never writes: ``pending`` lives in memory only (C3)."""
+    stored = meta.description_status
+    return stored if overlay is None else overlay.overlay_status(meta.name, stored)

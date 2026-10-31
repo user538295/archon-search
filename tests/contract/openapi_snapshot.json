@@ -309,6 +309,31 @@
             "title": "Description",
             "type": "string"
           },
+          "description_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "generated",
+                  "manual"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description Source"
+          },
+          "description_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DescriptionStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "doc_count": {
             "default": 0,
             "title": "Doc Count",
@@ -501,6 +526,31 @@
             "title": "Description",
             "type": "string"
           },
+          "description_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "generated",
+                  "manual"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description Source"
+          },
+          "description_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DescriptionStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "doc_count": {
             "default": 0,
             "title": "Doc Count",
@@ -612,6 +662,14 @@
         ],
         "title": "DeleteResponse",
         "type": "object"
+      },
+      "DescriptionStatus": {
+        "enum": [
+          "ok",
+          "failed",
+          "pending"
+        ],
+        "type": "string"
       },
       "DisabledResponse": {
         "properties": {

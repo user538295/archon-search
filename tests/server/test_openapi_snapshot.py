@@ -74,3 +74,21 @@ def test_openapi_spec_matches_snapshot(tmp_path: Path, pytestconfig: pytest.Conf
         f"OpenAPI spec changed. If intentional, regenerate with:\n"
         f"  uv run pytest tests/server/test_openapi_snapshot.py {UPDATE_FLAG}"
     )
+
+
+def test_openapi_snapshots_regenerated_match(tmp_path: Path) -> None:
+    """What ``--update-openapi-snapshot`` writes is what both pinned files hold, and it carries the BE-26 fields
+    (nullable, additive) on the list and detail shapes."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    spec = _strip_dynamic_fields(create_app(cfg, JobStore(path=tmp_path / "jobs.json")).openapi())
+
+    for pinned in (SNAPSHOT_PATH, CONTRACT_SNAPSHOT_PATH):
+        assert _strip_dynamic_fields(json.loads(pinned.read_text())) == spec, pinned
+
+    schemas = spec["components"]["schemas"]
+    for shape in ("CollectionSummary", "CollectionDetail"):
+        properties = schemas[shape]["properties"]
+        assert {"description_source", "description_status"} <= set(properties), shape
+        for field in ("description_source", "description_status"):
+            assert {"type": "null"} in properties[field]["anyOf"], f"{shape}.{field} must be nullable"

@@ -302,6 +302,8 @@ COLLECTION_INTERNAL_FIELDS = {
 COLLECTION_PUBLIC_FIELDS = {
     "name",
     "description",
+    "description_source",
+    "description_status",
     "doc_count",
     "chunk_count",
     "last_indexed",
