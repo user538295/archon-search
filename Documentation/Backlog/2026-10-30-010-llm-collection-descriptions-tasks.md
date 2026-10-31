@@ -486,7 +486,7 @@ flowchart LR
         - #e2e_test — `test_e2e_restart_loses_pending_and_next_ingest_regenerates` — a new app on the same store reads the stored value, not `pending`
         - #e2e_test — `test_e2e_only_open_chunks_reach_the_model` — chunks with an ACL never appear in the fake server's request
         - #e2e_test — `test_e2e_disabled_description_sends_nothing` — with the section absent the fake server sees no request
-- [ ] **T-6** — e2e on a synthetic old-schema store, plus manual checks on a real data directory and a clean install #tester-role
+- [x] **T-6** — e2e on a synthetic old-schema store, plus manual checks on a real data directory and a clean install #tester-role
     - — · 5.0h
     - needs BE-18, BE-28 · completes S42, S73, S49
     - Tests
