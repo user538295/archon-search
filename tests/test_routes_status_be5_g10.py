@@ -130,19 +130,14 @@ def test_status_openai_key_available_checks_openai_api_key(
 ) -> None:
     """is_key_available() for openai provider reads OPENAI_API_KEY (BE-5 Root-2).
 
-    Tests HyDEGenerator directly (provider='openai' is not yet wired in
-    create_app — that is BE-6).  OPENAI_API_KEY unset → False; set → True.
+    Tests HyDEGenerator directly with an injected client.  OPENAI_API_KEY unset → False; set → True.
     """
-    from unittest.mock import MagicMock
-
     from archon_search.hyde import HyDEGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    generator = HyDEGenerator(
-        config=HyDEConfig(provider="openai"),
-        provider=MagicMock(),  # stub provider so no ImportError
-    )
+    generator = HyDEGenerator(config=HyDEConfig(provider="openai"), client=ScriptedLlmClient())
     assert generator.is_key_available() is False
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")

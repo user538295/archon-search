@@ -32,6 +32,8 @@ from pathlib import Path
 # The alternation is ordered longest-first to avoid partial matches.
 # ---------------------------------------------------------------------------
 _LOG_PREFIX = r"(?:logging\.|_logger\.|(?<![_\w])logger\.)"
+# A logging call: a logger method, or ``warn_once(...)`` — HyDE's once-per-process WARNING route (S15).
+_LOG_CALL = rf"(?:{_LOG_PREFIX}\w+|(?<![_\w])warn_once)"
 
 # ---------------------------------------------------------------------------
 # Pattern 1 — f-string with bare {query} inside a logging call
@@ -42,7 +44,7 @@ _LOG_PREFIX = r"(?:logging\.|_logger\.|(?<![_\w])logger\.)"
 # The lookahead (?![_\w(]) after query ensures {query} is a bare expression,
 # not part of a longer name or a function call like {query_fingerprint(...)}.
 _FSTRING_QUERY_IN_LOG = re.compile(
-    _LOG_PREFIX + r"""\w+\s*\([^)]*f['"][^'"]*\{query(?![_\w(])""",
+    _LOG_CALL + r"""\s*\([^)]*f['"][^'"]*\{query(?![_\w(])""",
     re.DOTALL,
 )
 
@@ -62,7 +64,7 @@ _FSTRING_QUERY_IN_LOG = re.compile(
 #
 # This handles multiline logging calls correctly.
 
-_LOG_OPENER = re.compile(_LOG_PREFIX + r"\w+\s*\(", re.DOTALL)
+_LOG_OPENER = re.compile(_LOG_CALL + r"\s*\(", re.DOTALL)
 _FINGERPRINT_CALL = re.compile(r"_query_fingerprint\s*\([^)]*\)")
 # Matches single- or double-quoted string literals (with escape sequences).
 # Stripping these prevents the word "query" inside a log format-string from
@@ -71,7 +73,11 @@ _STRING_LITERAL = re.compile(
     r'"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\'',
     re.DOTALL,
 )
-_BARE_QUERY_TOKEN = re.compile(r"(?<!\w)query(?!\w)")
+# The query, and the other texts a HyDE log line must never hold: the hypothesis and the prompt that wraps the query.
+_BARE_SECRET_TOKEN = re.compile(r"(?<!\w)(?:query|hypothesis_text|hypothesis|request\.prompt|prompt)(?!\w)")
+
+#: The log calls of hyde.py: the rate-limit WARNING and the two ``warn_once`` calls (failure, empty hypothesis).
+_EXPECTED_HYDE_LOG_CALLS = 3
 
 
 def _extract_call_args(source: str, open_paren_pos: int) -> str:
@@ -112,7 +118,7 @@ def _bare_query_in_log_violations(source: str) -> list[tuple[int, str]]:
         sanitised = _STRING_LITERAL.sub("__STR__", args_text)
         # 2. Remove _query_fingerprint(query) (the only legitimate bare-query use)
         sanitised = _FINGERPRINT_CALL.sub("__FP__", sanitised)
-        if _BARE_QUERY_TOKEN.search(sanitised):
+        if _BARE_SECRET_TOKEN.search(sanitised):
             lineno = source.count("\n", 0, m.start()) + 1
             snippet = source.splitlines()[lineno - 1].strip()
             violations.append((lineno, snippet))
@@ -162,6 +168,29 @@ def test_guard_detects_bare_query_logger_variant() -> None:
     assert _bare_query_in_log_violations(content), (
         "Guard failed to detect bare 'query' in a logger. logging call"
     )
+
+
+def test_guard_detects_bare_query_arg_in_warn_once() -> None:
+    """Guard must fire on a ``warn_once(...)`` call (HyDE's WARNING route) that passes query."""
+    content = 'warn_once(_logger, "hyde", "raw query: %s", query)\n'
+    assert _bare_query_in_log_violations(content), (
+        "Guard failed to detect bare 'query' positional arg in a warn_once call"
+    )
+
+
+def test_guard_detects_fstring_query_in_warn_once() -> None:
+    """Guard must fire on a ``warn_once(...)`` call whose message is an f-string holding {query}."""
+    content = 'warn_once(_logger, "hyde", f"q={query}")\n'
+    assert _FSTRING_QUERY_IN_LOG.search(content), (
+        "Pattern failed to detect f-string with {query} in a warn_once call"
+    )
+
+
+def test_guard_ignores_fingerprint_only_warn_once() -> None:
+    """Guard must NOT fire when a ``warn_once(...)`` call only carries the query fingerprint."""
+    content = 'warn_once(_logger, "hyde", "HyDE failed (fp=%s)", _query_fingerprint(query))\n'
+    assert not _FSTRING_QUERY_IN_LOG.search(content)
+    assert not _bare_query_in_log_violations(content)
 
 
 def test_guard_detects_multiline_logging_call() -> None:
@@ -265,3 +294,26 @@ def test_no_raw_query_in_hyde_logging() -> None:
         + "\n".join(violations)
         + "\nUse _query_fingerprint(query) in all logging calls."
     )
+
+
+def test_guard_detects_hypothesis_and_prompt_in_warn_once() -> None:
+    """Guard must fire when a log call receives the hypothesis or the prompt (S2: no log line holds them)."""
+    for argument in ("hypothesis_text", "request.prompt"):
+        content = f'warn_once(_logger, "hyde", "bad: %s", {argument})\n'
+        assert _bare_query_in_log_violations(content), f"Guard failed to detect {argument} in a warn_once call"
+
+
+def test_guard_ignores_masked_reason_and_fingerprint_in_warn_once() -> None:
+    """Guard must NOT fire on the shape hyde.py uses: fingerprint plus the already-masked failure text."""
+    content = 'warn_once(_logger, "hyde", "failed (fp=%s): %s", _query_fingerprint(query), reason)\n'
+    assert not _bare_query_in_log_violations(content)
+
+
+def test_guard_scans_every_logging_call_of_hyde_py() -> None:
+    """The real guard is not vacuous: hyde.py's three log calls are found and their arguments parsed."""
+    source = (Path(__file__).parent.parent / "archon_search" / "hyde.py").read_text(encoding="utf-8")
+
+    openers = [m for m in _LOG_OPENER.finditer(source) if "getLogger" not in m.group()]
+
+    assert len(openers) == _EXPECTED_HYDE_LOG_CALLS
+    assert all(_extract_call_args(source, opener.end() - 1) for opener in openers)

@@ -9,9 +9,10 @@ fixtures live in ``tests/conftest.py``.
 """
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -25,15 +26,13 @@ from archon_search.graph_inspector import (
     GraphMLDependencyError,
     to_graphml,
 )
-from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
+from archon_search.hyde import HyDEGenerator
+from archon_search.llm_client.anthropic_client import AnthropicClient
 from archon_search.rag_fusion import (
     RAG_FUSION_DEPENDENCY_DETAIL,
     RAGFusionDependencyError,
 )
-from tests._internal_error_leak import (
-    hyde_generator_without_provider,
-    rag_fusion_generator_without_provider,
-)
+from tests._internal_error_leak import rag_fusion_generator_without_provider
 
 _INSTALL_METHODS = pytest.mark.parametrize(
     ("prefix_fixture", "command"),
@@ -82,15 +81,26 @@ def test_missing_fasttext_names_the_install_command(
 
 @_INSTALL_METHODS
 async def test_missing_hyde_provider_names_the_install_command(
-    request: pytest.FixtureRequest, prefix_fixture: str, command: str
+    request: pytest.FixtureRequest,
+    prefix_fixture: str,
+    command: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """A HyDE call on an Anthropic client without its package searches without HyDE and logs the install command."""
     request.getfixturevalue(prefix_fixture)
-    generator = hyde_generator_without_provider(HyDEConfig(enabled=True))
-    with pytest.raises(HyDEDependencyError) as excinfo:
-        await generator.generate("query", embedder=MagicMock())
-    assert str(excinfo.value) == f"Install archon-search[hyde] to use HyDE ({command} 'archon-search[hyde]')"
-    # The wire-safe half is the message minus the install command (C2-T-1).
-    assert str(excinfo.value).startswith(f"{HYDE_DEPENDENCY_DETAIL} (")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    generator = HyDEGenerator(HyDEConfig(enabled=True), AnthropicClient(model="claude-haiku-4-5-20251001"))
+    embedder = MagicMock()
+    embedder.embed_one = AsyncMock()
+
+    with patch.dict(sys.modules, {"anthropic": None}), caplog.at_level(logging.WARNING):
+        result = await generator.generate("query", embedder=embedder)
+
+    assert result is None
+    embedder.embed_one.assert_not_awaited()
+    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert f"run: {command} 'archon-search[hyde]'" in warning.getMessage()
 
 
 @_INSTALL_METHODS

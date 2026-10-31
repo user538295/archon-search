@@ -71,11 +71,11 @@ def _stub_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> None:
     """The real anthropic package is an optional extra (the dev group installs it, but every integration test gets a stub
     module instead, so none depends on it). create_app's
     provider guard (_check_provider_deps) imports it when anthropic-backed
-    HyDE/RAG Fusion is enabled, and AnthropicQueryExpansionProvider.__init__
+    HyDE/RAG Fusion is enabled, and RAG Fusion's AnthropicQueryExpansionProvider.__init__
     reads anthropic.APIError, so provide a bare stub for every integration test
     (make_real_app enables features with the default anthropic provider). No
     integration test asserts anthropic-absence behavior — those unit tests live
-    in tests/test_hyde.py / tests/test_rag_fusion.py and are unaffected.
+    in tests/test_extra_install_hints.py / tests/test_rag_fusion.py and are unaffected.
 
     The stub replaces the module the session guard `_block_model_providers`
     patched, so it carries the same refusal: AnthropicClient builds

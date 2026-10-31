@@ -1,19 +1,23 @@
-"""Tests for archon_search.hyde — TDD for HyDEGenerator."""
+"""Tests for archon_search.hyde — HyDEGenerator on the shared LLM client."""
 from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
+from collections.abc import Callable
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from archon_search.config import HyDEConfig
+from archon_search.hyde import HyDEGenerator
+from archon_search.llm_client.protocol import LlmCallFailure, LlmCallTimeout
+from tests._hyde_stubs import ScriptedLlmClient
 
-# ---------------------------------------------------------------------------
-# Helpers / fixtures
-# ---------------------------------------------------------------------------
+_HYDE_LOGGER = "archon_search.hyde"
+_EXPECTED_MAX_OUTPUT_TOKENS = 200
 
 
 def _make_embedder(dim: int = 4) -> Any:
@@ -32,14 +36,6 @@ def _make_config(**kwargs: Any) -> HyDEConfig:
     }
     defaults.update(kwargs)
     return HyDEConfig(**defaults)
-
-
-def _make_mock_anthropic_response(text: str) -> Any:
-    content_block = MagicMock()
-    content_block.text = text
-    response = MagicMock()
-    response.content = [content_block]
-    return response
 
 
 # ---------------------------------------------------------------------------
@@ -81,346 +77,290 @@ def test_fingerprint_is_the_keyed_hmac_not_bare_sha256(monkeypatch: pytest.Monke
 
 
 # ---------------------------------------------------------------------------
-# HyDEGenerator init
-# ---------------------------------------------------------------------------
-
-
-def test_generator_init_without_anthropic_package() -> None:
-    """If anthropic is not installed, HyDEGenerator initialises without raising."""
-    # G10 BE-1: must also patch the provider module so the try/except ImportError
-    # in HyDEGenerator.__init__ fires (the provider is lazy-imported there).
-    with patch.dict(  # type: ignore[dict-item]
-        "sys.modules",
-        {
-            "anthropic": None,
-            "archon_search.providers.anthropic_provider": None,
-        },
-    ):
-        import archon_search.hyde as hyde_mod
-        gen = hyde_mod.HyDEGenerator(_make_config())
-        assert gen._provider_available is False
-
-
-def test_generator_init_with_anthropic_package(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If anthropic is available, _provider_available is True."""
-    mock_anthropic = MagicMock()
-    mock_anthropic.AsyncAnthropic = MagicMock(return_value=MagicMock())
-    with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
-        import archon_search.hyde as hyde_mod
-        gen = hyde_mod.HyDEGenerator(_make_config())
-        assert gen._provider_available is True
-
-
-# ---------------------------------------------------------------------------
-# HyDEGenerator.generate — package not installed
+# generate — happy path and the request it sends
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_generate_package_not_installed() -> None:
-    """generate() raises HyDEDependencyError — the class every transport maps to its fixed 422 — when anthropic is missing."""
-    # G10 BE-1: must also patch the provider module so the try/except ImportError
-    # in HyDEGenerator.__init__ fires (the provider is lazy-imported there).
-    with patch.dict(  # type: ignore[dict-item]
-        "sys.modules",
-        {
-            "anthropic": None,
-            "archon_search.providers.anthropic_provider": None,
-        },
-    ):
-        import archon_search.hyde as hyde_mod
-        gen = hyde_mod.HyDEGenerator(_make_config())
-        with pytest.raises(hyde_mod.HyDEDependencyError, match="Install archon-search\\[hyde\\]"):
-            await gen.generate("test query", embedder=_make_embedder())
+async def test_generate_embeds_the_hypothesis_the_client_returned() -> None:
+    client = ScriptedLlmClient(reply="  A hypothetical passage.  ")
+    embedder = _make_embedder(dim=4)
 
+    result = await HyDEGenerator(_make_config(), client).generate("what is hyde", embedder=embedder)
 
-# ---------------------------------------------------------------------------
-# HyDEGenerator.generate — happy path
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_generate_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """generate() returns a list of floats matching the embedder dimension."""
-    dim = 8
-    embedder = _make_embedder(dim=dim)
-    config = _make_config()
-
-    mock_anthropic_mod = MagicMock()
-    mock_client = MagicMock()
-    mock_client.messages = MagicMock()
-    mock_client.messages.create = AsyncMock(
-        return_value=_make_mock_anthropic_response("A hypothetical passage.")
-    )
-    mock_anthropic_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
-    mock_anthropic_mod.APIError = Exception
-
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-
-    with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import archon_search.hyde as hyde_mod
-        gen = hyde_mod.HyDEGenerator(config)
-        result = await gen.generate("how do I do X?", embedder=embedder)
-
-    assert result is not None
-    assert isinstance(result, list)
-    assert len(result) == dim
+    assert result == [0.1] * 4
     embedder.embed_one.assert_awaited_once_with("A hypothetical passage.")
 
 
+@pytest.mark.asyncio
+async def test_generate_sends_one_templated_request_with_the_hyde_ceilings() -> None:
+    client = ScriptedLlmClient()
+    config = _make_config(timeout_seconds=7.5)
+
+    await HyDEGenerator(config, client).generate("what is hyde", embedder=_make_embedder())
+
+    assert len(client.requests) == 1
+    request = client.requests[0]
+    assert request.max_output_tokens == _EXPECTED_MAX_OUTPUT_TOKENS
+    assert request.timeout_seconds == 7.5
+    assert request.prompt.startswith("Write a short passage that would directly answer the following question.")
+    assert "---\nwhat is hyde\n---" in request.prompt
+
+
+@pytest.mark.asyncio
+async def test_query_truncated_to_2000_chars() -> None:
+    """Queries longer than 2000 chars are truncated in the prompt sent to the LLM."""
+    client = ScriptedLlmClient()
+
+    await HyDEGenerator(_make_config(), client).generate("x" * 3000, embedder=_make_embedder())
+
+    prompt = client.requests[0].prompt
+    assert "x" * 2000 in prompt
+    assert "x" * 2001 not in prompt
+
+
 # ---------------------------------------------------------------------------
-# Fallback paths
+# generate — failure contract (S2): no document, hyde_applied false upstream
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        LlmCallFailure("anthropic", "ANTHROPIC_API_KEY is not set"),
+        LlmCallTimeout("ollama", "no answer within 5.0s"),
+    ],
+    ids=["failure", "timeout"],
+)
 @pytest.mark.asyncio
-async def test_generate_timeout_fallback(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """generate() returns None and logs WARNING when the LLM call times out."""
-    embedder = _make_embedder()
+async def test_hyde_failure_returns_no_document_and_flags_not_applied(failure: LlmCallFailure) -> None:
+    """A raising client yields no document, so the request reports ``hyde_applied: false`` and searches the plain query."""
+    from archon_search.server._hyde import RequestHyDE
+
     config = _make_config()
-
-    mock_anthropic_mod = MagicMock()
-    mock_client = MagicMock()
-    mock_client.messages = MagicMock()
-    mock_client.messages.create = AsyncMock(side_effect=TimeoutError())
-    mock_anthropic_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
-    mock_anthropic_mod.APIError = Exception
-
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-
-    with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import archon_search.hyde as hyde_mod
-        gen = hyde_mod.HyDEGenerator(config)
-        with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
-            result = await gen.generate("how do I do X?", embedder=embedder)
-
-    assert result is None
-    assert any("WARNING" in r.levelname or r.levelno >= logging.WARNING for r in caplog.records)
-
-
-@pytest.mark.asyncio
-async def test_generate_api_error_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """generate() returns None when anthropic.APIError is raised."""
     embedder = _make_embedder()
-    config = _make_config()
-
-    class MockAPIError(Exception):
-        pass
-
-    mock_anthropic_mod = MagicMock()
-    mock_client = MagicMock()
-    mock_client.messages = MagicMock()
-    mock_client.messages.create = AsyncMock(side_effect=MockAPIError("rate limited"))
-    mock_anthropic_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
-    mock_anthropic_mod.APIError = MockAPIError
-
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-
-    with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import archon_search.hyde as hyde_mod
-        gen = hyde_mod.HyDEGenerator(config)
-        result = await gen.generate("test query", embedder=embedder)
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_generate_empty_response_fallback(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """generate() returns None when the LLM response text is empty after strip."""
-    embedder = _make_embedder()
-    config = _make_config()
-
-    mock_anthropic_mod = MagicMock()
-    mock_client = MagicMock()
-    mock_client.messages = MagicMock()
-    mock_client.messages.create = AsyncMock(
-        return_value=_make_mock_anthropic_response("   ")  # whitespace only
+    generator = HyDEGenerator(config, ScriptedLlmClient(failure=failure))
+    request = RequestHyDE.for_request(
+        "test query",
+        requested=True,
+        rag_fusion=False,
+        rag_fusion_enabled=False,
+        graph_mode=None,
+        generator=generator,
+        config=config,
+        timeout=5.0,
     )
-    mock_anthropic_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
-    mock_anthropic_mod.APIError = Exception
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    assert await generator.generate("test query", embedder=embedder) is None
+    outcome = await request.resolve(embedder, embedder_warm=True)
 
-    with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import archon_search.hyde as hyde_mod
-        gen = hyde_mod.HyDEGenerator(config)
-        with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
-            result = await gen.generate("test query", embedder=embedder)
+    assert outcome.applied is False
+    assert outcome.vector is None
+    assert outcome.expansion_warning is not None
+    embedder.embed_one.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("query", "echo"),
+    [
+        ("very-unique-secret-query-97531", lambda q: q),
+        ("very-unique  secret\nquery 97531", lambda q: " ".join(q.split())),  # clients collapse whitespace
+        ('very-unique "secret" query\n97531', lambda q: json.dumps(q)[1:-1]),  # a JSON error body
+        ("very-unique-secret-query-" + "x" * 3000, lambda q: q[:2000]),  # the cut that went into the prompt
+    ],
+    ids=["verbatim", "whitespace-collapsed", "json-escaped", "prompt-cut"],
+)
+@pytest.mark.asyncio
+async def test_hyde_failure_text_echoing_the_query_is_masked_in_the_warning(
+    caplog: pytest.LogCaptureFixture, query: str, echo: Callable[[str], str]
+) -> None:
+    """A server that echoes the query in its error never puts it in the log, in any form it may echo it."""
+    echoed = echo(query)
+    failure = LlmCallFailure("ollama", f'model not found for "{echoed}"')
+    generator = HyDEGenerator(_make_config(), ScriptedLlmClient(failure=failure))
+
+    with caplog.at_level(logging.DEBUG):
+        assert await generator.generate(query, embedder=_make_embedder()) is None
+
+    [warning] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    message = warning.getMessage()
+    assert echoed not in message
+    assert "model not found" in message
+
+
+@pytest.mark.asyncio
+async def test_generate_empty_hypothesis_returns_none() -> None:
+    embedder = _make_embedder()
+
+    result = await HyDEGenerator(_make_config(), ScriptedLlmClient(reply="   \n")).generate(
+        "test query", embedder=embedder
+    )
 
     assert result is None
-
-
-@pytest.mark.asyncio
-async def test_generate_no_api_key(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """generate() returns None and logs WARNING exactly once when no API key is set."""
-    embedder = _make_embedder()
-    config = _make_config()
-
-    mock_anthropic_mod = MagicMock()
-    mock_anthropic_mod.AsyncAnthropic = MagicMock(return_value=MagicMock())
-    mock_anthropic_mod.APIError = Exception
-
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-
-    with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import archon_search.hyde as hyde_mod
-        gen = hyde_mod.HyDEGenerator(config)
-
-        with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
-            result1 = await gen.generate("query 1", embedder=embedder)
-            result2 = await gen.generate("query 2", embedder=embedder)
-
-    assert result1 is None
-    assert result2 is None
-    # WARNING should be logged exactly once (one-time warning flag)
-    warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert len(warning_records) == 1
+    embedder.embed_one.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
-# Rate limiting
+# Logging: one WARNING per process, fingerprint only (S2, S15)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_fallback(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """When token bucket is exhausted, generate() returns None with a WARNING."""
+async def test_hyde_logs_one_warning_per_process_without_query_text(caplog: pytest.LogCaptureFixture) -> None:
+    """Many failures log one WARNING; no log line holds the query or the hypothesis."""
+    query = "very-unique-secret-query-12345"
+    hypothesis = "very-unique-secret-hypothesis-67890"
+    from archon_search.hyde import _query_fingerprint
+
+    client = ScriptedLlmClient(reply=hypothesis)
+    generator = HyDEGenerator(_make_config(), client)
     embedder = _make_embedder()
-    config = _make_config(max_requests_per_minute=1)
 
-    mock_anthropic_mod = MagicMock()
-    mock_client = MagicMock()
-    mock_client.messages = MagicMock()
-    mock_client.messages.create = AsyncMock(
-        return_value=_make_mock_anthropic_response("hypothesis text")
-    )
-    mock_anthropic_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
-    mock_anthropic_mod.APIError = Exception
+    with caplog.at_level(logging.DEBUG):
+        assert await generator.generate(f"{query}-ok", embedder=embedder) is not None
+        client.failure = LlmCallTimeout("anthropic", "no answer")
+        for attempt in range(5):
+            assert await generator.generate(f"{query}-{attempt}", embedder=embedder) is None
+        assert await generator.generate(query, embedder=embedder) is None
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING and r.name == _HYDE_LOGGER]
+    assert len(warnings) == 1
+    log_text = " ".join(r.getMessage() for r in caplog.records)
+    assert query not in log_text
+    assert hypothesis not in log_text
+    assert _query_fingerprint(f"{query}-0") in warnings[0].getMessage()
 
-    with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import archon_search.hyde as hyde_mod
-        gen = hyde_mod.HyDEGenerator(config)
 
-        # First call should succeed (1 token available)
-        result1 = await gen.generate("query 1", embedder=embedder)
-        # Second call should be rate-limited (0 tokens left)
-        with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
-            result2 = await gen.generate("query 2", embedder=embedder)
+@pytest.mark.asyncio
+async def test_hyde_empty_hypothesis_logs_no_hypothesis_text(caplog: pytest.LogCaptureFixture) -> None:
+    secret_query = "very-unique-secret-query-24680"
+    generator = HyDEGenerator(_make_config(), ScriptedLlmClient(reply=" "))
+
+    with caplog.at_level(logging.DEBUG):
+        await generator.generate(secret_query, embedder=_make_embedder())
+        await generator.generate(secret_query, embedder=_make_embedder())
+
+    assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
+    assert secret_query not in " ".join(r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting (generator-level bucket kept)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_fallback(caplog: pytest.LogCaptureFixture) -> None:
+    """When the token bucket is exhausted, generate() returns None with a WARNING and does not call the client."""
+    client = ScriptedLlmClient()
+    gen = HyDEGenerator(_make_config(max_requests_per_minute=1), client)
+    embedder = _make_embedder()
+
+    result1 = await gen.generate("query 1", embedder=embedder)
+    with caplog.at_level(logging.WARNING, logger=_HYDE_LOGGER):
+        result2 = await gen.generate("query 2", embedder=embedder)
 
     assert result1 is not None, "First call should succeed with 1 token"
     assert result2 is None, "Second call should be rate-limited"
+    assert len(client.requests) == 1
     assert any(r.levelno >= logging.WARNING for r in caplog.records)
 
 
+@pytest.mark.parametrize("provider", ["ollama", "claude_cli", "llama_cpp"])
 @pytest.mark.asyncio
-async def test_rate_limit_skip_includes_llama_cpp_hyde() -> None:
-    """provider='llama_cpp' must skip rate limiting, mirroring ollama/claude_cli."""
+async def test_rate_limit_skipped_for_local_providers(provider: str) -> None:
+    """ollama, claude_cli and llama_cpp are not throttled by the bucket."""
+    client = ScriptedLlmClient()
+    gen = HyDEGenerator(_make_config(provider=provider, max_requests_per_minute=1), client)
     embedder = _make_embedder()
-    config = _make_config(provider="llama_cpp", max_requests_per_minute=1)
 
-    mock_provider = MagicMock()
-    mock_provider.generate_hypothetical_doc = AsyncMock(return_value="hypothesis text")
-
-    from archon_search.hyde import HyDEGenerator
-
-    gen = HyDEGenerator(config, provider=mock_provider)
-
-    result1 = await gen.generate("query 1", embedder=embedder)
-    result2 = await gen.generate("query 2", embedder=embedder)
-
-    assert result1 is not None, "First call should succeed"
-    assert result2 is not None, "llama_cpp must skip rate limiting like ollama/claude_cli"
+    assert await gen.generate("query 1", embedder=embedder) is not None
+    assert await gen.generate("query 2", embedder=embedder) is not None
+    assert len(client.requests) == 2
 
 
 # ---------------------------------------------------------------------------
-# Privacy: fingerprint only, no raw query in logs
+# is_key_available (kept for /status)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_fingerprint_no_raw_query(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("provider", "env_var"),
+    [("anthropic", "ANTHROPIC_API_KEY"), ("openai", "OPENAI_API_KEY")],
+)
+def test_is_key_available_follows_the_provider_environment_key(
+    monkeypatch: pytest.MonkeyPatch, provider: str, env_var: str
 ) -> None:
-    """WARNING log must contain the fingerprint but NOT the raw query string."""
-    query = "very-unique-secret-query-12345"
-    embedder = _make_embedder()
-    config = _make_config()
+    generator = HyDEGenerator(_make_config(provider=provider), ScriptedLlmClient())
 
-    mock_anthropic_mod = MagicMock()
-    mock_client = MagicMock()
-    mock_client.messages = MagicMock()
-    mock_client.messages.create = AsyncMock(side_effect=TimeoutError())
-    mock_anthropic_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
-    mock_anthropic_mod.APIError = Exception
+    monkeypatch.delenv(env_var, raising=False)
+    assert generator.is_key_available() is False
+    monkeypatch.setenv(env_var, "key")
+    assert generator.is_key_available() is True
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-    with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import archon_search.hyde as hyde_mod
-        gen = hyde_mod.HyDEGenerator(config)
-        fp = hyde_mod._query_fingerprint(query)
-        assert len(fp) == 16
-        assert all(c in "0123456789abcdef" for c in fp)
-
-        with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
-            await gen.generate(query, embedder=embedder)
-
-    log_text = " ".join(r.getMessage() for r in caplog.records)
-    # Raw query must NOT appear in logs
-    assert query not in log_text, f"Raw query leaked into log: {log_text!r}"
-    # Fingerprint SHOULD appear in logs
-    assert fp in log_text, f"Fingerprint not found in log: {log_text!r}"
+@pytest.mark.parametrize("provider", ["ollama", "claude_cli", "llama_cpp"])
+def test_is_key_available_is_true_for_keyless_providers(provider: str) -> None:
+    assert HyDEGenerator(_make_config(provider=provider), ScriptedLlmClient()).is_key_available() is True
 
 
 # ---------------------------------------------------------------------------
-# Query truncation
+# Real LlamaCppClient against a loopback fake llama-server (S1, S2)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_query_truncated_to_2000_chars(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Queries longer than 2000 chars are truncated in the prompt sent to the LLM."""
-    embedder = _make_embedder()
-    config = _make_config()
+async def test_hyde_end_to_end_with_llama_cpp_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S1: a HyDEGenerator over a real ``LlamaCppClient`` embeds the server's answer and reports HyDE applied."""
+    from archon_search.llm_client.llama_cpp_client import LlamaCppClient
+    from archon_search.server._hyde import RequestHyDE
+    from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS
+    from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
 
-    prompt_capture: list[str] = []
+    keep_loopback_out_of_proxies(monkeypatch)
+    passage = "A hypothetical passage about archon search."
+    embedder = _make_embedder(dim=3)
 
-    async def capture_create(**kwargs: Any) -> Any:
-        messages = kwargs.get("messages", [])
-        if messages:
-            prompt_capture.append(messages[0]["content"])
-        return _make_mock_anthropic_response("hypothesis text")
+    with FakeModelServer(reply_text=passage) as server:
+        config = _make_config(provider="llama_cpp", llama_cpp_base_url=server.base_url)
+        generator = HyDEGenerator(config, LlamaCppClient(model="local-model", base_url=server.base_url))
+        outcome = await RequestHyDE(
+            query="archon search query", requested=True, suppressed=False,
+            generator=generator, config=config, timeout=SEARCH_TIMEOUT_SECONDS,
+        ).resolve(embedder, embedder_warm=True)
 
-    mock_anthropic_mod = MagicMock()
-    mock_client = MagicMock()
-    mock_client.messages = MagicMock()
-    mock_client.messages.create = capture_create
-    mock_anthropic_mod.AsyncAnthropic = MagicMock(return_value=mock_client)
-    mock_anthropic_mod.APIError = Exception
+    assert outcome.applied is True
+    assert outcome.vector == [0.1] * 3
+    embedder.embed_one.assert_awaited_once_with(passage)
+    [chat] = server.requests_to("/v1/chat/completions")
+    assert chat.body is not None
+    assert chat.body["max_tokens"] == _EXPECTED_MAX_OUTPUT_TOKENS
+    assert chat.body["messages"][0]["role"] == "user"
+    assert "archon search query" in chat.body["messages"][0]["content"]
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    long_query = "x" * 3000
 
-    with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import archon_search.hyde as hyde_mod
-        gen = hyde_mod.HyDEGenerator(config)
-        await gen.generate(long_query, embedder=embedder)
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_llama_cpp_fallback_on_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S2: llama-server unreachable → the client raises, HyDE falls back with no exception and embeds nothing."""
+    from archon_search.llm_client.llama_cpp_client import LlamaCppClient
+    from archon_search.server._hyde import RequestHyDE
+    from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS
+    from tests._fake_model_server import keep_loopback_out_of_proxies, unreachable_port
 
-    assert prompt_capture, "No prompt was captured"
-    # The prompt should contain at most 2000 chars of the query (it's truncated to 2000)
-    assert "x" * 2001 not in prompt_capture[0], (
-        "Query was not truncated — prompt contains > 2000 consecutive 'x' chars"
-    )
-    assert "x" * 2000 in prompt_capture[0], (
-        "Truncated query (2000 chars) not found in prompt"
-    )
+    keep_loopback_out_of_proxies(monkeypatch)
+    embedder = _make_embedder(dim=3)
+
+    with unreachable_port() as port:
+        base_url = f"http://127.0.0.1:{port}"
+        config = _make_config(provider="llama_cpp", llama_cpp_base_url=base_url)
+        generator = HyDEGenerator(config, LlamaCppClient(model="local-model", base_url=base_url))
+        outcome = await RequestHyDE(
+            query="archon search query", requested=True, suppressed=False,
+            generator=generator, config=config, timeout=SEARCH_TIMEOUT_SECONDS,
+        ).resolve(embedder, embedder_warm=True)
+
+    assert outcome.vector is None
+    assert outcome.applied is False
+    embedder.embed_one.assert_not_awaited()

@@ -24,6 +24,7 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.embedder import ModelEmbedder
 from archon_search.store import STORE_SCHEMA_VERSION
+from tests._hyde_stubs import ScriptedLlmClient
 from tests.integration.conftest import (
     ingest_doc,
     make_real_app,
@@ -43,19 +44,14 @@ _QUERY = "how are widgets calibrated"
 _HYPOTHESIS = "HYPOTHETICAL: widgets get calibrated using a torque gauge."
 
 
-class _StubHypothesisProvider:
-    """QueryExpansionProvider stand-in: always returns a fixed hypothetical document."""
-
-    async def generate_hypothetical_doc(self, query: str, *, max_tokens: int, timeout_seconds: float) -> str:
-        return _HYPOTHESIS
-
-
 @pytest.fixture(autouse=True)
-def _stub_hyde_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hand ``create_app``'s provider factory the stub, so HyDEGenerator is built with it."""
+def hyde_client(monkeypatch: pytest.MonkeyPatch) -> ScriptedLlmClient:
+    """Hand ``create_app``'s client composition a scripted shared client, so the real ``HyDEGenerator`` calls it."""
     import archon_search.server.app as app_module
 
-    monkeypatch.setattr(app_module, "_build_query_expansion_provider", lambda *_args: _StubHypothesisProvider())
+    client = ScriptedLlmClient(reply=_HYPOTHESIS)
+    monkeypatch.setattr(app_module, "build_llm_client", lambda **_kwargs: client)
+    return client
 
 
 @pytest.fixture
@@ -145,6 +141,24 @@ def test_rest_search_hyde_embeds_hypothesis_with_collection_model_same_dim(
         f"hypothesis must be embedded by the collection's model {_SAME_DIM_MODEL!r}, "
         f"got {_hypothesis_embedders(embed_calls)}"
     )
+
+
+def test_hyde_per_collection_embedder_with_shared_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, embed_calls: list[tuple[str, str]], hyde_client: ScriptedLlmClient
+) -> None:
+    """The real generator calls the app's shared client once and embeds its answer with the collection's model."""
+    with make_real_app(tmp_path, monkeypatch, hyde_enabled=True) as (client, _cfg, api_key):
+        assert client.app.state.hyde_client is hyde_client
+        _setup_collection_with_model(client, api_key, _OTHER_DIM_MODEL, embed_calls)
+
+        resp = client.post(
+            "/search", json={"query": _QUERY, "collection": _COLLECTION, "hyde": True}, headers=_auth(api_key)
+        )
+
+    _assert_no_error_and_right_space(resp.status_code, resp.json(), embed_calls, _OTHER_DIM_MODEL)
+    [request] = hyde_client.requests
+    assert _QUERY in request.prompt
+    assert request.max_output_tokens == 200
 
 
 # ---------------------------------------------------------------------------

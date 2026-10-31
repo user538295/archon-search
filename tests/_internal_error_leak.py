@@ -14,16 +14,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search import uv_tool
 from archon_search.chunker import DocumentChunker
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import GraphConfig, HyDEConfig, RAGFusionConfig
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.defref_extractor import DefRefExtractor
 from archon_search.embedder import Embedder
-from archon_search.hyde import HyDEGenerator
+from archon_search.hyde import (
+    HYDE_DEPENDENCY_DETAIL,
+    HyDEDependencyError,
+    HyDEGenerator,
+)
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import MetadataLookupError, SearchPipeline
 from archon_search.rag_fusion import RAGFusionGenerator
+from tests._hyde_stubs import ScriptedLlmClient
 
 # Internal-looking marker: an absolute path under the runtime data dir.
 LEAK_NEEDLE = "/Users/secret"
@@ -44,7 +50,7 @@ _DEFREF_SOURCE = "def caller():\n    return callee()\n\n\ndef callee():\n    ret
 _STUB_EMBEDDING_DIM = 4
 
 # Making the provider module unimportable is how a missing `hyde` / `rag_fusion`
-# extra reaches HyDEGenerator / RAGFusionGenerator __init__.
+# extra reaches RAGFusionGenerator __init__ (HyDEGenerator no longer builds a provider: BE-11).
 _NO_ANTHROPIC_PROVIDER = {"archon_search.providers.anthropic_provider": None}
 
 
@@ -91,16 +97,14 @@ def _embedder(embed_error: BaseException) -> tuple[MagicMock, AsyncMock]:
 
 
 def hyde_generator(config: HyDEConfig, embed_error: BaseException) -> tuple[HyDEGenerator, AsyncMock]:
-    """A real HyDEGenerator whose provider answers and whose hypothesis embed fails like ONNX.
+    """A real HyDEGenerator whose shared client answers and whose hypothesis embed fails like ONNX.
 
     ``generate`` embeds with the embedder its caller passes (the searched collection's);
     this stand-in swaps in one whose ``embed_one`` raises *embed_error*, whatever the
     caller passed, so the failure lands in the real generator's embed step.
     """
-    provider = MagicMock()
-    provider.generate_hypothetical_doc = AsyncMock(return_value="a hypothetical answer")
     failing_embedder, embed_one = _embedder(embed_error)
-    generator = HyDEGenerator(config, provider=provider)
+    generator = HyDEGenerator(config, ScriptedLlmClient(reply="a hypothetical answer"))
     real_generate = generator.generate
 
     async def _generate(query: str, *, embedder: Any) -> list[float] | None:
@@ -110,10 +114,19 @@ def hyde_generator(config: HyDEConfig, embed_error: BaseException) -> tuple[HyDE
     return generator, embed_one
 
 
-def hyde_generator_without_provider(config: HyDEConfig) -> HyDEGenerator:
-    """A real HyDEGenerator built while the `hyde` extra's provider module is absent."""
-    with patch.dict(sys.modules, _NO_ANTHROPIC_PROVIDER):
-        return HyDEGenerator(config)
+def hyde_generator_missing_extra() -> MagicMock:
+    """A ``HyDEGenerator`` stand-in whose ``generate`` raises ``HyDEDependencyError`` like a missing ``hyde`` extra.
+
+    The message carries the install command from ``uv_tool.extra_install_hint`` (patched by
+    ``patch_install_hint(monkeypatch, "archon_search.uv_tool")``); the transports must log it and send only the
+    fixed ``HYDE_DEPENDENCY_DETAIL``. The shared-client generator reports a missing package as a call failure, so
+    this stand-in serves the transport-mapping tests until BE-13 decides whether the error stays reachable.
+    """
+
+    async def _generate(*_args: Any, **_kwargs: Any) -> None:
+        raise HyDEDependencyError(f"{HYDE_DEPENDENCY_DETAIL} ({uv_tool.extra_install_hint('hyde')})")
+
+    return MagicMock(spec=HyDEGenerator, generate=AsyncMock(side_effect=_generate))
 
 
 def rag_fusion_generator_without_provider(config: RAGFusionConfig) -> RAGFusionGenerator:

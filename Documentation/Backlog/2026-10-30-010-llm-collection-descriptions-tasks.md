@@ -267,7 +267,7 @@ flowchart LR
         - #integration_test — `test_oversized_ollama_window_warns_with_model_maximum` — a window above the model maximum read from `show` logs a WARNING and the server boots
         - #integration_test — `test_hyde_and_graph_keep_their_own_provider_model_and_host` — two features on different providers each call their own
         - #unit_test — `test_each_llama_cpp_client_probes_its_own_host` — two `llama_cpp` features with different hosts probe different URLs
-- [ ] **BE-11** — Move `HyDEGenerator` onto the shared client: template and `max_tokens=200` move in, failure raises then is caught for `hyde_applied: false`, one WARNING per process with the query fingerprint only, generator-level rate bucket kept, `is_key_available` kept for `/status`; rewrite the HyDE-pinned tests and `_hyde_stubs.py` #backend-role
+- [x] **BE-11** — Move `HyDEGenerator` onto the shared client: template and `max_tokens=200` move in, failure raises then is caught for `hyde_applied: false`, one WARNING per process with the query fingerprint only, generator-level rate bucket kept, `is_key_available` kept for `/status`; rewrite the HyDE-pinned tests and `_hyde_stubs.py` #backend-role
     - Use Cases · 4.0h
     - needs BE-10 · completes S1, S2, S15
     - Tests

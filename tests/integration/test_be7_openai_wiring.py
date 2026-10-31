@@ -79,19 +79,20 @@ def test_search_hyde_openai_provider_mocked(
 ) -> None:
     """S4/C2: HyDE with OpenAI provider mocked → hyde_applied=True.
 
-    Wires the OpenAI provider into HyDEGenerator via the factory in app.py,
-    mocks AsyncOpenAI.chat.completions.create, searches with hyde=true, and
-    asserts hyde_applied=True — proving the wiring is end-to-end.
+    Wires the shared ``OpenAIClient`` into HyDEGenerator through ``create_app``, mocks the SDK's
+    ``chat.completions.create``, searches with hyde=true, and asserts hyde_applied=True — proving the wiring is
+    end-to-end and the request carries the HyDE template and the 200-token ceiling.
 
-    OPENAI_API_KEY must be set or the key-check guard in the provider returns None
-    before the mock is reached.
+    OPENAI_API_KEY must be set or the client's key guard raises before the mock is reached.
     """
+    from archon_search.llm_client.openai_client import OpenAIClient
+
     doc = tmp_path / "openai_hyde_test.md"
     doc.write_text(
         "# OpenAI HyDE Test\n\nHypothetical document embedding via OpenAI provider.\n" * 4
     )
 
-    # Set API key so the provider's is_key_available() guard passes
+    # Set API key so the client's is_key_available() guard passes
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key-be7-hyde")
 
     toml = _toml_hyde_openai(hyde_enabled=True)
@@ -103,12 +104,9 @@ def test_search_hyde_openai_provider_mocked(
         col = "be7-hyde-openai-mocked"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
-        # Mock AsyncOpenAI.chat.completions.create on the provider's client
-        provider = client.app.state.hyde_generator._provider
-
-        from archon_search.providers.openai_provider import OpenAIQueryExpansionProvider
-        assert isinstance(provider, OpenAIQueryExpansionProvider), (
-            f"HyDE generator must use OpenAIQueryExpansionProvider, got: {type(provider)}"
+        hyde_client = client.app.state.hyde_client
+        assert isinstance(hyde_client, OpenAIClient), (
+            f"HyDE generator must use OpenAIClient, got: {type(hyde_client)}"
         )
 
         mock_response = _make_openai_mock_completion(
@@ -119,7 +117,8 @@ def test_search_hyde_openai_provider_mocked(
         mock_openai_client.chat.completions = MagicMock()
         mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-        monkeypatch.setattr(provider, "_get_client", lambda: mock_openai_client)
+        # The wrapper caches its SDK client on first call; seed it with the mock.
+        monkeypatch.setattr(hyde_client, "_client", mock_openai_client)
 
         resp = client.post(
             "/search",
@@ -131,9 +130,14 @@ def test_search_hyde_openai_provider_mocked(
         data = resp.json()
         assert "results" in data, "response must contain 'results'"
         assert data["hyde_applied"] is True, (
-            f"expected hyde_applied=True with mocked OpenAI provider, got: {data['hyde_applied']}"
+            f"expected hyde_applied=True with mocked OpenAI client, got: {data['hyde_applied']}"
         )
         mock_openai_client.chat.completions.create.assert_awaited_once()
+        sent = mock_openai_client.chat.completions.create.await_args.kwargs
+        assert sent["max_completion_tokens"] == 200
+        [message] = sent["messages"]
+        assert message["role"] == "user"
+        assert "OpenAI hypothetical document" in message["content"]
 
 
 # ---------------------------------------------------------------------------

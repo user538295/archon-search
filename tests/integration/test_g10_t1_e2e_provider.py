@@ -1,4 +1,4 @@
-"""T-1 (G10) — E2e: Ollama fallback (mocked) and GET /status shows correct provider.
+"""T-1 (G10) — E2e: Ollama fallback (slow fake server) and GET /status shows correct provider.
 
 Tests:
   - test_e2e_hyde_ollama_timeout_fallback: HyDE with Ollama times out → hyde_applied=False,
@@ -14,13 +14,16 @@ from __future__ import annotations
 import sys
 import types
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
+
+_SLOW_ANSWER_SECONDS = 3.0
+_HYDE_TIMEOUT_SECONDS = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -74,49 +77,45 @@ def test_e2e_hyde_ollama_timeout_fallback(
 ) -> None:
     """S7: HyDE with Ollama provider times out → hyde_applied=False, 200 returned.
 
-    Verifies end-to-end that when the Ollama AsyncClient.chat() raises
-    asyncio.TimeoutError, the search still returns HTTP 200 with hyde_applied=False
-    (graceful fallback to plain hybrid search) and results are returned.
+    Verifies end-to-end that when the Ollama server answers later than ``[hyde].timeout_seconds``, the search
+    still returns HTTP 200 with hyde_applied=False (graceful fallback to plain hybrid search) and results are
+    returned.
     """
     doc = tmp_path / "e2e_hyde_test.md"
     doc.write_text("# E2e HyDE Test\n\nHypothetical document embedding fallback content.\n" * 4)
+    keep_loopback_out_of_proxies(monkeypatch)
 
-    # Install ollama stub BEFORE entering make_real_app
-    _install_ollama_stub(monkeypatch)
-
-    toml = (
-        "[hyde]\n"
-        "enabled = true\n"
-        'provider = "ollama"\n'
-        'model = "llama3.2"\n'
-    )
-
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
-        assert cfg.hyde.provider == "ollama", "expected provider=ollama from TOML"
-        assert cfg.hyde.enabled, "expected hyde.enabled=True"
-
-        col = "e2e-hyde-ollama-timeout"
-        ingest_file_via_path(client, col, str(doc), api_key=api_key)
-
-        # Replace the provider's _get_client to raise asyncio.TimeoutError
-        provider = client.app.state.hyde_generator._provider
-        mock_client = MagicMock()
-        mock_client.chat = AsyncMock(side_effect=TimeoutError("simulated timeout"))
-        monkeypatch.setattr(provider, "_get_client", lambda: mock_client)
-
-        resp = client.post(
-            "/search",
-            json={"collection": col, "query": "hypothetical document fallback", "hyde": True},
-            headers=_auth(api_key),
+    with FakeModelServer(response_delay_seconds=_SLOW_ANSWER_SECONDS) as server:
+        toml = (
+            "[hyde]\n"
+            "enabled = true\n"
+            'provider = "ollama"\n'
+            'model = "llama3.2"\n'
+            f'ollama_base_url = "{server.base_url}"\n'
+            f"timeout_seconds = {_HYDE_TIMEOUT_SECONDS}\n"
         )
 
-        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
-        data = resp.json()
-        assert "results" in data, "response must contain 'results'"
-        assert data["hyde_applied"] is False, (
-            f"expected hyde_applied=False on Ollama TimeoutError, got: {data['hyde_applied']}"
-        )
-        assert data["results"], "expected non-empty results from plain search fallback"
+        with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+            assert cfg.hyde.provider == "ollama", "expected provider=ollama from TOML"
+            assert cfg.hyde.enabled, "expected hyde.enabled=True"
+
+            col = "e2e-hyde-ollama-timeout"
+            ingest_file_via_path(client, col, str(doc), api_key=api_key)
+
+            resp = client.post(
+                "/search",
+                json={"collection": col, "query": "hypothetical document fallback", "hyde": True},
+                headers=_auth(api_key),
+            )
+
+            assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+            data = resp.json()
+            assert "results" in data, "response must contain 'results'"
+            assert data["hyde_applied"] is False, (
+                f"expected hyde_applied=False on an Ollama timeout, got: {data['hyde_applied']}"
+            )
+            assert data["results"], "expected non-empty results from plain search fallback"
+            assert len(server.requests_to("/api/chat")) == 1, "the call must have reached the slow provider"
 
 
 # ---------------------------------------------------------------------------

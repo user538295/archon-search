@@ -95,7 +95,7 @@ from tests._internal_error_leak import (
     assert_logged_with_traceback,
     defref_pipeline,
     hyde_generator,
-    hyde_generator_without_provider,
+    hyde_generator_missing_extra,
     metadata_lookup_error,
     mock_pipeline,
     permission_error,
@@ -889,9 +889,9 @@ def test_create_app_turns_fastmcp_error_masking_on() -> None:
 async def test_hyde_missing_extra_answers_fixed_detail_and_logs_install_command(
     tool: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    patch_install_hint(monkeypatch, "archon_search.hyde")
+    patch_install_hint(monkeypatch, "archon_search.uv_tool")
     config = _hyde_config()
-    generator = hyde_generator_without_provider(config.hyde)
+    generator = hyde_generator_missing_extra()
 
     with caplog.at_level(logging.WARNING):
         result, wire = await _wire(

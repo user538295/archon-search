@@ -481,8 +481,7 @@ def _build_query_expansion_provider(
     or an AnthropicQueryExpansionProvider for provider='anthropic' (default).
 
     The returned object is injected as the ``provider`` argument to
-    HyDEGenerator and RAGFusionGenerator so the generators do not
-    construct a default provider.
+    RAGFusionGenerator so the generator does not construct a default provider.
     """
     if provider == "llama_cpp":
         from archon_search.providers.llama_cpp_provider import (
@@ -1300,7 +1299,7 @@ def create_app(
     from archon_search.hyde import HyDEGenerator
     from archon_search.rag_fusion import RAGFusionGenerator
 
-    # The shared LLM client of HyDE, composed from [hyde] (BE-10); BE-11 hands it to the generator below in place of the provider.
+    # The shared LLM client of HyDE, composed from [hyde] (BE-10) and injected into the generator (BE-11).
     app.state.hyde_client = build_llm_client(
         provider=config.hyde.provider,
         model=config.hyde.model,
@@ -1309,10 +1308,7 @@ def create_app(
         ollama_context_tokens=config.hyde.ollama_context_tokens,
         retry_on_nonzero_exit=True,
     )
-    _hyde_provider = _build_query_expansion_provider(
-        config.hyde.provider, config.hyde.model, config.hyde.ollama_base_url, config.hyde.llama_cpp_base_url
-    )
-    app.state.hyde_generator = HyDEGenerator(config=config.hyde, provider=_hyde_provider)
+    app.state.hyde_generator = HyDEGenerator(config=config.hyde, client=app.state.hyde_client)
     if config.hyde.enabled:
         logger.info(
             "HyDE is enabled — search query text will be sent to %s (model: %s)",

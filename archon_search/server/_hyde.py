@@ -15,6 +15,7 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from archon_search.llm_client.once_per_process import warn_once
 from archon_search.observability import paused_stage_recorder
 from archon_search.server._search_budget import SearchBudgetExceeded, run_within_budget
 
@@ -24,6 +25,9 @@ if TYPE_CHECKING:
     from archon_search.hyde import HyDEGenerator
 
 _logger = logging.getLogger(__name__)
+
+#: ``warn_once`` key: one WARNING per process for every HyDE generation that overruns the search budget.
+_BUDGET_OVERRUN_WARN_KEY = "hyde_budget_overrun"
 
 HYDE_EXPANSION_FAILED_WARNING = "HyDE expansion failed"
 
@@ -58,14 +62,17 @@ async def resolve_hyde_within_budget(
 
     On overrun the call is cancelled and ``None`` is returned: the caller surfaces that as
     its standard HyDE-failure warning and the search runs on the plain query.  Everything
-    the coroutine itself raises — notably the ``HyDEDependencyError`` for a missing
-    provider package — propagates unchanged.
+    the coroutine itself raises propagates unchanged (``HyDEGenerator`` raises no
+    ``HyDEDependencyError`` since BE-11; the transports' mapping stays until BE-13).
     """
     try:
         return await run_within_budget(coro, timeout=timeout)
     except SearchBudgetExceeded:
-        _logger.warning(
-            "HyDE generation exceeded the %.1fs search budget; searching without it",
+        warn_once(
+            _logger,
+            _BUDGET_OVERRUN_WARN_KEY,
+            "HyDE generation exceeded the %.1fs search budget; searching without it "
+            "(later overruns in this process are not logged)",
             timeout,
         )
         return None
@@ -157,8 +164,9 @@ class RequestHyDE:
         hypothesis embed — including any cold build that embed waits on — stay out of
         ``stage_timings_ms``.
 
-        Raises :class:`~archon_search.hyde.HyDEDependencyError` when the HyDE provider
-        package is missing; any other exception propagates to the caller's catch-all.
+        Any exception the generator raises (an embed failure, or the :class:`~archon_search.hyde.HyDEDependencyError`
+        a generator stand-in may raise until BE-13 decides whether it stays) propagates to the caller's catch-all;
+        a failed LLM call is not one: the generator turns it into no vector.
         """
         if not self.requested or self.suppressed:
             return _SUPPRESSED

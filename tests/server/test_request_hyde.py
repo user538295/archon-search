@@ -229,10 +229,13 @@ async def test_resolve_hyde_within_budget_cancels_and_degrades_on_overrun(
 
     with caplog.at_level("WARNING", logger="archon_search.server._hyde"):
         result = await resolve_hyde_within_budget(_silent_provider(), timeout=_SHORT_BUDGET_SECONDS)
+        again = await resolve_hyde_within_budget(_silent_provider(), timeout=_SHORT_BUDGET_SECONDS)
 
     assert result is None
-    assert observed == ["cancelled"]
+    assert again is None
+    assert observed == ["cancelled", "cancelled"]
     assert "HyDE generation exceeded" in caplog.text
+    assert caplog.text.count("HyDE generation exceeded") == 1, "one WARNING per process (S2)"
 
 
 @pytest.mark.asyncio

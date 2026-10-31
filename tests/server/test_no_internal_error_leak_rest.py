@@ -66,7 +66,7 @@ from tests._internal_error_leak import (
     ONNX_MSG,
     assert_logged_with_traceback,
     hyde_generator,
-    hyde_generator_without_provider,
+    hyde_generator_missing_extra,
     metadata_lookup_error,
     mock_pipeline,
     permission_error,
@@ -522,10 +522,10 @@ def test_rotate_keys_json_failure_after_the_key_file_write_is_an_incomplete_rota
 def test_hyde_missing_extra_answers_fixed_detail_and_logs_install_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, route: str
 ) -> None:
-    patch_install_hint(monkeypatch, "archon_search.hyde")
+    patch_install_hint(monkeypatch, "archon_search.uv_tool")
     app, client = _wire_app(tmp_path)
     app.state.config.hyde.enabled = True
-    app.state.hyde_generator = hyde_generator_without_provider(app.state.config.hyde)
+    app.state.hyde_generator = hyde_generator_missing_extra()
 
     with caplog.at_level(logging.WARNING):
         response = client.post(route, json={"collection": "col", "query": "q", "hyde": True})

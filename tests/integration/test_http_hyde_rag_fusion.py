@@ -6,7 +6,7 @@ Exercises the full HTTP layer for:
 - HyDE dependency absent returns 4xx with the fixed dependency detail
 - RAG Fusion dependency absent returns 4xx with the fixed dependency detail (single-collection path)
 - RAG Fusion dependency absent returns 4xx with the fixed dependency detail (multi-collection path)
-- BE-1 refactor: HyDE behaviour unchanged after AnthropicQueryExpansionProvider extraction
+- BE-11: HyDE through the shared LLM client (``app.state.hyde_client``), success and provider-down fallback
 
 Run with:
     uv run pytest tests/integration/test_http_hyde_rag_fusion.py -v
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.hyde import HYDE_DEPENDENCY_DETAIL
+from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
 from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
@@ -148,41 +148,33 @@ def test_multi_collection_fan_out_with_rag_fusion_body_flag(
 
 
 # ---------------------------------------------------------------------------
-# Test 3 — HyDE dependency absent returns 4xx with clear error
+# Test 3 — HyDE dependency error maps to a 4xx with the fixed detail
 # ---------------------------------------------------------------------------
 
 def test_hyde_dependency_absent_returns_clear_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """HyDEGenerator._anthropic_available=False simulates missing dependency.
+    """A ``HyDEDependencyError`` out of the generator is answered 422 with the fixed ``HYDE_DEPENDENCY_DETAIL``.
 
-    POST /search with hyde=True must return 422 with the fixed HYDE_DEPENDENCY_DETAIL. The route handler converts the HyDEDependencyError
-    from HyDEGenerator.generate() into a 422 JSONResponse.
-
-    Note: config.hyde.enabled must be True so RequestHyDE.resolve actually
-    calls generator.generate(). The generator's _anthropic_available flag
-    is patched via monkeypatch.setattr on the app.state instance after startup.
+    The shared-client ``HyDEGenerator`` reports a missing provider package as a call failure (a fallback), so this
+    test serves the error through a generator stub: it pins the route's mapping of the exception, which BE-13
+    decides whether to keep. ``config.hyde.enabled`` must be True so ``RequestHyDE.resolve`` calls the generator.
     """
+    from tests._hyde_stubs import rest_hyde_generating
+
     doc = tmp_path / "hyde_dep_absent.md"
     doc.write_text("# Dependency Test\n\nTest content for HyDE dependency error.\n" * 4)
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
-        # Enable HyDE so RequestHyDE.resolve proceeds to call generator.generate().
-        cfg.hyde.enabled = True
-
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         col = "hyde-dep-absent"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
-        # Patch via monkeypatch.setattr so any rename of the attribute causes a clear error.
-        generator = client.app.state.hyde_generator
-        monkeypatch.setattr(generator, "_provider_available", False)
-
-        resp = client.post(
-            "/search",
-            json={"collection": col, "query": "dependency test", "hyde": True},
-            headers=_auth(api_key),
-        )
-        # The route catches HyDEDependencyError from generate() and returns 422.
+        with rest_hyde_generating(client.app, side_effect=HyDEDependencyError("hyde extra missing")):
+            resp = client.post(
+                "/search",
+                json={"collection": col, "query": "dependency test", "hyde": True},
+                headers=_auth(api_key),
+            )
         assert resp.status_code == 422, (
             f"expected 422 when anthropic is absent for HyDE, "
             f"got {resp.status_code}: {resp.text}"
@@ -295,70 +287,104 @@ def test_rag_fusion_dependency_absent_returns_error_multi_collection(
 
 
 # ---------------------------------------------------------------------------
-# Test 6 — BE-1: HyDE behaviour unchanged after AnthropicQueryExpansionProvider extraction
+# Test 6 — BE-11: HyDE through the shared LLM client, over HTTP
 # ---------------------------------------------------------------------------
 
-def test_hyde_anthropic_behaviour_unchanged_after_refactor(
+_HYDE_MODEL = "hyde-model"
+_HYPOTHETICAL_DOCUMENT = "A hypothetical passage about HyDE retrieval."
+_HYDE_QUERY = "what is HyDE"
+
+
+def _hyde_on_fake_ollama_toml(base_url: str) -> str:
+    return (
+        "[hyde]\n"
+        "enabled = true\n"
+        'provider = "ollama"\n'
+        f'model = "{_HYDE_MODEL}"\n'
+        f'ollama_base_url = "{base_url}"\n'
+        "ollama_context_tokens = 8192\n"
+    )
+
+
+def test_hyde_search_through_shared_client_over_http(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """BE-1 regression: HyDE returns hyde_applied=True after adapter extraction.
+    """A HyDE search answers ``hyde_applied: true`` with the hypothetical document the shared client returned.
 
-    After the BE-1 refactor, HyDEGenerator delegates text generation to
-    AnthropicQueryExpansionProvider.  This test verifies that:
-    1. The provider's generate_hypothetical_doc is called and returns text.
-    2. HyDEGenerator embeds the text and returns a vector.
-    3. RequestHyDE.resolve reports hyde_applied=True.
-    4. The HTTP response carries hyde_applied=True.
-
-    The provider's _client is replaced with a mock AFTER app startup (inside the
-    with-block) so the session fixture's RuntimeError guard for AsyncAnthropic()
-    does not interfere — we replace the already-constructed client object.
+    The real app composes ``app.state.hyde_client`` from ``[hyde]`` and hands it to the real ``HyDEGenerator``; the
+    loopback fake Ollama server sees exactly one chat call carrying the HyDE template around the query, the
+    configured ``num_ctx`` and the 200-token answer ceiling.
     """
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock, MagicMock
+    from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
 
-    doc = tmp_path / "hyde_refactor_test.md"
+    keep_loopback_out_of_proxies(monkeypatch)
+    doc = tmp_path / "hyde_shared_client.md"
     doc.write_text(
         "# Hypothetical Document Embeddings\n\n"
         "HyDE generates a passage that would answer the query, then embeds it.\n" * 6
     )
 
-    with make_real_app(tmp_path, monkeypatch, hyde_enabled=True) as (client, cfg, api_key):
-        assert cfg.hyde.enabled, "expected hyde.enabled=True for this test"
-
-        col = "hyde-refactor"
+    with FakeModelServer(reply_text=_HYPOTHETICAL_DOCUMENT) as server, make_real_app(
+        tmp_path, monkeypatch, toml_content=_hyde_on_fake_ollama_toml(server.base_url)
+    ) as (client, cfg, api_key):
+        assert cfg.hyde.enabled
+        col = "hyde-shared-client"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
-
-        # Inject a mocked client into the already-constructed provider so
-        # generate_hypothetical_doc returns a fixed hypothesis text.
-        generator = client.app.state.hyde_generator
-        provider = generator._provider
-
-        mock_content = SimpleNamespace(text="A hypothetical passage about HyDE retrieval.")
-        mock_response = SimpleNamespace(content=[mock_content])
-        mock_messages = MagicMock()
-        mock_messages.create = AsyncMock(return_value=mock_response)
-        mock_client = MagicMock()
-        mock_client.messages = mock_messages
-
-        # Replace the provider's _client with our mock.
-        monkeypatch.setattr(provider, "_client", mock_client)
-        monkeypatch.setattr(provider, "_anthropic_available", True)
-        # Set API key so the key guard in the provider passes.
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-integration-key")
 
         resp = client.post(
             "/search",
-            json={"collection": col, "query": "what is HyDE", "hyde": True},
+            json={"collection": col, "query": _HYDE_QUERY, "hyde": True},
             headers=_auth(api_key),
         )
-        assert resp.status_code == 200, (
-            f"expected 200 from HyDE search, got {resp.status_code}: {resp.text}"
-        )
+
+        assert resp.status_code == 200, f"expected 200 from HyDE search, got {resp.status_code}: {resp.text}"
         data = resp.json()
-        assert data["hyde_applied"] is True, (
-            f"expected hyde_applied=True after BE-1 refactor, got: {data['hyde_applied']}"
-        )
+        assert data["hyde_applied"] is True
+        assert data["results"], "the search must answer with the hypothesis vector"
+        [chat] = server.requests_to("/api/chat")
+        assert chat.body is not None
+        [message] = chat.body["messages"]
+        assert message["role"] == "user"
+        assert "---\nwhat is HyDE\n---" in message["content"]
+        assert chat.body["options"]["num_ctx"] == 8192
+        assert chat.body["options"]["num_predict"] == 200
+
+
+def test_hyde_provider_down_over_http_falls_back_to_the_plain_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failing HyDE provider leaves the search answering with ``hyde_applied: false`` and one query-free WARNING."""
+    import logging
+
+    from tests._fake_model_server import keep_loopback_out_of_proxies, unreachable_port
+
+    keep_loopback_out_of_proxies(monkeypatch)
+    doc = tmp_path / "hyde_provider_down.md"
+    doc.write_text("# Fallback\n\nThe search must still answer when HyDE cannot.\n" * 6)
+
+    with unreachable_port() as down_port, make_real_app(
+        tmp_path, monkeypatch, toml_content=_hyde_on_fake_ollama_toml(f"http://127.0.0.1:{down_port}")
+    ) as (client, _cfg, api_key), caplog.at_level(logging.INFO):
+        col = "hyde-provider-down"
+        ingest_file_via_path(client, col, str(doc), api_key=api_key)
+        responses = [
+            client.post(
+                "/search",
+                json={"collection": col, "query": f"{_HYDE_QUERY} {attempt}", "hyde": True},
+                headers=_auth(api_key),
+            )
+            for attempt in range(3)
+        ]
+
+    for resp in responses:
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["hyde_applied"] is False
+        assert resp.json()["results"]
+    hyde_warnings = [
+        r for r in caplog.records if r.levelno >= logging.WARNING and r.name == "archon_search.hyde"
+    ]
+    assert len(hyde_warnings) == 1
+    assert _HYDE_QUERY not in " ".join(r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """Integration tests — claude_cli provider factory wiring and rate-limit skip.
 
 Mirrors the Ollama coverage in test_g10_be4_provider_factory.py:
-- factory injects a ClaudeCLIQueryExpansionProvider for provider='claude_cli'
+- factory injects a ClaudeCliClient (HyDE) and a ClaudeCLIQueryExpansionProvider (RAG Fusion) for provider='claude_cli'
 - claude_cli skips the token bucket (local/free path, like Ollama)
 - app starts with provider='claude_cli' and a blank model (no ConfigError)
 
@@ -11,37 +11,42 @@ Run with:
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests import _fake_claude
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
+
+_HANG_SECONDS = 30.0
+_HYDE_TIMEOUT_SECONDS = 3.0  # covers the fake binary's interpreter start-up before it records its invocation
 
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
 
-def _mock_claude_proc(stdout: bytes) -> MagicMock:
-    proc = MagicMock()
-    proc.communicate = AsyncMock(return_value=(stdout, b""))
-    proc.returncode = 0
-    proc.kill = MagicMock()
-    proc.wait = AsyncMock(return_value=None)
-    return proc
+def _install_fake_claude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **behaviour: object
+) -> _fake_claude.FakeClaude:
+    """Put the fake ``claude`` first on ``PATH``, so the app composes its ``ClaudeCliClient`` on it."""
+    fake = _fake_claude.install(tmp_path / "fake-claude-bin", **behaviour)  # type: ignore[arg-type]
+    monkeypatch.setenv("PATH", f"{fake.path.parent}{os.pathsep}{os.environ['PATH']}")
+    return fake
 
 
 def test_factory_injects_claude_cli_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """provider='claude_cli' → generators use ClaudeCLIQueryExpansionProvider."""
+    """provider='claude_cli' → HyDE gets a ClaudeCliClient, RAG Fusion its ClaudeCLIQueryExpansionProvider."""
+    from archon_search.llm_client.claude_cli_client import ClaudeCliClient
     from archon_search.providers.claude_cli_provider import (
         ClaudeCLIQueryExpansionProvider,
     )
-    from archon_search.query_expansion_protocol import QueryExpansionProvider
 
     toml = (
         "[hyde]\n"
@@ -54,13 +59,12 @@ def test_factory_injects_claude_cli_provider(
         assert cfg.hyde.provider == "claude_cli"
         assert cfg.rag_fusion.provider == "claude_cli"
 
-        hyde_provider = client.app.state.hyde_generator._provider
+        hyde_client = client.app.state.hyde_client
         rag_provider = client.app.state.rag_fusion_generator._provider
 
-        assert isinstance(hyde_provider, ClaudeCLIQueryExpansionProvider)
+        assert isinstance(hyde_client, ClaudeCliClient)
+        assert client.app.state.hyde_generator._client is hyde_client
         assert isinstance(rag_provider, ClaudeCLIQueryExpansionProvider)
-        assert isinstance(hyde_provider, QueryExpansionProvider)
-        assert hyde_provider is not rag_provider
 
 
 def test_claude_cli_blank_model_starts_app(
@@ -73,28 +77,24 @@ def test_claude_cli_blank_model_starts_app(
 
 
 def test_claude_cli_rate_limit_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """claude_cli HyDE provider bypasses the token bucket (like Ollama)."""
+    """claude_cli HyDE bypasses the token bucket (like Ollama)."""
     from archon_search.config import HyDEConfig
     from archon_search.hyde import HyDEGenerator
-    from archon_search.providers.claude_cli_provider import (
-        ClaudeCLIQueryExpansionProvider,
-    )
+    from tests._hyde_stubs import ScriptedLlmClient
 
     mock_embedder = MagicMock()
     mock_embedder.embed_one = AsyncMock(return_value=[0.1] * 384)
 
-    mock_provider = MagicMock(spec=ClaudeCLIQueryExpansionProvider)
-    mock_provider.generate_hypothetical_doc = AsyncMock(return_value="A hypothetical document.")
-
+    client = ScriptedLlmClient(reply="A hypothetical document.")
     config = HyDEConfig(provider="claude_cli", model="haiku")
-    generator = HyDEGenerator(config=config, provider=mock_provider)
+    generator = HyDEGenerator(config=config, client=client)
 
     generator._rpm_tokens = 0  # exhaust the bucket
 
     result = asyncio.run(generator.generate("test query", embedder=mock_embedder))
 
     assert result is not None, "claude_cli HyDE should bypass the token bucket"
-    mock_provider.generate_hypothetical_doc.assert_called_once()
+    assert len(client.requests) == 1
     assert generator._rpm_tokens == 0, "claude_cli must not decrement the bucket"
 
 
@@ -125,12 +125,10 @@ def test_search_hyde_claude_cli_end_to_end(
 ) -> None:
     """E2E: HTTP /search with hyde=True and provider=claude_cli → hyde_applied=True.
 
-    The `claude` subprocess is mocked (canned stdout) so the test is fast and
-    environment-independent, but the full path runs for real: HTTP → pipeline →
-    HyDEGenerator → ClaudeCLIQueryExpansionProvider → embedding → search.
+    The ``claude`` on ``PATH`` is the real-subprocess fake of ``tests/_fake_claude.py``, so the full path runs:
+    HTTP → pipeline → HyDEGenerator → ClaudeCliClient → fake binary (prompt on standard input) → embedding → search.
     """
-    import archon_search.providers.claude_cli_provider as ccp
-
+    fake = _install_fake_claude(tmp_path, monkeypatch, reply="A hypothetical answer passage.")
     doc = tmp_path / "claude_cli_e2e.md"
     doc.write_text("# Claude CLI E2E\n\nHypothetical document embedding via the Claude CLI.\n" * 4)
 
@@ -138,16 +136,6 @@ def test_search_hyde_claude_cli_end_to_end(
 
     with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
         assert cfg.hyde.provider == "claude_cli"
-
-        # Force the provider to see `claude` as present and drive a canned response.
-        provider = client.app.state.hyde_generator._provider
-        monkeypatch.setattr(provider, "_claude_available", True)
-        monkeypatch.setattr(provider, "_claude_path", "/usr/bin/claude")
-        monkeypatch.setattr(
-            ccp.asyncio,
-            "create_subprocess_exec",
-            AsyncMock(return_value=_mock_claude_proc(b"A hypothetical answer passage.")),
-        )
 
         col = "claude-cli-e2e"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
@@ -160,31 +148,25 @@ def test_search_hyde_claude_cli_end_to_end(
         assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
         assert resp.json()["hyde_applied"] is True
 
+    [invocation] = fake.invocations()
+    assert "hypothetical document" in invocation.stdin
+    assert "hypothetical document" not in " ".join(invocation.argv)
+
 
 def test_search_hyde_claude_cli_timeout_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """E2E: claude subprocess times out → search still 200 with hyde_applied=False."""
-    import archon_search.providers.claude_cli_provider as ccp
-
+    """E2E: claude subprocess outlives ``[hyde].timeout_seconds`` → search still 200 with hyde_applied=False."""
+    fake = _install_fake_claude(tmp_path, monkeypatch, hang_seconds=_HANG_SECONDS)
     doc = tmp_path / "claude_cli_timeout.md"
     doc.write_text("# Timeout\n\nGraceful fallback content.\n" * 4)
 
-    toml = "[hyde]\nenabled = true\nprovider = \"claude_cli\"\nmodel = \"haiku\"\n"
+    toml = (
+        "[hyde]\nenabled = true\nprovider = \"claude_cli\"\nmodel = \"haiku\"\n"
+        f"timeout_seconds = {_HYDE_TIMEOUT_SECONDS}\n"
+    )
 
     with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, api_key):
-        provider = client.app.state.hyde_generator._provider
-        monkeypatch.setattr(provider, "_claude_available", True)
-        monkeypatch.setattr(provider, "_claude_path", "/usr/bin/claude")
-
-        timed_out = MagicMock()
-        timed_out.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
-        timed_out.kill = MagicMock()
-        timed_out.wait = AsyncMock(return_value=None)
-        monkeypatch.setattr(
-            ccp.asyncio, "create_subprocess_exec", AsyncMock(return_value=timed_out)
-        )
-
         col = "claude-cli-timeout"
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
@@ -195,3 +177,6 @@ def test_search_hyde_claude_cli_timeout_fallback(
         )
         assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
         assert resp.json()["hyde_applied"] is False
+
+    [invocation] = fake.invocations()
+    assert "graceful fallback" in invocation.stdin, "the call must have reached the hanging binary"

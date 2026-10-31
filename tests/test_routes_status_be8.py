@@ -85,8 +85,9 @@ def test_status_hyde_key_available_true_when_key_set(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
 
     from archon_search.hyde import HyDEGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
 
-    generator = HyDEGenerator(config=HyDEConfig())
+    generator = HyDEGenerator(config=HyDEConfig(), client=ScriptedLlmClient())
     assert generator.is_key_available() is True
 
     client = _make_client_with_expansion_config(tmp_db, hyde_enabled=True)
@@ -110,8 +111,9 @@ def test_status_hyde_key_available_false_when_key_absent(
     """
     # ANTHROPIC_API_KEY is already cleared by conftest.py — no setenv needed.
     from archon_search.hyde import HyDEGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
 
-    generator = HyDEGenerator(config=HyDEConfig())
+    generator = HyDEGenerator(config=HyDEConfig(), client=ScriptedLlmClient())
     assert generator.is_key_available() is False
 
     client = _make_client_with_expansion_config(tmp_db, hyde_enabled=True)
@@ -246,8 +248,9 @@ def test_hyde_generator_is_key_available_reflects_call_time_env(
     guarantee has a regression guard.
     """
     from archon_search.hyde import HyDEGenerator
+    from tests._hyde_stubs import ScriptedLlmClient
 
-    generator = HyDEGenerator(config=HyDEConfig())
+    generator = HyDEGenerator(config=HyDEConfig(), client=ScriptedLlmClient())
     assert generator.is_key_available() is False
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-late-set")

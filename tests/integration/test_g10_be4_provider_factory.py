@@ -4,9 +4,9 @@ Tests:
 - S7: HyDE with Ollama falls back gracefully on timeout → hyde_applied=False
 - S8: RAG Fusion with Ollama falls back gracefully on timeout → rag_fusion_applied=False
 - S6: Hyde=Ollama, RAG Fusion=Anthropic operate independently with no cross-contamination
-- C1-B-8: factory injects the correct provider type (QueryExpansionProvider protocol)
+- C1-B-8: factory injects the shared LlmClient (HyDE) and a QueryExpansionProvider (RAG Fusion)
 - S6 (rate-limit): Ollama provider skips rate limiting; non-Ollama provider respects it
-- C1-T-3: ollama_base_url passthrough to OllamaQueryExpansionProvider._base_url
+- C1-T-3: ollama_base_url is the host the HyDE client calls
 - C1-T-4: non-Ollama (Anthropic) provider IS blocked when token bucket exhausted
 
 Run with:
@@ -22,9 +22,28 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from archon_search.llm_client.protocol import LlmCallRequest
+from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
+
+_SLOW_ANSWER_SECONDS = 3.0
+_HYDE_TIMEOUT_SECONDS = 0.5
+_REQUEST_TIMEOUT_SECONDS = 10.0
+_MAX_OUTPUT_TOKENS = 200
+
+
+@pytest.fixture(autouse=True)
+def _no_proxy_for_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A developer's HTTP_PROXY must not capture the loopback requests of the fake model server."""
+    keep_loopback_out_of_proxies(monkeypatch)
+
+
+def _hyde_request() -> LlmCallRequest:
+    return LlmCallRequest(
+        prompt="write a passage", max_output_tokens=_MAX_OUTPUT_TOKENS, timeout_seconds=_REQUEST_TIMEOUT_SECONDS
+    )
 
 # anthropic is stubbed for all integration tests by the autouse fixture in
 # tests/integration/conftest.py (create_app's provider guard imports it).
@@ -69,14 +88,19 @@ def _install_ollama_stub(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     return fake_ollama
 
 
-def _toml_hyde_ollama(hyde_enabled: bool = True) -> str:
-    return (
+def _toml_hyde_ollama(
+    hyde_enabled: bool = True, base_url: str = "http://localhost:11434", timeout_seconds: float | None = None
+) -> str:
+    toml = (
         f"[hyde]\n"
         f"enabled = {'true' if hyde_enabled else 'false'}\n"
         f'provider = "ollama"\n'
         f'model = "llama3.2"\n'
-        f'ollama_base_url = "http://localhost:11434"\n'
+        f'ollama_base_url = "{base_url}"\n'
     )
+    if timeout_seconds is not None:
+        toml += f"timeout_seconds = {timeout_seconds}\n"
+    return toml
 
 
 def _toml_rag_fusion_ollama(rag_fusion_enabled: bool = True) -> str:
@@ -96,42 +120,36 @@ def _toml_rag_fusion_ollama(rag_fusion_enabled: bool = True) -> str:
 def test_search_hyde_ollama_fallback_on_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """S7: Ollama HyDE provider times out → hyde_applied=False (graceful fallback).
+    """S7: Ollama HyDE times out → hyde_applied=False (graceful fallback).
 
-    Verifies that when the Ollama AsyncClient.chat() raises TimeoutError,
+    The fake Ollama server answers later than ``[hyde].timeout_seconds``: the shared client raises a timeout,
     the search still returns 200 with hyde_applied=False (not a 500 error).
     """
     doc = tmp_path / "hyde_test.md"
     doc.write_text("# HyDE Test\n\nHypothetical document embedding test content.\n" * 4)
 
-    _install_ollama_stub(monkeypatch)
+    with FakeModelServer(response_delay_seconds=_SLOW_ANSWER_SECONDS) as server:
+        toml = _toml_hyde_ollama(hyde_enabled=True, base_url=server.base_url, timeout_seconds=_HYDE_TIMEOUT_SECONDS)
 
-    toml = _toml_hyde_ollama(hyde_enabled=True)
+        with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+            assert cfg.hyde.provider == "ollama", "expected provider=ollama from TOML"
+            assert cfg.hyde.enabled, "expected hyde.enabled=True"
 
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
-        assert cfg.hyde.provider == "ollama", "expected provider=ollama from TOML"
-        assert cfg.hyde.enabled, "expected hyde.enabled=True"
+            col = "hyde-ollama-timeout"
+            ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
-        col = "hyde-ollama-timeout"
-        ingest_file_via_path(client, col, str(doc), api_key=api_key)
-
-        # After startup, replace the provider's _get_client to raise TimeoutError
-        provider = client.app.state.hyde_generator._provider
-        mock_client = MagicMock()
-        mock_client.chat = AsyncMock(side_effect=TimeoutError("simulated timeout"))
-        monkeypatch.setattr(provider, "_get_client", lambda: mock_client)
-
-        resp = client.post(
-            "/search",
-            json={"collection": col, "query": "hypothetical document", "hyde": True},
-            headers=_auth(api_key),
-        )
-        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
-        data = resp.json()
-        assert "results" in data
-        assert data["hyde_applied"] is False, (
-            f"expected hyde_applied=False on Ollama timeout, got: {data['hyde_applied']}"
-        )
+            resp = client.post(
+                "/search",
+                json={"collection": col, "query": "hypothetical document", "hyde": True},
+                headers=_auth(api_key),
+            )
+            assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+            data = resp.json()
+            assert "results" in data
+            assert data["hyde_applied"] is False, (
+                f"expected hyde_applied=False on Ollama timeout, got: {data['hyde_applied']}"
+            )
+            assert len(server.requests_to("/api/chat")) == 1, "the call must have reached the slow provider"
 
 
 # ---------------------------------------------------------------------------
@@ -189,70 +207,65 @@ def test_search_hyde_ollama_rag_fusion_anthropic_independent(
     """S6: Hyde=ollama, RAG Fusion=anthropic; both work without interference.
 
     Verifies that each generator uses its configured client independently:
-    - HyDE uses OllamaQueryExpansionProvider
+    - HyDE uses an OllamaClient on its own fake server
     - RAG Fusion uses AnthropicQueryExpansionProvider (or the Anthropic default)
     They must not share state or interfere with each other.
 
     Also verifies behavioral independence: Ollama HyDE actually calls through
     to produce hyde_applied=True, proving the Ollama path works end-to-end.
     """
+    from archon_search.llm_client.ollama_client import OllamaClient
+
     doc = tmp_path / "independence_test.md"
     doc.write_text("# Independence Test\n\nBehavioral independence between providers.\n" * 4)
 
-    _install_ollama_stub(monkeypatch)
-
-    toml = (
-        "[hyde]\n"
-        "enabled = true\n"
-        'provider = "ollama"\n'
-        'model = "llama3.2"\n'
-        "\n"
-        "[rag_fusion]\n"
-        "enabled = true\n"
-        'provider = "anthropic"\n'
-        'model = "claude-haiku-4-5"\n'
-    )
-
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
-        assert cfg.hyde.provider == "ollama", "expected hyde provider=ollama"
-        assert cfg.rag_fusion.provider == "anthropic", "expected rag_fusion provider=anthropic"
-
-        # Verify generators have different provider types (construction wiring)
-        hyde_provider = client.app.state.hyde_generator._provider
-        rag_provider = client.app.state.rag_fusion_generator._provider
-
-        # HyDE should use OllamaQueryExpansionProvider
-        from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
-        assert isinstance(hyde_provider, OllamaQueryExpansionProvider), (
-            f"HyDE should use OllamaQueryExpansionProvider, got: {type(hyde_provider)}"
+    with FakeModelServer(reply_text="A short hypothetical document.") as server:
+        toml = (
+            "[hyde]\n"
+            "enabled = true\n"
+            'provider = "ollama"\n'
+            'model = "llama3.2"\n'
+            f'ollama_base_url = "{server.base_url}"\n'
+            "\n"
+            "[rag_fusion]\n"
+            "enabled = true\n"
+            'provider = "anthropic"\n'
+            'model = "claude-haiku-4-5"\n'
         )
 
-        # RAG Fusion should use AnthropicQueryExpansionProvider
-        from archon_search.providers.anthropic_provider import (
-            AnthropicQueryExpansionProvider,
-        )
-        assert isinstance(rag_provider, AnthropicQueryExpansionProvider), (
-            f"RAG Fusion should use AnthropicQueryExpansionProvider, got: {type(rag_provider)}"
-        )
+        with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+            assert cfg.hyde.provider == "ollama", "expected hyde provider=ollama"
+            assert cfg.rag_fusion.provider == "anthropic", "expected rag_fusion provider=anthropic"
 
-        # Providers must be independent instances (no shared state)
-        assert hyde_provider is not rag_provider, "generators must use independent provider instances"
+            # Verify the two generators sit on different kinds of caller (construction wiring)
+            hyde_client = client.app.state.hyde_client
+            rag_provider = client.app.state.rag_fusion_generator._provider
+            assert isinstance(hyde_client, OllamaClient), (
+                f"HyDE should use an OllamaClient, got: {type(hyde_client)}"
+            )
+            from archon_search.providers.anthropic_provider import (
+                AnthropicQueryExpansionProvider,
+            )
+            assert isinstance(rag_provider, AnthropicQueryExpansionProvider), (
+                f"RAG Fusion should use AnthropicQueryExpansionProvider, got: {type(rag_provider)}"
+            )
 
-        # Behavioral independence: ingest a document and run Ollama HyDE search
-        col = "s6-independence"
-        ingest_file_via_path(client, col, str(doc), api_key=api_key)
+            # Behavioral independence: ingest a document and run Ollama HyDE search
+            col = "s6-independence"
+            ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
-        resp = client.post(
-            "/search",
-            json={"collection": col, "query": "independence test", "hyde": True},
-            headers=_auth(api_key),
-        )
-        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
-        data = resp.json()
-        assert data["hyde_applied"] is True, (
-            f"Ollama HyDE should succeed independently of the Anthropic RAG Fusion provider, "
-            f"got hyde_applied={data['hyde_applied']}"
-        )
+            resp = client.post(
+                "/search",
+                json={"collection": col, "query": "independence test", "hyde": True},
+                headers=_auth(api_key),
+            )
+            assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+            data = resp.json()
+            assert data["hyde_applied"] is True, (
+                f"Ollama HyDE should succeed independently of the Anthropic RAG Fusion provider, "
+                f"got hyde_applied={data['hyde_applied']}"
+            )
+    assert len(server.requests_to("/api/chat")) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -262,21 +275,24 @@ def test_search_hyde_ollama_rag_fusion_anthropic_independent(
 def test_factory_injects_correct_provider_type(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """C1-B-8: The factory must inject a QueryExpansionProvider-conforming provider.
+    """C1-B-8: HyDE gets a shared ``LlmClient`` of its own provider; RAG Fusion keeps a QueryExpansionProvider.
 
-    isinstance check works because QueryExpansionProvider is @runtime_checkable.
+    isinstance checks work because both protocols are @runtime_checkable.
     Tests both the default (anthropic) and ollama paths.
     """
+    from archon_search.llm_client.anthropic_client import AnthropicClient
+    from archon_search.llm_client.ollama_client import OllamaClient
+    from archon_search.llm_client.protocol import LlmClient
     from archon_search.query_expansion_protocol import QueryExpansionProvider
 
     # --- Default (anthropic) provider path ---
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, _api_key):
-        hyde_provider = client.app.state.hyde_generator._provider
+        hyde_client = client.app.state.hyde_client
         rag_provider = client.app.state.rag_fusion_generator._provider
 
-        assert isinstance(hyde_provider, QueryExpansionProvider), (
-            f"HyDE provider must satisfy QueryExpansionProvider protocol, got: {type(hyde_provider)}"
-        )
+        assert isinstance(hyde_client, AnthropicClient)
+        assert isinstance(hyde_client, LlmClient)
+        assert client.app.state.hyde_generator._client is hyde_client
         assert isinstance(rag_provider, QueryExpansionProvider), (
             f"RAG Fusion provider must satisfy QueryExpansionProvider protocol, got: {type(rag_provider)}"
         )
@@ -295,12 +311,11 @@ def test_factory_injects_correct_provider_type(
     ollama_tmp = tmp_path / "ollama_sub"
     ollama_tmp.mkdir()
     with make_real_app(ollama_tmp, monkeypatch, toml_content=toml) as (client2, _cfg2, _api_key2):
-        ollama_hyde_provider = client2.app.state.hyde_generator._provider
+        ollama_hyde_client = client2.app.state.hyde_client
         ollama_rag_provider = client2.app.state.rag_fusion_generator._provider
 
-        assert isinstance(ollama_hyde_provider, QueryExpansionProvider), (
-            f"Ollama HyDE provider must satisfy QueryExpansionProvider protocol, got: {type(ollama_hyde_provider)}"
-        )
+        assert isinstance(ollama_hyde_client, OllamaClient)
+        assert isinstance(ollama_hyde_client, LlmClient)
         assert isinstance(ollama_rag_provider, QueryExpansionProvider), (
             f"Ollama RAG Fusion provider must satisfy QueryExpansionProvider protocol, got: {type(ollama_rag_provider)}"
         )
@@ -311,30 +326,21 @@ def test_factory_injects_correct_provider_type(
 # ---------------------------------------------------------------------------
 
 def test_ollama_rate_limit_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """S6 (rate-limit): Ollama HyDE provider bypasses the token bucket.
+    """S6 (rate-limit): Ollama HyDE bypasses the token bucket.
 
-    Unit-style test: creates a HyDEGenerator with provider='ollama' and a mock
-    Ollama provider, exhausts _rpm_tokens=0, and verifies the provider IS called
-    (rate limit was skipped) and generate() returns a non-None embedding.
+    Unit-style test: creates a HyDEGenerator with provider='ollama' over a scripted client, exhausts
+    _rpm_tokens=0, and verifies the client IS called (rate limit was skipped) and generate() returns an embedding.
     """
-    _install_ollama_stub(monkeypatch)
-
     from archon_search.config import HyDEConfig
     from archon_search.hyde import HyDEGenerator
-    from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
+    from tests._hyde_stubs import ScriptedLlmClient
 
-    # Mock embedder that returns a fixed vector
     mock_embedder = MagicMock()
     mock_embedder.embed_one = AsyncMock(return_value=[0.1] * 384)
 
-    # Mock Ollama provider that returns a fixed hypothesis text
-    mock_provider = MagicMock(spec=OllamaQueryExpansionProvider)
-    mock_provider.generate_hypothetical_doc = AsyncMock(
-        return_value="A short hypothetical document."
-    )
-
+    client = ScriptedLlmClient(reply="A short hypothetical document.")
     config = HyDEConfig(provider="ollama", model="llama3.2")
-    generator = HyDEGenerator(config=config, provider=mock_provider)
+    generator = HyDEGenerator(config=config, client=client)
 
     # Exhaust the token bucket
     generator._rpm_tokens = 0
@@ -345,7 +351,7 @@ def test_ollama_rate_limit_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result is not None, (
         "Ollama HyDE should bypass the token bucket and return an embedding vector"
     )
-    mock_provider.generate_hypothetical_doc.assert_called_once()
+    assert len(client.requests) == 1
     # Token remains at 0 — Ollama never decrements the bucket
     assert generator._rpm_tokens == 0, (
         "Ollama path must not decrement _rpm_tokens (no API cap)"
@@ -353,78 +359,49 @@ def test_ollama_rate_limit_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_non_ollama_provider_respects_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """C1-T-4: Non-Ollama (Anthropic) HyDE provider IS blocked by the token bucket.
+    """C1-T-4: Non-Ollama (Anthropic) HyDE IS blocked by the token bucket.
 
-    Unit-style test: creates a HyDEGenerator with provider='anthropic' and a mock
-    Anthropic provider that would succeed, sets _rpm_tokens=0, sets ANTHROPIC_API_KEY
-    so the key guard inside the provider passes, and asserts the provider is NOT
-    called (rate limit fired first) and generate() returns None.
+    Unit-style test: creates a HyDEGenerator with provider='anthropic' over a client that would succeed, sets
+    _rpm_tokens=0, and asserts the client is NOT called (rate limit fired first) and generate() returns None.
     """
     from archon_search.config import HyDEConfig
     from archon_search.hyde import HyDEGenerator
-    from archon_search.providers.anthropic_provider import (
-        AnthropicQueryExpansionProvider,
-    )
+    from tests._hyde_stubs import ScriptedLlmClient
 
-    # Ensure the API key guard in the provider passes — without this, the result
-    # would be None because of the missing key, not because of the rate limit.
+    # Ensure the key is set — without it a None result could be a missing key, not the rate limit.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-for-rate-limit-test")
 
-    # Mock embedder
     mock_embedder = MagicMock()
     mock_embedder.embed_one = AsyncMock(return_value=[0.1] * 384)
 
-    # Mock Anthropic provider that would return content if called
-    mock_provider = MagicMock(spec=AnthropicQueryExpansionProvider)
-    mock_provider.generate_hypothetical_doc = AsyncMock(
-        return_value="This would be a hypothesis if not rate-limited."
-    )
-
+    client = ScriptedLlmClient(reply="This would be a hypothesis if not rate-limited.")
     config = HyDEConfig(provider="anthropic", model="claude-haiku-4-5")
-    generator = HyDEGenerator(config=config, provider=mock_provider)
+    generator = HyDEGenerator(config=config, client=client)
 
     # Exhaust the token bucket
     generator._rpm_tokens = 0
 
-    # generate() must return None: rate limit fires before calling the provider
+    # generate() must return None: rate limit fires before calling the client
     result = asyncio.run(generator.generate("test query", embedder=mock_embedder))
 
     assert result is None, (
         f"Non-Ollama HyDE must return None when _rpm_tokens=0 (rate limited), got: {result}"
     )
-    mock_provider.generate_hypothetical_doc.assert_not_called()
+    assert client.requests == []
 
 
 def test_ollama_base_url_passthrough(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """C1-T-3: Custom ollama_base_url is forwarded to OllamaQueryExpansionProvider._base_url.
+    """C1-T-3: ``[hyde].ollama_base_url`` is the host the HyDE client calls, not the default localhost:11434."""
+    with FakeModelServer(reply_text="A short hypothetical document.") as server:
+        toml = _toml_hyde_ollama(hyde_enabled=True, base_url=server.base_url)
 
-    Verifies that the factory wires the configured base URL into the provider
-    rather than using the default 'http://localhost:11434'.
-    """
-    _install_ollama_stub(monkeypatch)
+        with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, _api_key):
+            reply = asyncio.run(client.app.state.hyde_client.call(_hyde_request()))
 
-    custom_url = "http://custom-ollama-host:9999"
-    toml = (
-        "[hyde]\n"
-        "enabled = true\n"
-        'provider = "ollama"\n'
-        'model = "llama3.2"\n'
-        f'ollama_base_url = "{custom_url}"\n'
-    )
-
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, _cfg, _api_key):
-        hyde_provider = client.app.state.hyde_generator._provider
-
-        from archon_search.providers.ollama_provider import OllamaQueryExpansionProvider
-        assert isinstance(hyde_provider, OllamaQueryExpansionProvider), (
-            f"Expected OllamaQueryExpansionProvider, got: {type(hyde_provider)}"
-        )
-        assert hyde_provider._base_url == custom_url, (
-            f"Expected ollama_base_url='{custom_url}' to be forwarded to provider._base_url, "
-            f"got: '{hyde_provider._base_url}'"
-        )
+    assert reply.text == "A short hypothetical document."
+    assert len(server.requests_to("/api/chat")) == 1
 
 
 # ---------------------------------------------------------------------------
