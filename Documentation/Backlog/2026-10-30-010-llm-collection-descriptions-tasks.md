@@ -284,7 +284,7 @@ flowchart LR
         - #unit_test — `test_shared_model_with_different_context_warns` — two Ollama features on one model with different values print the reload warning
         - #unit_test — `test_revert_strips_ollama_context_tokens` — a failed install removes the key from the reverted sections
         - #integration_test — `test_wizard_writes_ollama_context_per_feature` — the wizard end-to-end writes each feature's value into its own section
-- [ ] **T-1** — e2e: HyDE search through the real app on a fake Ollama server, including the provider-down fallback #tester-role
+- [x] **T-1** — e2e: HyDE search through the real app on a fake Ollama server, including the provider-down fallback #tester-role
     - — · 4.0h
     - needs BE-11, BE-5 · completes S1, S2, S7
     - Tests
