@@ -222,7 +222,7 @@ flowchart LR
         - #unit_test — `test_ollama_budget_applies_20_percent_margin_and_reserve` — the Ollama input budget is window minus answer reserve minus template, with the margin on the estimate
         - #unit_test — `test_llama_cpp_budget_uses_exact_count` — the `llama_cpp` budget uses the exact token count from its tokenize callback
         - #unit_test — `test_budget_reserves_room_for_retry_reminder` — the template used for sizing includes the retry reminder
-- [ ] **BE-5** — Ollama wrapper on the native `ollama` SDK (`AsyncClient.chat`, `num_ctx` only when configured, `think`, model maximum from `show`) plus the new loopback fake model server `tests/_fake_model_server.py` (Ollama `/api/chat`, `/api/show`; llama.cpp `/props`, `/tokenize`, `/v1/chat/completions`) #backend-role
+- [x] **BE-5** — Ollama wrapper on the native `ollama` SDK (`AsyncClient.chat`, `num_ctx` only when configured, `think`, model maximum from `show`) plus the new loopback fake model server `tests/_fake_model_server.py` (Ollama `/api/chat`, `/api/show`; llama.cpp `/props`, `/tokenize`, `/v1/chat/completions`) #backend-role
     - Interface Adapters · 5.0h
     - needs BE-2, BE-4 · completes S6, S7
     - Tests
