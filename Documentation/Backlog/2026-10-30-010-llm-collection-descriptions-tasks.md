@@ -512,7 +512,7 @@ flowchart LR
         - #unit_test — `test_think_true_on_non_thinking_model_warns` — a clear WARNING names the model
         - #unit_test — `test_restricted_chunks_sampled_only_for_local_providers` — cloud and `claude_cli` ignore the switch
         - #integration_test — `test_llama_cpp_think_switch_against_fake_server` — the request body carries the switch the wrapper chose
-- [ ] **T-7** — e2e on bad model output, plus manual live-provider checks #tester-role
+- [x] **T-7** — e2e on bad model output, plus manual live-provider checks #tester-role
     - — · 7.0h
     - needs BE-29, BE-30, BE-25 · completes S50, S53, S54
     - Tests

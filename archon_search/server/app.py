@@ -1180,6 +1180,15 @@ def create_app(
             if app.state.description_lifecycle is not None:
                 await app.state.description_lifecycle.drain()
 
+            # The cloud wrappers hold a pooled SDK client for the life of the process (the other providers have nothing
+            # to close); with the generations gone, close it here instead of leaving it to be closed on a dead event loop.
+            aclose = getattr(app.state.description_client, "aclose", None)
+            if aclose is not None:
+                try:
+                    await aclose()
+                except Exception:
+                    logger.debug("description client aclose() failed", exc_info=True)
+
             # Shutdown: disconnect search store
             await app.state.search_store.disconnect()
 
