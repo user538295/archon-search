@@ -230,7 +230,7 @@ flowchart LR
         - #unit_test — `test_ollama_wrapper_omits_num_ctx_when_unset` — an unset window assumes 4096 and sends nothing
         - #unit_test — `test_consecutive_calls_send_one_user_message_each` — the second call shares no history with the first
         - #integration_test — `test_ollama_wrapper_round_trips_against_fake_server` — the real SDK talks to the fake loopback server and the request carries `num_ctx`
-- [ ] **BE-6** — `llama_cpp` wrapper over `httpx`: window from `GET /props`, exact count through tokenize, chat completions; a failed probe assumes 4096 and logs a WARNING #backend-role
+- [x] **BE-6** — `llama_cpp` wrapper over `httpx`: window from `GET /props`, exact count through tokenize, chat completions; a failed probe assumes 4096 and logs a WARNING #backend-role
     - Interface Adapters · 4.0h
     - needs BE-2, BE-4, BE-5 · completes S8
     - Tests

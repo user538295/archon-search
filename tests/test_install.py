@@ -1809,6 +1809,7 @@ class TestRunNonBlocking:
              patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_is_service_running", return_value=False), \
              patch.object(installer, "_wait_for_service", return_value=True), \
+             patch.object(installer, "preload_models", return_value=None), \
              patch.object(installer, "_bootstrap_collections"):
             start = time.monotonic()
             result = installer.run(non_interactive=True)

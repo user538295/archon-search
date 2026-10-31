@@ -1,0 +1,100 @@
+"""BE-6 (collection-descriptions plan, C1, S8, S11): the ``llama_cpp`` wrapper against the loopback fake server."""
+
+from __future__ import annotations
+
+import socket
+
+import pytest
+
+from archon_search.constants import ANSWER_RESERVE_TOKENS, ASSUMED_CONTEXT_TOKENS
+from archon_search.llm_client.llama_cpp_client import LlamaCppClient
+from archon_search.llm_client.protocol import (
+    ContextWindowSource,
+    ContextWindowTokens,
+    InputBudget,
+    LlmCallFailure,
+    LlmCallRequest,
+    LlmCallTimeout,
+)
+from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
+
+pytestmark = pytest.mark.integration
+
+_LOOPBACK = "127.0.0.1"
+_MODEL = "fake-model"
+_PROMPT = "describe this collection in one line"
+_REPLY = "a one line description"
+_WINDOW = 8192
+_TIMEOUT_SECONDS = 10.0
+_SHORT_TIMEOUT_SECONDS = 0.2
+_LONGER_THAN_THE_TIMEOUT_SECONDS = 1.0
+# The fake's tokenize counts one token per whitespace-separated word.
+_TEMPLATE = "Describe the collection in one sentence."
+_TEMPLATE_TOKENS = 6
+
+
+@pytest.fixture(autouse=True)
+def _no_proxy_for_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    keep_loopback_out_of_proxies(monkeypatch)
+
+
+def _request(timeout: float = _TIMEOUT_SECONDS) -> LlmCallRequest:
+    return LlmCallRequest(prompt=_PROMPT, max_output_tokens=ANSWER_RESERVE_TOKENS, timeout_seconds=timeout)
+
+
+async def test_llama_cpp_wrapper_against_fake_server() -> None:
+    with FakeModelServer(reply_text=_REPLY, llama_n_ctx=_WINDOW) as server:
+        client = LlamaCppClient(model=_MODEL, base_url=server.base_url)
+
+        window = await client.probe_context_window(_TIMEOUT_SECONDS)
+        budget = await client.input_budget(_TEMPLATE)
+        result = await client.call(_request())
+
+        assert window == ContextWindowTokens(size=_WINDOW, source=ContextWindowSource.PROBED)
+        assert budget == InputBudget(tokens=_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS)
+        assert result.text == _REPLY
+        assert [request.path for request in server.requests] == ["/props", "/tokenize", "/v1/chat/completions"]
+        assert server.requests_to("/tokenize")[0].body == {"content": _TEMPLATE}
+        assert server.requests_to("/v1/chat/completions")[0].body == {
+            "model": _MODEL,
+            "max_tokens": ANSWER_RESERVE_TOKENS,
+            "messages": [{"role": "user", "content": _PROMPT}],
+        }
+
+
+async def test_llama_cpp_wrapper_maps_a_server_error_without_the_prompt() -> None:
+    with FakeModelServer(status_overrides={"/v1/chat/completions": 503}) as server:
+        client = LlamaCppClient(model=_MODEL, base_url=server.base_url)
+        with pytest.raises(LlmCallFailure) as raised:
+            await client.call(_request())
+        assert "HTTP 503" in raised.value.reason
+        assert _PROMPT not in str(raised.value)
+
+
+async def test_llama_cpp_wrapper_maps_a_slow_server_to_timeout() -> None:
+    with FakeModelServer(response_delay_seconds=_LONGER_THAN_THE_TIMEOUT_SECONDS) as slow:
+        client = LlamaCppClient(model=_MODEL, base_url=slow.base_url)
+        with pytest.raises(LlmCallTimeout):
+            await client.call(_request(_SHORT_TIMEOUT_SECONDS))
+
+
+async def test_llama_cpp_wrapper_probe_failure_against_fake_server_assumes_4096() -> None:
+    with FakeModelServer(status_overrides={"/props": 503}) as server:
+        client = LlamaCppClient(model=_MODEL, base_url=server.base_url)
+
+        window = await client.probe_context_window(_TIMEOUT_SECONDS)
+
+        assert window == ContextWindowTokens(size=ASSUMED_CONTEXT_TOKENS, source=ContextWindowSource.ASSUMED)
+
+
+async def test_llama_cpp_wrapper_reports_unreachable_server() -> None:
+    # A bound socket that never listens refuses every connection, and keeps its port from being handed to another test.
+    with socket.socket() as refusing:
+        refusing.bind((_LOOPBACK, 0))
+        client = LlamaCppClient(model=_MODEL, base_url=f"http://{_LOOPBACK}:{refusing.getsockname()[1]}")
+
+        with pytest.raises(LlmCallFailure) as raised:
+            await client.call(_request())
+
+    assert not isinstance(raised.value, LlmCallTimeout)
+    assert "cannot connect" in raised.value.reason

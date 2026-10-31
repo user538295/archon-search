@@ -34,6 +34,7 @@ from archon_search.llm_client.protocol import (
     LlmCallTimeout,
     ThinkSetting,
 )
+from archon_search.llm_client.server_text import bounded_server_text
 from archon_search.llm_client.token_counter import TokenCounter
 
 PROVIDER_NAME: Final = "ollama"
@@ -45,21 +46,8 @@ _THINK_ARGUMENT: Final = {ThinkSetting.ON: True, ThinkSetting.OFF: False}
 _ARCHITECTURE_KEY: Final = "general.architecture"
 _CONTEXT_LENGTH_SUFFIX: Final = "context_length"
 
-#: Longest server error text a failure reason carries.
-_MAX_SERVER_TEXT_CHARS: Final = 200
-
 #: Opens an SDK client for a host: an async context manager with ``chat`` and ``show``. The default is ``ollama.AsyncClient``.
 SdkClientFactory = Callable[[str], AbstractAsyncContextManager[Any]]
-
-
-def _bounded_server_text(text: str, prompt: str) -> str:
-    """Server error text as one short line with the prompt (raw or JSON-escaped) masked; best effort, the text is untrusted."""
-    scrubbed = text
-    if prompt:
-        for echo in (prompt, json.dumps(prompt)[1:-1]):
-            scrubbed = scrubbed.replace(echo, "[prompt]")
-    one_line = " ".join(scrubbed.split())
-    return one_line if len(one_line) <= _MAX_SERVER_TEXT_CHARS else f"{one_line[:_MAX_SERVER_TEXT_CHARS]}..."
 
 
 def _open_sdk_client(host: str) -> AbstractAsyncContextManager[Any]:
@@ -165,7 +153,7 @@ class OllamaClient:
         from pydantic import ValidationError
 
         if isinstance(exc, ResponseError):
-            return LlmCallFailure(PROVIDER_NAME, f"HTTP {exc.status_code}: {_bounded_server_text(str(exc.error), prompt)}")
+            return LlmCallFailure(PROVIDER_NAME, f"HTTP {exc.status_code}: {bounded_server_text(str(exc.error), prompt)}")
         if isinstance(exc, httpx.TransportError):
             return LlmCallFailure(PROVIDER_NAME, f"the connection to the Ollama server failed ({type(exc).__name__})")
         if isinstance(exc, ValidationError | json.JSONDecodeError):
