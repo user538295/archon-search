@@ -162,7 +162,7 @@ class LifecycleStore(Protocol):
 
 
 class DescriptionGeneration(Protocol):
-    """``DescriptionGenerator.generate``: samples, calls the model once, never raises."""
+    """``DescriptionGenerator.generate``: samples, asks the model (one retry at most), never raises."""
 
     async def generate(
         self, collection: str, namespace: str, *, include_restricted: bool = False

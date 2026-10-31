@@ -16,8 +16,19 @@ excerpt fits, the outcome is ``callFailed`` with a detail that names the window.
 stays ``min(max_sample_chunks, M)`` and nothing is counted.
 
 A store error while reading is ``sampleReadFailed``; ``noUnrestrictedChunks`` means the read worked and found no open
-chunk (no provider call is made then). The outcome carries the model's answer stripped of surrounding whitespace; the
-output rules (cleaning, the retry, the length limit) are applied on top of it.
+chunk (no provider call is made then).
+
+Output rules (BE-29, C2). Every answer is cleaned: thinking is removed (closed ``<think>``/``<thinking>``/``<thought>``/
+``<reasoning>`` blocks, text up to a closing tag that has no opener, and an unclosed opener at the start) and all white
+space collapses to single spaces, so the text is one line. A cleaned answer that is non-empty and at most
+``MAX_DESCRIPTION_CHARS`` characters is the description. Anything else gets ONE automatic retry: the same single message
+plus ``_RETRY_REMINDER`` (the constant the input budget is sized with, so a retry of a full sample still fits the
+window). A provider error, on either attempt, is never retried. An answer that is still too long after the retry is
+trimmed to its last full sentence within the limit (``DescriptionGenerated.trimmed``); when it has no sentence end, to
+its last word, or to the limit itself when it has no space. When both answers have nothing left after cleaning the
+outcome is ``unusableOutput`` with a WARNING that points to the ``think`` setting (a reasoning model's answer was eaten by
+its thinking); an empty retry after an over-long first answer trims that first answer instead. Each attempt has the
+configured timeout and the answer ceiling ``ANSWER_RESERVE_TOKENS``, the room the input budget already reserves.
 
 Logging: every failure logs one WARNING with the collection name and ``DescriptionFailed.detail``, which never holds an
 excerpt, a prompt or an answer (the provider's failure text is prompt-masked by the shared client, C1; an unexpected
@@ -29,6 +40,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -49,6 +61,25 @@ from archon_search.llm_client.protocol import (
 
 logger = logging.getLogger(__name__)
 
+#: Tag names a model wraps its thinking in (regex alternation).
+_THINKING_TAGS: Final = "think|thinking|thought|reasoning"
+#: A closed thinking block, any of the tag names (case-insensitive, attributes allowed).
+_THINKING_BLOCK: Final = re.compile(rf"<({_THINKING_TAGS})\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+#: Everything up to the last closing tag that has no opener: some chat templates open the thinking in the prompt.
+_THINKING_ORPHAN_CLOSE: Final = re.compile(rf"\A.*</(?:{_THINKING_TAGS})\s*>", re.IGNORECASE | re.DOTALL)
+#: An opening tag at the start that is never closed (the model ran out of answer room while thinking): all is thinking.
+_THINKING_UNCLOSED: Final = re.compile(rf"\A\s*<(?:{_THINKING_TAGS})\b[^>]*>.*\Z", re.IGNORECASE | re.DOTALL)
+#: A sentence end: a terminator (and any closing quote or bracket) before white space or the end of the text, so ``3.5``
+#: is no end; or a CJK terminator.
+_SENTENCE_END: Final = re.compile(r"[.!?…][\"')\]”’]*(?=\s|\Z)|[。！？]")
+#: Control characters that are not white space (NUL, ESC, DEL, ...): dropped, as a stored description is plain text.
+_CONTROL_CHARACTERS: Final = re.compile(r"[\x00-\x08\x0e-\x1b\x7f]")
+#: The failure detail (and WARNING) when the answer has nothing left after cleaning, even after the retry (S21).
+_NO_USABLE_OUTPUT_DETAIL: Final = (
+    "the model returned no usable text after one retry (empty, or only thinking); it may be a reasoning model: "
+    "set `think` to false in [description] (local providers) so it answers directly"
+)
+
 #: Joins the excerpts of one prompt; counted as part of the cost of a draw.
 _SAMPLE_SEPARATOR: Final = "\n\n---\n\n"
 #: ``warn_once`` key: one WARNING per process for every failed provider call of a description generation.
@@ -65,13 +96,15 @@ Below are sample excerpts from documents in this collection:
 
 Write 2-3 sentences that summarize what this collection contains and its purpose. \
 Be specific about the topic and type of content. \
-Output only the description — no preamble, no explanation.
-"""
+""" + (
+    f"Output only the description as one line of plain text of at most {MAX_DESCRIPTION_CHARS} characters"
+    " — no preamble, no explanation.\n"
+)
 
-#: The reminder of the one automatic retry (BE-29). Until that retry exists it only sizes the prompt: the input budget is
-#: sized for the template WITH it (C1), so a retry of a full sample will still fit the window.
+#: The reminder of the one automatic retry (BE-29). The input budget is sized for the template WITH it (C1), so a retry
+#: of a full sample still fits the window; sizing and the retry share this one constant so they cannot drift.
 _RETRY_REMINDER: Final = (
-    f"\n\nYour previous answer was longer than {MAX_DESCRIPTION_CHARS} characters. "
+    f"\n\nYour previous answer was empty or longer than {MAX_DESCRIPTION_CHARS} characters. "
     f"Answer again in one line of at most {MAX_DESCRIPTION_CHARS} characters."
 )
 
@@ -81,7 +114,7 @@ class DescriptionFailureReason(enum.StrEnum):
 
     #: Provider unreachable, key missing, timeout, prompt rejected or window too small: any call failure (not retried).
     CALL_FAILED = "callFailed"
-    #: The answer was empty.
+    #: Nothing was left of the answer after cleaning (empty, or only thinking), even after the retry.
     UNUSABLE_OUTPUT = "unusableOutput"
     #: The collection has no open chunk and restricted chunks are not allowed (the read worked).
     NO_UNRESTRICTED_CHUNKS = "noUnrestrictedChunks"
@@ -96,7 +129,7 @@ class DescriptionGenerated:
     """The model produced a description."""
 
     text: str
-    #: True when the text was trimmed to the last full sentence after the retry.
+    #: True when the text was cut to fit the limit (to the last full sentence, else the last word) instead of kept whole.
     trimmed: bool = False
 
 
@@ -122,6 +155,26 @@ class _GenerationStopped(Exception):
         super().__init__(detail)
         self.failed = DescriptionFailed(reason, detail)
         self.provider_failure = provider_failure
+
+
+def _clean_answer(raw: str) -> str:
+    """The model's answer without thinking or control characters, as one line (white space runs become one space)."""
+    visible = _THINKING_BLOCK.sub(" ", raw)
+    visible = _THINKING_ORPHAN_CLOSE.sub("", visible)
+    visible = _THINKING_UNCLOSED.sub("", visible)
+    return " ".join(_CONTROL_CHARACTERS.sub("", visible).split())
+
+
+def _trim_to_last_sentence(text: str) -> str:
+    """*text* (one line, longer than the limit) cut to its last full sentence within ``MAX_DESCRIPTION_CHARS``.
+
+    Without a sentence end in range the cut is at the last word, and at the limit itself when there is no space."""
+    window = text[: MAX_DESCRIPTION_CHARS + 1]
+    sentence_ends = [match.end() for match in _SENTENCE_END.finditer(window) if match.end() <= MAX_DESCRIPTION_CHARS]
+    if sentence_ends:
+        return text[: sentence_ends[-1]]
+    last_space = window.rfind(" ")
+    return text[:last_space] if last_space > 0 else text[:MAX_DESCRIPTION_CHARS]
 
 
 def _should_regenerate(
@@ -192,7 +245,7 @@ class DescriptionGenerator:
     async def generate(
         self, collection: str, namespace: str, *, include_restricted: bool = False
     ) -> DescriptionOutcome:
-        """Sample *collection*, call the model once and return the outcome.
+        """Sample *collection*, ask the model (one retry at most, see the output rules) and return the outcome.
 
         Args:
             collection: the collection to describe.
@@ -205,14 +258,14 @@ class DescriptionGenerator:
         """
         try:
             sample = await self._draw_sample(collection, namespace, include_restricted)
-            text = await self._ask(collection, sample)
+            generated = await self._ask(collection, sample)
         except _GenerationStopped as stopped:
             failed, provider_failure = stopped.failed, stopped.provider_failure
         except Exception as unexpected:  # noqa: BLE001 — a store-side error; provider steps are covered by _provider_step
             failed = DescriptionFailed(DescriptionFailureReason.SAMPLE_READ_FAILED, f"unexpected {type(unexpected).__name__}")
             provider_failure = False
         else:
-            return DescriptionGenerated(text=text)
+            return generated
         self._log_failure(collection, failed.detail, provider_failure=provider_failure)
         return failed
 
@@ -272,18 +325,30 @@ class DescriptionGenerator:
             f"the model's context window ({named}) leaves {budget} input tokens, too little for {room}",
         )
 
-    async def _ask(self, collection: str, sample: list[str]) -> str:
+    async def _ask(self, collection: str, sample: list[str]) -> DescriptionGenerated:
+        """The model's answer under the output rules: accepted, or retried once and then trimmed or failed."""
+        prompt = _DESCRIPTION_PROMPT.format(name=collection, samples=_SAMPLE_SEPARATOR.join(sample))
+        first = await self._attempt(prompt)
+        if first and len(first) <= MAX_DESCRIPTION_CHARS:
+            return DescriptionGenerated(text=first)
+        second = await self._attempt(prompt + _RETRY_REMINDER)
+        cleaned = second or first  # an empty retry still leaves an over-long first answer to trim
+        if not cleaned:
+            raise _GenerationStopped(DescriptionFailureReason.UNUSABLE_OUTPUT, _NO_USABLE_OUTPUT_DETAIL)
+        if len(cleaned) <= MAX_DESCRIPTION_CHARS:
+            return DescriptionGenerated(text=cleaned)
+        return DescriptionGenerated(text=_trim_to_last_sentence(cleaned), trimmed=True)
+
+    async def _attempt(self, prompt: str) -> str:
+        """One model call (its own timeout; a provider error stops the generation, it is never retried), cleaned."""
         request = LlmCallRequest(
-            prompt=_DESCRIPTION_PROMPT.format(name=collection, samples=_SAMPLE_SEPARATOR.join(sample)),
+            prompt=prompt,
             max_output_tokens=ANSWER_RESERVE_TOKENS,
             timeout_seconds=self._config.timeout_seconds,
         )
         with _provider_step():
             result = await self._client.call(request)
-            answer = result.text.strip()
-        if not answer:
-            raise _GenerationStopped(DescriptionFailureReason.UNUSABLE_OUTPUT, "the model returned an empty answer")
-        return answer
+        return _clean_answer(result.text)
 
     @staticmethod
     def _log_failure(collection: str, detail: str, *, provider_failure: bool) -> None:

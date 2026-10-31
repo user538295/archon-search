@@ -495,7 +495,7 @@ flowchart LR
         - #manual_test — Clean-environment install without claude-agent-sdk — server and CLI work and the package is not importable (non-automatable: an install test is forbidden in the default and unlocked-deps lanes, and a stale dev venv still holds the package)
 
 ### Phase 5 · Get a usable description from reasoning models and messy output *(output rules, retry, trim, `think`, restricted-chunk switch)*
-- [ ] **BE-29** — Output rules in `description_generator.py`: strip thinking tags, one line, at most 600 characters, one automatic retry with the same single message plus a limit reminder (a provider error is not retried), trim to the last full sentence, nothing usable becomes `failed` keeping the old text with the reasoning-model WARNING; generous answer ceiling #backend-role
+- [x] **BE-29** — Output rules in `description_generator.py`: strip thinking tags, one line, at most 600 characters, one automatic retry with the same single message plus a limit reminder (a provider error is not retried), trim to the last full sentence, nothing usable becomes `failed` keeping the old text with the reasoning-model WARNING; generous answer ceiling #backend-role
     - Use Cases · 6.0h
     - needs BE-22 · completes C2, S11, S21, S53
     - Tests

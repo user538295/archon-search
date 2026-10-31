@@ -37,7 +37,8 @@ _LOGGING_HELPER_PREFIXES = ("_warn", "_log")
 #: may echo a chunk text.
 _SENSITIVE_NAMES = frozenset(
     {
-        "excerpt", "excerpts", "sample", "samples", "text", "prompt", "request", "answer", "reply", "raw",
+        "excerpt", "excerpts", "sample", "samples", "text", "prompt", "request", "answer", "reply", "raw", "cleaned",
+        "generated", "visible", "first", "second",
         "description", "new_description", "old_description", "template_text", "joined", "body", "payload",
         "result", "outcome", "change", "fields", "meta", "row",
     }
@@ -145,6 +146,13 @@ def log_violations(source: str) -> list[tuple[int, str, str]]:
         'logger.warning("description %s", description)\n',
         'logger.warning("description %s", new_description)\n',
         'logger.warning("answer %s", answer)\n',
+        'logger.warning("cleaned %s", cleaned)\n',
+        'logger.warning("generated %s", generated)\n',
+        'logger.warning("visible %s", visible)\n',
+        'logger.warning("first %s", first)\n',
+        'logger.warning("second %s", second)\n',
+        'logger.warning("raw %s", raw)\n',
+        'DescriptionFailed(reason, cleaned)\n',
         'logger.warning("answer %s", result.text)\n',
         'logger.warning("sent %s", request.prompt)\n',
         'logger.warning("sent %s", request)\n',

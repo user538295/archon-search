@@ -1,7 +1,7 @@
 """Tests for ``archon_search.description_generator`` (collection descriptions BE-22, contract C2).
 
 The generator draws a deterministic sample of open chunks through the store port, fits it to the client's input budget,
-makes one call on the shared LLM client and returns a typed outcome. It never raises for a provider or store failure.
+asks the shared LLM client (one retry at most) and returns a typed outcome. It never raises for a provider or store failure.
 """
 from __future__ import annotations
 
@@ -18,15 +18,19 @@ from archon_search.constants import (
     ANSWER_RESERVE_TOKENS,
     DEFAULT_FAST_MODEL,
     DEFAULT_MODEL,
+    MAX_DESCRIPTION_CHARS,
 )
 from archon_search.description_generator import (
+    _RETRY_REMINDER,
     DescriptionFailed,
     DescriptionFailureReason,
     DescriptionGenerated,
     DescriptionGenerator,
     _should_regenerate,
+    _sizing_template,
 )
 from archon_search.description_sample import StoreReadError
+from archon_search.llm_client.budget import exact_budget
 from archon_search.llm_client.protocol import (
     ContextWindow,
     ContextWindowSource,
@@ -34,6 +38,7 @@ from archon_search.llm_client.protocol import (
     InputBudget,
     LlmCallFailure,
     LlmCallRequest,
+    LlmCallResult,
     LlmCallTimeout,
 )
 from tests._hyde_stubs import ScriptedLlmClient
@@ -130,6 +135,52 @@ def _read_ids(store: FakeSampleStore) -> list[str]:
 def _expected_picks(total: int, count: int) -> list[str]:
     """The contract's picks: the ids at positions floor((j + 0.5) * total / count), in exact arithmetic."""
     return [_chunk_id(int((Fraction(j) + Fraction(1, 2)) * total / count)) for j in range(count)]
+
+
+_OVERLONG_ANSWER = "A line.\n" * 100
+_SENTENCES_WITHIN_LIMIT = " ".join(f"Sentence number {i} is here." for i in range(10, 31))
+_SENTENCES = " ".join(f"Sentence number {i} is here." for i in range(10, 50))
+_EXCERPT_MARK = "p"
+_FIT_SLACK_LIMIT = 2 * (len(_EXCERPT_MARK) + len(_SEPARATOR))
+
+
+class _SequenceClient(ScriptedLlmClient):
+    """Answers the scripted replies in order (an exception is raised); the last reply repeats."""
+
+    def __init__(self, *replies: str | Exception) -> None:
+        super().__init__()
+        self._replies = list(replies)
+
+    async def call(self, request: LlmCallRequest) -> LlmCallResult:
+        self.requests.append(request)
+        reply = self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
+        if isinstance(reply, Exception):
+            raise reply
+        return LlmCallResult(text=reply)
+
+
+class _ShortExcerptStore(FakeSampleStore):
+    """One-character excerpts, so the shrink loop lands within a couple of characters of the budget."""
+
+    async def read_excerpts(
+        self, collection: str, namespace: str, chunk_ids: list[str], include_restricted: bool = False
+    ) -> list[str]:
+        return [_EXCERPT_MARK for _ in chunk_ids]
+
+
+class _CharCountingClient(_SequenceClient):
+    """A 4096-token window with one token per character and the real exact-count budget rule (BE-4)."""
+
+    def context_window(self) -> ContextWindow:
+        return ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
+
+    async def input_budget(self, template_text: str) -> InputBudget:
+        window = self.context_window()
+        assert isinstance(window, ContextWindowTokens)
+        return await exact_budget(window, template_text, self.count_tokens)
+
+    async def count_tokens(self, text: str) -> int:
+        return len(text)
 
 
 class TestConstants:
@@ -365,7 +416,7 @@ class TestSizingTemplate:
 
 class TestCall:
     @pytest.mark.asyncio
-    async def test_one_call_with_the_unchanged_prompt_and_configured_timeout(self) -> None:
+    async def test_one_call_with_the_prompt_asking_for_one_line_and_the_configured_timeout(self) -> None:
         store = FakeSampleStore(chunk_count=2)
         client = ScriptedLlmClient(reply=_DESCRIPTION_TEXT)
 
@@ -382,7 +433,7 @@ class TestCall:
             f"{_excerpt(_chunk_id(0))}{_SEPARATOR}{_excerpt(_chunk_id(1))}\n\n"
             "Write 2-3 sentences that summarize what this collection contains and its purpose. "
             "Be specific about the topic and type of content. "
-            "Output only the description — no preamble, no explanation.\n"
+            "Output only the description as one line of plain text of at most 600 characters — no preamble, no explanation.\n"
         )
 
     @pytest.mark.asyncio
@@ -407,12 +458,29 @@ class TestCall:
         assert len(client.requests) == 1
 
     @pytest.mark.asyncio
-    async def test_provider_failure_is_not_retried(self) -> None:
+    async def test_provider_error_is_not_retried(self) -> None:
+        """S53: a raised failure settles ``failed`` after one call; the output-rule retry never covers a provider error."""
         client = ScriptedLlmClient(failure=LlmCallFailure("openai", "HTTP 500"))
 
-        await _generator(client, FakeSampleStore()).generate(_COLLECTION, _NAMESPACE)
+        outcome = await _generator(client, FakeSampleStore()).generate(_COLLECTION, _NAMESPACE)
 
+        assert isinstance(outcome, DescriptionFailed)
+        assert outcome.reason is DescriptionFailureReason.CALL_FAILED
         assert len(client.requests) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", [LlmCallFailure("openai", "HTTP 500"), LlmCallTimeout("ollama", "no answer")])
+    async def test_provider_error_on_the_retry_is_not_retried_again(self, failure: LlmCallFailure) -> None:
+        """Deliberate: a failed retry call settles ``failed`` even though the first answer could be trimmed (C2: any
+        call failure is ``callFailed``); only an EMPTY retry falls back to the first answer."""
+        client = _SequenceClient(_OVERLONG_ANSWER, failure)
+
+        outcome = await _generator(client, FakeSampleStore()).generate(_COLLECTION, _NAMESPACE)
+
+        assert isinstance(outcome, DescriptionFailed)
+        assert outcome.reason is DescriptionFailureReason.CALL_FAILED
+        assert failure.reason in outcome.detail
+        assert len(client.requests) == 2
 
     @pytest.mark.asyncio
     async def test_failure_while_sizing_is_a_call_failed_value(self) -> None:
@@ -484,6 +552,251 @@ class TestCall:
         assert isinstance(outcome, DescriptionFailed)
         assert outcome.reason is DescriptionFailureReason.SAMPLE_READ_FAILED
         assert client.requests == []
+
+
+class TestOutputRules:
+    """C2 output rules (S53, S21): clean, accept within 600, one retry with the limit reminder, trim, or fail."""
+
+    @pytest.mark.asyncio
+    async def test_overlong_answer_retried_once_then_trimmed_to_last_sentence(self) -> None:
+        client = _SequenceClient(_OVERLONG_ANSWER, _SENTENCES)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text=_SENTENCES_WITHIN_LIMIT, trimmed=True)
+        assert len(outcome.text) <= MAX_DESCRIPTION_CHARS
+        first, retry = client.requests
+        assert retry.prompt == first.prompt + _RETRY_REMINDER, "the same single message plus the limit reminder"
+        assert retry.max_output_tokens == first.max_output_tokens == ANSWER_RESERVE_TOKENS
+        assert retry.timeout_seconds == first.timeout_seconds
+
+    @pytest.mark.asyncio
+    async def test_second_answer_within_the_limit_is_stored_untrimmed(self) -> None:
+        client = _SequenceClient(_OVERLONG_ANSWER, _DESCRIPTION_TEXT)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text=_DESCRIPTION_TEXT, trimmed=False)
+        assert len(client.requests) == 2
+
+    @pytest.mark.asyncio
+    async def test_the_retry_is_one_extra_call_never_more(self) -> None:
+        client = _SequenceClient(_OVERLONG_ANSWER)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert isinstance(outcome, DescriptionGenerated)
+        assert len(client.requests) == 2
+
+    @pytest.mark.asyncio
+    async def test_answer_of_exactly_the_limit_is_accepted_without_a_retry(self) -> None:
+        answer = "a" * MAX_DESCRIPTION_CHARS
+        client = _SequenceClient(answer)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text=answer, trimmed=False)
+        assert len(client.requests) == 1
+
+    @pytest.mark.asyncio
+    async def test_answer_one_over_the_limit_is_retried(self) -> None:
+        client = _SequenceClient("a" * (MAX_DESCRIPTION_CHARS + 1), _DESCRIPTION_TEXT)
+
+        await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert len(client.requests) == 2
+
+    @pytest.mark.asyncio
+    async def test_the_limit_counts_the_cleaned_one_line_text_not_the_raw_answer(self) -> None:
+        """A raw answer padded with thinking and blank lines is within the limit once cleaned: no retry."""
+        raw = f"<think>{'x' * 900}</think>\n\n  A handbook\n\tof   company\npolicies.  "
+        client = _SequenceClient(raw)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text="A handbook of company policies.", trimmed=False)
+        assert len(client.requests) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("<think>weighing the excerpts</think>A handbook.", "A handbook."),
+            ("<THINK>weighing</THINK> A handbook.", "A handbook."),
+            ("<thinking>weighing\nmore</thinking>\nA handbook.", "A handbook."),
+            ("<thought>weighing</thought>A handbook.", "A handbook."),
+            ("<reasoning>weighing</reasoning>A handbook.", "A handbook."),
+            ("<think>one</think><think>two</think>A handbook.", "A handbook."),
+            ("<think type='x'>weighing</think>A handbook.", "A handbook."),
+            ("weighing the excerpts</think>A handbook.", "A handbook."),
+            ("<think weighing without end", "<think weighing without end"),
+            ("A handbook of <think> tags.", "A handbook of <think> tags."),
+            ("<think >weighing</think >A handbook.", "A handbook."),
+            ("A\n\nhandbook.\r\nOf   policies.", "A handbook. Of policies."),
+            ("A handbook of <b>policies</b>.", "A handbook of <b>policies</b>."),
+        ],
+    )
+    async def test_thinking_is_removed_and_the_answer_is_one_line(self, raw: str, expected: str) -> None:
+        client = _SequenceClient(raw)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text=expected, trimmed=False)
+        assert len(client.requests) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("first", ["", "<think>no answer yet</think>", "   \n"])
+    async def test_nothing_usable_on_the_first_attempt_is_retried(self, first: str) -> None:
+        client = _SequenceClient(first, _DESCRIPTION_TEXT)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text=_DESCRIPTION_TEXT, trimmed=False)
+        assert client.requests[1].prompt == client.requests[0].prompt + _RETRY_REMINDER
+
+    @pytest.mark.asyncio
+    async def test_thinking_only_output_after_retry_is_failed_with_think_hint(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = _SequenceClient("<think>reasoning about the excerpts", "<think>still thinking</think>")
+
+        with caplog.at_level("WARNING", logger="archon_search.description_generator"):
+            outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert isinstance(outcome, DescriptionFailed)
+        assert outcome.reason is DescriptionFailureReason.UNUSABLE_OUTPUT
+        assert len(client.requests) == 2
+        warnings = [r for r in caplog.records if r.name == "archon_search.description_generator"]
+        assert len(warnings) == 1
+        assert "reasoning model" in warnings[0].getMessage()
+        assert "`think`" in warnings[0].getMessage()
+        assert "reasoning model" in outcome.detail and "`think`" in outcome.detail
+        assert "still thinking" not in caplog.text and "excerpt of" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_empty_output_twice_warns_for_every_collection(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Unusable output is per collection (not a provider outage): the WARNING is not once per process."""
+        generator = _generator(_SequenceClient(""), FakeSampleStore(chunk_count=3))
+
+        with caplog.at_level("WARNING", logger="archon_search.description_generator"):
+            await generator.generate("first", _NAMESPACE)
+            await generator.generate("second", _NAMESPACE)
+
+        assert [r.getMessage().count("`think`") for r in caplog.records] == [1, 1]
+
+    @pytest.mark.asyncio
+    async def test_trim_without_a_sentence_end_cuts_at_a_word_within_the_limit(self) -> None:
+        run_on = " ".join(["word"] * 200)
+        client = _SequenceClient(run_on)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text=" ".join(["word"] * 120), trimmed=True)
+
+    @pytest.mark.asyncio
+    async def test_trim_without_a_sentence_end_or_a_space_cuts_at_the_limit(self) -> None:
+        client = _SequenceClient("a" * 700)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text="a" * MAX_DESCRIPTION_CHARS, trimmed=True)
+
+    @pytest.mark.asyncio
+    async def test_trim_keeps_a_sentence_that_ends_exactly_at_the_limit(self) -> None:
+        sentence = "a" * (MAX_DESCRIPTION_CHARS - 1) + "."
+        client = _SequenceClient(sentence + " More text follows.")
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text=sentence, trimmed=True)
+
+    @pytest.mark.asyncio
+    async def test_trim_ignores_a_dot_inside_a_word(self) -> None:
+        """``3.5`` and ``v1.2`` do not end a sentence: only a terminator followed by white space or the end does."""
+        client = _SequenceClient("Version 3.5 notes. " + "b" * 10 + " v1.2" + "c" * 600)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text="Version 3.5 notes.", trimmed=True)
+
+    @pytest.mark.asyncio
+    async def test_trim_recognises_cjk_sentence_ends(self) -> None:
+        """Sentences of 7 characters, so a cut at the limit would fall inside one (600 is not a multiple of 7)."""
+        sentence = "短い説明です。"
+        client = _SequenceClient(sentence * 100)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text=sentence * (MAX_DESCRIPTION_CHARS // len(sentence)), trimmed=True)
+
+    @pytest.mark.asyncio
+    async def test_trim_does_not_take_a_dot_at_the_edge_of_the_window_for_a_sentence_end(self) -> None:
+        """A dot at index 599 followed by a character is no end: only white space or the end of the text after it is."""
+        text = "First sentence. " + "b" * (MAX_DESCRIPTION_CHARS - 17) + ".5" + "c" * 100
+        assert text[MAX_DESCRIPTION_CHARS - 1] == "." and text[MAX_DESCRIPTION_CHARS] == "5"
+        client = _SequenceClient(text)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text="First sentence.", trimmed=True)
+
+    @pytest.mark.asyncio
+    async def test_control_characters_are_dropped_and_whitespace_ones_collapse(self) -> None:
+        client = _SequenceClient("A\x00 hand\x1bbook\x7f\x0bof\x0cpolicies.")
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text="A handbook of policies.", trimmed=False)
+
+    @pytest.mark.asyncio
+    async def test_an_answer_of_only_control_characters_is_unusable(self) -> None:
+        client = _SequenceClient("\x00\x1b")
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert isinstance(outcome, DescriptionFailed)
+        assert outcome.reason is DescriptionFailureReason.UNUSABLE_OUTPUT
+
+    def test_the_sizing_template_and_the_retry_use_one_reminder_constant(self) -> None:
+        """BE-4/C1: the reminder the budget is sized with is the reminder the retry sends, so they cannot drift."""
+        assert _sizing_template(_COLLECTION).endswith(_RETRY_REMINDER)
+        assert str(MAX_DESCRIPTION_CHARS) in _RETRY_REMINDER
+
+    @pytest.mark.asyncio
+    async def test_retry_prompt_fits_a_small_window(self) -> None:
+        """S11: with a 4k window the sample was sized for the retry, so the retry prompt plus the answer room fits.
+
+        The fit is tight (less than two excerpts of slack), so a sizing that left the reminder out would overflow."""
+        client = _CharCountingClient(_OVERLONG_ANSWER, _DESCRIPTION_TEXT)
+
+        outcome = await _generator(client, _ShortExcerptStore(1000), max_sample_chunks=1000).generate(
+            _COLLECTION, _NAMESPACE
+        )
+
+        assert isinstance(outcome, DescriptionGenerated)
+        first, retry = client.requests
+        assert retry.prompt == first.prompt + _RETRY_REMINDER
+        slack = _SMALL_WINDOW_SIZE - ANSWER_RESERVE_TOKENS - len(retry.prompt)
+        assert 0 <= slack < _FIT_SLACK_LIMIT
+
+    @pytest.mark.asyncio
+    async def test_empty_retry_after_an_overlong_answer_trims_the_first_answer(self) -> None:
+        client = _SequenceClient(_SENTENCES, "<think>nothing left</think>")
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text=_SENTENCES_WITHIN_LIMIT, trimmed=True)
+        assert len(client.requests) == 2
+
+    @pytest.mark.asyncio
+    async def test_trim_keeps_a_closing_quote_or_bracket_with_its_sentence(self) -> None:
+        sentence = 'It says "stop." ' * 10
+        client = _SequenceClient(sentence * 5)
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert isinstance(outcome, DescriptionGenerated)
+        assert outcome.trimmed and outcome.text.endswith('stop."') and len(outcome.text) <= MAX_DESCRIPTION_CHARS
 
 
 class TestNeverRaises:
