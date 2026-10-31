@@ -23,6 +23,22 @@ _FETCH_TIMEOUT = 10.0
 _ROUTING_FIELDS = {"name", "description", "centroid", "active_embedding_model", "doc_count", "chunk_count", "description_embedding"}
 
 
+_NO_DESCRIPTION = "(no description)"
+
+
+def _render_description(description: str | None) -> str:
+    """One-line, angle-bracket-escaped description text for the <search_collections> block (S77).
+
+    Descriptions derive from untrusted document text: whitespace runs (including line breaks)
+    collapse to one space so the text cannot forge a ``- name:`` row, and ``<``/``>`` are escaped
+    so it cannot close the block or open a ``<search_selected_collections>`` tag.
+    """
+    collapsed = " ".join((description or "").split())
+    if not collapsed:
+        return _NO_DESCRIPTION
+    return collapsed.replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
@@ -300,7 +316,7 @@ class MultiCollectionRouter:
             " tags at the end of your routing decision):"),
         ]
         for col in collections:
-            desc = col.description if col.description else "(no description)"
+            desc = _render_description(col.description)
             lines.append(f"- {col.name}: {desc}")
         lines.append("</search_collections>")
         return "\n".join(lines)

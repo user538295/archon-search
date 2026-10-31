@@ -457,7 +457,7 @@ flowchart LR
         - #unit_test — `test_detail_and_summary_include_source_and_status` — both shapes carry the two fields
         - #integration_test — `test_mcp_collection_tools_return_source_and_status` — the three MCP tools carry them
         - #integration_test — `test_openapi_snapshots_regenerated_match` — `--update-openapi-snapshot` output equals the pinned files
-- [ ] **BE-27** — Collapse whitespace and escape `<` and `>` in every description the router renders into `<search_collections>` (`router.py` `_build_block`) #backend-role
+- [x] **BE-27** — Collapse whitespace and escape `<` and `>` in every description the router renders into `<search_collections>` (`router.py` `_build_block`) #backend-role
     - Interface Adapters · 2.0h
     - needs K1 · completes S77
     - Tests
