@@ -214,7 +214,7 @@ flowchart LR
         - #unit_test — `test_counter_counts_tokens_with_stub_tokenizer` — the counter returns the stub tokenizer's count for a text
         - #unit_test — `test_counter_not_imported_at_cli_start` — importing the client package does not load the tokenizer (start-up latency guard)
         - #unit_test — `test_pinned_snapshot_has_revision_and_files` — the gpt2 pin names a repo, a revision and its files
-- [ ] **BE-4** — Size every prompt ahead of the call: exact count for `llama_cpp`, gpt2 estimate plus the 20% margin for `ollama`, none for cloud; budget covers answer reserve, template and the retry reminder #backend-role
+- [x] **BE-4** — Size every prompt ahead of the call: exact count for `llama_cpp`, gpt2 estimate plus the 20% margin for `ollama`, none for cloud; budget covers answer reserve, template and the retry reminder #backend-role
     - Use Cases · 3.0h
     - needs BE-2, BE-3 · completes S9, S11
     - Tests

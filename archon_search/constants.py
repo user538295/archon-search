@@ -47,6 +47,11 @@ ASSUMED_CONTEXT_TOKENS: Final[int] = 4096
 # (C1 ``ollamaEstimateMargin``, 20%): the gpt2 vocabulary only approximates the model's own tokenizer.
 OLLAMA_ESTIMATE_MARGIN: Final[float] = 0.20
 
+# Output tokens every sized prompt leaves free for the model's answer (C1 "reserved answer space"). Generous on
+# purpose: a reasoning model may think before the one-line answer, and the answer ceiling a caller sends as
+# ``LlmCallRequest.max_output_tokens`` should equal it so the reserve covers what the model may produce.
+ANSWER_RESERVE_TOKENS: Final[int] = 1024
+
 # Default namespace used when no explicit namespace is specified.
 DEFAULT_NAMESPACE: str = "default"
 

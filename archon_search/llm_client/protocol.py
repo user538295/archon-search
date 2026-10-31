@@ -49,7 +49,8 @@ class LlmCallRequest:
     """One stateless call: exactly one user message, no history, no session."""
 
     prompt: str
-    #: Generous for every model so that ``ThinkSetting.DEFAULT`` works on reasoning models.
+    #: Generous for every model so that ``ThinkSetting.DEFAULT`` works on reasoning models; callers pass
+    #: ``constants.ANSWER_RESERVE_TOKENS`` so the answer space the budget reserves is the ceiling they send.
     max_output_tokens: int
     #: Per attempt.
     timeout_seconds: float
@@ -99,7 +100,10 @@ class ContextWindowSource(enum.StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ContextWindowTokens:
-    """A window the client enforces: ``size`` tokens, known from ``source``."""
+    """A window the client enforces: ``size`` tokens, known from ``source``.
+
+    A window smaller than answer reserve plus template is representable (it yields ``InputBudget(0)``), so the
+    caller can fail naming the window; ``size`` is at least 1 where a configured value is validated."""
 
     size: int
     source: ContextWindowSource
@@ -115,6 +119,8 @@ class InputBudget:
 
     The window minus the reserved answer space minus the prompt template, after the provider's
     counting rule (exact for ``llama_cpp``, gpt2 estimate plus ``OLLAMA_ESTIMATE_MARGIN`` for ``ollama``).
+
+    A window too small for reserve and template gives 0, never a negative number (``llm_client.budget``).
     """
 
     tokens: int | Unbounded

@@ -38,6 +38,7 @@ import sys
 
 import archon_search.llm_client
 import archon_search.llm_client.token_counter
+import archon_search.llm_client.budget
 
 print(json.dumps(sorted(m for m in ("tokenizers", "huggingface_hub") if m in sys.modules)))
 """
