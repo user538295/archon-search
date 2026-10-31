@@ -391,7 +391,7 @@ flowchart LR
         - #unit_test — `test_older_writer_dict_without_new_keys_leaves_stored_values` — a merge without the new keys keeps stored source and status
         - #integration_test — `test_old_store_gets_columns_and_default_ttl_at_startup` — a store lacking the columns starts and accepts a metadata write
         - #integration_test — `test_eval_runner_stores_run_startup_migrations` — both eval runner stores migrate after `connect()`
-- [ ] **BE-19** — Guarded store write in `store.py` beside `update_description`: takes the collection lock itself, re-reads the row, applies keep, set or clear per field, refuses a generated write over a manual row (`refusedManual`) or over a changed row (`refusedStale`), reports `written`, `lockTimeout`, `collectionMissing`; whitelist it in `test_no_unlocked_direct_call.py` #backend-role
+- [x] **BE-19** — Guarded store write in `store.py` beside `update_description`: takes the collection lock itself, re-reads the row, applies keep, set or clear per field, refuses a generated write over a manual row (`refusedManual`) or over a changed row (`refusedStale`), reports `written`, `lockTimeout`, `collectionMissing`; whitelist it in `test_no_unlocked_direct_call.py` #backend-role
     - Frameworks & Drivers · 5.0h
     - needs BE-18 · completes C3, S22, S74
     - Tests

@@ -24,6 +24,7 @@ _ALLOWED_CALLERS = frozenset(
         "update_collection_meta",  # acquires _lock_for; calls _do_write_meta_unlocked
         "delete_document",         # acquires _lock_for; calls _do_fetch_doc_vectors_unlocked / _do_subtract_meta_on_delete
         "update_description",      # Task 5.1; acquires _lock_for; calls _do_read_meta_unlocked / _do_write_meta_unlocked
+        "write_description",       # BE-19; acquires _lock_for; calls _do_read_meta_unlocked / _do_write_meta_unlocked
     }
 )
 

@@ -32,6 +32,7 @@ from archon_search.collection_meta import (
     DESCRIPTION_SOURCES,
     DESCRIPTION_STATUS_OK,
     DESCRIPTION_STORED_STATUSES,
+    check_stored_description_value,
 )
 from archon_search.constants import (
     DEFAULT_NAMESPACE,
@@ -39,6 +40,13 @@ from archon_search.constants import (
     PING_TIMEOUT_SECONDS,
     PING_TTL_SECONDS,
     _validate_namespace,
+)
+from archon_search.description_write import (
+    UNCONDITIONAL,
+    DescriptionFields,
+    DescriptionWriteOutcome,
+    ExpectedState,
+    WriteGuard,
 )
 from archon_search.lance_session import list_all_table_names, new_lance_session
 from archon_search.observability import _stage_recorder, record_stage
@@ -290,8 +298,7 @@ def _description_state_columns(meta: CollectionMeta) -> dict[str, str]:
         ("description_source", meta.description_source, DESCRIPTION_SOURCES),
         ("description_status", meta.description_status, DESCRIPTION_STORED_STATUSES),
     ):
-        if value is not None and value not in allowed:
-            raise ValueError(f"{column} {value!r} cannot be stored; expected one of {allowed}")
+        check_stored_description_value(column, value, allowed)
     return {
         "description_source": meta.description_source or "",
         "description_status": meta.description_status or "",
@@ -2001,6 +2008,62 @@ class SearchStore:
             await self._do_write_meta_unlocked(db, collection, updated)
         finally:
             lock.release()
+
+    async def write_description(
+        self,
+        collection: str,
+        namespace: str,
+        fields: DescriptionFields,
+        guard: WriteGuard,
+    ) -> DescriptionWriteOutcome:
+        """Change the description fields of (*collection*, *namespace*) in one atomic step under the collection lock (C3).
+
+        Re-reads the row inside the lock, applies *guard*, changes only the fields *fields* states (each kept, set
+        or cleared; every other field stays as just read, centroid fields and last-indexed included) and writes the
+        row once. A generated write and a recorded failure carry ``ExpectedState`` and are refused when the row's
+        source is ``manual`` (``refusedManual``) or its description, source or last-described differ
+        (``refusedStale``); set, clear and import pass ``UNCONDITIONAL``. The text and the routing vector change
+        together, because *fields* carries both.
+
+        Takes the collection lock itself and the lock is not reentrant: the caller must NOT hold it (a caller that
+        does, as PATCH and DELETE do, waits out ``INGEST_LOCK_TIMEOUT_S`` and gets ``lockTimeout``). A lock timeout is
+        reported as an outcome, never swallowed and never raised, so the caller can record a failed description.
+
+        Raises:
+            RuntimeError: if the store is not connected.
+            ValueError: if *collection* or *namespace* is invalid.
+            TypeError: if *guard* is neither ``UNCONDITIONAL`` nor an ``ExpectedState`` (a bad guard must not fail open).
+            Exception: a LanceDB or I/O error from the read or the write propagates (the lock is released); the
+                caller records it as a failed description.
+        """
+        self._validate_collection(collection)
+        _validate_namespace(namespace)
+        if guard != UNCONDITIONAL and not isinstance(guard, ExpectedState):
+            raise TypeError(f"write_description guard must be UNCONDITIONAL or an ExpectedState, got {guard!r}")
+        db = self._require_connected()
+        lock = self.lock_for(collection)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+        except TimeoutError:
+            logger.warning("Collection %r lock timeout in write_description", collection)
+            return DescriptionWriteOutcome.LOCK_TIMEOUT
+        row: CollectionMeta | None = None
+        try:
+            row = await self._do_read_meta_unlocked(db, collection, namespace=namespace)
+            if row is None:
+                return DescriptionWriteOutcome.COLLECTION_MISSING
+            if isinstance(guard, ExpectedState):
+                refusal = guard.refusal(row)
+                if refusal is not None:
+                    return refusal
+            await self._do_write_meta_unlocked(db, collection, fields.apply_to(row))
+            return DescriptionWriteOutcome.WRITTEN
+        finally:
+            lock.release()
+            if row is None:
+                # No row (the collection is missing, or the read failed): drop a lock entry nobody waits on, as
+                # ``locked_collection_meta`` does, so a write to an unknown name does not grow the lock map.
+                self.discard_lock(collection)
 
     # ------------------------------------------------------------------
     # Private unlocked helpers (caller must hold lock_for(collection))

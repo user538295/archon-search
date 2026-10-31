@@ -12,9 +12,17 @@ from archon_search.constants import DEFAULT_NAMESPACE
 DescriptionSource = Literal["generated", "manual"]
 DescriptionStoredStatus = Literal["ok", "failed"]
 DESCRIPTION_SOURCE_GENERATED: DescriptionSource = "generated"
+DESCRIPTION_SOURCE_MANUAL: DescriptionSource = "manual"
 DESCRIPTION_STATUS_OK: DescriptionStoredStatus = "ok"
 DESCRIPTION_SOURCES: tuple[str, ...] = get_args(DescriptionSource)
 DESCRIPTION_STORED_STATUSES: tuple[str, ...] = get_args(DescriptionStoredStatus)
+
+
+def check_stored_description_value(column: str, value: str | None, allowed: tuple[str, ...]) -> None:
+    """Refuse a *value* of *column* that the store cannot hold: ``pending`` is memory only, and anything outside
+    the contract is refused rather than written. ``None`` (no value) is always storable."""
+    if value is not None and value not in allowed:
+        raise ValueError(f"{column} {value!r} cannot be stored; expected one of {allowed}")
 
 
 @dataclasses.dataclass
