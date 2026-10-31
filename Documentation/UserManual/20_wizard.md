@@ -398,7 +398,7 @@ Claude model aliases:
 Model for HyDE (number, name, or blank):
 ```
 
-Leaving it blank omits `--model` so Claude Code uses its own configured default. If `claude` is not found, the wizard prints an install pointer (https://claude.ai/code) and still writes the config — install Claude Code before starting the server, and query expansion falls back silently until it is available. Unlike Ollama, this alias list is hardcoded in the wizard (the Claude CLI has no runtime model-listing command) and is updated with each release.
+Leaving it blank omits `--model` so Claude Code uses its own configured default. If `claude` is not found, the wizard prints an install pointer (https://claude.ai/code) and still writes the config — install Claude Code before starting the server. What happens until then depends on the feature, and the warning says which: HyDE and RAG Fusion fall back to the plain query, graph enrichment skips its community summaries, and collection descriptions fail visibly (status `failed`, with a warning in the server log). Unlike Ollama, this alias list is hardcoded in the wizard (the Claude CLI has no runtime model-listing command) and is updated with each release.
 
 For **llama.cpp**: the wizard asks for the llama-server base URL first — that address is what the server talks to at runtime. On a first run the prompt offers the built-in default `http://localhost:8080`; on a re-run it is pre-filled with the address already saved in config instead, so pressing Enter keeps a previously configured custom URL rather than reverting to the default. The model list is independent of it and is built in two tiers: first `llama cli -cl`, which lists your **local llama.cpp cache**; when that command is missing or its cache is empty, the wizard scans the known GGUF download directories for `.gguf` files. Either way you pick by number instead of typing a name:
 
@@ -421,7 +421,7 @@ After answering, the wizard:
 - Enables both `[hyde].enabled = true` and `[rag_fusion].enabled = true` in your config.
 - Writes `[hyde].provider` / `[rag_fusion].provider` (and `model`, `ollama_base_url`/`llama_cpp_base_url`, and for `ollama` the `ollama_context_tokens` window, where applicable) for non-Anthropic providers. For `claude_cli`, `model` is only written when you choose one — a blank leaves it unset so the config default applies.
 - Installs the provider's package so the feature actually works: `anthropic` → `archon-search[hyde]`, `openai` → `archon-search[openai-provider]`, `ollama` → `archon-search[ollama]`. When both features share a provider (the default is `anthropic` for both), the package is installed once. `claude_cli` and `llama_cpp` need no package (the former uses the `claude` command on your PATH, the latter uses `httpx`, a core dependency). If the install fails, the wizard prints a warning and reverts `[hyde].enabled` / `[rag_fusion].enabled` to `false` so the next server start does not hard-fail on the missing package — re-run the wizard or install the package manually to enable it.
-- Creates `<data-dir>/.secrets.env` (mode 600, empty) if it does not already exist, whatever the selected provider. (`ollama`, `claude_cli`, and `llama_cpp` need no key; the file then stays empty unless you add other variables.)
+- Creates `<data-dir>/.secrets.env` (mode 600, empty) if it does not already exist, whatever the selected HyDE / RAG Fusion provider. (`ollama`, `claude_cli`, and `llama_cpp` need no key; the file then stays empty unless you add other variables.) The file is also created when the graph enrichment provider (5i) or the collection description provider (5j) is `anthropic` or `openai`; the `Created:` message names every feature that reads a key from it, for example `... for collection descriptions and graph enrichment.`
 
 To configure providers manually after the wizard, edit `archon-search.toml` directly: set `[hyde].provider` and `[rag_fusion].provider` to `"anthropic"`, `"openai"`, `"ollama"`, `"claude_cli"`, or `"llama_cpp"`, and set the corresponding `model` and `ollama_base_url`/`llama_cpp_base_url` fields as needed. You can also re-run the wizard with `--enable-hyde --enable-rag-fusion` to reconfigure.
 
@@ -473,7 +473,7 @@ If you answer `y`, the wizard asks, in this order:
 2. For `ollama` only: `Ollama context window for collection descriptions (tokens) [8192]:` (the stored `[description].ollama_context_tokens` on a re-run), as described in 5h.
 3. `Fill the descriptions of existing collections at startup? [y/n]:` (`[description].backfill_on_startup`). **On EOF**: No.
 
-The answers land in the `[description]` section (`enabled`, `provider`, `model`, the host key for `ollama` or `llama_cpp` when it differs from the built-in default, `ollama_context_tokens`, `backfill_on_startup`). API keys never go into it; they belong in `<data-dir>/.secrets.env` or the environment, like the HyDE and RAG Fusion keys.
+The answers land in the `[description]` section (`enabled`, `provider`, `model`, the host key for `ollama` or `llama_cpp` when it differs from the built-in default, `ollama_context_tokens`, `backfill_on_startup`). API keys never go into it; they belong in `<data-dir>/.secrets.env` or the environment, like the HyDE and RAG Fusion keys. The installer creates that file for an `anthropic` or `openai` description provider (see 5h). The provider package is installed with the same extras as the other features (Step 7), and a failed install reverts the section (see Step 7).
 
 ### Step 6 — Summary screen
 
@@ -499,15 +499,17 @@ Before any model is downloaded, the wizard prints a summary of what it is about 
     • Watch directories (auto-reindex)
     • HyDE: enabled (provider: anthropic)
     • RAG Fusion: enabled (provider: anthropic)
+    • LLM graph enrichment: enabled (provider: ollama)
+    • Collection descriptions: enabled (provider: anthropic)
 ```
 
-Only non-default optional features are listed. When you enable AI query expansion, the summary confirms it with `HyDE: enabled (provider: …)` and `RAG Fusion: enabled (provider: …)` lines so you have visible proof the setting took effect before you exit the wizard. The `API key` line shows a masked preview and the path to the env file that holds the full key. If the key file does not exist yet (first install, server not yet started), `(not yet generated)` is shown instead. The summary also reflects any deployment flags you passed (custom host, port, db path, top-k, etc.). Then:
+Only non-default optional features are listed. When you enable AI query expansion, the summary confirms it with `HyDE: enabled (provider: …)` and `RAG Fusion: enabled (provider: …)` lines so you have visible proof the setting took effect before you exit the wizard. An LLM graph enrichment provider (5i) adds `LLM graph enrichment: enabled (provider: …)` and collection descriptions (5j) add `Collection descriptions: enabled (provider: …)`. The `API key` line shows a masked preview and the path to the env file that holds the full key. If the key file does not exist yet (first install, server not yet started), `(not yet generated)` is shown instead. The summary also reflects any deployment flags you passed (custom host, port, db path, top-k, etc.). Then:
 
 ```
 Proceed? [y/n]:
 ```
 
-Type `y` to continue or `n` to abort; anything else is asked again (see [Answering the yes/no questions](#answering-the-yesno-questions)). Only a closed stdin (EOF) aborts without an answer. On abort, graph-enabled, multilingual, query-expansion and graph-enrichment-provider flags are reverted in the config file, but the config file itself was already written to disk before this prompt appeared. No GPU check, model download or provider write has happened at that point.
+Type `y` to continue or `n` to abort; anything else is asked again (see [Answering the yes/no questions](#answering-the-yesno-questions)). Only a closed stdin (EOF) aborts without an answer. On abort, graph-enabled, multilingual, query-expansion, graph-enrichment-provider and collection-description flags are reverted in the config file, but the config file itself was already written to disk before this prompt appeared. No GPU check, model download or provider write has happened at that point.
 
 ### Step 7 — Optional extras install (if requested)
 
@@ -525,6 +527,8 @@ If the install fails, a warning is shown but the overall wizard continues — co
 If you enabled the **graph** (Step 5a), the `archon-search[graph]` extra is installed at this step too. Its prose extraction model is *not* fetched here — that happens in Step 8, together with the embedder and reranker weights. If the package install fails, the wizard prints `Warning: graph enrichment install failed: ...`, reverts `graph.enabled` to `false`, and continues; see Step 5a for the exact copy.
 
 If you chose an LLM-backed **graph enrichment** provider (Step 5i) of `anthropic`, `openai` or `ollama` and gave it a model, the matching provider package is installed at this step too, with the same extra HyDE and RAG Fusion use (`hyde` for `anthropic`, `openai-provider`, `ollama`); an extra shared with HyDE or RAG Fusion is installed once. `llama_cpp` and `claude_cli` need no package. If that install fails, the wizard prints `Warning: graph enrichment provider install failed for archon-search[<extra>]: ...` (also naming AI query expansion when HyDE or RAG Fusion share the extra), strips the `[graph]` provider, model, host and context keys (`graph.enabled` is untouched) and continues. The same keys are stripped when the disk-space check fails or you answer `n` at `Proceed?`; a run that left graph enrichment off (no provider, or no model) does not touch them.
+
+If you enabled **collection descriptions** (Step 5j) with an `anthropic`, `openai` or `ollama` provider, the matching package is installed at this step too, with the same extras and the same once-only sharing (`hyde` for `anthropic`, `openai-provider`, `ollama`); `llama_cpp` and `claude_cli` need no package. If that install fails, the wizard prints `Warning: collection descriptions install failed for archon-search[<extra>]: ...` (naming every feature that shares the extra), sets `[description].enabled = false` and removes the `provider`, `model`, host, `ollama_context_tokens` and `backfill_on_startup` keys it wrote (a `think` or `timeout_seconds` you set yourself stays). The section is reverted the same way when the disk-space check fails, when you answer `n` at `Proceed?`, or when the written config does not reload with the feature enabled.
 
 If you chose a **multilingual** profile, the wizard also installs the `archon-search[multilingual]` extra (`fasttext-predict`, used for language detection) at this step — the server needs it to start when `multilingual = true`. If that install fails, the wizard reverts `multilingual = false` in the config so the server still starts (in English-only mode) instead of crashing on the next start. You can install it separately at any time (see [Optional extras](./10_installation.md#optional-extras)), e.g. `pip install "archon-search[multilingual]"`.
 

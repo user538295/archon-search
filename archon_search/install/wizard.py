@@ -573,14 +573,14 @@ def _prompt_graph_provider(
         "anthropic",
     )
     local = _prompt_local_provider_model(
-        provider, "graph enrichment", ollama_base_url_default, llama_cpp_base_url_default
+        provider, _GRAPH_LABEL, ollama_base_url_default, llama_cpp_base_url_default
     )
     if local is not None:
         model, ollama_url, llama_cpp_url = local
         return provider, model, ollama_url, llama_cpp_url
     if provider == "claude_cli":
-        return provider, _prompt_claude_cli_model("graph enrichment"), "", ""
-    return provider, _prompt_model_freetext("graph enrichment"), "", ""
+        return provider, _prompt_claude_cli_model(_GRAPH_LABEL), "", ""
+    return provider, _prompt_model_freetext(_GRAPH_LABEL), "", ""
 
 
 # Curated Claude model aliases shown by the wizard. The Claude CLI has no
@@ -589,20 +589,37 @@ def _prompt_graph_provider(
 _CLAUDE_MODEL_ALIASES: tuple[str, ...] = ("haiku", "sonnet", "opus", "fable")
 
 
-def _check_claude_cli_present() -> bool:
+_GRAPH_LABEL = "graph enrichment"
+_DESCRIPTION_LABEL = "collection descriptions"
+
+# What a missing `claude` command does to each feature that offers the claude_cli provider, by the
+# label its prompt uses. HyDE / RAG Fusion degrade to a plain search; graph enrichment skips its
+# summaries; collection descriptions fail visibly (status `failed` plus a warning). A feature
+# with no entry here raises, so a new claude_cli feature has to say what it does.
+_QUERY_EXPANSION_FALLBACK = "searches will fall back to the plain query"
+_CLAUDE_MISSING_EFFECT: dict[str, str] = {
+    "HyDE": _QUERY_EXPANSION_FALLBACK,
+    "RAG Fusion": _QUERY_EXPANSION_FALLBACK,
+    _GRAPH_LABEL: "community summaries will be skipped",
+    _DESCRIPTION_LABEL: "description generation will fail visibly",
+}
+
+
+def _check_claude_cli_present(feature_label: str) -> bool:
     """Warn (but don't block) when the ``claude`` command is not on PATH.
 
     Returns True when found. Mirrors the "wizard guides, doesn't block"
-    decision — a missing CLI surfaces its error on first search, exactly as a
-    missing ANTHROPIC_API_KEY does today.
+    decision — a missing CLI surfaces on first use, as a missing
+    ANTHROPIC_API_KEY does. The warning says what that does to *feature_label*.
     """
     if shutil.which("claude") is not None:
         return True
+    effect = _CLAUDE_MISSING_EFFECT[feature_label]
     print(
         "  WARNING: 'claude' command not found in PATH.\n"
         "  The claude_cli provider needs Claude Code installed and logged in.\n"
         "  Install it from https://claude.ai/code, then start the server.\n"
-        "  Writing the config anyway — the feature will fall back until 'claude' is available."
+        f"  Writing the config anyway — {effect} until 'claude' is available."
     )
     return False
 
@@ -632,9 +649,9 @@ def _pick_claude_model(feature_label: str) -> str:
 def _prompt_claude_cli_model(feature_label: str) -> str:
     """Check the ``claude`` command is installed (warn only), then pick the model for *feature_label*.
 
-    Shared by the HyDE/RAG Fusion and graph-enrichment prompts; returns ``""`` for Claude Code's default.
+    Shared by the HyDE / RAG Fusion, graph-enrichment and collection-description prompts; returns ``""`` for Claude Code's default.
     """
-    _check_claude_cli_present()
+    _check_claude_cli_present(feature_label)
     return _pick_claude_model(feature_label)
 
 
@@ -667,7 +684,6 @@ def _prompt_provider(
     return provider, "", "", ""
 
 
-_DESCRIPTION_LABEL = "collection descriptions"
 # Providers whose blank model means "use the provider's own default"; every other provider needs a named model.
 _PROVIDERS_WITHOUT_REQUIRED_MODEL = frozenset({"anthropic", "claude_cli"})
 
@@ -1011,7 +1027,7 @@ def _prompt_optional_features(
             _ask_yn, _ask_choice, graph_ollama_base_url_default, graph_llama_cpp_base_url_default
         )
         if _graph_provider_val == "ollama":
-            _graph_ollama_context_val = _prompt_ollama_context("graph enrichment", graph_ollama_context_tokens_default)
+            _graph_ollama_context_val = _prompt_ollama_context(_GRAPH_LABEL, graph_ollama_context_tokens_default)
 
     # --- collection descriptions (FE-7): its own gate, asked whenever the wizard is interactive ---
     # Deliberately outside the HyDE / RAG Fusion gate above: `--enable-hyde` / `--enable-rag-fusion` skip
@@ -1032,7 +1048,7 @@ def _prompt_optional_features(
             for label, base_url, model, context in (
                 ("HyDE", _hyde_ollama_base_url_val, _hyde_model_val, _hyde_ollama_context_val),
                 ("RAG Fusion", _rag_fusion_ollama_base_url_val, _rag_fusion_model_val, _rag_fusion_ollama_context_val),
-                ("graph enrichment", _graph_ollama_base_url_val, _graph_extraction_model_val, _graph_ollama_context_val),
+                (_GRAPH_LABEL, _graph_ollama_base_url_val, _graph_extraction_model_val, _graph_ollama_context_val),
                 (
                     _DESCRIPTION_LABEL,
                     _description.ollama_base_url,

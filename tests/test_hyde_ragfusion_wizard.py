@@ -24,6 +24,7 @@ from archon_search.install import (
     _assert_features_persisted,
     _install_query_expansion_extras,
     _render_summary,
+    _revert_description_flags,
     _revert_graph_enrichment_flags,
     _revert_query_expansion_flags,
 )
@@ -346,6 +347,145 @@ class TestInstallQueryExpansionExtras:
         assert set(failed) == {"hyde", "graph"}
         assert "AI query expansion and graph enrichment provider install failed" in capsys.readouterr().err
 
+    def test_description_section_shares_extras_installed_once_across_four_sections(self) -> None:
+        """FE-8 S71: HyDE, RAG Fusion, graph and descriptions on anthropic share the `hyde` extra: one install,
+        one label naming every feature; a failure marks all four sections failed."""
+        features = WizardFeatures(
+            enable_hyde=True, enable_rag_fusion=True, hyde_provider="anthropic", rag_fusion_provider="anthropic",
+            graph_provider="anthropic", graph_extraction_model="m",
+            description_enabled=True, description_provider="anthropic",
+        )
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
+            assert _install_query_expansion_extras(features, dry_run=False) == []
+        mock_extra.assert_called_once()
+        assert mock_extra.call_args[0][:2] == (
+            "hyde", "AI query expansion, graph enrichment provider and collection descriptions"
+        )
+        with patch("archon_search.install.extras._install_extra", side_effect=InstallError("boom")):
+            failed = _install_query_expansion_extras(features, dry_run=False)
+        assert set(failed) == {"hyde", "rag_fusion", "graph", "description"}
+
+    @pytest.mark.parametrize(
+        ("provider", "extra"),
+        [("anthropic", "hyde"), ("openai", "openai-provider"), ("ollama", "ollama")],
+    )
+    def test_description_provider_installs_its_extra_and_reports_its_section(self, provider: str, extra: str) -> None:
+        features = WizardFeatures(description_enabled=True, description_provider=provider, description_model="m")
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
+            assert _install_query_expansion_extras(features, dry_run=False) == []
+        assert [c[0][:2] for c in mock_extra.call_args_list] == [(extra, "collection descriptions")]
+        with patch("archon_search.install.extras._install_extra", side_effect=InstallError("boom")):
+            assert _install_query_expansion_extras(features, dry_run=False) == ["description"]
+
+    @pytest.mark.parametrize("features", [
+        WizardFeatures(description_enabled=True, description_provider="claude_cli"),
+        WizardFeatures(description_enabled=True, description_provider="llama_cpp", description_model="m"),
+        WizardFeatures(description_enabled=False, description_provider="openai", description_model="m"),
+        WizardFeatures(description_enabled=None, description_provider="openai", description_model="m"),
+    ], ids=["claude_cli", "llama_cpp", "declined", "unanswered"])
+    def test_description_without_package_or_not_written_installs_nothing(self, features: WizardFeatures) -> None:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
+            assert _install_query_expansion_extras(features, dry_run=False) == []
+        mock_extra.assert_not_called()
+
+
+class TestRevertDescriptionFlags:
+    """FE-8 S47: a failed install strips every `[description]` key the wizard wrote and writes `enabled = false`."""
+
+    def _write(self, tmp_path: Path, body: str) -> Path:
+        cfg = tmp_path / "archon-search.toml"
+        cfg.write_text(body)
+        return cfg
+
+    def test_revert_description_flags_strips_all_keys(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        cfg = self._write(
+            tmp_path,
+            '[description]\nenabled = true\nprovider = "ollama"\nmodel = "m1"\n'
+            'ollama_base_url = "http://h:11434"\nllama_cpp_base_url = "http://h:8080"\n'
+            "ollama_context_tokens = 8192\nbackfill_on_startup = true\n"
+            "timeout_seconds = 12.0\n",
+        )
+        _revert_description_flags(cfg, dry_run=False)
+        description = tomlkit.parse(cfg.read_text())["description"]
+        assert dict(description) == {"enabled": False, "timeout_seconds": 12.0}  # hand-set keys survive
+        assert "collection descriptions have been disabled" in capsys.readouterr().err
+
+    def test_leaves_other_sections_alone(self, tmp_path: Path) -> None:
+        cfg = self._write(
+            tmp_path,
+            '[hyde]\nenabled = true\nprovider = "ollama"\n[description]\nenabled = true\nprovider = "openai"\n',
+        )
+        _revert_description_flags(cfg, dry_run=False)
+        doc = tomlkit.parse(cfg.read_text())
+        assert doc["hyde"]["enabled"] is True
+        assert doc["hyde"]["provider"] == "ollama"
+
+    def test_dry_run_missing_file_and_disabled_section_are_noops(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        body = '[description]\nenabled = true\nprovider = "openai"\n'
+        cfg = self._write(tmp_path, body)
+        _revert_description_flags(cfg, dry_run=True)
+        assert cfg.read_text() == body
+        _revert_description_flags(tmp_path / "nope.toml", dry_run=False)  # must not raise
+        declined = self._write(tmp_path, "[description]\nenabled = false\n")
+        _revert_description_flags(declined, dry_run=False)
+        assert declined.read_text() == "[description]\nenabled = false\n"
+        assert "warning" not in capsys.readouterr().err.lower()
+
+
+class TestRevertUnfinishedFeatures:
+    """FE-8: the one revert path of the assert, disk-space and declined-Proceed exits reverts exactly what the run wrote."""
+
+    _REVERTS = (
+        "_revert_graph_enabled_flag",
+        "_revert_multilingual_flag",
+        "_revert_query_expansion_flags",
+        "_revert_graph_enrichment_flags",
+        "_revert_description_flags",
+    )
+
+    @pytest.mark.parametrize(
+        ("features", "expected"),
+        [
+            (WizardFeatures(), set()),
+            (WizardFeatures(install_graph_extra=True), {"_revert_graph_enabled_flag"}),
+            (WizardFeatures(install_multilingual_extra=True), {"_revert_multilingual_flag"}),
+            (WizardFeatures(enable_hyde=True), {"_revert_query_expansion_flags"}),
+            (WizardFeatures(enable_rag_fusion=True), {"_revert_query_expansion_flags"}),
+            (
+                WizardFeatures(graph_provider="ollama", graph_extraction_model="m"),
+                {"_revert_graph_enrichment_flags"},
+            ),
+            (WizardFeatures(graph_provider="ollama"), set()),  # no model: the writer left it off
+            (WizardFeatures(description_enabled=True), {"_revert_description_flags"}),
+            (WizardFeatures(description_enabled=False), set()),
+            (WizardFeatures(description_enabled=None), set()),
+            (
+                WizardFeatures(
+                    install_graph_extra=True, install_multilingual_extra=True, enable_hyde=True,
+                    graph_provider="claude_cli", description_enabled=True,
+                ),
+                set(_REVERTS),
+            ),
+        ],
+        ids=[
+            "nothing", "graph-extra", "multilingual", "hyde", "rag-fusion", "graph-enrichment",
+            "graph-without-model", "description", "description-declined", "description-unanswered", "everything",
+        ],
+    )
+    def test_reverts_exactly_the_features_the_run_wrote(self, features: WizardFeatures, expected: set[str]) -> None:
+        from archon_search.install import installer
+
+        config_path = Path("archon-search.toml")
+        mocks = {name: MagicMock() for name in self._REVERTS}
+        with patch.multiple(installer, **mocks):
+            installer._revert_unfinished_features(config_path, False, features)
+        called = {name for name, mock in mocks.items() if mock.called}
+        assert called == expected
+        for name in expected:
+            assert mocks[name].call_args.args[:2] == (config_path, False)
+
 
 # ---------------------------------------------------------------------------
 # _revert_query_expansion_flags — rollback on failure/abort
@@ -586,3 +726,30 @@ class TestRenderSummaryQueryExpansion:
         )
         assert "HyDE" not in out
         assert "RAG Fusion" not in out
+
+    def test_summary_shows_description_and_graph_bullets(self) -> None:
+        """FE-8 S46: both LLM features appear as bullets with their providers when configured."""
+        profile = get_profile("minimal", multilingual=False)
+        out = _render_summary(
+            "minimal", profile, multilingual=False, device_labels=["CPU"],
+            features=WizardFeatures(
+                description_enabled=True, description_provider="claude_cli",
+                graph_provider="ollama", graph_extraction_model="qwen2.5:3b",
+            ),
+            config_path="archon-search.toml",
+        )
+        assert "Collection descriptions: enabled (provider: claude_cli)" in out
+        assert "LLM graph enrichment: enabled (provider: ollama)" in out
+
+    def test_description_and_graph_bullets_absent_when_not_configured(self) -> None:
+        profile = get_profile("minimal", multilingual=False)
+        for features in (
+            WizardFeatures(),
+            WizardFeatures(description_enabled=False, graph_provider="ollama", graph_extraction_model=""),
+        ):
+            out = _render_summary(
+                "minimal", profile, multilingual=False, device_labels=["CPU"], features=features,
+                config_path="archon-search.toml",
+            )
+            assert "Collection descriptions" not in out
+            assert "LLM graph enrichment" not in out

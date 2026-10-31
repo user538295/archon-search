@@ -4309,6 +4309,79 @@ def test_e2e_wizard_description_no_writes_enabled_false(runner: CliRunner, tmp_p
     assert load_config(config_path).description.enabled is False
 
 
+_INSTALLER = "archon_search.install.installer"
+_EXTRAS_PASS = f"{_INSTALLER}._install_query_expansion_extras"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("exit_code", "patches", "typed", "ended_by", "extras_reached"),
+    [
+        pytest.param(
+            0,
+            {_EXTRAS_PASS: MagicMock(return_value=["description"])},
+            {},
+            "collection descriptions have been disabled",
+            True,
+            id="extra-failed",
+        ),
+        pytest.param(
+            1,
+            {_EXTRAS_PASS: MagicMock(return_value=[]), f"{_INSTALLER}._check_disk_space": MagicMock(side_effect=InstallError("not enough disk space"))},
+            {},
+            "not enough disk space",
+            False,
+            id="disk-space",
+        ),
+        pytest.param(
+            1, {_EXTRAS_PASS: MagicMock(return_value=[])}, {"Proceed? [y/n]: ": "n"}, "Installation aborted.", False, id="declined"
+        ),
+        pytest.param(
+            1,
+            {
+                _EXTRAS_PASS: MagicMock(return_value=[]),
+                f"{_INSTALLER}._assert_features_persisted": MagicMock(
+                    side_effect=InstallError("[description].enabled was requested but is not present")
+                ),
+            },
+            {},
+            "Install error",
+            False,
+            id="not-persisted",
+        ),
+    ],
+)
+def test_description_install_failure_disk_space_and_decline_all_revert(
+    runner: CliRunner,
+    tmp_path: Path,
+    exit_code: int,
+    patches: dict[str, Any],
+    typed: dict[str, str],
+    ended_by: str,
+    extras_reached: bool,
+) -> None:
+    """S47: each exit — a failed provider extra, the disk-space abort, the declined `Proceed?` and a config that
+    did not reload with the written choices — leaves `[description]` as `enabled = false` with none of the keys
+    the wizard had written (provider, model, host, context window, backfill)."""
+    answers = _answer_description_on_ollama()
+    answers[_CONTEXT_PROMPT.format(_DESCRIPTION_LABEL, 8192)] = "12288"
+    config_path = tmp_path / "archon-search.toml"
+
+    with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["m1"]):
+        result = _run_minimal_wizard_interactive(
+            runner, config_path, answers=answers | typed, wizard_patches=patches
+        )
+
+    assert result.exit_code == exit_code, f"Exit {result.exit_code}:\n{result.output}"
+    assert ended_by in result.output  # the exit under test ended the run, not another one
+    assert _written(config_path)["description"] == {"enabled": False}
+    assert "collection descriptions have been disabled" in result.output
+    extras = patches[_EXTRAS_PASS]
+    assert extras.called is extras_reached
+    if extras_reached:
+        assert extras.call_args.args[0].description_provider == "ollama"
+
+
 @pytest.mark.integration
 def test_e2e_description_question_asked_with_enable_hyde_flag(runner: CliRunner, tmp_path: Path) -> None:
     """S44: `--enable-hyde` skips the HyDE, RAG Fusion and graph prompts but not the description question."""

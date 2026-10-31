@@ -15,6 +15,10 @@ from archon_search.profiles import InstallProfile, get_profile
 
 from .errors import InstallError
 
+# Providers whose calls need an API key from the environment or `.secrets.env` (the rest need none:
+# see `archon_search.llm_client.provider_key.provider_key_available`).
+API_KEY_PROVIDERS = frozenset({"anthropic", "openai"})
+
 # ---------------------------------------------------------------------------
 # WizardFeatures dataclass (Task C8-1.1)
 # ---------------------------------------------------------------------------
@@ -77,6 +81,34 @@ class WizardFeatures:
     def graph_enrichment_written(self) -> bool:
         """True when the writer stores the graph provider: one is chosen and has a model (``claude_cli`` may omit it)."""
         return bool(self.graph_provider) and (bool(self.graph_extraction_model) or self.graph_provider == "claude_cli")
+
+    @property
+    def description_written(self) -> bool:
+        """True when the writer stores a ``[description]`` provider block (the operator answered yes)."""
+        return bool(self.description_enabled)
+
+    @property
+    def provider_feature_written(self) -> bool:
+        """True when the run wrote any LLM-provider feature: HyDE, RAG Fusion, graph enrichment or descriptions."""
+        return bool(
+            self.enable_hyde or self.enable_rag_fusion or self.graph_enrichment_written or self.description_written
+        )
+
+    @property
+    def api_key_features(self) -> tuple[str, ...]:
+        """Labels of the written features that read an API key from ``.secrets.env``.
+
+        HyDE and RAG Fusion count whatever their provider is (the file has always been created for them);
+        descriptions and graph enrichment count only on a provider that needs a key.
+        """
+        labels: list[str] = []
+        if self.enable_hyde or self.enable_rag_fusion:
+            labels.append("AI query expansion")
+        if self.description_written and self.description_provider in API_KEY_PROVIDERS:
+            labels.append("collection descriptions")
+        if self.graph_enrichment_written and self.graph_provider in API_KEY_PROVIDERS:
+            labels.append("graph enrichment")
+        return tuple(labels)
 
 
 # Tri-state optional keys written by `_apply_wizard_features_to_toml`:

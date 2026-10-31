@@ -53,6 +53,7 @@ from .extras import _install_extra as _install_extra
 from .extras import _install_graph_extra as _install_graph_extra
 from .extras import _install_multilingual_extra as _install_multilingual_extra
 from .extras import _install_query_expansion_extras as _install_query_expansion_extras
+from .extras import _revert_description_flags as _revert_description_flags
 from .extras import _revert_graph_enrichment_flags as _revert_graph_enrichment_flags
 from .extras import _revert_query_expansion_flags as _revert_query_expansion_flags
 from .installer import _WAIT_FOR_SERVICE_TIMEOUT as _WAIT_FOR_SERVICE_TIMEOUT

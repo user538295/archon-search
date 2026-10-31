@@ -129,6 +129,10 @@ def _render_summary(
             feature_bullets.append(f"• HyDE: enabled (provider: {features.hyde_provider})")
         if features.enable_rag_fusion:
             feature_bullets.append(f"• RAG Fusion: enabled (provider: {features.rag_fusion_provider})")
+        if features.graph_enrichment_written:
+            feature_bullets.append(f"• LLM graph enrichment: enabled (provider: {features.graph_provider})")
+        if features.description_written:
+            feature_bullets.append(f"• Collection descriptions: enabled (provider: {features.description_provider})")
         if features.disable_reranker:
             feature_bullets.append("• Reranker disabled")
         if features.enable_watch:

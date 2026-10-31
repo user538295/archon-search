@@ -24,7 +24,7 @@ from archon_search.uv_tool import (
     unrecorded_install_hint,
 )
 
-from .config_writer import WizardFeatures
+from .config_writer import _PROVIDER_OWNED_KEYS, WizardFeatures
 from .errors import InstallError
 from .provisioning import SizeEstimateSpec
 
@@ -296,7 +296,7 @@ def _install_multilingual_extra(dry_run: bool = False) -> None:
     _install_extra("multilingual", "multilingual language detection", dry_run)
 
 
-# Maps a HyDE / RAG Fusion / graph-enrichment provider to the archon-search extra that supplies its package.
+# Maps a HyDE / RAG Fusion / graph-enrichment / description provider to the archon-search extra that supplies its package.
 # 'claude_cli' and 'llama_cpp' are absent by design: they have no pip package (claude_cli's availability
 # is the `claude` binary on PATH; llama_cpp speaks plain HTTP). [hyde] and [rag_fusion] are byte-identical
 # extras (both pull anthropic>=2.3), so anthropic maps to a single name — this is what lets the dedup
@@ -312,18 +312,29 @@ _SECTION_LABELS: dict[str, str] = {
     "hyde": "AI query expansion",
     "rag_fusion": "AI query expansion",
     "graph": "graph enrichment provider",
+    "description": "collection descriptions",
 }
+
+# Provider keys the wizard writes into a query-expansion-style section ([hyde], [rag_fusion], [description]).
+_PROVIDER_KEYS: tuple[str, ...] = ("provider", *_PROVIDER_OWNED_KEYS)
+
+
+def _join_labels(labels: tuple[str, ...] | list[str]) -> str:
+    """Join feature labels as prose: ``a``, ``a and b``, ``a, b and c``."""
+    if len(labels) < 2:
+        return "".join(labels)
+    return f"{', '.join(labels[:-1])} and {labels[-1]}"
 
 
 def _install_query_expansion_extras(features: WizardFeatures, dry_run: bool = False) -> list[str]:
-    """Install provider packages for enabled HyDE / RAG Fusion features and the graph provider.
+    """Install provider packages for enabled HyDE / RAG Fusion / description features and the graph provider.
 
     Resolves each enabled feature's provider to its archon-search extra and
     installs each unique extra once (so the common case — features sharing the
     default anthropic provider — installs a single extra, while mixed providers
     install each). ``claude_cli`` and ``llama_cpp`` need no package and are
     skipped. Returns the list of SECTIONS (``"hyde"`` / ``"rag_fusion"`` /
-    ``"graph"``) whose provider extra failed to install (empty when all
+    ``"graph"`` / ``"description"``) whose provider extra failed to install (empty when all
     succeeded); never raises, so the caller can revert exactly the flags whose
     extra failed. When sections share an extra, a single failure marks ALL of
     them failed, and the message names every feature that needed it.
@@ -336,6 +347,8 @@ def _install_query_expansion_extras(features: WizardFeatures, dry_run: bool = Fa
         section_extras.append(("rag_fusion", _PROVIDER_EXTRA.get(features.rag_fusion_provider)))
     if features.graph_enrichment_written:
         section_extras.append(("graph", _PROVIDER_EXTRA.get(features.graph_provider)))
+    if features.description_written:
+        section_extras.append(("description", _PROVIDER_EXTRA.get(features.description_provider)))
 
     # Install each distinct extra once, labelled by every feature that needs it.
     extras: list[str] = []
@@ -345,7 +358,7 @@ def _install_query_expansion_extras(features: WizardFeatures, dry_run: bool = Fa
     failed_extras: list[str] = []
     for extra in extras:
         labels = list(dict.fromkeys(_SECTION_LABELS[s] for s, e in section_extras if e == extra))
-        label = " and ".join(labels)
+        label = _join_labels(labels)
         try:
             _install_extra(extra, label, dry_run)
         except InstallError as exc:
@@ -382,7 +395,7 @@ def _revert_query_expansion_flags(
     for section in sections:
         if section in doc and doc[section].get("enabled"):
             doc[section]["enabled"] = False
-            for key in ("provider", "model", "ollama_base_url", "llama_cpp_base_url", "ollama_context_tokens"):
+            for key in _PROVIDER_KEYS:
                 if key in doc[section]:
                     del doc[section][key]
             changed = True
@@ -397,6 +410,36 @@ def _revert_query_expansion_flags(
             "[hyde] / [rag_fusion] in archon-search.toml.",
             file=sys.stderr,
         )
+
+
+def _revert_description_flags(config_path: Path, dry_run: bool) -> None:
+    """Disable ``[description]`` and strip every key the wizard wrote into it, on abort or a failed provider install.
+
+    Same reasoning as :func:`_revert_query_expansion_flags`: the section is written (``enabled = true`` plus
+    the provider block and ``backfill_on_startup``) before the provider package is installed, and leaving it
+    would run a description feature whose package is missing (every generation would fail). Unlike HyDE and
+    RAG Fusion, startup does not refuse to boot on that. Keys the wizard never asks for (``think``,
+    ``timeout_seconds``, ...) are left as the operator set them.
+    """
+    if dry_run or not config_path.exists():
+        return
+    doc = tomlkit.parse(config_path.read_text())
+    if "description" not in doc or not doc["description"].get("enabled"):
+        return
+    doc["description"]["enabled"] = False
+    for key in (*_PROVIDER_KEYS, "backfill_on_startup"):
+        if key in doc["description"]:
+            del doc["description"][key]
+    atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+    print(
+        "Warning: collection descriptions have been disabled because the install did "
+        "not complete. Re-run the wizard, or install the provider package "
+        f"manually — e.g. `{extra_install_hint('hyde')}` (Anthropic, the "
+        f"default), `{extra_install_hint('openai-provider')}` (OpenAI), or "
+        f"`{extra_install_hint('ollama')}` (Ollama) — then set enabled = true under "
+        "[description] in archon-search.toml.",
+        file=sys.stderr,
+    )
 
 
 def _revert_graph_enrichment_flags(config_path: Path, dry_run: bool) -> None:

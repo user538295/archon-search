@@ -20,7 +20,7 @@ Paths are shown for the default data dir `~/.archon-search/`; `ARCHON_SEARCH_DAT
 | --- | --- |
 | `~/.archon-search/logs/archon-search.log` | Server log (level from `[logging].level`). |
 | `~/.archon-search/.search.env` | API key (mode `600`). |
-| `~/.archon-search/.secrets.env` | HyDE / RAG-Fusion provider keys (mode `600`; managed service only). |
+| `~/.archon-search/.secrets.env` | HyDE, RAG Fusion, graph enrichment and collection description provider keys (mode `600`; managed service only). |
 | `~/.archon-search/search/` | LanceDB data. Deleting forces a full rebuild on next sync. |
 | `~/.archon-search/search-logs/` | Telemetry JSONL — only present when telemetry is enabled. |
 | `~/.archon-search/archon-search.toml` | Config. Default `<data-dir>/archon-search.toml`; overridable via `ARCHON_SEARCH_CONFIG`. |
@@ -178,7 +178,7 @@ All three wordings are sanitized constants in `archon_search/graph_extractor.py`
 `POST /search` with `hyde=true` or `rag_fusion=true` returns a non-null `expansion_warning` (and `expansion_used: false` — expansion fell back to the original query embedding).
 
 1. **Check `GET /status`** — with `[hyde] enabled = true` or `[rag_fusion] enabled = true`, the response includes `hyde.key_available` / `rag_fusion.key_available`. A `false` value means the provider's required key is unset: `ANTHROPIC_API_KEY` for `provider = "anthropic"` (default), `OPENAI_API_KEY` for `provider = "openai"`. `ollama` and `claude_cli` report `key_available: true` (no API key) but that does **not** confirm Ollama is reachable or the `claude` CLI is logged in.
-2. **Managed service**: put the key in `<data-dir>/.secrets.env` (`~/.archon-search/.secrets.env` by default; `ANTHROPIC_API_KEY=sk-...` or `OPENAI_API_KEY=sk-...`), then restart (`archon-search stop && archon-search start`). The wizard creates this file (mode 600) when HyDE/RAG-Fusion is enabled.
+2. **Managed service**: put the key in `<data-dir>/.secrets.env` (`~/.archon-search/.secrets.env` by default; `ANTHROPIC_API_KEY=sk-...` or `OPENAI_API_KEY=sk-...`), then restart (`archon-search stop && archon-search start`). The wizard creates this file (mode 600) when HyDE/RAG-Fusion is enabled, or when the graph enrichment or collection description provider it wrote is `anthropic` or `openai`.
 3. **`archon-search serve` (container mode)**: pass the key as `-e ANTHROPIC_API_KEY=sk-...` / `-e OPENAI_API_KEY=sk-...`.
 4. **`archon-search status`** warns on stderr when the feature is enabled with a key-needing provider but the key is absent.
 5. Key set but still warned? The provider call may be timing out — raise `timeout_seconds` in `[hyde]`/`[rag_fusion]` (default `10.0`). For `ollama`, verify the server at `ollama_base_url`; for `claude_cli`, confirm `claude` is on PATH and logged in.

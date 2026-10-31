@@ -63,6 +63,8 @@ from .extras import (
     _install_graph_extra,
     _install_multilingual_extra,
     _install_query_expansion_extras,
+    _join_labels,
+    _revert_description_flags,
     _revert_graph_enrichment_flags,
     _revert_query_expansion_flags,
     _torch_cuda_available,
@@ -165,6 +167,26 @@ def _require_device_setting(device: str) -> None:
     """Raise ValueError unless *device* is one of ``DEVICE_SETTINGS``."""
     if device not in DEVICE_SETTINGS:
         raise ValueError(f"unknown device {device!r}; expected one of: {', '.join(DEVICE_SETTINGS)}")
+
+
+def _revert_unfinished_features(config_path: Path, dry_run: bool, features: WizardFeatures) -> None:
+    """Undo every config flag this run wrote for an optional feature whose install has not happened.
+
+    The one revert path of the exits that leave before any package is installed (a config that did not
+    reload with the written choices, the disk-space abort, a declined ``Proceed?``): ``graph.enabled``,
+    ``multilingual``, the HyDE / RAG Fusion sections, graph enrichment and ``[description]``. Each revert is
+    skipped for a feature this run did not write.
+    """
+    if features.install_graph_extra:
+        _revert_graph_enabled_flag(config_path, dry_run)
+    if features.install_multilingual_extra:
+        _revert_multilingual_flag(config_path, dry_run)
+    if features.enable_hyde or features.enable_rag_fusion:
+        _revert_query_expansion_flags(config_path, dry_run)
+    if features.graph_enrichment_written:
+        _revert_graph_enrichment_flags(config_path, dry_run)
+    if features.description_written:
+        _revert_description_flags(config_path, dry_run)
 
 
 def _compute_svc_timeout(eager_load: bool, total_bytes: int) -> int:
@@ -897,7 +919,7 @@ class BaseInstaller(ABC):
                     _assert_features_persisted(cfg, features)
                 except InstallError as exc:
                     print(f"Install error: {exc}", file=sys.stderr)
-                    _revert_query_expansion_flags(config_path, self.dry_run)
+                    _revert_unfinished_features(config_path, self.dry_run, features)
                     return 1
 
             # Steps 11-13 (disk check, summary, confirmation) come BEFORE Step 9: its
@@ -909,14 +931,7 @@ class BaseInstaller(ABC):
                 _check_disk_space(prof, features=features)
             except InstallError as exc:
                 print(str(exc))
-                if features.install_graph_extra:
-                    _revert_graph_enabled_flag(config_path, self.dry_run)
-                if features.install_multilingual_extra:
-                    _revert_multilingual_flag(config_path, self.dry_run)
-                if features.enable_hyde or features.enable_rag_fusion:
-                    _revert_query_expansion_flags(config_path, self.dry_run)
-                if features.graph_enrichment_written:
-                    _revert_graph_enrichment_flags(config_path, self.dry_run)
+                _revert_unfinished_features(config_path, self.dry_run, features)
                 return 1
 
             # Step 12: summary display
@@ -935,14 +950,7 @@ class BaseInstaller(ABC):
             # Step 13: confirmation
             if not non_interactive and not ask_yes_no("Proceed? [y/n]: ", eof_default=False):
                 print("Installation aborted.")
-                if features.install_graph_extra:
-                    _revert_graph_enabled_flag(config_path, self.dry_run)
-                if features.install_multilingual_extra:
-                    _revert_multilingual_flag(config_path, self.dry_run)
-                if features.enable_hyde or features.enable_rag_fusion:
-                    _revert_query_expansion_flags(config_path, self.dry_run)
-                if features.graph_enrichment_written:
-                    _revert_graph_enrichment_flags(config_path, self.dry_run)
+                _revert_unfinished_features(config_path, self.dry_run, features)
                 return 1
 
             # Step 9: device configuration (detection + user confirm already done in Step 2b)
@@ -954,7 +962,7 @@ class BaseInstaller(ABC):
                 # Step 9 rewrote [database].device after Step 8b loaded the config.
                 # Step 14's pre-warm reads self.cfg, and no step before it rewrites the
                 # [database] model or device keys again (the flag reverts below touch
-                # [graph], [hyde], [rag_fusion] and [database].multilingual only).
+                # [graph], [hyde], [rag_fusion], [description] and [database].multilingual only).
                 self.cfg = cfg = self._load_config(config_path)
 
             # Step 9b: graph device candidate + the free stage-1 availability
@@ -1002,22 +1010,23 @@ class BaseInstaller(ABC):
                     print(f"Warning: multilingual install failed: {exc}", file=sys.stderr)
                     _revert_multilingual_flag(config_path, self.dry_run)
 
-            # Before Step 14: install provider packages for enabled HyDE / RAG Fusion and the
-            # graph enrichment provider. Same shape as the graph/multilingual installs above:
+            # Before Step 14: install provider packages for the written HyDE / RAG Fusion, graph enrichment and
+            # description features. Same shape as the graph/multilingual installs above:
             # non-fatal, and roll back the already-written flags of each failed section so the
             # next server start does not hard-fail on the missing provider package (the
-            # anthropic guard in app.py's _check_provider_deps) or run graph enrichment without it.
-            # ponytail: revert wiring is triplicated across the disk-space/decline/install exit paths (mirrors the pre-existing graph & multilingual reverts); consolidate into one _revert_optional_feature_flags helper if a 4th revertable feature is added.
-            if features.enable_hyde or features.enable_rag_fusion or features.graph_enrichment_written:
+            # anthropic guard in app.py's _check_provider_deps) or run a feature without its package.
+            if features.provider_feature_written:
                 _failed_sections = _install_query_expansion_extras(features, dry_run=self.dry_run)
-                _failed_expansion = tuple(s for s in _failed_sections if s != "graph")
+                _failed_expansion = tuple(s for s in _failed_sections if s in ("hyde", "rag_fusion"))
                 if _failed_expansion:
                     _revert_query_expansion_flags(config_path, self.dry_run, sections=_failed_expansion)
                 if "graph" in _failed_sections:
                     _revert_graph_enrichment_flags(config_path, self.dry_run)
+                if "description" in _failed_sections:
+                    _revert_description_flags(config_path, self.dry_run)
 
-            # Before Step 14b: create .secrets.env when AI query expansion is enabled
-            if features.enable_hyde or features.enable_rag_fusion:
+            # Before Step 14b: create .secrets.env when a written feature reads an API key from it
+            if features.api_key_features:
                 try:
                     _secrets_env_path = get_secrets_env_file()
                     _created = _create_secrets_env(_secrets_env_path, dry_run=self.dry_run)
@@ -1026,7 +1035,7 @@ class BaseInstaller(ABC):
                             f"  Created:    {_secrets_env_path}\n"
                             "  Add your provider API key (ANTHROPIC_API_KEY=<key> or\n"
                             "  OPENAI_API_KEY=<key>) to this file so the managed service can\n"
-                            "  load it at start time for AI query expansion."
+                            f"  load it at start time for {_join_labels(features.api_key_features)}."
                         )
                 except OSError as exc:
                     print(f"Warning: could not create .secrets.env: {exc}", file=sys.stderr)
@@ -1126,16 +1135,15 @@ class BaseInstaller(ABC):
                         f"  API key: {_api_key}"
                         f"  (keep this key private; also stored at: {get_key_file()})"
                     )
-            # Post-install hint: if ANTHROPIC_API_KEY not set and HyDE/RAG Fusion not requested
+            # Post-install hint: if ANTHROPIC_API_KEY is not set and none of the LLM-provider features was written
             if (
                 not self.dry_run
-                and not features.enable_hyde
-                and not features.enable_rag_fusion
+                and not features.provider_feature_written
                 and not os.environ.get("ANTHROPIC_API_KEY")
             ):
                 print(
                     "Tip: Set $ANTHROPIC_API_KEY to enable AI query expansion "
-                    "(HyDE + RAG Fusion) next run."
+                    "(HyDE + RAG Fusion), collection descriptions or graph enrichment next run."
                 )
 
             lang = "Multilingual" if is_multilingual else "English"

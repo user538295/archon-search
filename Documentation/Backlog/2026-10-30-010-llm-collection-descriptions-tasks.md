@@ -540,7 +540,7 @@ flowchart LR
         - #unit_test — `test_description_asked_even_when_enable_hyde_flag_given` — the flag does not skip the question
         - #integration_test — `test_e2e_wizard_description_flow_writes_section` — the dev-written wizard end-to-end for S44, S45, S46, S48, S71 in `test_e2e_wizard_optional_features.py`
         - #integration_test — `test_wizard_help_has_no_enable_description_flag` — `install --help` lists no such flag
-- [ ] **FE-8** — Description provider extra and shared revert path, `.secrets.env` gate and message for description and graph providers, the post-install key tip, and the install summary bullets for description and graph #frontend-role
+- [x] **FE-8** — Description provider extra and shared revert path, `.secrets.env` gate and message for description and graph providers, the post-install key tip, and the install summary bullets for description and graph #frontend-role
     - Presentation · 6.0h
     - needs FE-7, FE-3 · completes C4, S47, S71
     - Tests

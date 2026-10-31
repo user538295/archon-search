@@ -293,6 +293,44 @@ class TestPromptGraphProvider:
             result = _prompt_graph_provider(ask_yn, self._ask_choice_from("claude_cli"), OLLAMA_BASE_URL_DEFAULT)
         assert result == ("claude_cli", "", "", "")
 
+    def test_graph_claude_cli_missing_warning_says_summaries_are_skipped(self, capsys) -> None:
+        """FE-8: the graph call site passes its own label, so the warning does not promise a fallback."""
+        with (
+            patch("archon_search.install.shutil.which", return_value=None),
+            patch("builtins.input", return_value=""),
+        ):
+            _prompt_graph_provider(lambda *_a, **_k: True, self._ask_choice_from("claude_cli"), OLLAMA_BASE_URL_DEFAULT)
+        out = capsys.readouterr().out
+        assert "community summaries will be skipped" in out
+        assert "fall back" not in out
+
+
+class TestPromptDescriptionClaudeMissing:
+    def test_description_claude_cli_missing_warning_says_generation_fails_visibly(self, capsys) -> None:
+        """FE-8: the description call site passes its own label, so the warning does not promise a fallback."""
+        from archon_search.install.wizard import _prompt_description
+
+        with (
+            patch("archon_search.install.shutil.which", return_value=None),
+            patch("builtins.input", return_value=""),
+        ):
+            _prompt_description(
+                lambda *_a, **_k: True, lambda *_a: "claude_cli", OLLAMA_BASE_URL_DEFAULT, LLAMA_CPP_BASE_URL_DEFAULT, None
+            )
+        out = capsys.readouterr().out
+        assert "description generation will fail visibly" in out
+        assert "fall back" not in out
+
+    def test_hyde_claude_cli_missing_warning_keeps_the_fallback_wording(self, capsys) -> None:
+        from archon_search.install.wizard import _prompt_provider
+
+        with (
+            patch("archon_search.install.shutil.which", return_value=None),
+            patch("builtins.input", return_value=""),
+        ):
+            _prompt_provider("HyDE", lambda *_a: "claude_cli", OLLAMA_BASE_URL_DEFAULT)
+        assert "searches will fall back to the plain query" in capsys.readouterr().out
+
 
 class TestPromptMultilingual:
     def test_flag_true_skips_prompt(self) -> None:
@@ -3359,15 +3397,35 @@ class TestCheckClaudeCliPresent:
 
     def test_present_returns_true_no_warning(self, capsys) -> None:
         with patch("archon_search.install.shutil.which", return_value="/usr/bin/claude"):
-            assert _check_claude_cli_present() is True
+            assert _check_claude_cli_present("HyDE") is True
         assert "WARNING" not in capsys.readouterr().out
 
     def test_absent_returns_false_and_warns(self, capsys) -> None:
         with patch("archon_search.install.shutil.which", return_value=None):
-            assert _check_claude_cli_present() is False
+            assert _check_claude_cli_present("HyDE") is False
         out = capsys.readouterr().out
         assert "WARNING" in out
         assert "claude.ai/code" in out
+
+    @pytest.mark.parametrize(
+        ("label", "effect"),
+        [
+            ("HyDE", "searches will fall back to the plain query"),
+            ("RAG Fusion", "searches will fall back to the plain query"),
+            ("graph enrichment", "community summaries will be skipped"),
+            ("collection descriptions", "description generation will fail visibly"),
+        ],
+    )
+    def test_absent_warning_describes_what_the_feature_does_without_claude(
+        self, capsys, label: str, effect: str
+    ) -> None:
+        """Only the query-expansion features fall back; descriptions fail visibly, graph skips its summaries."""
+        with patch("archon_search.install.shutil.which", return_value=None):
+            _check_claude_cli_present(label)
+        out = capsys.readouterr().out
+        assert effect in out
+        if label not in ("HyDE", "RAG Fusion"):
+            assert "fall back" not in out
 
 
 class TestWizardClaudeCLI:

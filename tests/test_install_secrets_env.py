@@ -8,10 +8,12 @@ from unittest.mock import patch
 
 import pytest
 
+from archon_search.config import _PROVIDER_REGISTRY
 from archon_search.install import (
     BaseInstaller,
     DryRunInstaller,
     RealInstaller,
+    WizardFeatures,
     _create_secrets_env,
     create_installer,
 )
@@ -478,3 +480,198 @@ def test_wizard_secrets_env_no_created_hint_on_reinstall(tmp_path: Path, capsys:
     captured = capsys.readouterr()
     assert "Created:" not in captured.out, "Must not print 'Created:' when file already existed"
     assert existing_secrets.read_text() == "ANTHROPIC_API_KEY=existing_key", "Existing content must be preserved"
+
+
+# ---------------------------------------------------------------------------
+# FE-8: description and graph providers that need an API key count too
+# ---------------------------------------------------------------------------
+
+
+def _run_with_features(tmp_path: Path, features: WizardFeatures, *, dry_run: bool = False) -> tuple[int, Path]:
+    """Run a non-interactive install whose wizard answers are *features*; return the exit code and the data dir."""
+    config_path = tmp_path / "archon-search.toml"
+    data_dir = tmp_path / ".archon-search"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    installer = create_installer(config_file=str(config_path), dry_run=dry_run)
+    with (
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=tmp_path / "fake.plist"),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch("archon_search.install.installer._prompt_optional_features", return_value=features),
+        patch("archon_search.install.installer.get_data_dir", return_value=data_dir),
+        patch("archon_search.paths.get_data_dir", return_value=data_dir),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "_probe_and_configure_device", return_value=[]),
+        patch.object(RealInstaller, "write_service_file"),
+        patch.object(RealInstaller, "load_service", return_value=0),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
+        patch("pathlib.Path.home", return_value=tmp_path),
+    ):
+        rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
+    return rc, data_dir
+
+
+def test_secrets_env_created_for_description_provider_needing_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """A description provider that needs a key creates the file and the message names the feature."""
+    rc, data_dir = _run_with_features(
+        tmp_path, WizardFeatures(description_enabled=True, description_provider="openai", description_model="gpt-5-mini")
+    )
+
+    assert rc == 0
+    secrets_path = data_dir / ".secrets.env"
+    assert secrets_path.exists()
+    out = capsys.readouterr().out
+    assert f"  Created:    {secrets_path}\n" in out, out
+    assert "for collection descriptions." in out, out
+    assert "AI query expansion" not in out, out
+
+
+def test_secrets_env_created_for_graph_provider_needing_key(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    rc, data_dir = _run_with_features(
+        tmp_path, WizardFeatures(graph_provider="anthropic", graph_extraction_model="claude-haiku-4-5")
+    )
+
+    assert rc == 0
+    assert (data_dir / ".secrets.env").exists()
+    assert "for graph enrichment." in capsys.readouterr().out
+
+
+def test_secrets_env_message_names_every_feature_that_needs_a_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    rc, _ = _run_with_features(
+        tmp_path,
+        WizardFeatures(
+            enable_hyde=True,
+            description_enabled=True,
+            description_provider="anthropic",
+            graph_provider="openai",
+            graph_extraction_model="gpt-5-mini",
+        ),
+    )
+
+    assert rc == 0
+    assert "for AI query expansion, collection descriptions and graph enrichment." in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "features",
+    [
+        WizardFeatures(description_enabled=True, description_provider="ollama", description_model="m1"),
+        WizardFeatures(description_enabled=True, description_provider="claude_cli"),
+        WizardFeatures(graph_provider="llama_cpp", graph_extraction_model="m1"),
+        WizardFeatures(graph_provider="claude_cli"),
+        WizardFeatures(description_enabled=False, description_provider="openai", description_model="m"),
+        WizardFeatures(graph_provider="openai", graph_extraction_model=""),
+    ],
+    ids=["description-ollama", "description-claude_cli", "graph-llama_cpp", "graph-claude_cli", "declined", "graph-no-model"],
+)
+def test_no_secrets_env_when_no_description_or_graph_provider_needs_a_key(
+    tmp_path: Path, features: WizardFeatures
+) -> None:
+    rc, data_dir = _run_with_features(tmp_path, features)
+
+    assert rc == 0
+    assert not (data_dir / ".secrets.env").exists()
+
+
+@pytest.mark.parametrize(
+    "features",
+    [
+        WizardFeatures(description_enabled=True, description_provider="openai", description_model="gpt-5-mini"),
+        WizardFeatures(graph_provider="anthropic", graph_extraction_model="claude-haiku-4-5"),
+    ],
+    ids=["description-openai", "graph-anthropic"],
+)
+def test_dry_run_creates_no_secrets_env_for_description_or_graph(tmp_path: Path, features: WizardFeatures) -> None:
+    rc, data_dir = _run_with_features(tmp_path, features, dry_run=True)
+
+    assert rc == 0
+    assert not (data_dir / ".secrets.env").exists()
+
+
+@pytest.mark.parametrize("provider", _PROVIDER_REGISTRY)
+def test_api_key_providers_agree_with_provider_key_available(
+    provider: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wizard's idea of a provider needing a key must not drift from the runtime's key check."""
+    from archon_search.install.config_writer import API_KEY_PROVIDERS
+    from archon_search.llm_client.provider_key import provider_key_available
+
+    for variable in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(variable, raising=False)
+
+    assert (provider in API_KEY_PROVIDERS) is (not provider_key_available(provider))
+
+
+_KEY_TIP = "Tip: Set $ANTHROPIC_API_KEY to enable AI query expansion"
+
+
+@pytest.fixture
+def no_anthropic_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
+@pytest.mark.usefixtures("no_anthropic_key")
+def test_key_tip_names_every_feature_when_none_is_configured(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    rc, _ = _run_with_features(tmp_path, WizardFeatures())
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"{_KEY_TIP} (HyDE + RAG Fusion), collection descriptions or graph enrichment next run." in out
+
+
+@pytest.mark.usefixtures("no_anthropic_key")
+@pytest.mark.parametrize(
+    "features",
+    [
+        WizardFeatures(enable_hyde=True),
+        WizardFeatures(description_enabled=True, description_provider="openai", description_model="gpt-5-mini"),
+        WizardFeatures(description_enabled=True, description_provider="ollama", description_model="m1"),
+        WizardFeatures(graph_provider="llama_cpp", graph_extraction_model="m1"),
+    ],
+    ids=["hyde", "description-openai", "description-ollama", "graph-llama_cpp"],
+)
+def test_key_tip_is_not_shown_once_a_provider_feature_is_configured(
+    tmp_path: Path, capsys: pytest.CaptureFixture, features: WizardFeatures
+) -> None:
+    rc, _ = _run_with_features(tmp_path, features)
+
+    assert rc == 0
+    assert _KEY_TIP not in capsys.readouterr().out
+
+
+def test_key_tip_is_not_shown_when_the_key_is_already_set(
+    tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+    rc, _ = _run_with_features(tmp_path, WizardFeatures())
+
+    assert rc == 0
+    assert _KEY_TIP not in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures("no_anthropic_key")
+def test_key_tip_is_not_shown_in_a_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    rc, _ = _run_with_features(tmp_path, WizardFeatures(), dry_run=True)
+
+    assert rc == 0
+    assert _KEY_TIP not in capsys.readouterr().out
+
+
+def test_secrets_env_message_with_two_features_joins_them_with_and(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    rc, _ = _run_with_features(
+        tmp_path,
+        WizardFeatures(enable_hyde=True, description_enabled=True, description_provider="openai", description_model="m"),
+    )
+
+    assert rc == 0
+    assert "for AI query expansion and collection descriptions." in capsys.readouterr().out
