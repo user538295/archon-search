@@ -163,6 +163,14 @@ ENV ARCHON_SEARCH_DATA_DIR=/data \
     ARCHON_SEARCH_CONTAINER=1 \
     HOME=/data
 
+# The gpt2 tokenizer the `ollama` token counter sizes prompts with (1.3 MB, pinned in `paths.py`). It lives under
+# `<data dir>/models/token-counter`, where the service looks for it, so the build runs after the data directory
+# is redirected to /data: the image seeds a FRESH data volume with it, ownership included. A volume that already
+# holds data and a host bind mount are not seeded; there the tokenizer downloads on first use.
+RUN set -eux; \
+    /usr/local/bin/python3 /app/scripts/prefetch-token-counter.py; \
+    chown -R appuser:appuser /data
+
 COPY scripts/docker-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

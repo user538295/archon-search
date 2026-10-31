@@ -248,6 +248,38 @@ def test_dockerfile_prefetches_parse_models_into_a_cache_outside_the_data_volume
     assert pip_install < prefetch < user_switch, "prefetch needs the installed package and root's write access"
 
 
+def test_dockerfile_prefetches_the_token_counter_tokenizer_into_the_data_dir_as_root_before_the_user_switch(
+    dockerfile_logical: list[str],
+) -> None:
+    """The gpt2 tokenizer lands under ``<data dir>/models`` (where the service reads it), so the build must run after
+    ``ARCHON_SEARCH_DATA_DIR`` points at /data, as root, with the files handed to the app user."""
+    prefetch = next(
+        (
+            i
+            for i, line in enumerate(dockerfile_logical)
+            if line.startswith("RUN ") and "prefetch-token-counter.py" in line
+        ),
+        None,
+    )
+    assert prefetch is not None, "the Dockerfile must run scripts/prefetch-token-counter.py at build time"
+    # The step runs as root with HOME=/data: whatever the hub client writes under HOME must belong to the app user too.
+    assert dockerfile_logical[prefetch].endswith("chown -R appuser:appuser /data")
+    data_dir_env = next(i for i, line in enumerate(dockerfile_logical) if "ARCHON_SEARCH_DATA_DIR=/data" in line)
+    user_switch = next(i for i, line in enumerate(dockerfile_logical) if line.startswith("USER "))
+    assert data_dir_env < prefetch < user_switch
+
+
+def test_token_counter_prefetch_script_counts_a_sample_through_the_service_loader(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The build step runs the service's own loader; under the suite's tokenizer stub it prints the stub's count."""
+    import runpy
+
+    runpy.run_path(str(REPO_ROOT / "scripts" / "prefetch-token-counter.py"), run_name="__main__")
+
+    assert capsys.readouterr().out.strip() == "prefetch: counted 3 gpt2 tokens"
+
+
 def test_prefetch_script_writes_a_scanned_pdf_and_a_png(tmp_path: Path) -> None:
     spec = importlib.util.spec_from_file_location(
         "prefetch_parse_models", REPO_ROOT / "scripts" / "prefetch-parse-models.py"

@@ -207,7 +207,7 @@ flowchart LR
         - #unit_test — `test_warn_once_logs_single_warning_per_process_key` — many failing calls log one WARNING per process; tests reset the state through a fixture
         - #unit_test — `test_failure_type_distinguishes_timeout_from_other` — the probe can tell a timeout from any other provider failure
         - #unit_test — `test_provider_key_available_returns_bool` — the re-homed helper returns a real bool, not `str | None`
-- [ ] **BE-3** — Add the gpt2-based token counter as a new component with a pinned snapshot (`paths.py` constants, `model_store.ensure_pinned_snapshot`, `install/prewarm.py`, Dockerfile prefetch) and a stub for tests #backend-role
+- [x] **BE-3** — Add the gpt2-based token counter as a new component with a pinned snapshot (`paths.py` constants, `model_store.ensure_pinned_snapshot`, `install/prewarm.py`, Dockerfile prefetch) and a stub for tests #backend-role
     - Frameworks & Drivers · 4.0h
     - needs K1 · completes S11
     - Tests

@@ -15,6 +15,7 @@ from archon_search.model_store import ensure_model
 from archon_search.paths import (
     GRAPH_NER_MODEL_NAME,
     GRAPH_NER_MODEL_REVISION,
+    TOKEN_COUNTER_MODEL_NAME,
     get_data_dir,
 )
 from archon_search.platform.runtime import get_search_service
@@ -151,7 +152,8 @@ def _prewarm_models(
 
     Failure policy: an embedder failure raises InstallError (the service cannot embed
     without it). A reranker failure only warns. The graph NER model is
-    non-fatal too (``_prewarm_graph_model``).
+    non-fatal too (``_prewarm_graph_model``), as is the token counter's gpt2 tokenizer (``_prewarm_token_counter``,
+    fetched right after the embedder and not gated by the deadline: 1.3 MB).
 
     *timeout* (seconds; the caller passes ``_prewarm_timeout(profile)``) sets a
     deadline that is checked between models: it cannot interrupt a running download
@@ -177,6 +179,8 @@ def _prewarm_models(
         )
     except _PrewarmFailure as exc:
         raise InstallError(str(exc)) from exc
+
+    _prewarm_token_counter()
 
     def _prewarm_reranker() -> None:
         try:
@@ -259,6 +263,26 @@ def _prewarm_graph_model(device: str = CPU_DEVICE) -> str | None:
             GRAPH_NER_MODEL_NAME, exc,
         )
         return None
+
+
+def _prewarm_token_counter() -> None:
+    """Pre-warm the gpt2 tokenizer behind the token counter (non-fatal).
+
+    The ``ollama`` features size their prompts with it (``llm_client.token_counter``). A failure here must never
+    abort the wizard: the tokenizer downloads on first use instead. The tokenizer is 1.3 MB, so the model deadline
+    does not gate it.
+    """
+    # Imported here: ``install`` is on the CLI start-up path, which must not load the LLM client package. The
+    # call-time lookup of the default loader is also what lets tests replace it.
+    from archon_search.llm_client.token_counter import TokenCounter
+
+    try:
+        TokenCounter().count(_PROBE_TEXT)
+    except Exception as exc:  # noqa: BLE001 — hub, network and tokenizer failures are many; pre-warm is non-fatal
+        logger.warning(
+            "Failed to pre-warm the token counter tokenizer %r: %s — it will be downloaded on first use.",
+            TOKEN_COUNTER_MODEL_NAME, exc,
+        )
 
 
 # ---------------------------------------------------------------------------

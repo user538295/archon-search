@@ -60,6 +60,17 @@ GRAPH_NER_MODEL_FILES: tuple[str, ...] = (
 )
 
 
+#: Pinned gpt2 tokenizer behind the token counter (``llm_client.token_counter``) that sizes ``ollama`` prompts.
+#: ``openai-community/gpt2`` is the hub's canonical id (the bare ``gpt2`` id redirects to it); the revision is that
+#: repo's ``main`` commit as read from ``https://huggingface.co/api/models/openai-community/gpt2`` (last modified
+#: 2024-02-19). Only ``tokenizer.json`` (1.3 MB, the full byte-level BPE) is fetched: no weights, vocab or merges
+#: files, and nothing a later push to the repo adds.
+TOKEN_COUNTER_MODEL_NAME: str = "openai-community/gpt2"
+TOKEN_COUNTER_MODEL_REVISION: str = "607a30d783dfa663caf39e06633721c8d4cfcd7e"
+TOKEN_COUNTER_TOKENIZER_FILE: str = "tokenizer.json"
+TOKEN_COUNTER_MODEL_FILES: tuple[str, ...] = (TOKEN_COUNTER_TOKENIZER_FILE,)
+
+
 def get_data_dir() -> Path:
     """Return the base data directory for archon-search runtime state.
 
@@ -140,3 +151,13 @@ def get_graph_models_dir() -> Path:
     """
     model_segment = GRAPH_NER_MODEL_NAME.replace("/", "--")
     return get_models_dir() / "graph" / f"{model_segment}-{GRAPH_NER_MODEL_REVISION}"
+
+
+def get_token_counter_models_dir() -> Path:
+    """Return the token counter's tokenizer cache directory, resolved fresh on every call.
+
+    Layout: ``<data>/models/token-counter/``, the ``cache_dir`` ``model_store.ensure_pinned_snapshot`` fills with
+    ``TOKEN_COUNTER_MODEL_FILES`` of ``TOKEN_COUNTER_MODEL_REVISION`` (the hub layout, which already carries the
+    revision, so no revision segment is added here). Not guaranteed to exist.
+    """
+    return get_models_dir() / "token-counter"

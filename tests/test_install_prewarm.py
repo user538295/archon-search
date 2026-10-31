@@ -520,3 +520,42 @@ def test_prewarm_models_skips_graph_prewarm_when_not_requested():
         _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
 
     graph_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Token counter pre-warm (BE-3): fetches the pinned gpt2 tokenizer, non-fatal
+# ---------------------------------------------------------------------------
+
+def test_prewarm_models_loads_the_token_counter_tokenizer_once_with_one_probe_count(monkeypatch):
+    from tests._token_counter_stub import StubTokenizer
+
+    stub = StubTokenizer()
+    monkeypatch.setattr("archon_search.llm_client.token_counter.load_gpt2_tokenizer", lambda: stub)
+
+    with _Rig():
+        _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
+
+    assert len(stub.calls) == 1, "the pre-warm loads the tokenizer and runs one probe count"
+
+
+def test_prewarm_token_counter_failure_is_non_fatal_and_logs_first_use_will_download(monkeypatch, caplog):
+    def _fail() -> None:
+        raise ModelDownloadError("openai-community/gpt2", "download failed")
+
+    monkeypatch.setattr("archon_search.llm_client.token_counter.load_gpt2_tokenizer", _fail)
+
+    with _Rig() as rig, caplog.at_level("WARNING"):
+        _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)  # must not raise
+
+    assert ("load", _RERANKER) in rig.events, "a token counter failure must not stop the reranker pre-warm"
+    assert any("token counter" in r.getMessage() and "first use" in r.getMessage() for r in caplog.records)
+
+
+def test_prewarm_embedder_failure_skips_the_token_counter(monkeypatch):
+    loads: list[int] = []
+    monkeypatch.setattr("archon_search.llm_client.token_counter.load_gpt2_tokenizer", lambda: loads.append(1))
+
+    with _Rig(embedder_download_error=ModelDownloadError(_EMBEDDER, "x")), pytest.raises(InstallError):
+        _prewarm_models(_cfg_for(_MINIMAL), _TIMEOUT_S)
+
+    assert loads == []

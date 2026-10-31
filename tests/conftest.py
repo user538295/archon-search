@@ -254,6 +254,10 @@ def _stub_model_backends(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(ModelEmbedder, "encode", encode)
     monkeypatch.setattr(ModelReranker, "predict", predict)
+    # The ollama token counter's gpt2 tokenizer is a hub download; keep the install pre-warm offline.
+    from tests._token_counter_stub import StubTokenizer
+
+    monkeypatch.setattr("archon_search.llm_client.token_counter.load_gpt2_tokenizer", StubTokenizer)
 
 
 @pytest.fixture(autouse=True)

@@ -298,6 +298,7 @@ rm -rf ~/.archon-search/
 | `~/.archon-search/search-logs/` | Telemetry JSONL (only when telemetry is enabled). |
 | `~/.archon-search/models/lid.176.ftz` | **C2** — fasttext language identification model (only when installed with `--multilingual`). |
 | `~/.archon-search/models/graph/knowledgator--gliner-relex-multi-v1.0-<revision>/` | Hugging Face cache for the pinned GLiNER prose extraction checkpoint (only when the graph extra is in use). Written by the wizard's pre-warm, or lazily by the server on first graph ingest — `get_graph_models_dir()` in `archon_search/paths.py` builds this path from `GRAPH_NER_MODEL_NAME` and `GRAPH_NER_MODEL_REVISION`. |
+| `~/.archon-search/models/token-counter/` | Hugging Face cache for the pinned gpt2 tokenizer (`tokenizer.json`, 1.3 MB) that sizes prompts for the `ollama` provider. Written by the wizard's pre-warm, by the Docker image build, or on first use. |
 
 > The entire runtime tree relocates with a single env var: set `ARCHON_SEARCH_DATA_DIR` to move DB, models, keys, logs, and the default `archon-search.toml` off `~/.archon-search/`.
 
