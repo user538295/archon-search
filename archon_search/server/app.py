@@ -78,6 +78,11 @@ from archon_search.reranker import (
     UnsupportedModelReranker,
 )
 from archon_search.server.graph_view_token import GRAPH_VIEW_SECRET_BYTES
+from archon_search.server.llm_composition import (
+    FeatureClient,
+    build_llm_client,
+    resolve_context_windows,
+)
 from archon_search.server.middleware_auth import (
     _EXEMPT_PATHS,
     DOCS_PATHS,
@@ -758,6 +763,15 @@ def create_app(
         app.state._background_tasks.add(recovery_task)
         recovery_task.add_done_callback(app.state._background_tasks.discard)
 
+        # Startup: resolve the context window of every enabled feature's shared LLM client and log the window
+        # WARNINGs (unset or oversized Ollama window, failed llama_cpp probe; BE-10, C1). A background task, like
+        # the validation above: a provider host that does not answer must never hold the port closed. Always
+        # created, so the task is awaitable even when no feature is enabled.
+        window_features = [FeatureClient("hyde", app.state.hyde_client)] if config.hyde.enabled else []
+        app.state._llm_window_task = asyncio.create_task(resolve_context_windows(window_features))
+        app.state._background_tasks.add(app.state._llm_window_task)
+        app.state._llm_window_task.add_done_callback(app.state._background_tasks.discard)
+
         # Startup: install the real export/import dispatch closure on the
         # scheduler and start it. The placeholder dispatch passed to
         # ``JobScheduler(...)`` in ``run_server()`` is replaced here, once
@@ -1182,6 +1196,9 @@ def create_app(
     # Set to a Task by the lifespan only when at least one collection is configured;
     # the None default keeps the attribute readable on every path.
     app.state._startup_sync_task = None
+    # Set to a Task by the lifespan, which resolves the context windows of the enabled features' LLM clients; the
+    # None default keeps the attribute readable before the lifespan has run.
+    app.state._llm_window_task = None
     # Set to True by _run_startup_sync when the sync crashed (except branch) or
     # completed with per-collection errors (result.errors non-empty); the False
     # default keeps the attribute readable on every path.
@@ -1283,6 +1300,15 @@ def create_app(
     from archon_search.hyde import HyDEGenerator
     from archon_search.rag_fusion import RAGFusionGenerator
 
+    # The shared LLM client of HyDE, composed from [hyde] (BE-10); BE-11 hands it to the generator below in place of the provider.
+    app.state.hyde_client = build_llm_client(
+        provider=config.hyde.provider,
+        model=config.hyde.model,
+        ollama_base_url=config.hyde.ollama_base_url,
+        llama_cpp_base_url=config.hyde.llama_cpp_base_url,
+        ollama_context_tokens=config.hyde.ollama_context_tokens,
+        retry_on_nonzero_exit=True,
+    )
     _hyde_provider = _build_query_expansion_provider(
         config.hyde.provider, config.hyde.model, config.hyde.ollama_base_url, config.hyde.llama_cpp_base_url
     )

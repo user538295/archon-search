@@ -259,7 +259,7 @@ flowchart LR
         - #unit_test — `test_guard_blocks_openai_and_ollama_client_construction` — constructing either SDK client in a test raises
         - #unit_test — `test_guard_blocks_claude_spawn_for_unresolved_binary` — a `claude` spawn from an unresolved path raises
         - #unit_test — `test_guard_allows_fake_claude_on_resolved_path` — the fake binary of `BE-8` passes the guard
-- [ ] **BE-10** — Compose the HyDE client from `[hyde]` in `server/app.py` (provider, model, host, context), resolve each client's window asynchronously (Ollama `show`, `llama_cpp` props, per client), and log the startup WARNINGs for an unset Ollama window, an oversized one and a failed `llama_cpp` probe; `llama_cpp_ok` unchanged #backend-role
+- [x] **BE-10** — Compose the HyDE client from `[hyde]` in `server/app.py` (provider, model, host, context), resolve each client's window asynchronously (Ollama `show`, `llama_cpp` props, per client), and log the startup WARNINGs for an unset Ollama window, an oversized one and a failed `llama_cpp` probe; `llama_cpp_ok` unchanged #backend-role
     - Frameworks & Drivers · 6.0h
     - needs BE-1, BE-9 · completes S5, S67, S68
     - Tests
