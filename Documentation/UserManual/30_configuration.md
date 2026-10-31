@@ -1,7 +1,7 @@
 **Purpose**: Configure `archon-search` via `archon-search.toml` and environment variables.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-10-17 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-10-31 / **Next review**: 2027-07-29
 
 # Configuration
 
@@ -33,9 +33,9 @@ archon-search config get server.port
 archon-search config set server.port 9000
 ```
 
-`config show` prints the *effective* config: the file's contents plus every `[server]`, `[database]`, `[routing]`, `[collections]`, and `[logging]` key, and the `enabled` toggle of `[telemetry]`, `[hyde]` and `[rag_fusion]`, that the file omits, filled in with its `SearchConfig` default (`config get` resolves the same keys, so `archon-search config get hyde.enabled` prints `False` when the file has no `[hyde].enabled`). The install wizard deliberately writes only the choices you actually made — a default it never asked about (a `--non-interactive` run without the matching flag) is left out, with one exception: a fresh install always writes `[server].host = "127.0.0.1"` (unless `--host` is passed) because `archon-search serve` would otherwise bind `0.0.0.0` — so the file on disk is normally shorter than what `config show` prints. Values present in the file are echoed verbatim, and keys and sections the defaults do not cover (`[hyde].model`, `[jobs]`, …) are passed through unchanged.
+`config show` prints the *effective* config: the file's contents plus every `[server]`, `[database]`, `[routing]`, `[collections]`, and `[logging]` key, and the `enabled` toggle of `[telemetry]`, `[hyde]`, `[rag_fusion]` and `[description]`, that the file omits, filled in with its `SearchConfig` default (`config get` resolves the same keys, so `archon-search config get description.enabled` prints `False` when the file has no `[description].enabled`). The install wizard deliberately writes only the choices you actually made — a default it never asked about (a `--non-interactive` run without the matching flag) is left out, with one exception: a fresh install always writes `[server].host = "127.0.0.1"` (unless `--host` is passed) because `archon-search serve` would otherwise bind `0.0.0.0` — so the file on disk is normally shorter than what `config show` prints. Values present in the file are echoed verbatim, and keys and sections the defaults do not cover (`[hyde].model`, `[jobs]`, …) are passed through unchanged.
 
-`config set` coerces the value in this order: bool (case-insensitive `"true"`/`"false"`) → int → float → string. Keys must be in `section.field` form. `config set` writes to the TOML file **without** validating against `SearchConfig` — unknown sections or fields silently succeed and are only caught on the next `load_config` call.
+`config set` coerces the value in this order: bool (case-insensitive `"true"`/`"false"`) → int → float → string. Keys must be in `section.field` form. `config set` validates the resulting file with the loader the server uses: a value of the wrong type or out of range (for example `archon-search config set description.enabled maybe`) is refused with an error and the file is left unchanged. Unknown sections and keys are still accepted without error (a misspelt key is written and then ignored). There is no install flag for descriptions: the wizard asks, and scripts use `archon-search config set description.enabled true`.
 
 ## Sections
 
@@ -179,11 +179,32 @@ Optional LLM-backed recall boosters, both **disabled by default**. They share th
 | `model` | `claude-haiku-4-5-20251001` | Generation model. Required for `ollama`/`openai`/`llama_cpp`; a model tag/id for those providers. |
 | `ollama_base_url` | `http://localhost:11434` | Ollama server URL; used only when `provider = "ollama"`. |
 | `llama_cpp_base_url` | `http://localhost:8080` | llama-server URL; used only when `provider = "llama_cpp"`. Use a small, direct-response instruct model — a reasoning model burns the whole `max_tokens` budget on hidden chain-of-thought and leaves `hyde_applied`/`rag_fusion_applied` silently `false`. |
+| `ollama_context_tokens` | unset | Context window (tokens) assumed for the Ollama server; used only when `provider = "ollama"`. Unset assumes 4096 and logs a startup WARNING; 8192 is a good start (≥1). |
 | `timeout_seconds` | `10.0` | Per-request LLM timeout; on timeout the server falls back silently to the plain query (>0). |
 | `max_requests_per_minute` | `60` | Per-process rate limit (≥1); **not** enforced for `ollama`/`claude_cli`/`llama_cpp`. |
 | `num_queries` *(rag_fusion only)* | `2` | LLM-generated query variants, range `1–5`. Total searches = `num_queries + 1`. |
 
 > **Privacy warning:** with `provider = "anthropic"`, `"openai"`, or `"claude_cli"`, enabling these features sends raw query text to the provider on every boosted request. `provider = "ollama"` or `"llama_cpp"` keeps query text on the local host (zero-transmission). Enabling either feature causes the wizard to create `<data-dir>/.secrets.env` (`~/.archon-search/.secrets.env` by default; mode 0600) for provider API keys — created whatever the provider, though `ollama`/`claude_cli`/`llama_cpp` need none. See [`60_searching.md`](./60_searching.md) for worked examples and the residency caveats.
+
+### `[description]`
+
+LLM-generated collection descriptions (used by the query router and shown by `collection info`), **disabled by default**. Same provider/model shape as `[hyde]`, with its own timeout and no rate limit (generations run one at a time per process).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Master switch. Set it with `archon-search config set description.enabled true`; there is no install flag. |
+| `provider` | `anthropic` | One of `anthropic`, `ollama`, `openai`, `claude_cli`, `llama_cpp`. |
+| `model` | `claude-haiku-4-5-20251001` | Generation model. Required for `ollama`/`openai`/`llama_cpp`. For `claude_cli`, leaving the key out or keeping the default omits `--model` (Claude Code's own default model); an empty string is a config error. |
+| `ollama_base_url` | `http://localhost:11434` | Ollama server URL; used only when `provider = "ollama"`. |
+| `llama_cpp_base_url` | `http://localhost:8080` | llama-server URL; used only when `provider = "llama_cpp"`. |
+| `ollama_context_tokens` | unset | Context window (tokens) assumed for the Ollama server; used only when `provider = "ollama"`. Unset assumes 4096 and logs a startup WARNING; 8192 is a good start (≥1). |
+| `backfill_on_startup` | `false` | Describe existing collections that have no description when the server starts. |
+| `timeout_seconds` | `30.0` | Per-attempt LLM timeout; a cold local model may need more (>0). |
+| `max_sample_chunks` | `100` | Most chunks sampled for one description (≥1). |
+| `think` | `default` | `true`, `false` or `"default"` (send no thinking control). Honoured by `ollama` and `llama_cpp` only; set `false` when a reasoning model returns no usable answer. |
+| `include_restricted_chunks` | `false` | Local providers (`ollama`, `llama_cpp`) only: also sample chunks that carry an access list. The description may then contain text from chunks the access list hides, and every caller who can see the collection reads it; with a non-loopback host that text also leaves the machine. `anthropic`, `openai` and `claude_cli` never sample such chunks, whatever this says. |
+
+> **Privacy warning:** with `provider = "anthropic"`, `"openai"` or `"claude_cli"`, excerpts of your documents leave the machine. `ollama` and `llama_cpp` keep the text local only while their base URL points at this host. By default only chunks without an access list are sampled. A scripted `config set description.enabled true` does not install provider packages: add the extra (`hyde` for `anthropic`, `openai-provider`, `ollama`) yourself; `llama_cpp` and `claude_cli` need none.
 
 ### `[maintenance]`
 
@@ -227,9 +248,10 @@ Prose entity and relation extraction additionally needs a model checkpoint, whic
 | --- | --- | --- |
 | `enabled` | `false` | Master switch for the graph subsystem (entity extraction, PPR, communities, community/graph routes). `true` with the `gliner` *library* absent raises `ConfigError` at startup; a failed *checkpoint* load is not fatal (see above). LLM-backed enrichment (below) additionally needs `provider` set — both gates must be open (`enabled=true` AND `provider` set) for community summaries to be produced. |
 | `provider` | `null` | Enrichment provider for **community summaries only**: one of `anthropic`, `openai`, `ollama`, `llama_cpp`, `claude_cli`. Typed relationship labels are *not* produced here — they come from the local prose extraction model, with no provider configured and no network access. `null` (default) disables enrichment entirely — no LLM call, preserving the air-gap guarantee; unlike `[hyde]`/`[rag_fusion]`, this field IS the enrichment enable gate (there is no separate `[graph].enrichment_enabled`). `claude_cli` sends each community's summary prompt to the `claude` program on standard input (tools disabled), on your Claude Code login; `claude` must be on `PATH`. `anthropic`, `openai` and `ollama` need their package (extras `hyde`, `openai-provider` and `ollama`): when it is missing and `[graph].enabled` is true, the server still starts, logs one WARNING with the install command, and graph enrichment stays off (communities are built without summaries) — unlike `[hyde]`/`[rag_fusion]`, which refuse to start. |
-| `extraction_model` | `null` | Bare model name for the configured `provider` (e.g. `"claude-haiku-4-5-20251001"`, an Ollama tag, or a llama.cpp model name — the wizard writes the name shown by `llama cli -cl`, or, when that command is unavailable, a `.gguf` path relative to the cache directory it was scanned from) — never a `"provider:model"` string. Logs a WARNING once at build time if `provider` is set but this is empty. |
+| `extraction_model` | `null` | Bare model name for the configured `provider` (e.g. `"claude-haiku-4-5-20251001"`, an Ollama tag, or a llama.cpp model name — the wizard writes the name shown by `llama cli -cl`, or, when that command is unavailable, a `.gguf` path relative to the cache directory it was scanned from) — never a `"provider:model"` string. Logs a WARNING once at build time if `provider` is set but this is empty, except for `claude_cli`, where a missing model means Claude Code's own default model and nothing is logged. |
 | `llama_cpp_base_url` | `http://localhost:8080` | llama-server URL for graph enrichment; used only when `provider = "llama_cpp"`. |
 | `ollama_base_url` | `http://localhost:11434` | Ollama server URL for graph enrichment; used only when `provider = "ollama"`. |
+| `ollama_context_tokens` | unset | Context window (tokens) assumed for the Ollama server; used only when `provider = "ollama"`. Unset assumes 4096 and logs a startup WARNING; 8192 is a good start (≥1). |
 | `extraction_timeout_seconds` | `30.0` | Per-request timeout (seconds) for enrichment LLM calls. |
 | `extraction_rate_limit_rpm` | `60` | Per-minute rate limit for enrichment LLM calls; applies to `anthropic` and `claude_cli` (account quotas) — a call over the cap fails at once and that community keeps no summary. `openai`, `ollama` and `llama_cpp` are not throttled. |
 | `extraction_token_budget` | `1024` | Max output tokens requested per enrichment LLM call. On `ollama` and `llama_cpp` the prompt is sized to the model's window minus 1024 tokens for the answer, so a value above 1024 comes out of the room for the community's passages. |

@@ -306,7 +306,7 @@ enabled = false
 # For "ollama": the Ollama model tag (e.g. "llama3.2:3b"). REQUIRED for ollama/openai/llama_cpp.
 # For "openai": an OpenAI model name (e.g. "gpt-4o-mini").
 # For "claude_cli": a model alias (haiku/sonnet/opus/fable) or full ID, passed as
-#   --model. OPTIONAL — blank or the default below omits --model (Claude Code's default).
+#   --model. OPTIONAL — leaving the key out or keeping the default below omits --model (Claude Code's default).
 # For "llama_cpp": a llama.cpp model name from your local cache, as listed by
 #   "llama cli -cl" (e.g. "ggml-org/Qwen3-1.7B-GGUF:Q8_0") — the wizard writes that name.
 #   When that command is unavailable the wizard instead offers .gguf files found
@@ -317,6 +317,11 @@ model = "claude-haiku-4-5-20251001"
 # ollama_base_url = "http://localhost:11434"
 # Base URL for the llama-server instance. Only used when provider = "llama_cpp".
 # llama_cpp_base_url = "http://localhost:8080"
+# Context window (tokens) assumed for the Ollama server. Only used when
+# provider = "ollama". Unset = 4096 is assumed (no num_ctx is sent, so Ollama's own
+# window applies) and a startup WARNING asks you to set this. 8192 is a good start;
+# a value above the model's maximum is warned about. Must be >= 1.
+# ollama_context_tokens = 8192
 # Per-request timeout (seconds) for the LLM API call. On timeout, the server
 # falls back silently to the original query embedding (hyde_applied: false).
 timeout_seconds = 10.0
@@ -389,7 +394,7 @@ enabled = false
 # For "ollama": the Ollama model tag (e.g. "llama3.2:3b"). REQUIRED for ollama/openai/llama_cpp.
 # For "openai": an OpenAI model name (e.g. "gpt-4o-mini").
 # For "claude_cli": a model alias (haiku/sonnet/opus/fable) or full ID, passed as
-#   --model. OPTIONAL — blank or the default below omits --model (Claude Code's default).
+#   --model. OPTIONAL — leaving the key out or keeping the default below omits --model (Claude Code's default).
 # For "llama_cpp": a llama.cpp model name from your local cache, as listed by
 #   "llama cli -cl" (e.g. "ggml-org/Qwen3-1.7B-GGUF:Q8_0") — the wizard writes that name.
 #   When that command is unavailable the wizard instead offers .gguf files found
@@ -400,6 +405,11 @@ model = "claude-haiku-4-5-20251001"
 # ollama_base_url = "http://localhost:11434"
 # Base URL for the llama-server instance. Only used when provider = "llama_cpp".
 # llama_cpp_base_url = "http://localhost:8080"
+# Context window (tokens) assumed for the Ollama server. Only used when
+# provider = "ollama". Unset = 4096 is assumed (no num_ctx is sent, so Ollama's own
+# window applies) and a startup WARNING asks you to set this. 8192 is a good start;
+# a value above the model's maximum is warned about. Must be >= 1.
+# ollama_context_tokens = 8192
 # Per-request timeout (seconds) for the LLM API call. On timeout, the server
 # falls back silently to single-query search (rag_fusion_applied: false).
 timeout_seconds = 10.0
@@ -413,6 +423,60 @@ max_requests_per_minute = 60
 # Total searches per request = num_queries + 1. Valid range: 1–5.
 # NOTE: num_queries = 1 incurs LLM overhead for minimal benefit; consider using 2 or more.
 num_queries = 2
+
+[description]
+# LLM-generated collection descriptions, used by the query router and shown in
+# `collection info` and the collection routes. Disabled by default.
+#
+# PRIVACY: excerpts of your documents (a sample of chunk text from each collection)
+# leave this machine when provider = "anthropic", "openai" or "claude_cli". Do not enable
+# those providers for collections that must stay on-premise or under data residency
+# requirements. provider = "ollama" or "llama_cpp" keeps the text local only while
+# its base URL (ollama_base_url / llama_cpp_base_url) points at this host. By default
+# only chunks without an access list are sampled.
+#
+# Install commands are for pip; in a `uv tool` install use
+# `uv tool install 'archon-search[<extras>]'`, listing every extra you use.
+# Prerequisites per provider are the same as for [hyde] above (extra `hyde` for
+# anthropic, `openai-provider` for openai, `ollama` for ollama; none for llama_cpp
+# and claude_cli). Config keys stay in this file; API keys stay in the server's
+# environment (or the secrets file of an installed service).
+#
+# `archon-search wizard` asks for the provider, model, host and context window
+# interactively; there is no install flag. For scripts use
+# `archon-search config set description.enabled true`.
+enabled = false
+# LLM provider: "anthropic" (default), "ollama", "openai", "claude_cli", or "llama_cpp".
+# provider = "anthropic"
+# Model used to write the description. Same rules as [hyde].model: required for
+# ollama/openai/llama_cpp. For claude_cli, leaving the key out or keeping the default
+# below omits --model (Claude Code's own default model); an empty string is an error.
+# model = "claude-haiku-4-5-20251001"
+# Base URL for the Ollama server. Only used when provider = "ollama".
+# ollama_base_url = "http://localhost:11434"
+# Base URL for the llama-server instance. Only used when provider = "llama_cpp".
+# llama_cpp_base_url = "http://localhost:8080"
+# Context window (tokens) assumed for the Ollama server. Only used when
+# provider = "ollama". Unset = 4096 is assumed (no num_ctx is sent, so Ollama's own
+# window applies) and a startup WARNING asks you to set this. 8192 is a good start;
+# a value above the model's maximum is warned about. Must be >= 1.
+# ollama_context_tokens = 8192
+# Describe existing collections that have no description when the server starts.
+# backfill_on_startup = false
+# Per-attempt timeout (seconds) for the LLM call; a cold local model may need more.
+# timeout_seconds = 30.0
+# Most chunks sampled for one description. Must be >= 1.
+# max_sample_chunks = 100
+# Thinking control for reasoning models: true, false or "default" (send nothing).
+# Honoured by ollama and llama_cpp only. Set false when a reasoning model returns
+# no usable answer.
+# think = "default"
+# Local providers only (ollama, llama_cpp): also sample chunks that carry an access list.
+# WARNING: the description may then contain text from chunks the access list hides, and
+# every caller who can see the collection reads it; with a non-loopback host that text
+# also leaves this machine. anthropic, openai and claude_cli never sample such chunks,
+# whatever this says.
+# include_restricted_chunks = false
 
 [backup]
 # Automated periodic backup of all collections.
@@ -577,6 +641,12 @@ num_queries = 2
 # Base URL for the Ollama enrichment provider. Only used when
 # provider = "ollama".
 # ollama_base_url = "http://localhost:11434"
+
+# Context window (tokens) assumed for the Ollama server. Only used when
+# provider = "ollama". Unset = 4096 is assumed, the prompt is sized to fit it and a
+# startup WARNING asks you to set this. 8192 is a good start; a value above the
+# model's maximum is warned about. Must be >= 1.
+# ollama_context_tokens = 8192
 
 # Per-request timeout (seconds) for enrichment LLM calls (community
 # summarisation). Must be > 0.

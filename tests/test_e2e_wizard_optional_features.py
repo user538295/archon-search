@@ -4195,7 +4195,8 @@ def test_fresh_config_resolves_like_its_fully_defaulted_twin(
     else:
         monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     filled_path = tmp_path / "filled.toml"
-    filled_path.write_text(_effective_toml(config_path))
+    filled_text = _effective_toml(config_path)
+    filled_path.write_text(filled_text)
 
     written = asdict(load_config(config_path, serve=serve))
     filled = asdict(load_config(filled_path, serve=serve))
@@ -4203,6 +4204,7 @@ def test_fresh_config_resolves_like_its_fully_defaulted_twin(
     assert written == filled
     assert written["host"] == "127.0.0.1"
     assert written["db_path"].startswith(str(data_dir)) is data_dir_set
+    assert tomlkit.parse(filled_text)["description"]["enabled"] is False
 
 
 # ---------------------------------------------------------------------------

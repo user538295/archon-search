@@ -57,7 +57,12 @@ def _default_toml() -> str:
     logging_table.add("backup_count", cfg.backup_count)
     doc.add("logging", logging_table)
 
-    for section, feature in (("telemetry", cfg.telemetry), ("hyde", cfg.hyde), ("rag_fusion", cfg.rag_fusion)):
+    for section, feature in (
+        ("telemetry", cfg.telemetry),
+        ("hyde", cfg.hyde),
+        ("rag_fusion", cfg.rag_fusion),
+        ("description", cfg.description),
+    ):
         feature_table = tomlkit.table()
         feature_table.add("enabled", feature.enabled)
         doc.add(section, feature_table)

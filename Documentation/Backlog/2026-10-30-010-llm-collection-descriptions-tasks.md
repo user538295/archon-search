@@ -548,7 +548,7 @@ flowchart LR
         - #unit_test — `test_secrets_env_created_for_description_provider_needing_key` — the file is created and the message names the feature
         - #unit_test — `test_summary_shows_description_and_graph_bullets` — the summary lists both when configured
         - #integration_test — `test_description_install_failure_disk_space_and_decline_all_revert` — the three failure paths revert the section end-to-end
-- [ ] **FE-9** — `config` command default sections include `description`, `config set description.enabled true` validates, and the `archon-search.toml.example` template gains `[description]` (all keys incl. `think`, `include_restricted_chunks`, privacy header), `ollama_context_tokens` in the other three sections and the corrected graph `claude_cli` comment #frontend-role
+- [x] **FE-9** — `config` command default sections include `description`, `config set description.enabled true` validates, and the `archon-search.toml.example` template gains `[description]` (all keys incl. `think`, `include_restricted_chunks`, privacy header), `ollama_context_tokens` in the other three sections and the corrected graph `claude_cli` comment #frontend-role
     - Presentation · 3.0h
     - needs BE-17 · completes C4, S72
     - Tests

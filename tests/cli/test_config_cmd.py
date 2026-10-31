@@ -165,7 +165,7 @@ def test_config_show_preserves_file_values_and_unknown_sections(runner: CliRunne
     assert doc["hyde"]["enabled"] is True
 
 
-@pytest.mark.parametrize("key", ["telemetry.enabled", "hyde.enabled", "rag_fusion.enabled"])
+@pytest.mark.parametrize("key", ["telemetry.enabled", "hyde.enabled", "rag_fusion.enabled", "description.enabled"])
 def test_config_get_reports_feature_default_absent_from_wizard_config(
     runner: CliRunner, tmp_path: Path, key: str
 ) -> None:
@@ -185,7 +185,7 @@ def test_config_show_fills_in_missing_feature_toggles(runner: CliRunner, tmp_pat
     result = runner.invoke(main, ["config", "show", "--config", str(config_file)])
     assert result.exit_code == 0, result.output
     doc = tomlkit.parse(result.output)
-    for section in ("telemetry", "hyde", "rag_fusion"):
+    for section in ("telemetry", "hyde", "rag_fusion", "description"):
         assert doc[section]["enabled"] is False, section
 
 
