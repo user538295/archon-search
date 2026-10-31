@@ -290,7 +290,7 @@ flowchart LR
     - Tests
         - #e2e_test — `test_e2e_hyde_through_shared_client_sends_num_ctx` — a HyDE search returns the hypothetical document and the fake server saw the configured `num_ctx`
         - #e2e_test — `test_e2e_hyde_provider_down_falls_back_with_one_warning` — the search answers, `hyde_applied` is false, one WARNING appears and no log line holds the query
-- [ ] **T-2** — Manual checklist `tests/integration/test_lcd_t2_manual_checklist.md`: real Ollama, llama-server and claude windows and ratios #tester-role
+- [x] **T-2** — Manual checklist `tests/integration/test_lcd_t2_manual_checklist.md`: real Ollama, llama-server and claude windows and ratios #tester-role
     - — · 4.0h
     - needs BE-10, BE-8, BE-6 · completes S8, S11, S68, S79
     - Tests
