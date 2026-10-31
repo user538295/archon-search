@@ -433,7 +433,7 @@ flowchart LR
         - #unit_test — `test_waiting_requests_served_describe_then_ingest_then_backfill` — queue priority order
         - #unit_test — `test_queue_over_bound_drops_ingest_and_fails_describe` — the bound is 64 with the stated outcomes
         - #integration_test — `test_slot_released_before_embedding_so_slow_lock_does_not_stall_others` — a collection stuck on a lock does not delay another
-- [ ] **BE-24** — Move generation off the ingest path in `pipeline.py`: `_finalize_batch_ingest` marks `pending` and requests generation in the background, the unreachable `force_regenerate_description` parameter is removed, the `last_indexed` write goes through a guarded path, no lifecycle means silent; rewrite the pipeline tests that patch `generate_description` and delete the shuffle pins in `test_e0c_be1_sample_shuffle.py` #backend-role
+- [x] **BE-24** — Move generation off the ingest path in `pipeline.py`: `_finalize_batch_ingest` marks `pending` and requests generation in the background, the unreachable `force_regenerate_description` parameter is removed, the `last_indexed` write goes through a guarded path, no lifecycle means silent; rewrite the pipeline tests that patch `generate_description` and delete the shuffle pins in `test_e0c_be1_sample_shuffle.py` #backend-role
     - Use Cases · 5.0h
     - needs BE-23 · completes S25
     - Tests

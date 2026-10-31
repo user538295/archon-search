@@ -71,7 +71,7 @@ class FakeStore:
         )
         self.recompute_collection_meta = AsyncMock(return_value=None)
         self.get_collection_meta = AsyncMock(return_value=None)
-        self.update_description = AsyncMock(return_value=None)
+        self.touch_last_indexed = AsyncMock(return_value=None)
         self._delete_calls: list[dict[str, Any]] = []
 
     async def delete_document(

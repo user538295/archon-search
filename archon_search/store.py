@@ -1996,53 +1996,41 @@ class SearchStore:
             if lock is not None:
                 lock.release()
 
-    async def update_description(
+    async def touch_last_indexed(
         self,
         collection: str,
-        description: str | None,
-        last_described: datetime | None,
-        described_at_doc_count: int | None,
-        last_indexed: datetime | None,
+        last_indexed: datetime,
         namespace: str = DEFAULT_NAMESPACE,
     ) -> None:
-        """Partial-write description/timestamp fields without touching centroid fields.
+        """Stamp *last_indexed* on the row of (*collection*, *namespace*) and change nothing else.
 
-        A description that differs from the stored one drops the stored routing vector, which belongs to the old
-        text (a stale vector would route on text that is gone), and flags the row ``needs_recompute`` so the next
-        recompute can repair it (when its embedder has the collection's model); the shared write operation writes
-        the vector of a changed description (C11).
+        Takes the collection lock, re-reads the row inside it and writes it back with only ``last_indexed`` replaced,
+        so the stamp cannot overwrite a description (text, source, status, vector, baseline) or a centroid write that
+        landed since the caller last read the row. A missing row is left missing: an ingest never creates one here.
 
-        On lock timeout, logs a warning and returns silently (no StoreBusyError).
-        Description is cosmetic — stalling indefinitely behind reindex_metadata is
-        worse than skipping one description update.
+        On lock timeout, logs a warning and returns silently (no StoreBusyError): the stamp is cosmetic, and stalling
+        behind reindex_metadata is worse than skipping one.
         """
         self._validate_collection(collection)
+        _validate_namespace(namespace)
         db = self._require_connected()
         lock = self.lock_for(collection)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
         except TimeoutError:
-            logger.warning("Collection %r lock timeout in update_description, skipping", collection)
+            logger.warning("Collection %r lock timeout in touch_last_indexed, skipping", collection)
             return
+        existing: CollectionMeta | None = None
         try:
             existing = await self._do_read_meta_unlocked(db, collection, namespace=namespace)
             if existing is None:
                 return
-            dropped_vector = (description or None) != (existing.description or None) and (
-                existing.description_embedding is not None
-            )
-            updated = replace(
-                existing,
-                description=description,
-                last_indexed=last_indexed,
-                last_described=last_described,
-                described_at_doc_count=described_at_doc_count,
-                description_embedding=None if dropped_vector else existing.description_embedding,
-                needs_recompute=existing.needs_recompute or dropped_vector,
-            )
-            await self._do_write_meta_unlocked(db, collection, updated)
+            await self._do_write_meta_unlocked(db, collection, replace(existing, last_indexed=last_indexed))
         finally:
             lock.release()
+            if existing is None:
+                # No row: drop a lock entry nobody waits on, as ``write_description`` does.
+                self.discard_lock(collection)
 
     async def write_description(
         self,

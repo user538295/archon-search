@@ -103,7 +103,7 @@ from archon_search.warmup_coordinator import WARMUP_TIMEOUT_SECONDS
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig, RAGFusionConfig, SearchConfig
     from archon_search.defref_extractor import DefRefExtractor
-    from archon_search.description_generator import DescriptionGenerator
+    from archon_search.description_lifecycle import DescriptionLifecycle
     from archon_search.graph_expander import ExpandedQuery, GraphExpander
     from archon_search.graph_extractor import GraphExtractor
     from archon_search.graph_store import GraphStore
@@ -512,7 +512,7 @@ class SearchPipeline:
         ppr_walker: PPRWalker | None = None,
         path_policy: IngestPathPolicy = _DEFAULT_PATH_POLICY,
         max_discovered_files: int = DEFAULT_MAX_DISCOVERED_FILES,
-        description_generator: DescriptionGenerator | None = None,
+        description_lifecycle: DescriptionLifecycle | None = None,
     ) -> None:
         self.store = store
         self._global_embedder = embedder
@@ -540,10 +540,9 @@ class SearchPipeline:
         self._max_file_mb = max_file_mb
         self._path_policy = path_policy
         self._max_discovered_files = max_discovered_files
-        # Collection descriptions BE-22: generation on the shared client. ``None`` makes the ingest generate nothing (the
-        # eval, installer and CLI pipelines, and the server's while ``[description]`` is disabled). BE-24 moves
-        # generation to the lifecycle.
-        self._description_generator = description_generator
+        # Collection descriptions BE-24: the lifecycle owns every generation task. ``None`` makes the ingest request
+        # nothing (the eval, installer and CLI pipelines, and the server's until BE-25 wires the lifecycle).
+        self._description_lifecycle = description_lifecycle
         self._context_window_max = context_window_max
         self._graph_extractor = graph_extractor
         self._graph_store = graph_store
@@ -1239,7 +1238,6 @@ class SearchPipeline:
         collection: str,
         glob_pattern: str = "**/*",
         progress_cb: Callable[[int, int], None | Awaitable[None]] | None = None,
-        force_regenerate_description: bool = False,
         exclude_paths: frozenset[str] | None = None,
         on_file_complete: Callable[[Path], None] | None = None,
         namespace: str = DEFAULT_NAMESPACE,
@@ -1300,7 +1298,6 @@ class SearchPipeline:
             results,
             namespace=namespace,
             rebuild_fts=rebuild_fts,
-            force_regenerate_description=force_regenerate_description,
         )
 
         return results
@@ -1326,13 +1323,19 @@ class SearchPipeline:
         *,
         namespace: str,
         rebuild_fts: bool = True,
-        force_regenerate_description: bool = False,
     ) -> None:
-        """Rebuild FTS and refresh collection metadata once after a batch ingest.
+        """Rebuild FTS, refresh collection metadata once and ask for a description after a batch ingest.
 
         Shared by ``ingest_directory`` and ``ingest_documents`` so a batch pays the
-        FTS optimize and the description/centroid recompute once, not per document.
+        FTS optimize and the centroid recompute once, not per document.
         No-op when no document in the batch was ingested successfully.
+
+        The order matters. The stamp comes first, so a recompute that fails (a busy collection lock) still leaves it.
+        A re-ingest deletes a document's chunks before it adds them, and that delete zeroes the incremental centroid
+        sum, so the batch leaves the row's counts stale and ``needs_recompute`` set until the recompute runs. The
+        recompute therefore precedes the request: the lifecycle reads the row itself and applies its 20% rule to counts
+        that are right (S24, S25). The request returns at once: the model call runs in the lifecycle's own task and
+        this method never awaits it.
         """
         # Optimize (or rebuild) FTS once if at least one successful ingest
         if rebuild_fts and any(r.status == "ok" for r in results):
@@ -1340,41 +1343,18 @@ class SearchPipeline:
 
         # Only update metadata when at least one file was successfully ingested
         if any(r.status == "ok" for r in results):
-            # Regenerate description using fresh store counts from B5 incremental path
-            existing_meta = await self.store.get_collection_meta(collection, namespace=namespace)
-            description = existing_meta.description if existing_meta else None
-            described_at = existing_meta.described_at_doc_count if existing_meta else None
-            last_described = existing_meta.last_described if existing_meta else None
-            batch_doc_count = existing_meta.doc_count if existing_meta else 0
-            batch_chunk_count = existing_meta.chunk_count if existing_meta else 0
-
-            if self._description_generator is not None:
-                # Imported here: the generator module pulls in the shared LLM client, which a pipeline that never
-                # generates (CLI store commands, eval, installer) must not load.
-                from archon_search.description_generator import (
-                    DescriptionGenerated,
-                    _should_regenerate,
-                )
-
-                if force_regenerate_description or _should_regenerate(batch_doc_count, batch_chunk_count, described_at):
-                    outcome = await self._description_generator.generate(collection, namespace)
-                    if isinstance(outcome, DescriptionGenerated):
-                        description = outcome.text
-                        described_at = batch_doc_count
-                        last_described = datetime.now(UTC)
-
-            await self.store.update_description(
-                collection,
-                description,
-                last_described,
-                described_at_doc_count=described_at,
-                last_indexed=datetime.now(UTC),
-                namespace=namespace,
-            )
+            await self.store.touch_last_indexed(collection, datetime.now(UTC), namespace=namespace)
 
             # Aggregate needs_recompute signal: if any file triggered it, fire recompute
             if any(r.needs_recompute for r in results):
                 await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
+
+            if self._description_lifecycle is not None:
+                # Imported here, not at module level: the lifecycle module imports the generator and the LLM client
+                # protocol, which a pipeline that never generates (CLI store commands, eval, installer) must not load.
+                from archon_search.description_lifecycle import GenerationKind
+
+                await self._description_lifecycle.request_generation(collection, namespace, GenerationKind.INGEST)
 
     async def ingest_documents(
         self,

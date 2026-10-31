@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -251,30 +252,23 @@ def _expected(row: CollectionMeta) -> ExpectedState:
     return ExpectedState(description=row.description, source=row.description_source, last_described=row.last_described)
 
 
-async def test_update_description_drops_the_vector_of_a_text_that_changed(store: SearchStore) -> None:
-    """The generation path that still writes through ``update_description`` must not leave the old text's vector on
-    the new text: a stale vector would route on text that is gone."""
-    await DescriptionWriter(store, _Cache(), default_embedding_model=_DEFAULT_MODEL).apply(
-        _NAME, _NAMESPACE, ManualSetChange(text="first text")
-    )
-    assert (await _stored(store)).description_embedding is not None
-
-    await store.update_description(_NAME, "second text", None, None, None, namespace=_NAMESPACE)
-
-    row = await _stored(store)
-    assert row.description == "second text"
-    assert row.description_embedding is None
-    assert row.needs_recompute is True, "flagged so the next recompute can repair the vector"
-
-
-async def test_update_description_keeps_the_vector_of_an_unchanged_text(store: SearchStore) -> None:
+async def test_touch_last_indexed_keeps_the_text_its_vector_and_the_recompute_flag(store: SearchStore) -> None:
+    """The ingest's own row write stamps ``last_indexed`` and nothing else: the text's vector stays on its text, and
+    no recompute is flagged because the description did not change."""
     await DescriptionWriter(store, _Cache(), default_embedding_model=_DEFAULT_MODEL).apply(
         _NAME, _NAMESPACE, ManualSetChange(text="same text")
     )
-    vector = (await _stored(store)).description_embedding
+    before = await _stored(store)
+    assert before.description_embedding is not None
+    stamp = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
 
-    await store.update_description(_NAME, "same text", None, 5, None, namespace=_NAMESPACE)
+    await store.touch_last_indexed(_NAME, stamp, namespace=_NAMESPACE)
 
     row = await _stored(store)
-    assert row.description_embedding == vector and row.described_at_doc_count == 5
-    assert row.needs_recompute is False
+    assert row.last_indexed == stamp
+    assert row.description == "same text" and row.description_embedding == before.description_embedding
+    assert (row.description_source, row.description_status, row.needs_recompute) == (
+        before.description_source,
+        before.description_status,
+        before.needs_recompute,
+    )

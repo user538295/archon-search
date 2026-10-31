@@ -70,7 +70,7 @@ class FakeStore:
         self.recompute_collection_meta = AsyncMock(return_value=None)
         # Required by ingest_directory centroid block
         self.get_collection_meta = AsyncMock(return_value=None)
-        self.update_description = AsyncMock(return_value=None)
+        self.touch_last_indexed = AsyncMock(return_value=None)
         # Track delete_document calls with their kwargs
         self._delete_calls: list[dict[str, Any]] = []
 

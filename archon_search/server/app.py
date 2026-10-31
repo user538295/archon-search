@@ -604,8 +604,8 @@ def _build_description_generator(description: DescriptionConfig, store: SearchSt
     """The description generator on its own client, from ``[description]`` alone.
 
     ``None`` while ``[description]`` is disabled (the default): no client is built and no provider can be touched (S19).
-    Interim wiring: the pipeline asks it on every ingest until the lifecycle service takes generation over (BE-23 to
-    BE-25), which also resolves this client's context window and warns about an unset one.
+    The lifecycle service (BE-23) runs it in the background once BE-25 builds the lifecycle around it and resolves this
+    client's context window and warns about an unset one; the pipeline no longer calls a generator itself (BE-24).
     """
     if not description.enabled:
         return None
@@ -1333,7 +1333,7 @@ def create_app(
         graph_expander=_graph_expander,
         defref_extractor=_defref_extractor,
         ppr_walker=_ppr_walker,
-        description_generator=_build_description_generator(config.description, app.state.search_store),
+        description_lifecycle=None,  # BE-25 builds the lifecycle in the lifespan and injects it here
     )
     from archon_search.sync import SearchCollectionSync
 

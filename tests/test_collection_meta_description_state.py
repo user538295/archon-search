@@ -109,19 +109,14 @@ async def test_row_with_every_field_non_default_survives_every_writer_do_write_m
     _assert_only_changed(meta, read, set())
 
 
-async def test_row_with_every_field_non_default_survives_every_writer_update_description(store) -> None:
+async def test_row_with_every_field_non_default_survives_every_writer_touch_last_indexed(store) -> None:
     meta = await _seed(store)
-    await store.update_description(
-        _NAME,
-        description=meta.description,
-        last_described=meta.last_described,
-        described_at_doc_count=meta.described_at_doc_count,
-        last_indexed=meta.last_indexed,
-        namespace=_NAMESPACE,
-    )
+    stamp = datetime(2026, 6, 7, 8, 9, 10, tzinfo=UTC)
+    await store.touch_last_indexed(_NAME, stamp, namespace=_NAMESPACE)
     read = await store.get_collection_meta(_NAME, _NAMESPACE)
     assert read is not None
-    _assert_only_changed(meta, read, set())
+    assert read.last_indexed == stamp
+    _assert_only_changed(meta, read, {"last_indexed"})
 
 
 async def _update_meta_on_add(store: SearchStore, embedding_model: str, vectors: list[list[float]]) -> None:

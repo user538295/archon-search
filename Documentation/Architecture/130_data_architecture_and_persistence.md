@@ -346,7 +346,7 @@ flowchart LR
     F --> H[_do_update_meta_on_add<br/>doc_count, chunk_count, centroid<br/>per batch inside ingest_chunks]
 ```
 
-Note: step `H` (`_do_update_meta_on_add`) runs inside `store.ingest_chunks()` on every batch — centroid, `doc_count`, and `chunk_count` are maintained incrementally (B5 incremental path, unconditional since D4). `ingest_directory` additionally calls `store.update_description()` (description + `last_indexed`) after each file. A drift-correction full recompute (`recompute_collection_meta`) fires if any batch sets `needs_recompute=True`.
+Note: step `H` (`_do_update_meta_on_add`) runs inside `store.ingest_chunks()` on every batch — centroid, `doc_count`, and `chunk_count` are maintained incrementally (B5 incremental path, unconditional since D4). `ingest_directory` and `ingest_documents` additionally call `store.touch_last_indexed()` (lock, re-read, `last_indexed` only, so it cannot overwrite a description written meanwhile) once per batch, before the recompute described next. A drift-correction full recompute (`recompute_collection_meta`) fires if any batch sets `needs_recompute=True`.
 
 ### Reindex semantics
 

@@ -5676,62 +5676,65 @@ def test_delete_by_source_path_forwards_namespace(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# B5 Task 5.1 — store.update_description partial-write
+# BE-24 — store.touch_last_indexed guarded partial write (replaced B5 Task 5.1 update_description)
 # ---------------------------------------------------------------------------
+
+_TOUCH_STAMP = datetime(2026, 8, 9, 10, 11, 12, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
-async def test_update_description_writes_description_field(tmp_path) -> None:
-    """update_description sets the description field on an existing meta row."""
+async def test_touch_last_indexed_writes_the_stamp(tmp_path) -> None:
+    """touch_last_indexed sets last_indexed on an existing meta row."""
     from archon_search.collection_meta import CollectionMeta
     store = SearchStore(tmp_path / "db")
     await store.connect()
     try:
-        col = "desc_col"
+        col = "touch_col"
         await store.ensure_collection(col, _DIM)
-        await store.update_collection_meta(CollectionMeta(name=col, chunk_count=1))
-        await store.update_description(col, "my description", None, None, None)
+        await store.update_collection_meta(CollectionMeta(name=col, chunk_count=1, description="kept text"))
+        await store.touch_last_indexed(col, _TOUCH_STAMP)
         meta = await store.get_collection_meta(col)
         assert meta is not None
-        assert meta.description == "my description"
+        assert meta.last_indexed == _TOUCH_STAMP
+        assert meta.description == "kept text"
     finally:
         await store.disconnect()
 
 
 @pytest.mark.asyncio
-async def test_update_description_does_not_touch_centroid_sum(tmp_path) -> None:
-    """update_description does not alter centroid_sum, chunk_count, or doc_count."""
+async def test_touch_last_indexed_does_not_touch_centroid_sum(tmp_path) -> None:
+    """touch_last_indexed does not alter centroid_sum, chunk_count, or doc_count."""
     from archon_search.config import SearchConfig
     cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
-        col = "desc_no_touch"
+        col = "touch_no_touch"
         await store.ensure_collection(col, 2)
         doc = _doc_id()
         chunks = [_chunk(doc, 0, dim=2), _chunk(doc, 1, dim=2)]
         await store.ingest_chunks(col, chunks, embedding_model="m")
         meta_before = await store.get_collection_meta(col)
         assert meta_before is not None
-        await store.update_description(col, "new desc", None, None, None)
+        await store.touch_last_indexed(col, _TOUCH_STAMP)
         meta_after = await store.get_collection_meta(col)
         assert meta_after.centroid_sum == meta_before.centroid_sum
         assert meta_after.chunk_count == meta_before.chunk_count
         assert meta_after.doc_count == meta_before.doc_count
-        assert meta_after.description == "new desc"
+        assert meta_after.last_indexed == _TOUCH_STAMP
     finally:
         await store.disconnect()
 
 
 @pytest.mark.asyncio
-async def test_update_description_noop_when_no_meta_row(tmp_path) -> None:
-    """update_description with no prior meta row raises no exception and creates no row."""
+async def test_touch_last_indexed_noop_when_no_meta_row(tmp_path) -> None:
+    """touch_last_indexed with no prior meta row raises no exception and creates no row."""
     store = SearchStore(tmp_path / "db")
     await store.connect()
     try:
-        col = "desc_no_meta"
+        col = "touch_no_meta"
         await store.ensure_collection(col, _DIM)
-        await store.update_description(col, "desc", None, None, None)
+        await store.touch_last_indexed(col, _TOUCH_STAMP)
         meta = await store.get_collection_meta(col)
         assert meta is None
     finally:
@@ -5739,62 +5742,33 @@ async def test_update_description_noop_when_no_meta_row(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_description_timeout_skips_write(tmp_path, caplog, monkeypatch) -> None:
-    """Lock held externally → update_description returns silently (no StoreBusyError) and logs warning."""
+async def test_touch_last_indexed_timeout_skips_write(tmp_path, caplog, monkeypatch) -> None:
+    """Lock held externally → touch_last_indexed returns silently (no StoreBusyError) and logs warning."""
     import logging
 
     import archon_search.store as store_mod
+    from archon_search.collection_meta import CollectionMeta
 
     monkeypatch.setattr(store_mod, "INGEST_LOCK_TIMEOUT_S", 0.1)
     store = SearchStore(tmp_path / "db")
     await store.connect()
     try:
-        col = "desc_timeout"
+        col = "touch_timeout"
         await store.ensure_collection(col, _DIM)
-        doc = _doc_id()
-        await store.ingest_chunks(col, [_chunk(doc, 0)])
+        await store.update_collection_meta(CollectionMeta(name=col, chunk_count=1))
         lock = store.lock_for(col)
         await lock.acquire()
         try:
             with caplog.at_level(logging.WARNING, logger="archon"):
-                await store.update_description(col, "new desc", None, None, None)
+                await store.touch_last_indexed(col, _TOUCH_STAMP)
             assert any(
                 col in record.message and "lock timeout" in record.message
                 for record in caplog.records
             )
-            meta = await store.get_collection_meta(col)
-            assert meta is None or meta.description != "new desc"
         finally:
             lock.release()
-    finally:
-        await store.disconnect()
-
-
-@pytest.mark.asyncio
-async def test_update_description_concurrent_with_ingest(tmp_path) -> None:
-    """Concurrent ingest_chunks and update_description — centroid_sum correct, description set."""
-    import asyncio
-
-    from archon_search.config import SearchConfig
-    cfg = SearchConfig()
-    store = SearchStore(tmp_path / "db", config=cfg)
-    await store.connect()
-    try:
-        col = "desc_concurrent"
-        await store.ensure_collection(col, 2)
-        doc = _doc_id()
-
-        async def do_ingest():
-            await store.ingest_chunks(col, [_chunk(doc, 0, dim=2)], embedding_model="m")
-
-        async def do_desc():
-            await store.update_description(col, "concurrent desc", None, None, None)
-
-        await asyncio.gather(do_ingest(), do_desc())
         meta = await store.get_collection_meta(col)
-        assert meta is not None
-        assert meta.chunk_count == 1
-        assert meta.description == "concurrent desc"
+        assert meta is not None and meta.last_indexed != _TOUCH_STAMP
     finally:
         await store.disconnect()
 
@@ -5952,20 +5926,14 @@ async def test_metadata_reindex_job_id_sentinel_coercion(connected_store: Search
 
 
 @pytest.mark.asyncio
-async def test_metadata_reindex_job_id_preserved_through_update_description(connected_store: SearchStore) -> None:
-    """metadata_reindex_job_id survives a _do_write_meta_unlocked write via update_description."""
+async def test_metadata_reindex_job_id_preserved_through_touch_last_indexed(connected_store: SearchStore) -> None:
+    """metadata_reindex_job_id survives a _do_write_meta_unlocked write via touch_last_indexed."""
     from archon_search.collection_meta import CollectionMeta
 
     col = "c1-meta-reindex-desc"
     meta = CollectionMeta(name=col, active_embedding_model="model-A", metadata_reindex_job_id="job-desc-test")
     await connected_store.update_collection_meta(meta)
-    await connected_store.update_description(
-        collection=col,
-        description="updated description",
-        last_described=None,
-        described_at_doc_count=None,
-        last_indexed=None,
-    )
+    await connected_store.touch_last_indexed(col, datetime.now(UTC))
     retrieved = await connected_store.get_collection_meta(col)
     assert retrieved is not None
     assert retrieved.metadata_reindex_job_id == "job-desc-test"
@@ -6571,8 +6539,8 @@ def test_row_to_meta_schema_version_none_defaults_to_zero() -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_schema_version_preserved_through_update_description(tmp_path: Path) -> None:
-    """schema_version is not reset to 0 when update_description is called."""
+async def test_schema_version_preserved_through_touch_last_indexed(tmp_path: Path) -> None:
+    """schema_version is not reset to 0 when touch_last_indexed is called."""
     from archon_search.collection_meta import CollectionMeta
 
     store = SearchStore(tmp_path / "db_sv_desc")
@@ -6580,13 +6548,7 @@ async def test_schema_version_preserved_through_update_description(tmp_path: Pat
     try:
         meta = CollectionMeta(name="schema-preserve-test", schema_version=5)
         await store.update_collection_meta(meta)
-        await store.update_description(
-            "schema-preserve-test",
-            description="updated desc",
-            last_described=None,
-            described_at_doc_count=None,
-            last_indexed=None,
-        )
+        await store.touch_last_indexed("schema-preserve-test", datetime.now(UTC))
         retrieved = await store.get_collection_meta("schema-preserve-test")
         assert retrieved is not None
         assert retrieved.schema_version == 5
@@ -6597,7 +6559,7 @@ async def test_schema_version_preserved_through_update_description(tmp_path: Pat
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_meta_field_threaded_through_write_paths(tmp_path: Path) -> None:
-    """community_rebuild_job_id survives write via update_collection_meta and reload via update_description."""
+    """community_rebuild_job_id survives write via update_collection_meta and reload via touch_last_indexed."""
     from archon_search.collection_meta import CollectionMeta
 
     store = SearchStore(tmp_path / "db_rebuild_id_thread")
@@ -6605,13 +6567,7 @@ async def test_meta_field_threaded_through_write_paths(tmp_path: Path) -> None:
     try:
         meta = CollectionMeta(name="rebuild-id-thread-test", community_rebuild_job_id="job-789")
         await store.update_collection_meta(meta)
-        await store.update_description(
-            "rebuild-id-thread-test",
-            description="updated desc",
-            last_described=None,
-            described_at_doc_count=None,
-            last_indexed=None,
-        )
+        await store.touch_last_indexed("rebuild-id-thread-test", datetime.now(UTC))
         retrieved = await store.get_collection_meta("rebuild-id-thread-test")
         assert retrieved is not None
         assert retrieved.community_rebuild_job_id == "job-789"
