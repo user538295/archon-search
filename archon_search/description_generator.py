@@ -30,11 +30,19 @@ outcome is ``unusableOutput`` with a WARNING that points to the ``think`` settin
 its thinking); an empty retry after an over-long first answer trims that first answer instead. Each attempt has the
 configured timeout and the answer ceiling ``ANSWER_RESERVE_TOKENS``, the room the input budget already reserves.
 
+Thinking and restricted chunks (BE-30, S54, S56). ``[description].think`` rides on every call as ``ThinkSetting``
+(``None`` is ``default``, which sends no thinking control); the wrappers decide what goes on the wire and cloud and
+``claude_cli`` ignore it. ``true`` on a model with no thinking mode (``LlmThinkingNotSupported``) logs one WARNING per
+process and model and fails the generation like any provider error (no retry without ``think``). Chunks that carry an ACL
+are sampled only for ``ollama`` and ``llama_cpp`` and only when ``include_restricted_chunks`` is true; the generator
+decides this from its config, so the lifecycle passes nothing.
+
 Logging: every failure logs one WARNING with the collection name and ``DescriptionFailed.detail``, which never holds an
 excerpt, a prompt or an answer (the provider's failure text is prompt-masked by the shared client, C1; an unexpected
 error is named by its type only). A failed provider call logs once per process (``warn_once``): a provider that is down
 fails every collection the same way. Every other failure (a window too small, a store error, no open chunk) is per
-collection and logs every time.
+collection and logs every time. The one exception is ``think = true`` on a model with no thinking mode: its own WARNING
+(model name, no collection) replaces the failure line and appears once per process and model.
 """
 from __future__ import annotations
 
@@ -47,7 +55,11 @@ from dataclasses import dataclass
 from typing import Final
 
 from archon_search.config import DescriptionConfig
-from archon_search.constants import ANSWER_RESERVE_TOKENS, MAX_DESCRIPTION_CHARS
+from archon_search.constants import (
+    ANSWER_RESERVE_TOKENS,
+    MAX_DESCRIPTION_CHARS,
+    RESTRICTED_CHUNK_PROVIDERS,
+)
 from archon_search.description_sample import DescriptionSampleStore, StoreReadError
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.protocol import (
@@ -56,6 +68,8 @@ from archon_search.llm_client.protocol import (
     LlmCallFailure,
     LlmCallRequest,
     LlmClient,
+    LlmThinkingNotSupported,
+    ThinkSetting,
     TokenCountingClient,
 )
 
@@ -84,6 +98,8 @@ _NO_USABLE_OUTPUT_DETAIL: Final = (
 _SAMPLE_SEPARATOR: Final = "\n\n---\n\n"
 #: ``warn_once`` key: one WARNING per process for every failed provider call of a description generation.
 _CALL_WARN_KEY: Final = "description_generation"
+#: ``warn_once`` key prefix: one WARNING per process and model for ``think = true`` on a model without a thinking mode (S54).
+_THINK_UNSUPPORTED_WARN_KEY: Final = "description_think_unsupported"
 #: Document-count change, as a share of the count the description was written at, that makes it stale.
 _REGENERATE_CHANGE_RATIO: Final = 0.20
 
@@ -149,12 +165,14 @@ class _GenerationStopped(Exception):
     """Ends a generation with a failure value; ``generate`` catches it, logs it and returns ``failed``.
 
     *provider_failure* marks a failure of the provider itself (a failed call, sizing or counting), which is logged once
-    per process; every other stop is logged for its collection."""
+    per process; every other stop is logged for its collection. *already_logged* is set by the code that raised or
+    re-raised the stop after it logged a more specific WARNING of its own, so ``generate`` does not log it again."""
 
     def __init__(self, reason: DescriptionFailureReason, detail: str, *, provider_failure: bool = False) -> None:
         super().__init__(detail)
         self.failed = DescriptionFailed(reason, detail)
         self.provider_failure = provider_failure
+        self.already_logged = False
 
 
 def _clean_answer(raw: str) -> str:
@@ -241,32 +259,34 @@ class DescriptionGenerator:
         self._config = config
         self._client = client
         self._store = store
+        self._include_restricted = config.include_restricted_chunks and config.provider in RESTRICTED_CHUNK_PROVIDERS
 
-    async def generate(
-        self, collection: str, namespace: str, *, include_restricted: bool = False
-    ) -> DescriptionOutcome:
+    async def generate(self, collection: str, namespace: str) -> DescriptionOutcome:
         """Sample *collection*, ask the model (one retry at most, see the output rules) and return the outcome.
 
         Args:
             collection: the collection to describe.
             namespace: its namespace (the store's ownership rule applies to both reads).
-            include_restricted: sample chunks that carry an ACL too (the operator's switch for a local provider).
+
+        Restricted chunks (those with an ACL) are sampled only for ``ollama`` and ``llama_cpp`` with
+        ``[description].include_restricted_chunks`` on (S56); otherwise only open chunks are.
 
         Never raises (contract C2): a provider, sizing, counting or store failure, whatever its type, is the returned
         ``DescriptionFailed``; only task cancellation propagates. A store error that is not a ``StoreReadError`` (an
         ownership refusal, a store that is not connected) is ``sampleReadFailed`` whose detail names its type.
         """
         try:
-            sample = await self._draw_sample(collection, namespace, include_restricted)
+            sample = await self._draw_sample(collection, namespace, self._include_restricted)
             generated = await self._ask(collection, sample)
         except _GenerationStopped as stopped:
-            failed, provider_failure = stopped.failed, stopped.provider_failure
+            failed, provider_failure, logged = stopped.failed, stopped.provider_failure, stopped.already_logged
         except Exception as unexpected:  # noqa: BLE001 — a store-side error; provider steps are covered by _provider_step
             failed = DescriptionFailed(DescriptionFailureReason.SAMPLE_READ_FAILED, f"unexpected {type(unexpected).__name__}")
-            provider_failure = False
+            provider_failure = logged = False
         else:
             return generated
-        self._log_failure(collection, failed.detail, provider_failure=provider_failure)
+        if not logged:
+            self._log_failure(collection, failed.detail, provider_failure=provider_failure)
         return failed
 
     async def _draw_sample(self, collection: str, namespace: str, include_restricted: bool) -> list[str]:
@@ -345,10 +365,25 @@ class DescriptionGenerator:
             prompt=prompt,
             max_output_tokens=ANSWER_RESERVE_TOKENS,
             timeout_seconds=self._config.timeout_seconds,
+            think=ThinkSetting.from_config(self._config.think),
         )
-        with _provider_step():
-            result = await self._client.call(request)
+        try:
+            with _provider_step():
+                result = await self._client.call(request)
+        except _GenerationStopped as stopped:
+            if isinstance(stopped.__cause__, LlmThinkingNotSupported):
+                self._warn_think_unsupported()
+                stopped.already_logged = True
+            raise
         return _clean_answer(result.text)
+
+    def _warn_think_unsupported(self) -> None:
+        warn_once(
+            logger,
+            f"{_THINK_UNSUPPORTED_WARN_KEY}:{self._config.model}",
+            '[description].think is true but the model %r has no thinking mode; set think to "default" or false',
+            self._config.model,
+        )
 
     @staticmethod
     def _log_failure(collection: str, detail: str, *, provider_failure: bool) -> None:

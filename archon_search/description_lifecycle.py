@@ -164,9 +164,7 @@ class LifecycleStore(Protocol):
 class DescriptionGeneration(Protocol):
     """``DescriptionGenerator.generate``: samples, asks the model (one retry at most), never raises."""
 
-    async def generate(
-        self, collection: str, namespace: str, *, include_restricted: bool = False
-    ) -> DescriptionOutcome: ...
+    async def generate(self, collection: str, namespace: str) -> DescriptionOutcome: ...
 
 
 class DescriptionWrites(Protocol):
@@ -463,7 +461,6 @@ class DescriptionLifecycle:
     async def _generate(self, job: _Job) -> DescriptionOutcome:
         """The generator never raises; a stand-in or a bug that does is a failed call, so the slot and the status hold."""
         try:
-            # ``include_restricted`` stays at its default: the operator's restricted-chunk switch is not wired here yet.
             return await self._generator.generate(job.collection, job.namespace)
         except Exception as failure:  # noqa: BLE001 — see above
             logger.warning(

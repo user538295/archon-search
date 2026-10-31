@@ -41,7 +41,7 @@ class _Generator:
     def __init__(self) -> None:
         self.started: list[str] = []
 
-    async def generate(self, collection: str, namespace: str, *, include_restricted: bool = False) -> DescriptionOutcome:
+    async def generate(self, collection: str, namespace: str) -> DescriptionOutcome:
         self.started.append(collection)
         return DescriptionGenerated(text=f"A description of {collection}.")
 

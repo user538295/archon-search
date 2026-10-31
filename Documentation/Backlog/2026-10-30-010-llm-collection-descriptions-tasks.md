@@ -503,7 +503,7 @@ flowchart LR
         - #unit_test — `test_thinking_only_output_after_retry_is_failed_with_think_hint` — nothing stored, status `failed`, WARNING points to `think`
         - #unit_test — `test_provider_error_is_not_retried` — a raised failure settles `failed` after one call
         - #unit_test — `test_retry_prompt_fits_a_small_window` — the sample was sized for the retry reminder
-- [ ] **BE-30** — `think` sending (`default` sends nothing, `true`/`false` to Ollama and the verified `llama_cpp` switch, ignored for cloud and `claude_cli`, clear WARNING for `true` on a model without thinking) and `include_restricted_chunks` honoured for `ollama` and `llama_cpp` only in the sampler #backend-role
+- [x] **BE-30** — `think` sending (`default` sends nothing, `true`/`false` to Ollama and the verified `llama_cpp` switch, ignored for cloud and `claude_cli`, clear WARNING for `true` on a model without thinking) and `include_restricted_chunks` honoured for `ollama` and `llama_cpp` only in the sampler #backend-role
     - Interface Adapters · 4.0h
     - needs BE-29, BE-5, BE-6, BE-21 · completes S54, S56
     - Tests

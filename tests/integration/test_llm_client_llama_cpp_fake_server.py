@@ -15,6 +15,7 @@ from archon_search.llm_client.protocol import (
     LlmCallFailure,
     LlmCallRequest,
     LlmCallTimeout,
+    ThinkSetting,
 )
 from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
 
@@ -60,6 +61,26 @@ async def test_llama_cpp_wrapper_against_fake_server() -> None:
             "max_tokens": ANSWER_RESERVE_TOKENS,
             "messages": [{"role": "user", "content": _PROMPT}],
         }
+
+
+@pytest.mark.parametrize(
+    ("think", "expected_switch"),
+    [
+        (ThinkSetting.ON, {"enable_thinking": True}),
+        (ThinkSetting.OFF, {"enable_thinking": False}),
+        (ThinkSetting.DEFAULT, None),
+    ],
+)
+async def test_llama_cpp_think_switch_against_fake_server(think: ThinkSetting, expected_switch: dict[str, bool] | None) -> None:
+    with FakeModelServer(reply_text=_REPLY) as server:
+        client = LlamaCppClient(model=_MODEL, base_url=server.base_url)
+
+        await client.call(LlmCallRequest(prompt=_PROMPT, max_output_tokens=ANSWER_RESERVE_TOKENS, timeout_seconds=_TIMEOUT_SECONDS, think=think))
+
+        [recorded] = server.requests_to("/v1/chat/completions")
+        assert recorded.body is not None
+        assert recorded.body.get("chat_template_kwargs") == expected_switch
+        assert ("chat_template_kwargs" in recorded.body) is (expected_switch is not None)
 
 
 async def test_llama_cpp_wrapper_maps_a_server_error_without_the_prompt() -> None:

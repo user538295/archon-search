@@ -324,12 +324,24 @@ async def test_llama_cpp_probe_warning_hides_credentials_of_the_base_url(caplog:
     assert "abc" not in warning.getMessage()
 
 
-@pytest.mark.parametrize("think", [ThinkSetting.ON, ThinkSetting.OFF])
-async def test_llama_cpp_call_sends_no_thinking_control(think: ThinkSetting) -> None:
+@pytest.mark.parametrize(
+    ("think", "expected"),
+    [(ThinkSetting.ON, {"enable_thinking": True}), (ThinkSetting.OFF, {"enable_thinking": False})],
+)
+async def test_llama_cpp_call_sends_the_template_thinking_switch(think: ThinkSetting, expected: dict[str, bool]) -> None:
+    # llama-server reads the per-request ``chat_template_kwargs`` (tools/server README, ``enable_thinking``).
     server = _Server()
     request = LlmCallRequest(prompt=_PROMPT, max_output_tokens=ANSWER_RESERVE_TOKENS, timeout_seconds=_TIMEOUT_SECONDS, think=think)
 
     await _client(server).call(request)
+
+    assert server.bodies("/v1/chat/completions")[0]["chat_template_kwargs"] == expected
+
+
+async def test_llama_cpp_call_sends_no_thinking_control_by_default() -> None:
+    server = _Server()
+
+    await _client(server).call(_request())
 
     assert set(server.bodies("/v1/chat/completions")[0]) == {"model", "max_tokens", "messages"}
 

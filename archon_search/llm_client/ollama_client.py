@@ -8,7 +8,8 @@ OpenAI-compatible endpoint has no such field.
   to; unset, the window is ``ASSUMED_CONTEXT_TOKENS``, assumed and NOT sent, so the server's own window applies.
 * Sizing (S11): :meth:`OllamaClient.input_budget` counts gpt2 tokens plus ``OLLAMA_ESTIMATE_MARGIN`` (``llm_client.budget``).
 * ``think``: ``DEFAULT`` sends no thinking control; ``ON`` and ``OFF`` send the SDK's ``think=True`` / ``think=False``.
-* Every failure is raised as ``LlmCallFailure`` (a timeout as ``LlmCallTimeout``). The reason carries the provider's own
+* Every failure is raised as ``LlmCallFailure`` (a timeout as ``LlmCallTimeout``, ``think = true`` on a model without a
+  thinking mode as ``LlmThinkingNotSupported``). The reason carries the provider's own
   status and error text where the server gave one (``model not found``, ``does not support thinking``), never the prompt.
 
 The ``ollama`` package is an optional extra: it is imported when a call or the model query needs it, never at import.
@@ -32,15 +33,17 @@ from archon_search.llm_client.protocol import (
     LlmCallRequest,
     LlmCallResult,
     LlmCallTimeout,
-    ThinkSetting,
+    LlmThinkingNotSupported,
 )
 from archon_search.llm_client.server_text import bounded_server_text
 from archon_search.llm_client.token_counter import TokenCounter
 
 PROVIDER_NAME: Final = "ollama"
 
-#: ``ThinkSetting`` to the SDK's ``think`` argument; ``DEFAULT`` is absent because it sends no argument at all.
-_THINK_ARGUMENT: Final = {ThinkSetting.ON: True, ThinkSetting.OFF: False}
+#: Ollama answers ``HTTP 400 "<model>" does not support thinking`` when ``think`` is true for a model without a thinking
+#: mode (its server returns it from ``/api/chat``; seen on Ollama 0.40.13 with ``llama3.1:8b``).
+_BAD_REQUEST_STATUS: Final = 400
+_NO_THINKING_TEXT: Final = "does not support thinking"
 
 #: ``/api/show`` model_info key that names the architecture; the model maximum sits under ``<architecture>.context_length``.
 _ARCHITECTURE_KEY: Final = "general.architecture"
@@ -95,7 +98,7 @@ class OllamaClient:
             "messages": [{"role": "user", "content": request.prompt}],
             "options": options,
         }
-        think = _THINK_ARGUMENT.get(request.think)
+        think = request.think.enabled
         if think is not None:
             arguments["think"] = think
         try:
@@ -161,7 +164,11 @@ class OllamaClient:
         from pydantic import ValidationError
 
         if isinstance(exc, ResponseError):
-            return LlmCallFailure(PROVIDER_NAME, f"HTTP {exc.status_code}: {bounded_server_text(str(exc.error), prompt)}")
+            server_text = str(exc.error)
+            reason = f"HTTP {exc.status_code}: {bounded_server_text(server_text, prompt)}"
+            if exc.status_code == _BAD_REQUEST_STATUS and _NO_THINKING_TEXT in server_text:
+                return LlmThinkingNotSupported(PROVIDER_NAME, reason)
+            return LlmCallFailure(PROVIDER_NAME, reason)
         if isinstance(exc, httpx.TransportError):
             return LlmCallFailure(PROVIDER_NAME, f"the connection to the Ollama server failed ({type(exc).__name__})")
         if isinstance(exc, ValidationError | json.JSONDecodeError):

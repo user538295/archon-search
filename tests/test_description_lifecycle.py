@@ -123,7 +123,7 @@ class FakeGenerator:
 
     def __init__(self) -> None:
         self.started: list[str] = []
-        self.calls: list[tuple[str, str, bool]] = []
+        self.calls: list[tuple[str, str]] = []
         self.running = 0
         self.max_running = 0
         self.outcomes: dict[str, DescriptionOutcome] = {}
@@ -132,9 +132,9 @@ class FakeGenerator:
     def gate(self, collection: str) -> asyncio.Event:
         return self._gates.setdefault(collection, asyncio.Event())
 
-    async def generate(self, collection: str, namespace: str, *, include_restricted: bool = False) -> DescriptionOutcome:
+    async def generate(self, collection: str, namespace: str) -> DescriptionOutcome:
         self.started.append(collection)
-        self.calls.append((collection, namespace, include_restricted))
+        self.calls.append((collection, namespace))
         self.running += 1
         self.max_running = max(self.max_running, self.running)
         try:
@@ -218,7 +218,7 @@ async def test_second_request_for_one_collection_settles_already_running(rig: Ri
     assert (await third.settled).result is GenerationResult.ALREADY_RUNNING
     rig.generator.gate(_COLLECTION).set()
     assert (await first.settled).result is GenerationResult.GENERATED
-    assert rig.generator.calls == [(_COLLECTION, _NAMESPACE, False)]
+    assert rig.generator.calls == [(_COLLECTION, _NAMESPACE)]
     again = await rig.request(_COLLECTION)  # single-flight ends with the run: the next request is accepted
     assert again.outcome is RequestOutcome.ACCEPTED
 
@@ -860,7 +860,7 @@ async def test_a_generator_that_raises_anyway_is_a_recorded_failed_call_and_free
     """``DescriptionGenerator.generate`` never raises; if a stand-in or a future bug does, the slot must not leak and
     the failure is recorded like any failed call."""
 
-    async def explode(collection: str, namespace: str, *, include_restricted: bool = False) -> DescriptionOutcome:
+    async def explode(collection: str, namespace: str) -> DescriptionOutcome:
         raise RuntimeError("boom with secret excerpt text")
 
     with monkeypatch.context() as patch, caplog.at_level(logging.WARNING, logger=_LIFECYCLE_LOGGER):

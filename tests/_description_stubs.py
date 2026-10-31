@@ -51,7 +51,7 @@ class ScriptedGenerator:
         self.started = asyncio.Event()
         self.calls: list[tuple[str, str]] = []
 
-    async def generate(self, collection: str, namespace: str, *, include_restricted: bool = False) -> DescriptionOutcome:
+    async def generate(self, collection: str, namespace: str) -> DescriptionOutcome:
         self.calls.append((collection, namespace))
         self.started.set()
         if self._gate is not None:

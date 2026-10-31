@@ -56,6 +56,11 @@ ANSWER_RESERVE_TOKENS: Final[int] = 1024
 # is rejected.
 MAX_DESCRIPTION_CHARS: Final[int] = 600
 
+# Providers that may be given restricted (ACL) chunks when ``[description].include_restricted_chunks`` is on (S56): the
+# two the operator hosts (their server may still be remote, which the startup WARNINGs report). The switch is ignored
+# for every other provider (cloud and ``claude_cli``).
+RESTRICTED_CHUNK_PROVIDERS: Final[frozenset[str]] = frozenset({"ollama", "llama_cpp"})
+
 # Most description generation requests that may wait for the process-wide generation slot at once (C4
 # ``maxQueuedGenerations``). Not configurable: a loop over hundreds of collections must not grow an unbounded queue.
 MAX_QUEUED_GENERATIONS: Final[int] = 64

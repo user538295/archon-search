@@ -9,7 +9,8 @@ Thin wrapper over ``httpx`` (a core dependency) talking to a llama-server (llama
   sizes with (S11, ``llm_client.budget.exact_budget``).
 * ``POST /v1/chat/completions`` carries every call: one fresh user message, nothing carried over (S6). llama-server
   rejects an oversized prompt with an error, which is raised as a failure.
-* ``think`` is not sent; the llama_cpp switch is template dependent and is added with BE-30.
+* ``think``: ``ON`` / ``OFF`` send ``chat_template_kwargs: {"enable_thinking": true / false}`` (the chat template decides
+  whether it has any effect; a template without thinking ignores it); ``DEFAULT`` sends nothing.
 * Every failure is raised as ``LlmCallFailure`` (a timeout as ``LlmCallTimeout``). The reason carries the server's own
   status and error text where it gave one, never the prompt.
 """
@@ -47,6 +48,12 @@ TOKENIZE_TIMEOUT_SECONDS: Final = 10.0
 _PROPS_PATH: Final = "/props"
 _TOKENIZE_PATH: Final = "/tokenize"
 _CHAT_PATH: Final = "/v1/chat/completions"
+
+#: The per-request thinking switch of llama-server: ``chat_template_kwargs: {"enable_thinking": <bool>}`` (llama.cpp
+#: ``tools/server/README.md``, "chat_template_kwargs"; the server reads it in ``tools/server/server-common.cpp``).
+#: ``DEFAULT`` sends nothing, so the server's own default (``--reasoning``, ``--chat-template-kwargs``) applies.
+_TEMPLATE_KWARGS_FIELD: Final = "chat_template_kwargs"
+_ENABLE_THINKING_KWARG: Final = "enable_thinking"
 
 #: Stands in for the server in the probe WARNING when the configured URL does not parse.
 _UNPARSEABLE_URL_LABEL: Final = "the configured base URL"
@@ -104,11 +111,14 @@ class LlamaCppClient:
         return self._window
 
     async def call(self, request: LlmCallRequest) -> LlmCallResult:
-        payload = {
+        payload: dict[str, Any] = {
             "model": self._model,
             "max_tokens": request.max_output_tokens,
             "messages": [{"role": "user", "content": request.prompt}],
         }
+        enable_thinking = request.think.enabled
+        if enable_thinking is not None:
+            payload[_TEMPLATE_KWARGS_FIELD] = {_ENABLE_THINKING_KWARG: enable_thinking}
         body = await self._request("POST", _CHAT_PATH, request.timeout_seconds, payload, prompt=request.prompt)
         try:
             text = body["choices"][0]["message"]["content"]

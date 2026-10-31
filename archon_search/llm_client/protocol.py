@@ -35,12 +35,26 @@ class ThinkSetting(enum.Enum):
     ``DEFAULT`` sends no thinking control at all. Only description generation exposes this setting;
     providers with no verified switch (``anthropic``, ``openai``, ``claude_cli``) ignore a non-default
     value. This is the call-level value, not the config file's: the consumer of ``[description].think`` (stored as
-    ``true``, ``false`` or ``None`` for ``default``) maps it onto this enum.
+    ``true``, ``false`` or ``None`` for ``default``) maps it with :meth:`from_config`.
     """
 
     DEFAULT = "default"
     ON = "on"
     OFF = "off"
+
+    @classmethod
+    def from_config(cls, configured: bool | None) -> ThinkSetting:
+        """The setting of a config value: ``None`` is ``default``, ``true`` and ``false`` are ``ON`` and ``OFF``."""
+        if configured is None:
+            return cls.DEFAULT
+        return cls.ON if configured else cls.OFF
+
+    @property
+    def enabled(self) -> bool | None:
+        """The switch a wrapper sends: ``True`` for ``ON``, ``False`` for ``OFF``, ``None`` (send nothing) for ``DEFAULT``."""
+        if self is ThinkSetting.ON:
+            return True
+        return False if self is ThinkSetting.OFF else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +100,14 @@ class LlmCallTimeout(LlmCallFailure):
     Kept apart from every other failure: the graph model probe reads it as "possibly a reasoning
     model that is too slow", where any other failure reads as a misconfiguration. A caller that does
     not care catches :class:`LlmCallFailure`.
+    """
+
+
+class LlmThinkingNotSupported(LlmCallFailure):
+    """The provider rejected ``think = ON`` because the model has no thinking mode.
+
+    Only a wrapper whose server reports this (``ollama``) raises it; ``llama_cpp`` cannot tell, a template without
+    thinking simply ignores the switch. Kept apart so the caller can give the operator one clear, actionable WARNING.
     """
 
 

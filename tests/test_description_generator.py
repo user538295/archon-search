@@ -310,9 +310,9 @@ class TestSampling:
     async def test_both_reads_use_the_same_restricted_flag(self, include_restricted: bool) -> None:
         store = FakeSampleStore()
 
-        await _generator(ScriptedLlmClient(reply=_DESCRIPTION_TEXT), store).generate(
-            _COLLECTION, _NAMESPACE, include_restricted=include_restricted
-        )
+        await _generator(
+            ScriptedLlmClient(reply=_DESCRIPTION_TEXT), store, provider="ollama", include_restricted_chunks=include_restricted
+        ).generate(_COLLECTION, _NAMESPACE)
 
         assert store.list_calls == [(_COLLECTION, _NAMESPACE, include_restricted)]
         assert [call[3] for call in store.read_calls] == [include_restricted]
@@ -322,9 +322,9 @@ class TestSampling:
     async def test_every_read_of_the_shrink_loop_keeps_the_restricted_flag(self, include_restricted: bool) -> None:
         store = FakeSampleStore()
 
-        await _generator(_small_window_client(), store).generate(
-            _COLLECTION, _NAMESPACE, include_restricted=include_restricted
-        )
+        await _generator(
+            _small_window_client(), store, provider="llama_cpp", include_restricted_chunks=include_restricted
+        ).generate(_COLLECTION, _NAMESPACE)
 
         assert len(store.read_calls) > 1
         assert {call[3] for call in store.read_calls} == {include_restricted}

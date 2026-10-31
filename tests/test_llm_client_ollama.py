@@ -27,6 +27,7 @@ from archon_search.llm_client.protocol import (
     LlmCallRequest,
     LlmCallTimeout,
     LlmClient,
+    LlmThinkingNotSupported,
     ThinkSetting,
     TokenCountingClient,
 )
@@ -240,6 +241,26 @@ async def test_sdk_error_keeps_the_server_reason_and_status_for_the_operator() -
 
     with pytest.raises(LlmCallFailure, match=r"HTTP 400: .*does not support thinking"):
         await wrapper.call(_request(think=ThinkSetting.ON))
+
+
+async def test_a_model_without_thinking_support_raises_the_typed_failure() -> None:
+    wrapper = _wrapper(_Factory(error=ollama.ResponseError('"qwen3:8b" does not support thinking', 400)))
+
+    with pytest.raises(LlmThinkingNotSupported) as raised:
+        await wrapper.call(_request(think=ThinkSetting.ON))
+
+    assert raised.value.provider == "ollama"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ollama.ResponseError('model "qwen3:8b" not found', 404), ollama.ResponseError("does not support thinking", 500)],
+)
+async def test_other_http_errors_are_not_the_thinking_failure(error: ollama.ResponseError) -> None:
+    with pytest.raises(LlmCallFailure) as raised:
+        await _wrapper(_Factory(error=error)).call(_request(think=ThinkSetting.ON))
+
+    assert not isinstance(raised.value, LlmThinkingNotSupported)
 
 
 async def test_server_error_text_that_echoes_the_prompt_is_scrubbed() -> None:
