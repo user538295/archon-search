@@ -216,46 +216,82 @@ class TestCreateAppPipelineWiring:
             "to the constructor default and the operator's config is ignored (S443)."
         )
 
-    def test_create_app_passes_no_description_lifecycle_until_it_is_wired(self, tmp_path):
-        """BE-24 moved generation off the ingest path onto the lifecycle; BE-25 builds and injects it. Until then the
-        app's pipeline has none, so an ingest requests nothing (a pipeline with no lifecycle is silent)."""
+    def test_create_app_passes_no_description_lifecycle_while_description_is_disabled(self, tmp_path):
+        """S19: ``[description]`` is off by default; the app builds no client and no lifecycle, so an ingest requests
+        nothing and no provider can be touched."""
         from archon_search.jobs import JobStore
 
         cfg = SearchConfig()
         cfg.db_path = str(tmp_path / "test.db")
 
         with patch("archon_search.server.app.SearchPipeline") as mock_pipeline:
-            _create_app_with_stubbed_deps(cfg, JobStore())
+            app = _create_app_with_stubbed_deps(cfg, JobStore())
 
         assert mock_pipeline.call_args.kwargs["description_lifecycle"] is None
+        assert app.state.description_lifecycle is None
+        assert app.state.description_client is None
 
-    def test_description_generator_is_not_built_while_description_is_disabled(self):
+    def test_create_app_passes_the_description_lifecycle_to_the_pipeline_when_enabled(self, tmp_path):
+        """BE-25: the lifecycle the app builds from ``[description]`` is the one its pipeline asks and ``app.state`` shares."""
+        from archon_search.description_lifecycle import DescriptionLifecycle
+        from archon_search.jobs import JobStore
+        from tests._fake_model_server import unreachable_port
+
+        cfg = SearchConfig()
+        cfg.db_path = str(tmp_path / "test.db")
+        cfg.description.enabled = True
+        cfg.description.provider = "llama_cpp"
+
+        with unreachable_port() as port, patch("archon_search.server.app.SearchPipeline") as mock_pipeline:
+            cfg.description.llama_cpp_base_url = f"http://127.0.0.1:{port}"
+            app = _create_app_with_stubbed_deps(cfg, JobStore())
+
+        lifecycle = mock_pipeline.call_args.kwargs["description_lifecycle"]
+        assert isinstance(lifecycle, DescriptionLifecycle)
+        assert app.state.description_lifecycle is lifecycle
+        assert lifecycle._writer._embedders._cache[cfg.embedding_model] is app.state.embedder
+
+    def test_description_client_is_not_built_while_description_is_disabled(self):
         """S19: ``[description]`` is off by default; nothing is built, so no provider can be touched."""
-        from archon_search.server.app import _build_description_generator
+        from archon_search.server.app import _build_description_client
 
-        assert _build_description_generator(SearchConfig().description, MagicMock()) is None
+        assert _build_description_client(SearchConfig().description) is None
 
-    def test_description_generator_is_built_from_its_own_section_when_enabled(self):
-        """The generator's client comes from ``[description]`` alone (provider, model, host), and it reads the given store."""
-        from archon_search.description_generator import DescriptionGenerator
+    def test_description_client_is_built_from_its_own_section_when_enabled(self):
+        """The client comes from ``[description]`` alone (provider, model, host)."""
         from archon_search.llm_client.llama_cpp_client import LlamaCppClient
-        from archon_search.server.app import _build_description_generator
+        from archon_search.server.app import _build_description_client
         from tests._fake_model_server import unreachable_port
 
         cfg = SearchConfig()
         cfg.description.enabled = True
         cfg.description.provider = "llama_cpp"
         cfg.description.model = "description-model"
-        store = MagicMock()
 
         with unreachable_port() as port:
             cfg.description.llama_cpp_base_url = f"http://127.0.0.1:{port}"
-            generator = _build_description_generator(cfg.description, store)
+            client = _build_description_client(cfg.description)
 
+        assert isinstance(client, LlamaCppClient)
+
+    def test_description_lifecycle_runs_the_generator_on_the_given_client_and_store(self):
+        """The lifecycle's generator reads the given store through the given client, and the writer embeds with the cache."""
+        from archon_search.description_generator import DescriptionGenerator
+        from archon_search.server.app import _build_description_lifecycle
+
+        cfg = SearchConfig()
+        cfg.description.enabled = True
+        store, client, cache = MagicMock(), MagicMock(), MagicMock()
+
+        lifecycle = _build_description_lifecycle(cfg.description, client, store, cache, default_embedding_model="model-x")
+
+        generator = lifecycle._generator
         assert isinstance(generator, DescriptionGenerator)
-        assert isinstance(generator._client, LlamaCppClient)
+        assert generator._client is client
         assert generator._config is cfg.description
         assert generator._store is store
+        assert lifecycle._writer._embedders is cache
+        assert lifecycle._writer._default_embedding_model == "model-x"
 
     def test_create_app_wires_fanout_config_into_pipeline(self, tmp_path):
         """S443 regression: [search] fan-out knobs must reach the SearchPipeline.

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Final
 if TYPE_CHECKING:
     from starlette.datastructures import State
 
-    from archon_search.description_generator import DescriptionGenerator
+    from archon_search.description_lifecycle import DescriptionLifecycle
     from archon_search.llm_client.protocol import LlmClient
 
 import uvicorn
@@ -600,25 +600,43 @@ def _build_graph_client(graph: GraphConfig, *, rate_limit_rpm: int | None) -> Ll
     )
 
 
-def _build_description_generator(description: DescriptionConfig, store: SearchStore) -> DescriptionGenerator | None:
-    """The description generator on its own client, from ``[description]`` alone.
+def _build_description_client(description: DescriptionConfig) -> LlmClient | None:
+    """The shared LLM client of the description feature, from ``[description]`` alone.
 
     ``None`` while ``[description]`` is disabled (the default): no client is built and no provider can be touched (S19).
-    The lifecycle service (BE-23) runs it in the background once BE-25 builds the lifecycle around it and resolves this
-    client's context window and warns about an unset one; the pipeline no longer calls a generator itself (BE-24).
+    ``claude_cli`` retries nothing (the prompt holds excerpts a retry would send twice). The lifespan resolves this
+    client's context window with the other features' and the lifecycle's generator calls it.
     """
     if not description.enabled:
         return None
-    from archon_search.description_generator import DescriptionGenerator
-
-    client = build_llm_client(
+    return build_llm_client(
         provider=description.provider,
         model=description.model,
         ollama_base_url=description.ollama_base_url,
         llama_cpp_base_url=description.llama_cpp_base_url,
         ollama_context_tokens=description.ollama_context_tokens,
     )
-    return DescriptionGenerator(description, client, store)
+
+
+def _build_description_lifecycle(
+    description: DescriptionConfig,
+    client: LlmClient,
+    store: SearchStore,
+    embedder_cache: EmbedderCache,
+    *,
+    default_embedding_model: str,
+) -> DescriptionLifecycle:
+    """The description lifecycle (C5): the generator on *client*, the guarded writer embedding with the per-collection
+    embedder cache, and the service that owns the generation tasks."""
+    # Imported here, not at module level: only a server with ``[description]`` enabled builds a lifecycle, and the other
+    # features' generators are composed the same way.
+    from archon_search.description_generator import DescriptionGenerator
+    from archon_search.description_lifecycle import DescriptionLifecycle
+    from archon_search.description_writer import DescriptionWriter
+
+    generator = DescriptionGenerator(description, client, store)
+    writer = DescriptionWriter(store, embedder_cache, default_embedding_model=default_embedding_model)
+    return DescriptionLifecycle(store, generator, writer)
 
 
 def create_app(
@@ -687,14 +705,8 @@ def create_app(
                 )
                 app.state.graph_store = None
 
-        # Startup: create embedder cache and warm the models the first search needs. The default
-        # model is seeded with the global embedder, so the cache and the pipeline share one copy of
-        # its weights instead of each loading its own.
-        embedder_cache = EmbedderCache(
-            config.embedder_cache_size,
-            device=config.device,
-            preloaded={config.embedding_model: app.state.pipeline.global_embedder},
-        )
+        # Startup: publish the embedder cache (built in create_app) and warm the models the first search needs.
+        embedder_cache = shared_embedder_cache
         app.state.embedder_cache = embedder_cache
         if config.eager_load_embedders:
             metas = await app.state.search_store.get_all_collections_meta()
@@ -821,6 +833,7 @@ def create_app(
                 ("hyde", config.hyde.enabled, app.state.hyde_client),
                 ("rag_fusion", config.rag_fusion.enabled, app.state.rag_fusion_client),
                 ("graph", config.graph.enabled, app.state.graph_client),
+                ("description", config.description.enabled, app.state.description_client),
             )
             if enabled and client is not None
         ]
@@ -1022,6 +1035,7 @@ def create_app(
                             # One current default key for both transports: MCP auth and
                             # rotate_key read app.state.api_key; rotate_key publishes to it.
                             api_key_state=app.state,
+                            description_lifecycle=app.state.description_lifecycle,
                             ingest_policy=app.state.ingest_path_policy,
                         )
                         await _mcp_stack.enter_async_context(
@@ -1136,7 +1150,7 @@ def create_app(
                 except Exception:
                     logger.warning("Filesystem watcher stop_all() raised", exc_info=True)
 
-            # Shutdown ordering is load-bearing in two directions at once:
+            # Shutdown ordering is load-bearing in three directions at once:
             # - the telemetry writer must drain BEFORE its own background task is
             #   cancelled — drain_and_stop() cancels writer._task internally, so
             #   cancelling app.state._background_tasks first would leave
@@ -1144,15 +1158,27 @@ def create_app(
             # - background tasks (startup sync, model warm-up, model validation)
             #   must be cancelled and drained BEFORE the stores disconnect, or an
             #   in-flight task keeps calling into a closed store.
-            # Draining telemetry first, then cancelling the rest, then
-            # disconnecting the stores last satisfies both.
+            # - the description lifecycle shuts down in two phases around the cancel: closed BEFORE it (a cancelled
+            #   ingest asking late is refused) and drained AFTER it (every generation is cancelled and awaited).
+            # Draining telemetry first, then closing the lifecycle and cancelling the rest, then draining the lifecycle,
+            # then disconnecting the stores last satisfies all three.
             if app.state.telemetry_writer is not None:
                 await app.state.telemetry_writer.drain_and_stop()
+
+            # Description lifecycle phase 1: refuse every request from now on. An ingest task cancelled below asks for a
+            # generation as its last act; it must find the service closed and start nothing (S85).
+            if app.state.description_lifecycle is not None:
+                app.state.description_lifecycle.close()
 
             tasks = list(app.state._background_tasks)
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Description lifecycle phase 2: cancel and await every generation, after the tasks above are gone and before
+            # the stores disconnect, so no description is half written and no provider call outlives the store (S35).
+            if app.state.description_lifecycle is not None:
+                await app.state.description_lifecycle.drain()
 
             # Shutdown: disconnect search store
             await app.state.search_store.disconnect()
@@ -1285,6 +1311,31 @@ def create_app(
     # or when the graph is enabled and its provider package cannot be imported (C12); the guard runs again here, so the
     # client decision never depends on the WARNING logged above.
     app.state.graph_client = _build_graph_client(config.graph, rate_limit_rpm=config.graph.extraction_rate_limit_rpm)
+    # The per-collection embedder cache. The default model is seeded with the global embedder, so the cache and the
+    # pipeline share one copy of its weights instead of each loading its own. Built here, not in the lifespan, because the
+    # description writer embeds with it and the lifecycle must exist before the pipeline that asks it; the lifespan
+    # publishes it as ``app.state.embedder_cache`` (routes treat its absence as "not started yet").
+    shared_embedder_cache = EmbedderCache(
+        config.embedder_cache_size,
+        device=config.device,
+        preloaded={config.embedding_model: app.state.embedder},
+    )
+    # The shared LLM client of the description feature, from [description] alone (BE-25); ``None`` while the feature is
+    # off, so nothing is built and no provider can be touched (S19). The lifespan resolves its context window.
+    app.state.description_client = _build_description_client(config.description)
+    # The lifecycle (C5) owns every generation task: given to the pipeline (the ingest rule) and to the MCP app, closed
+    # and drained by the lifespan's shutdown. ``None`` while the feature is off: nothing is built, no task can start.
+    app.state.description_lifecycle = (
+        _build_description_lifecycle(
+            config.description,
+            app.state.description_client,
+            app.state.search_store,
+            shared_embedder_cache,
+            default_embedding_model=config.embedding_model,
+        )
+        if app.state.description_client is not None
+        else None
+    )
 
     if config.graph.enabled:
         from archon_search.defref_extractor import DefRefExtractor as _DefRefExtractor
@@ -1333,7 +1384,7 @@ def create_app(
         graph_expander=_graph_expander,
         defref_extractor=_defref_extractor,
         ppr_walker=_ppr_walker,
-        description_lifecycle=None,  # BE-25 builds the lifecycle in the lifespan and injects it here
+        description_lifecycle=app.state.description_lifecycle,
     )
     from archon_search.sync import SearchCollectionSync
 

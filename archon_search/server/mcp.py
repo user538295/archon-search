@@ -155,6 +155,7 @@ from archon_search.types import JobStatus
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
+    from archon_search.description_lifecycle import DescriptionLifecycle
     from archon_search.graph_store import GraphStore
     from archon_search.hyde import HyDEGenerator
     from archon_search.jobs.store import JobStore
@@ -453,6 +454,7 @@ def create_app(
     graph_store: GraphStore | None = None,
     api_key_state: State | None = None,
     ingest_policy: IngestPathPolicy | None = None,
+    description_lifecycle: DescriptionLifecycle | None = None,
 ) -> FastMCP:
     """Create a FastMCP app with 16 RAG tools + up to 4 optional key-management tools.
 
@@ -471,6 +473,9 @@ def create_app(
     default key (the REST app's ``app.state`` when mounted). ``rotate_key`` reads the key to
     retire from it and publishes the new key to it, exactly like ``POST /keys/rotate``. When
     omitted, ``rotate_key`` re-reads ``.search.env`` and publishes nothing.
+
+    ``description_lifecycle`` — the server's description lifecycle (``None`` while ``[description]`` is off). Accepted so
+    the collection tools can read the in-flight ``pending`` overlay from it (BE-26 and later); nothing here reads it yet.
     """
     # An ordinary exception escaping a tool reaches the client as a bare "Error calling
     # tool <name>" instead of "<name>: <exception text>". Not a full safety net: FastMCP
@@ -2494,6 +2499,7 @@ def create_mcp_http_app(
     graph_store: GraphStore | None = None,
     api_key_state: State | None = None,
     ingest_policy: IngestPathPolicy | None = None,
+    description_lifecycle: DescriptionLifecycle | None = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
@@ -2517,12 +2523,15 @@ def create_mcp_http_app(
     default key; ``create_app`` (REST) passes its ``app.state``, so the auth middleware and
     ``rotate_key`` here read, and ``rotate_key`` publishes, the same key as ``POST /keys/rotate``.
     When omitted, a private ``State`` seeded with ``load_or_generate_key()`` plays that role.
+
+    ``description_lifecycle`` — the server's description lifecycle (``None`` while ``[description]`` is off). Accepted so
+    the collection tools can read the in-flight ``pending`` overlay from it (BE-26 and later); nothing here reads it yet.
     """
     from archon_search.server.middleware_context import RequestContextMiddleware
 
     if api_key_state is None:
         api_key_state = State({"api_key": load_or_generate_key()[0]})
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store, doc_id_hasher=doc_id_hasher, graph_store=graph_store, api_key_state=api_key_state, ingest_policy=ingest_policy)
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store, doc_id_hasher=doc_id_hasher, graph_store=graph_store, api_key_state=api_key_state, ingest_policy=ingest_policy, description_lifecycle=description_lifecycle)
     # FastMCP 3.4.x renamed ``streamable_http_app()`` to ``http_app()``; ``path='/'``
     # exposes the JSON-RPC endpoint at the sub-app root so it is reachable at the
     # ``/mcp`` mount point without an extra suffix (see ADR 09, K-1 spike).

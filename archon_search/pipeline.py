@@ -541,7 +541,7 @@ class SearchPipeline:
         self._path_policy = path_policy
         self._max_discovered_files = max_discovered_files
         # Collection descriptions BE-24: the lifecycle owns every generation task. ``None`` makes the ingest request
-        # nothing (the eval, installer and CLI pipelines, and the server's until BE-25 wires the lifecycle).
+        # nothing (the eval, installer and CLI pipelines, and the server's while ``[description]`` is off).
         self._description_lifecycle = description_lifecycle
         self._context_window_max = context_window_max
         self._graph_extractor = graph_extractor

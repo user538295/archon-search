@@ -440,7 +440,7 @@ flowchart LR
         - #integration_test — `test_ingest_returns_before_the_provider_finishes` — with a parked provider the ingest result is already returned
         - #integration_test — `test_ingest_without_lifecycle_requests_no_generation` — eval and installer pipelines stay silent
         - #unit_test — `test_manual_source_collection_is_not_marked_pending` — the rule does not enqueue for a manual description
-- [ ] **BE-25** — Wire the lifecycle in `server/app.py`: build it in the lifespan before the MCP mount, pass it to the pipeline and the MCP app, build the description client from `[description]` (window resolution, unset-Ollama WARNING arm), build nothing when disabled, close then drain in two phases (closed before the cancel gather, drain after, before the stores disconnect) #backend-role
+- [x] **BE-25** — Wire the lifecycle in `server/app.py`: build it in the lifespan before the MCP mount, pass it to the pipeline and the MCP app, build the description client from `[description]` (window resolution, unset-Ollama WARNING arm), build nothing when disabled, close then drain in two phases (closed before the cancel gather, drain after, before the stores disconnect) #backend-role
     - Frameworks & Drivers · 6.0h
     - needs BE-23, BE-24, BE-10 · completes S5, S17, S19, S35, S67, S85
     - Tests

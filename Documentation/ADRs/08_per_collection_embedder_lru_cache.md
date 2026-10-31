@@ -78,8 +78,8 @@ Key design points, each traceable to `embedder_cache.py`:
    skipped — a failed eager load does not abort startup.
 
 **Lifecycle in `app.py`** (lines 103–108): `EmbedderCache` is constructed
-inside the FastAPI `lifespan` context with capacity `config.embedder_cache_size`
-and stored on `app.state.embedder_cache`. If `config.eager_load_embedders` is
+in `create_app` (the description lifecycle's writer embeds with it) with capacity `config.embedder_cache_size`
+and stored on `app.state.embedder_cache` inside the FastAPI `lifespan` context. If `config.eager_load_embedders` is
 `True`, the lifespan block queries `get_all_collections_meta`, collects the
 distinct non-null `active_embedding_model` values, and calls
 `embedder_cache.preload(list(distinct_models))` before the server begins
