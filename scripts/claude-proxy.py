@@ -5,8 +5,9 @@ Run before starting the dev container (the same token must be set in the contain
     CLAUDE_PROXY_TOKEN=<random secret> python3 scripts/claude-proxy.py
 
 Listens on 127.0.0.1:18766. The container wrapper at /usr/local/bin/claude
-POSTs {"args": [...]} here; this script runs the real claude binary and
-streams stdout back with an X-Exit-Code header.
+POSTs {"args": [...], "stdin": "..."} here (stdin is optional: the prompt the claude_cli
+provider writes to the wrapper's standard input); this script runs the real claude binary
+with those args and that standard input, and streams stdout back with an X-Exit-Code header.
 
 This server executes `claude` with caller-supplied arguments on the host, so it
 authenticates every request and only answers requests addressed to it:
@@ -33,7 +34,11 @@ TOKEN_ENV = "CLAUDE_PROXY_TOKEN"
 TOKEN_HEADER = "X-Claude-Proxy-Token"
 # Names a request may address this server by: loopback, and the alias Docker Desktop gives the host.
 ALLOWED_HOST_NAMES = frozenset({"127.0.0.1", "localhost", "host.docker.internal"})
-MAX_BODY_BYTES = 1_000_000
+# Room for a very large prompt on stdin (a description or graph sample is far over the former 1 MB).
+MAX_BODY_BYTES = 16 * 1024 * 1024
+# A refused request's body is drained (not kept) up to this much before the refusal is sent.
+REFUSED_BODY_DRAIN_BYTES = 1_000_000
+DRAIN_CHUNK_BYTES = 64 * 1024
 CLAUDE_TIMEOUT_S = 120
 
 
@@ -62,36 +67,61 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_body(self) -> bytes | None:
-        """The request body, or None when Content-Length is missing, malformed or over the cap."""
+    def _content_length(self) -> int | None:
+        """The declared body length, or None when Content-Length is missing, malformed or over the cap."""
         try:
             length = int(self.headers.get("Content-Length", ""))
         except ValueError:
             return None
-        return self.rfile.read(length) if 0 <= length <= MAX_BODY_BYTES else None
+        return length if 0 <= length <= MAX_BODY_BYTES else None
+
+    def _discard_body(self, length: int | None) -> None:
+        """Read and drop the start of a body the request is refused for, without keeping it in memory."""
+        remaining = min(length or 0, REFUSED_BODY_DRAIN_BYTES)
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, DRAIN_CHUNK_BYTES))
+            if not chunk:
+                return
+            remaining -= len(chunk)
 
     def do_POST(self):
-        # Read the body before any reply: answering with an unread upload still in flight makes the
-        # OS reset the connection, so the client would see a reset instead of the 401/403.
-        raw = self._read_body()
+        length = self._content_length()
         refused = check_request(self.headers, self.server.token)
         if refused is not None:
+            # Drain what is in flight before replying: answering with an unread upload still in flight makes the
+            # OS reset the connection, so the client would see a reset instead of the 401/403. Only the
+            # authenticated caller's body is ever kept in memory.
+            self._discard_body(length)
             self._reply(refused)
             return
+        raw = self.rfile.read(length) if length is not None else None
         try:
             if raw is None:
                 raise ValueError("missing or oversized body")
-            args = json.loads(raw).get("args", [])
+            request = json.loads(raw)
+            args = request.get("args", [])
+            stdin_text = request.get("stdin", "")
             if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
                 raise ValueError("args must be a list of strings")
-        except (ValueError, AttributeError):
+            if not isinstance(stdin_text, str):
+                raise TypeError("stdin must be a string")
+        except (ValueError, AttributeError, TypeError):
             self._reply(HTTPStatus.BAD_REQUEST)
             return
         if not CLAUDE:
             self._reply(HTTPStatus.SERVICE_UNAVAILABLE, b"claude not found on host PATH")
             return
         try:
-            r = subprocess.run([CLAUDE, *args], capture_output=True, text=True, timeout=CLAUDE_TIMEOUT_S, check=False)
+            r = subprocess.run(
+                [CLAUDE, *args],
+                input=stdin_text,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=CLAUDE_TIMEOUT_S,
+                check=False,
+            )
         except (OSError, subprocess.SubprocessError) as exc:
             self._reply(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc).encode())
             return

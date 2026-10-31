@@ -4,6 +4,7 @@
 Mounted at /usr/local/bin/claude inside the dev container.
 The proxy URL is configured via CLAUDE_PROXY_URL (default: host.docker.internal:18766);
 the shared secret the proxy requires is read from CLAUDE_PROXY_TOKEN.
+The caller's standard input (the prompt, for the claude_cli provider) is forwarded to the host-side claude.
 """
 import json
 import os
@@ -13,10 +14,17 @@ import urllib.request
 PROXY_URL = os.environ.get("CLAUDE_PROXY_URL", "http://host.docker.internal:18766")
 TOKEN = os.environ.get("CLAUDE_PROXY_TOKEN", "")
 
-data = json.dumps({"args": sys.argv[1:]}).encode()
+payload = {"args": sys.argv[1:]}
+# Standard input is the prompt of a print-mode call; any other call (``claude --version``) must not wait on a stdin
+# that nobody closes.
+if ("-p" in sys.argv[1:] or "--print" in sys.argv[1:]) and not sys.stdin.isatty():
+    stdin_text = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+    if stdin_text:
+        payload["stdin"] = stdin_text
+
 req = urllib.request.Request(
     PROXY_URL,
-    data=data,
+    data=json.dumps(payload, ensure_ascii=False).encode(),
     headers={"Content-Type": "application/json", "X-Claude-Proxy-Token": TOKEN},
 )
 try:

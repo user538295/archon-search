@@ -11,11 +11,16 @@ from __future__ import annotations
 import http.client
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+from tests import _fake_claude
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROXY_PATH = REPO_ROOT / "scripts" / "claude-proxy.py"
@@ -127,3 +132,86 @@ def test_server_refuses_an_empty_token(proxy_module) -> None:
 def test_wrapper_sends_the_shared_secret_header() -> None:
     text = WRAPPER_PATH.read_text()
     assert "CLAUDE_PROXY_TOKEN" in text and "X-Claude-Proxy-Token" in text
+
+
+CAT = "/bin/cat"
+WRAPPER_TIMEOUT_S = 30
+OVERSIZED_FOR_THE_OLD_CAP = "x" * 2_000_000  # the proxy's former body cap was 1 MB
+
+
+def test_stdin_reaches_claude(proxy_module, monkeypatch: pytest.MonkeyPatch, server) -> None:
+    monkeypatch.setattr(proxy_module, "CLAUDE", CAT)
+    body = json.dumps({"args": [], "stdin": "prompt text é"}).encode()
+    response, payload = _post(server, body, AUTH)
+    assert response.status == 200
+    assert payload.decode() == "prompt text é"
+
+
+def test_large_stdin_is_accepted(proxy_module, monkeypatch: pytest.MonkeyPatch, server) -> None:
+    monkeypatch.setattr(proxy_module, "CLAUDE", CAT)
+    body = json.dumps({"args": [], "stdin": OVERSIZED_FOR_THE_OLD_CAP}).encode()
+    response, payload = _post(server, body, AUTH)
+    assert response.status == 200
+    assert payload.decode() == OVERSIZED_FOR_THE_OLD_CAP
+
+
+def test_missing_stdin_gives_claude_an_empty_input(proxy_module, monkeypatch: pytest.MonkeyPatch, server) -> None:
+    monkeypatch.setattr(proxy_module, "CLAUDE", CAT)
+    response, payload = _post(server, json.dumps({"args": []}).encode(), AUTH)
+    assert response.status == 200
+    assert payload == b""
+
+
+def test_non_string_stdin_is_a_bad_request(server) -> None:
+    response, _ = _post(server, json.dumps({"args": [], "stdin": 5}).encode(), AUTH)
+    assert response.status == 400
+
+
+def _run_wrapper(server, args: list[str], stdin: str) -> subprocess.CompletedProcess[str]:
+    env = {
+        "PATH": os.environ["PATH"],
+        "CLAUDE_PROXY_URL": f"http://127.0.0.1:{server[1]}",
+        "CLAUDE_PROXY_TOKEN": TOKEN,
+        "NO_PROXY": "127.0.0.1",
+    }
+    return subprocess.run(
+        [sys.executable, str(WRAPPER_PATH), *args],
+        input=stdin,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=WRAPPER_TIMEOUT_S,
+        check=False,
+    )
+
+
+def test_wrapper_forwards_the_stdin_of_a_print_call_to_the_host_claude(
+    proxy_module, monkeypatch: pytest.MonkeyPatch, server, tmp_path: Path
+) -> None:
+    fake = _fake_claude.install(tmp_path, reply="host answer")
+    monkeypatch.setattr(proxy_module, "CLAUDE", str(fake.path))
+    done = _run_wrapper(server, ["-p", "--model", "haiku"], "from the wrapper's stdin é")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "host answer"
+    (invocation,) = fake.invocations()
+    assert invocation.argv == ["-p", "--model", "haiku"]
+    assert invocation.stdin == "from the wrapper's stdin é"
+
+
+def test_wrapper_does_not_wait_on_the_stdin_of_a_call_that_is_not_print_mode(
+    proxy_module, monkeypatch: pytest.MonkeyPatch, server, tmp_path: Path
+) -> None:
+    fake = _fake_claude.install(tmp_path)
+    monkeypatch.setattr(proxy_module, "CLAUDE", str(fake.path))
+    done = _run_wrapper(server, ["--version"], "not a prompt")
+    assert done.returncode == 0, done.stderr
+    (invocation,) = fake.invocations()
+    assert invocation.argv == ["--version"]
+    assert invocation.stdin == ""
+
+
+def test_wrapper_still_forwards_argv_when_stdin_is_empty(proxy_module, monkeypatch: pytest.MonkeyPatch, server) -> None:
+    monkeypatch.setattr(proxy_module, "CLAUDE", ECHO)
+    done = _run_wrapper(server, ["-p", "hi"], "")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "-p hi\n"

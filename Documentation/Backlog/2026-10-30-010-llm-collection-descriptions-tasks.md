@@ -244,7 +244,7 @@ flowchart LR
         - #unit_test — `test_anthropic_wrapper_builds_client_lazily_on_first_call` — constructing the wrapper never instantiates the SDK client
         - #unit_test — `test_openai_wrapper_raises_when_key_missing` — a missing key is a raised failure, not a swallowed one
         - #unit_test — `test_cloud_wrappers_send_one_user_message_no_history` — each call is one user message
-- [ ] **BE-8** — `claude_cli` wrapper: prompt on standard input, tools disabled, no session, no slash commands or MCP servers, `--max-turns 1`, `--safe-mode`, neutral working directory, allowlisted environment, child killed on timeout and on cancellation, transport retry only when the caller asks (HyDE, RAG Fusion), plus the real-subprocess fake `claude` harness `tests/_fake_claude.py` recording argv, environment and stdin; keep the dev-container `claude` wrapper (`scripts/claude-container-wrapper`, `scripts/claude-proxy.py`) working, because it drops stdin and needs proxy variables the environment allowlist excludes #backend-role
+- [x] **BE-8** — `claude_cli` wrapper: prompt on standard input, tools disabled, no session, no slash commands or MCP servers, `--max-turns 1`, `--safe-mode`, neutral working directory, allowlisted environment, child killed on timeout and on cancellation, transport retry only when the caller asks (HyDE, RAG Fusion), plus the real-subprocess fake `claude` harness `tests/_fake_claude.py` recording argv, environment and stdin; keep the dev-container `claude` wrapper (`scripts/claude-container-wrapper`, `scripts/claude-proxy.py`) working, because it drops stdin and needs proxy variables the environment allowlist excludes #backend-role
     - Interface Adapters · 6.0h
     - needs BE-2 · completes S12, S79
     - Tests
