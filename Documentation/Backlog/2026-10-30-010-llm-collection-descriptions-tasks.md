@@ -237,7 +237,7 @@ flowchart LR
         - #unit_test — `test_llama_cpp_window_read_from_props` — the probed window becomes the client's context window with source `probed`
         - #unit_test — `test_llama_cpp_probe_failure_assumes_4096_and_warns` — a failed probe assumes 4096 and logs one WARNING
         - #integration_test — `test_llama_cpp_wrapper_against_fake_server` — props, tokenize and chat completions work end to end against the fake server
-- [ ] **BE-7** — `anthropic` and `openai` wrappers: SDK client built lazily on first call, key guard line kept for `test_anthropic_key_guards.py`, no trimming, `think` ignored #backend-role
+- [x] **BE-7** — `anthropic` and `openai` wrappers: SDK client built lazily on first call, key guard line kept for `test_anthropic_key_guards.py`, no trimming, `think` ignored #backend-role
     - Interface Adapters · 4.0h
     - needs BE-2 · completes S6
     - Tests
