@@ -424,7 +424,7 @@ flowchart LR
         - #unit_test — `test_sample_read_error_is_sample_read_failed_not_no_open_chunks` — a store error has its own reason
         - #unit_test — `test_regeneration_rule_fires_at_20_percent_either_direction` — growth or shrink of 20% regenerates, less does not
         - #unit_test — `test_no_excerpt_or_description_text_in_logs_of_description_modules` — the source-scan guard stays green
-- [ ] **BE-23** — Description lifecycle service (C5 core, new Use Cases module): `requestGeneration` for the ingest rule, per-collection single-flight (`alreadyRunning`), process slot of one for the sample read and model call only, prioritised bounded queue (describe, ingest, backfill; 64), in-memory `pending` and last attempt with the overlay, manual short-circuit, `closed` flag, tracked tasks and drain #backend-role
+- [x] **BE-23** — Description lifecycle service (C5 core, new Use Cases module): `requestGeneration` for the ingest rule, per-collection single-flight (`alreadyRunning`), process slot of one for the sample read and model call only, prioritised bounded queue (describe, ingest, backfill; 64), in-memory `pending` and last attempt with the overlay, manual short-circuit, `closed` flag, tracked tasks and drain #backend-role
     - Use Cases · 8.0h
     - needs BE-20, BE-22 · completes C5, S23, S24, S80
     - Tests

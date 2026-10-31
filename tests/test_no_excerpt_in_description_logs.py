@@ -1,7 +1,8 @@
 """BE-22 (S76) — CI guard: no excerpt, prompt, answer or description text may reach a logging call of the description modules.
 
 Covers ``description_generator.py`` (reads excerpts, sends the prompt, receives the answer), ``description_writer.py`` and
-``description_write.py`` (handle the description text and its vector). Like ``tests/test_no_query_log_in_llm_client.py``
+``description_write.py`` (handle the description text and its vector) and ``description_lifecycle.py`` (holds the
+generated text between the model call and the write). Like ``tests/test_no_query_log_in_llm_client.py``
 the guard reads the modules with ``ast`` and never imports them, looks at the call and not at its text, and counts
 ``warn_once(...)`` and ``print(...)`` as logging calls. A traceback is as forbidden as the text: a store or provider error's
 message can carry a chunk text, so failures log a collection name, a counter or ``type(exc).__name__`` and travel as
@@ -15,7 +16,9 @@ from pathlib import Path
 import pytest
 
 _PACKAGE_DIR = Path(__file__).parent.parent / "archon_search"
-_DESCRIPTION_MODULES = ("description_generator.py", "description_writer.py", "description_write.py")
+_DESCRIPTION_MODULES = (
+    "description_generator.py", "description_writer.py", "description_write.py", "description_lifecycle.py"
+)
 
 _LOG_METHODS = frozenset({"debug", "info", "warning", "warn", "error", "critical", "fatal", "log"})
 _LOG_FUNCTIONS = frozenset({"warn_once", "print"})
@@ -24,8 +27,9 @@ _EXCEPTION_METHOD = "exception"
 _LOGGER_RECEIVER_HINT = "log"
 #: Calls whose result says nothing about their argument's content: a size, a type, a truth value.
 _NEUTRAL_CALLS = frozenset({"len", "type", "bool", "sum"})
-#: Constructors whose ``detail`` text reaches a WARNING and the failed status: treated like a logging call.
-_TEXT_SINK_CALLS = frozenset({"_GenerationStopped", "DescriptionFailed"})
+#: Constructors and helpers whose ``detail`` text reaches a WARNING, the failed status or a settled ticket: treated
+#: like a logging call.
+_TEXT_SINK_CALLS = frozenset({"_GenerationStopped", "DescriptionFailed", "GenerationSettlement", "_record_failure"})
 #: A module's own logging helpers (``_warn_kept_without_vector``): their arguments reach a log line.
 _LOGGING_HELPER_PREFIXES = ("_warn", "_log")
 #: Names that hold an excerpt, the prompt, the model's answer or a description, or an object that carries them (a
@@ -177,6 +181,9 @@ def log_violations(source: str) -> list[tuple[int, str, str]]:
         'logger.warning("sent %s", self._excerpts)\n',
         'try:\n    pass\nexcept Exception as exc:\n    self._warn_kept(collection, model, str(exc))\n',
         'self._warn_kept(collection, model, answer)\n',
+        'try:\n    pass\nexcept Exception as failure:\n    GenerationSettlement(FAILED, detail=str(failure))\n',
+        'GenerationSettlement(FAILED, detail=answer)\n',
+        'try:\n    pass\nexcept Exception as failure:\n    self._record_failure(job, expected, reason, str(failure))\n',
     ],
 )
 def test_guard_detects_a_forbidden_logging_call(content: str) -> None:
@@ -203,6 +210,9 @@ def test_guard_names_the_violating_line_and_reason() -> None:
         "sys.stderr.write(collection)\n",
         'try:\n    pass\nexcept Exception as unexpected:\n    stop = _GenerationStopped(reason, f"unexpected {type(unexpected).__name__}")\n',
         'DescriptionFailed(reason, "the model returned an empty answer")\n',
+        'GenerationSettlement(GenerationResult.FAILED, detail=f"unexpected {type(failure).__name__}")\n',
+        'self._record_failure(job, expected, reason, "the collection was busy")\n',
+        'GenerationSettlement(verdict, detail=detail, reason=reason)\n',
         'self._warn_kept_without_vector(collection, model, "unusable vector")\n',
         'try:\n    pass\nexcept Exception as exc:\n    self._warn_kept(collection, model, type(exc).__name__)\n',
         'logger.warning("sampled %d", sum(len(e) for e in excerpts))\n',
@@ -215,15 +225,15 @@ def test_guard_ignores_a_harmless_call(content: str) -> None:
     assert not log_violations(content), f"guard over-matched: {content!r}"
 
 
-def test_the_scan_covers_the_three_description_modules() -> None:
+def test_the_scan_covers_the_four_description_modules() -> None:
     """Positive control: a renamed module must not turn the real guard into a vacuous pass."""
     for module in _DESCRIPTION_MODULES:
         assert (_PACKAGE_DIR / module).is_file(), f"{module} moved; update the guard"
 
 
 def test_the_scan_recognises_the_real_logging_calls_of_the_modules() -> None:
-    """Positive control: the guard sees the log sites the generator and the writer really have."""
-    for module in ("description_generator.py", "description_writer.py"):
+    """Positive control: the guard sees the log sites the generator, the writer and the lifecycle really have."""
+    for module in ("description_generator.py", "description_writer.py", "description_lifecycle.py"):
         assert count_logging_calls((_PACKAGE_DIR / module).read_text("utf-8")) >= 1, module
 
 
