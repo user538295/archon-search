@@ -190,7 +190,7 @@ flowchart LR
         - #integration_test — `test_client_commands_report_weak_key_in_one_line` — the 8 commands still exit 1 with a single `Error` line
         - #integration_test — `test_message_consistent_across_modules` — the connection-refused UX module-identity check stays green (and the existing test in `test_cli_collection.py` that asserts the default URL for `collection` keeps passing)
         - #integration_test — `test_wire_text_matches_source_and_every_quoting_doc` — doc 120 still quotes the wire text correctly
-- [ ] **T-2** — e2e: after the move, real-server REST search and the CLI commands that use the shared helpers work end to end; add the environment-key path #tester-role
+- [x] **T-2** — e2e: after the move, real-server REST search and the CLI commands that use the shared helpers work end to end; add the environment-key path #tester-role
     - — · 3.0h
     - needs FE-2, BE-4 · completes S28
     - Tests

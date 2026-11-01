@@ -367,6 +367,55 @@ def test_key_list_no_repr(smoke_server) -> None:
     assert "namespace: " in result.stdout
 
 
+def _run_key_list_with_env(base_url: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run ``archon-search key list --api-url <base_url>`` (no ``--api-key``) under ``env``."""
+    return subprocess.run(
+        ["uv", "run", "archon-search", "key", "list", "--api-url", base_url],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+        env=env,
+    )
+
+
+def test_smoke_key_list_resolves_key_from_environment(smoke_server, tmp_path) -> None:
+    """``archon-search key list`` with no ``--api-key`` option resolves the key
+    from ``ARCHON_SEARCH_API_KEY`` through the shared ``_helpers`` resolver (S28, C5).
+
+    The child's data dir is an empty ``tmp_path`` (deliberately not
+    ``smoke_server.data_dir``, where the server persists the correct key to a
+    key file) so no key file can answer for the environment variable. Two
+    controls keep the pass from being vacuous: with the variable unset the
+    command fails with the fixed "No API key found" text, and with a
+    well-formed but wrong key the server itself answers 401.
+    """
+    base_env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("ARCHON_SEARCH_API_KEY", "ARCHON_SEARCH_KEY_FILE")
+    }
+    base_env["ARCHON_SEARCH_DATA_DIR"] = str(tmp_path)
+
+    result = _run_key_list_with_env(
+        smoke_server.base_url, {**base_env, "ARCHON_SEARCH_API_KEY": smoke_server.api_key}
+    )
+    assert result.returncode == 0, (
+        f"key list failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "id: " in result.stdout or "No keys found." in result.stdout
+
+    unset = _run_key_list_with_env(smoke_server.base_url, base_env)
+    assert unset.returncode == 1
+    assert "No API key found" in unset.stderr
+
+    wrong = _run_key_list_with_env(
+        smoke_server.base_url, {**base_env, "ARCHON_SEARCH_API_KEY": "0" * 64}
+    )
+    assert wrong.returncode == 1
+    assert "server returned 401" in wrong.stderr
+
+
 # ---------------------------------------------------------------------------
 # graph build-communities --wait (S3) — real CLI-to-server HTTP round trip
 # against the graph-enabled smoke server, with real Leiden clustering compute.
