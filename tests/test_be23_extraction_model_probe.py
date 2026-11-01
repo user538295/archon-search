@@ -200,13 +200,13 @@ async def test_probe_skipped_for_llama_cpp_when_already_known_unreachable() -> N
     """When _probe_llama_cpp already found the server down, re-probing here would just
     produce a second, confusing warning for the same root cause — reuse the signal instead."""
     cfg = _cfg(enabled=True, provider="llama_cpp", extraction_model="model-x")
-    assert await _probe_extraction_model(cfg, llama_cpp_ok=False, graph_client_factory=_unused_factory()) == []
+    assert await _probe_extraction_model(cfg, graph_server_ok=False, graph_client_factory=_unused_factory()) == []
 
 
 async def test_probe_still_runs_for_llama_cpp_when_reachable() -> None:
     cfg = _cfg(enabled=True, provider="llama_cpp", extraction_model="model-x")
     client = _Client()
-    assert await _probe_extraction_model(cfg, llama_cpp_ok=True, graph_client_factory=_factory(client)) == []
+    assert await _probe_extraction_model(cfg, graph_server_ok=True, graph_client_factory=_factory(client)) == []
     assert len(client.requests) == 1
 
 

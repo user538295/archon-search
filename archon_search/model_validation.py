@@ -19,10 +19,7 @@ import httpx
 
 from archon_search.embedder import EmbedderBackend, ModelEmbedder
 from archon_search.llm_client.claude_cli_client import resolve_claude_binary
-from archon_search.llm_client.llama_cpp_client import (
-    exception_types,
-    warn_llama_cpp_unreachable,
-)
+from archon_search.llm_client.llama_cpp_client import warn_llama_cpp_unreachable
 from archon_search.llm_client.protocol import LlmCallRequest, LlmCallTimeout
 from archon_search.llm_client.server_address import host_port
 from archon_search.model_specs import UnsupportedModelError, get_embedder_spec
@@ -168,20 +165,22 @@ def _llama_cpp_base_urls(config: SearchConfig) -> list[str]:
 
 
 async def _probe_llama_cpp_server(base_url: str) -> bool:
-    """``GET {base_url}/v1/models`` under a short, fixed timeout: ``True`` on any 2xx answer, else ``False`` after the one
-    per-server "not reachable" WARNING (shared with the context-window lookup and the description probe). Never raises."""
+    """``GET {base_url}/v1/models`` under a short, fixed bound: ``True`` on any 2xx answer, else ``False`` after the one
+    per-server "not reachable" WARNING (shared with the context-window lookup and the description probe). Never raises.
+
+    httpx limits each phase, not the whole request, so a server that keeps answering a byte at a time would hold the probe
+    open: the same bound is also put on the whole call with ``asyncio.timeout``."""
     try:
-        async with httpx.AsyncClient(
-            base_url=base_url, timeout=_LLAMA_CPP_PROBE_TIMEOUT_SECONDS
-        ) as client:
+        async with (
+            asyncio.timeout(_LLAMA_CPP_PROBE_TIMEOUT_SECONDS),
+            httpx.AsyncClient(base_url=base_url, timeout=_LLAMA_CPP_PROBE_TIMEOUT_SECONDS) as client,
+        ):
             response = await client.get("/v1/models")
             response.raise_for_status()
         return True
     except Exception as exc:  # noqa: BLE001 — probe reports any failure as "unreachable" (False); it must never raise
-        server = host_port(base_url)  # host:port only: the URL may carry credentials
         reason = f"HTTP {exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
-        logger.debug("llama_cpp: GET /v1/models on %s failed (%s)", server, exception_types(exc))
-        warn_llama_cpp_unreachable(server, reason)
+        warn_llama_cpp_unreachable(base_url, reason, exc)
         return False
 
 
@@ -302,7 +301,7 @@ def _log_gliner_install_command() -> None:
 
 async def _probe_extraction_model(
     config: SearchConfig,
-    llama_cpp_ok: bool | None = None,
+    graph_server_ok: bool | None = None,
     *,
     graph_client_factory: GraphClientFactory | None = None,
 ) -> list[str]:
@@ -346,15 +345,15 @@ async def _probe_extraction_model(
 
     Returns ``[]`` (skipped, no probe attempted) when ``[graph].enabled`` is False,
     ``extraction_model`` is unset (the gate ingest itself uses), ``provider`` is unset, or no
-    *graph_client_factory* was given. Also skipped when ``provider == "llama_cpp"`` and *llama_cpp_ok* is ``False``:
-    here *llama_cpp_ok* is the reachability of the graph's OWN server (``[graph].llama_cpp_base_url``, as
+    *graph_client_factory* was given. Also skipped when ``provider == "llama_cpp"`` and *graph_server_ok* is ``False``:
+    *graph_server_ok* is the reachability of the graph's OWN server (``[graph].llama_cpp_base_url``, as
     :func:`_probe_llama_cpp` found it; ``None`` when it was not probed), so a server already reported unreachable is not
     called again for a second WARNING with a traceback, while a live graph server is probed whatever another server did.
     """
     graph_config = config.graph
     if not graph_config.enabled or not graph_config.extraction_model:
         return []
-    if graph_config.provider == _LLAMA_CPP_PROVIDER and llama_cpp_ok is False:
+    if graph_config.provider == _LLAMA_CPP_PROVIDER and graph_server_ok is False:
         return []
     if graph_config.provider == _CLAUDE_CLI_PROVIDER:
         if resolve_claude_binary() is not None:
@@ -581,7 +580,7 @@ async def validate_models_async(
     graph_server_ok = None if llama_servers is None else llama_servers.get(host_port(config.graph.llama_cpp_base_url))
     graph_warnings = await asyncio.to_thread(graph_ner_status, config)
     graph_warnings = graph_warnings + await _probe_extraction_model(
-        config, llama_cpp_ok=graph_server_ok, graph_client_factory=graph_client_factory
+        config, graph_server_ok=graph_server_ok, graph_client_factory=graph_client_factory
     )
 
     def _result(

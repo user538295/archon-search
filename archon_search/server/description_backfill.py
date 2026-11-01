@@ -47,7 +47,7 @@ from archon_search.llm_client.claude_cli_client import resolve_claude_binary
 from archon_search.llm_client.llama_cpp_client import warn_llama_cpp_unreachable
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.provider_key import provider_key_available
-from archon_search.llm_client.server_address import host_port
+from archon_search.llm_client.server_address import UNKNOWN_HOST, host_port
 from archon_search.server.provider_dependency import check_provider_package
 from archon_search.server.schemas import StartupSyncResult
 
@@ -144,10 +144,20 @@ async def probe_description_reachability(
     return DescriptionReachability(True, None)
 
 
+def probed_server_label(provider: str, base_url: str) -> str:
+    """``host:port`` of the server the probe of *provider* asks, from the URL it actually asks (an ``ollama`` value without
+    a scheme or port gains ``http://`` and 11434 first, as :func:`_probe_url` does): the name an operator message uses for
+    that server. ``UNKNOWN_HOST`` when the value does not parse."""
+    try:
+        return host_port(_probe_url(provider, base_url))
+    except ValueError:  # an ``ollama`` value such as ``[::1`` that ``urlsplit`` rejects
+        return UNKNOWN_HOST
+
+
 async def _probe_local_server(provider: str, base_url: str, timeout_seconds: float) -> DescriptionReachability:
     # An Ollama reason names the server (the WARNING does not); a llama_cpp reason does not, because its WARNING already
     # reads "the server at <host:port> is not reachable (<reason>)".
-    host = host_port(base_url)
+    host = probed_server_label(provider, base_url)
     named = f" from {host}" if provider == _OLLAMA else ""
     try:
         url = _probe_url(provider, base_url)
@@ -177,16 +187,21 @@ async def run_description_probe(state: State, description: DescriptionConfig) ->
     not usable. Never raises (a probe bug reads as unreachable). A llama-server that does not answer is reported through
     ``warn_llama_cpp_unreachable``, the one WARNING per server (``host:port``) that the context-window lookup and the
     startup reachability probe use too, so the paths that find the same outage log it once; that line is attributed to
-    ``archon_search.llm_client.llama_cpp_client``, not to this module's logger."""
+    ``archon_search.llm_client.llama_cpp_client``, not to this module's logger. Only that network verdict goes through the
+    per-server key: a probe that failed unexpectedly is no statement about the server and takes the generic
+    ``warn_description_unreachable`` WARNING."""
     try:
         verdict = await probe_description_reachability(description)
     except Exception as failure:  # noqa: BLE001 — never raises: an unexpected probe failure is a finding, not a crash
         verdict = DescriptionReachability(False, f"the probe failed unexpectedly ({type(failure).__name__})")
+        state.description_reachability = verdict
+        warn_description_unreachable(description.provider, verdict.reason)  # no network verdict: no per-server key
+        return
     state.description_reachability = verdict
     if verdict.reachable:
         return
     if description.provider == _LLAMA_CPP:
-        warn_llama_cpp_unreachable(host_port(local_server_url(description)), verdict.reason)
+        warn_llama_cpp_unreachable(local_server_url(description), verdict.reason)
     else:
         warn_description_unreachable(description.provider, verdict.reason)
 

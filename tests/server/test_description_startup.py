@@ -56,6 +56,8 @@ _PROVIDER_EXTRA = {"ollama": "ollama", "openai": "openai-provider", "anthropic":
         ("::ffff:127.0.0.1", True),
         ("http://[::ffff:127.0.0.1]:11434", True),
         ("  http://localhost:11434  ", True),
+        ("localhost:11434/a//b", True),
+        ("127.0.0.1/v1//models", True),
         # not loopback
         ("0.0.0.0", False),
         ("http://0.0.0.0:11434", False),
@@ -76,6 +78,8 @@ _PROVIDER_EXTRA = {"ollama": "ollama", "openai": "openai-provider", "anthropic":
         ("   ", False),
         ("http://", False),
         ("http://[::1", False),
+        ("http://localhost:80/x@evil.test", False),
+        ("localhost/x@evil.test", False),
     ],
 )
 def test_is_loopback_host_table(value: str, expected: bool) -> None:

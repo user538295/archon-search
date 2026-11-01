@@ -17,3 +17,14 @@ def bounded_server_text(text: str, prompt: str) -> str:
             scrubbed = scrubbed.replace(echo, "[prompt]")
     one_line = " ".join(scrubbed.split())
     return one_line if len(one_line) <= MAX_SERVER_TEXT_CHARS else f"{one_line[:MAX_SERVER_TEXT_CHARS]}..."
+
+
+def exception_types(exc: BaseException) -> str:
+    """The types of *exc* and of its causes, outermost first (``LlmCallFailure < ConnectError < OSError``). Never the
+    messages: those of a malformed base URL repeat the credentials it carries."""
+    types: list[str] = []
+    current: BaseException | None = exc
+    while current is not None:
+        types.append(type(current).__name__)
+        current = current.__cause__
+    return " < ".join(types)

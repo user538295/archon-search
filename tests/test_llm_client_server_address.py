@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from archon_search.llm_client.server_address import UNKNOWN_HOST, host_port
+from archon_search.llm_client.server_address import (
+    UNKNOWN_HOST,
+    ServerAddress,
+    host_port,
+    parse_server_address,
+)
 
 
 @pytest.mark.parametrize(
@@ -49,6 +54,13 @@ def test_host_port_of_a_value_that_does_not_parse_is_the_unknown_host(base_url: 
         "http://user:pa#ss@h.test:8080",
         "user:pa/ss@h.test:8080",
         "http://user:pa%2Fss@h.test:8080",
+        "http://user:12345/x@h.test:80",
+        "http://user/x@h.test:80",
+        "http://tok?en@h.test:8080",
+        "http://tok#en@h.test:8080",
+        "tok/en@h.test:80",
+        "http://h.test:8080/a@b",
+        "http://h.test:8080?mail=a@b",
     ],
 )
 def test_host_port_never_carries_a_password_whatever_the_userinfo_holds(base_url: str) -> None:
@@ -84,3 +96,23 @@ def test_every_unparsable_value_shares_the_unknown_host() -> None:
 
 def test_a_scheme_default_port_is_not_filled_for_an_unknown_scheme() -> None:
     assert host_port("ftp://files.test/pub") == "files.test"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("http://u:p@Gpu.Test.:11434/x", ServerAddress("gpu.test", 11434)),
+        ("http://localhost", ServerAddress("localhost", 80)),
+        ("localhost:11434/a//b", ServerAddress("localhost", 11434)),
+        ("[::1]:8080", ServerAddress("::1", 8080)),
+        ("localhost", ServerAddress("localhost", None)),
+        ("ftp://files.test/pub", ServerAddress("files.test", None)),
+    ],
+)
+def test_parse_server_address_is_the_one_parser_of_host_and_port(value: str, expected: ServerAddress) -> None:
+    assert parse_server_address(value) == expected
+
+
+@pytest.mark.parametrize("value", ["http://[::1", "", "http://user/x@h.test:80", "http://:80"])
+def test_parse_server_address_is_none_for_a_value_without_a_usable_host(value: str) -> None:
+    assert parse_server_address(value) is None

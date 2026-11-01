@@ -274,8 +274,8 @@ def test_status_probe_llama_cpp_reachability(tmp_path: Path, monkeypatch: pytest
     server yields ``llama_cpp_ok=False``, which fails the assertion below
     loudly and points at the missing server.
     """
-    toml_content = '[hyde]\nprovider = "llama_cpp"\n'
-    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, cfg, api_key):
+    toml_content = '[hyde]\nenabled = true\nprovider = "llama_cpp"\n'
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content, hyde_enabled=True) as (client, cfg, api_key):
         # /ready stays 503 until warm-up AND validation settle (S631) — wait both out.
         wait_for_models_check_to_settle(client.app)
 

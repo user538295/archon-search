@@ -11,6 +11,7 @@ import logging
 from types import SimpleNamespace
 from typing import Any, Self
 
+import httpx
 import pytest
 
 from archon_search.collection_meta import (
@@ -248,6 +249,40 @@ async def test_ipv6_host_keeps_its_brackets_in_the_reason() -> None:
     assert result.reason is not None and "[::1]:1" in result.reason
 
 
+@pytest.mark.parametrize(
+    ("configured", "label"),
+    [
+        ("myollama.internal", "myollama.internal:11434"),
+        ("user:secret@[::1]", "[::1]:11434"),
+        ("myollama.internal:9", "myollama.internal:9"),
+        ("http://myollama.internal", "myollama.internal:80"),
+    ],
+)
+async def test_an_ollama_reason_labels_the_url_actually_probed(
+    configured: str, label: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Refusing:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            return None
+
+        async def get(self, url: str) -> None:
+            raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(description_backfill.httpx, "AsyncClient", _Refusing)
+
+    result = await probe_description_reachability(
+        _description(provider="ollama", ollama_base_url=configured), timeout_seconds=_SHORT_PROBE_TIMEOUT_SECONDS
+    )
+
+    assert result.reason == f"no answer from {label} (ConnectError)"
+
+
 async def test_a_request_that_never_completes_is_cut_by_the_overall_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Hanging:
         def __init__(self, **kwargs: object) -> None:
@@ -387,6 +422,26 @@ async def test_probe_task_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     await run_description_probe(state, _description(provider="anthropic"))
 
     assert state.description_reachability is not None and state.description_reachability.reachable is False
+
+
+@pytest.mark.parametrize("provider", ["llama_cpp", "ollama"])
+async def test_an_unexpected_probe_failure_is_the_generic_warning_never_a_per_server_one(
+    provider: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def explode(*args: object, **kwargs: object) -> DescriptionReachability:
+        raise RuntimeError("probe bug")
+
+    monkeypatch.setattr(description_backfill, "probe_description_reachability", explode)
+    state = SimpleNamespace(description_reachability=None)
+
+    with caplog.at_level(logging.WARNING):
+        await run_description_probe(state, _description(provider=provider))
+
+    [record] = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert record.name == description_backfill.__name__
+    assert "the probe failed unexpectedly (RuntimeError)" in record.getMessage()
+    assert DESCRIPTION_UNREACHABLE_WARN_KEY in once_per_process._warned_keys
+    assert not [key for key in once_per_process._warned_keys if key.startswith("llama_cpp_unreachable:")]
 
 
 # ------------------------------------------------------------------------------ the loop

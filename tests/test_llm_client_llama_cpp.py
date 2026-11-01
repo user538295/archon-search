@@ -15,7 +15,10 @@ import httpx
 import pytest
 
 from archon_search.constants import ANSWER_RESERVE_TOKENS, ASSUMED_CONTEXT_TOKENS
-from archon_search.llm_client.llama_cpp_client import LlamaCppClient
+from archon_search.llm_client.llama_cpp_client import (
+    LlamaCppClient,
+    warn_llama_cpp_unreachable,
+)
 from archon_search.llm_client.protocol import (
     ContextWindowSource,
     ContextWindowTokens,
@@ -180,8 +183,32 @@ async def test_llama_cpp_unreachable_server_probe_logs_the_exception_types_at_de
         await client.probe_context_window(_TIMEOUT_SECONDS)
 
     [debug] = [r for r in caplog.records if r.levelno == logging.DEBUG and r.name == _LOGGER_NAME]
-    assert debug.getMessage() == "llama_cpp: GET /props on llama.test:8080 failed (LlmCallFailure < ConnectError)"
+    assert debug.getMessage() == "llama_cpp: probe of llama.test:8080 failed (LlmCallFailure < ConnectError)"
     assert "refused" not in caplog.text
+
+
+def test_warn_llama_cpp_unreachable_without_a_reason_says_so_instead_of_printing_none(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        warn_llama_cpp_unreachable("http://user:s3cr3t@llama.test:8080/v1", None)
+
+    [warning] = _warnings(caplog)
+    assert "None" not in warning.getMessage()
+    assert "(no reason given)" in warning.getMessage()
+    assert "s3cr3t" not in warning.getMessage()
+
+
+def test_warn_llama_cpp_unreachable_labels_the_url_and_logs_the_cause_types_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    cause = ConnectionError("password=s3cr3t")
+    cause.__cause__ = OSError("s3cr3t")
+
+    with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
+        warn_llama_cpp_unreachable("HTTP://U:P@LLAMA.test.:8080/x", "refused", cause)
+
+    [warning] = _warnings(caplog)
+    assert warning.getMessage().startswith("llama_cpp: the server at llama.test:8080 is not reachable (refused)")
+    [debug] = [r for r in caplog.records if r.levelno == logging.DEBUG]
+    assert debug.getMessage() == "llama_cpp: probe of llama.test:8080 failed (ConnectionError < OSError)"
+    assert "s3cr3t" not in caplog.text
 
 
 async def test_llama_cpp_http_error_probe_reason_carries_the_status_and_the_servers_bounded_text(caplog: pytest.LogCaptureFixture) -> None:
@@ -443,7 +470,7 @@ def _paths(server: _Server) -> list[str]:
     return [request.url.path for request in server.requests]
 
 
-async def test_llama_cpp_input_budget_counts_a_template_once_per_process() -> None:
+async def test_llama_cpp_input_budget_counts_a_template_once_per_cached_template() -> None:
     """The template is the fixed part of every query: its framed count is asked of the server once, not per search."""
     server = _Server()
     client = _client(server)
@@ -556,6 +583,9 @@ async def test_llama_cpp_probe_rejects_unusable_n_ctx_values(window: object) -> 
         "http://user:s3cr3t/x@llama.test:8080",
         "http://user:s3cr3t?x@llama.test:8080",
         "http://user:s3cr3t#x@llama.test:8080",
+        "http://user:12345/x@llama.test:80",
+        "http://user/x@llama.test:80",
+        "http://k3y?en@llama.test:8080",
     ],
 )
 async def test_llama_cpp_probe_logs_never_carry_credentials_of_the_base_url(base_url: str, caplog: pytest.LogCaptureFixture) -> None:
@@ -569,7 +599,7 @@ async def test_llama_cpp_probe_logs_never_carry_credentials_of_the_base_url(base
     [warning] = _warnings(caplog)
     assert warning.getMessage().startswith("llama_cpp: the server at ")
     logged = caplog.text + "".join(logging.Formatter().formatException(r.exc_info) for r in caplog.records if r.exc_info)
-    for secret in ("s3cr3t", "t0k3n", "user"):
+    for secret in ("s3cr3t", "t0k3n", "user", "12345", "k3y"):
         assert secret not in logged, secret
 
 

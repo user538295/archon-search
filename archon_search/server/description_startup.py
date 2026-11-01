@@ -18,15 +18,15 @@ import functools
 import ipaddress
 import logging
 from typing import Final, Protocol
-from urllib.parse import urlsplit
 
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import DescriptionConfig
 from archon_search.constants import RESTRICTED_CHUNK_PROVIDERS
 from archon_search.llm_client.provider_key import provider_key_available
-from archon_search.llm_client.server_address import host_port
+from archon_search.llm_client.server_address import parse_server_address
 from archon_search.server.description_backfill import (
     local_server_url,
+    probed_server_label,
     static_provider_problem,
     warn_description_unreachable,
 )
@@ -46,15 +46,6 @@ _IPV6_VERSION: Final = 6
 
 class _MetaStore(Protocol):
     async def get_all_collections_meta(self) -> list[CollectionMeta]: ...
-
-
-def _hostname(value: str) -> str | None:
-    """The host of a URL, or of a scheme-less ``host:port`` (``urlsplit`` reads ``localhost:11434`` as scheme ``localhost``
-    and no host, so a value without ``//`` is split as ``//value``). ``None`` when there is none or it cannot be parsed."""
-    try:
-        return urlsplit(value if "//" in value else f"//{value}").hostname
-    except ValueError:  # an unparsable value such as ``http://[::1``
-        return None
 
 
 def _ip_literal(value: str) -> str | None:
@@ -79,10 +70,10 @@ def is_loopback_host(base_url: str) -> bool:
     """
     value = base_url.strip()
     # A bare IPv6 literal (``::1``) is all colons to ``urlsplit``, which reads a port into it: take the literal whole.
-    host = _ip_literal(value) or _hostname(value)
+    parsed = parse_server_address(value)
+    host = _ip_literal(value) or (parsed.host if parsed is not None else None)
     if not host:
         return False
-    host = host.removesuffix(".")
     if host == _LOCALHOST:
         return True
     try:
@@ -165,7 +156,7 @@ def _warn_restricted_chunks(description: DescriptionConfig) -> None:
         )
         return
     url = local_server_url(description)
-    host = host_port(url)
+    host = probed_server_label(provider, url)
     logger.warning(
         "[description].include_restricted_chunks = true: chunks with an access list may be sampled and sent to the %s "
         "server at %s; their text may then appear in descriptions that every reader of the collection can see",
@@ -187,7 +178,7 @@ def _log_privacy(description: DescriptionConfig) -> None:
         url = local_server_url(description)
         if is_loopback_host(url):
             return
-        destination = f"the {provider} server at {host_port(url)}"
+        destination = f"the {provider} server at {probed_server_label(provider, url)}"
     else:
         destination = f"provider {provider}"
     logger.info(

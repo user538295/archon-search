@@ -91,6 +91,8 @@ _VALIDATE_DEVICE = "archon_search.model_validation.validate_device"
 _RESOLVE_DEVICE = "archon_search.model_validation.resolve_device"
 _PROBE_TEXT = "archon search validation probe"
 _PROBE_PAIR = ("archon search query", "archon search document")
+_TRICKLE_SECONDS = 2.0  # a GET that stays open far past any bound under test
+_SHORT_PROBE_BOUND_SECONDS = 0.05
 
 
 class _Probes:
@@ -586,6 +588,9 @@ async def test_probe_failure_does_not_block_boot(caplog: pytest.LogCaptureFixtur
         "http://user:s3cr3t/x@gpu.test:8080",
         "http://user:s3cr3t?x@gpu.test:8080",
         "http://user:s3cr3t#x@gpu.test:8080",
+        "http://user:12345/x@gpu.test:80",
+        "http://user/x@gpu.test:80",
+        "http://k3y?en@gpu.test:8080",
     ],
 )
 async def test_probe_failure_logs_never_carry_the_credentials_of_the_url(base_url: str, caplog: pytest.LogCaptureFixture):
@@ -599,7 +604,7 @@ async def test_probe_failure_logs_never_carry_the_credentials_of_the_url(base_ur
     [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert warning.startswith("llama_cpp: the server at ")
     logged = caplog.text + "".join(logging.Formatter().formatException(r.exc_info) for r in caplog.records if r.exc_info)
-    for secret in ("s3cr3t", "t0k3n", "user"):
+    for secret in ("s3cr3t", "t0k3n", "user", "12345", "k3y"):
         assert secret not in logged, secret
 
 
@@ -647,11 +652,30 @@ async def test_probe_failure_keeps_the_exception_types_at_debug(caplog: pytest.L
     mock_cls = _make_async_client_cls(get_side_effect=httpx.ConnectError("refused"))
     with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
          patch(_VALIDATE_DEVICE, return_value=(True, True, [])), \
-         caplog.at_level(logging.DEBUG, logger="archon_search.model_validation"):
+         caplog.at_level(logging.DEBUG, logger="archon_search.llm_client.llama_cpp_client"):
         await validate_models_async(_llama_cpp_cfg(), timeout_seconds=5)
 
-    [debug] = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG and r.name == "archon_search.model_validation"]
-    assert debug == "llama_cpp: GET /v1/models on localhost:8080 failed (ConnectError)"
+    [debug] = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+    assert debug == "llama_cpp: probe of localhost:8080 failed (ConnectError)"
+
+
+@pytest.mark.asyncio
+async def test_a_trickling_server_is_cut_off_by_an_overall_deadline_and_reads_unreachable(caplog: pytest.LogCaptureFixture):
+    """httpx limits each phase, not the request: a server that keeps the GET open must still end as ``False`` + one WARNING."""
+    async def trickle(*_args: object, **_kwargs: object) -> MagicMock:
+        await asyncio.sleep(_TRICKLE_SECONDS)
+        return _ok_response()
+
+    mock_cls = _make_async_client_cls(get_side_effect=trickle)
+    with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
+         patch("archon_search.model_validation._LLAMA_CPP_PROBE_TIMEOUT_SECONDS", _SHORT_PROBE_BOUND_SECONDS), \
+         patch(_VALIDATE_DEVICE, return_value=(True, True, [])), \
+         caplog.at_level(logging.WARNING):
+        result = await asyncio.wait_for(validate_models_async(_llama_cpp_cfg(), timeout_seconds=5), _TRICKLE_SECONDS / 2)
+
+    assert result.llama_cpp_ok is False
+    [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert "is not reachable (TimeoutError)" in warning
 
 
 # The probe asks every llama-server an ENABLED feature uses, once per ``host:port``: a disabled section is not a server
@@ -682,10 +706,14 @@ async def _validate(config: SearchConfig, mock_cls: MagicMock, **kwargs) -> Mode
 
 
 @pytest.mark.asyncio
-async def test_a_disabled_llama_cpp_section_is_not_probed_and_warns_nothing(caplog: pytest.LogCaptureFixture):
+@pytest.mark.parametrize("section", ["hyde", "rag_fusion", "graph", "description"])
+async def test_a_disabled_llama_cpp_section_is_not_probed_and_warns_nothing(section: str, caplog: pytest.LogCaptureFixture):
     config = _cfg()
-    config.hyde.provider = "llama_cpp"  # [hyde] stays disabled
-    mock_cls = _servers_client_cls(down=frozenset({config.hyde.llama_cpp_base_url}))
+    target = getattr(config, section)
+    target.enabled = False
+    target.provider = "llama_cpp"
+    target.llama_cpp_base_url = "http://down.test:8080"
+    mock_cls = _servers_client_cls(down=frozenset({"http://down.test:8080"}))
 
     with caplog.at_level(logging.WARNING):
         result = await _validate(config, mock_cls)

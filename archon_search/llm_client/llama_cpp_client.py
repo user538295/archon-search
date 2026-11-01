@@ -37,7 +37,7 @@ from archon_search.llm_client.protocol import (
     LlmCallTimeout,
 )
 from archon_search.llm_client.server_address import host_port
-from archon_search.llm_client.server_text import bounded_server_text
+from archon_search.llm_client.server_text import bounded_server_text, exception_types
 
 PROVIDER_NAME: Final = "llama_cpp"
 
@@ -78,35 +78,34 @@ def _unexpected_reply(exc: Exception) -> LlmCallFailure:
     return LlmCallFailure(PROVIDER_NAME, f"unexpected reply ({type(exc).__name__}); is the base URL a llama-server?")
 
 
-def exception_types(exc: BaseException) -> str:
-    """The types of *exc* and of its causes, outermost first (``LlmCallFailure < ConnectError < OSError``). Never the
-    messages: those of a malformed base URL repeat the credentials it carries."""
-    types: list[str] = []
-    current: BaseException | None = exc
-    while current is not None:
-        types.append(type(current).__name__)
-        current = current.__cause__
-    return " < ".join(types)
+#: Stands in for a failure reason a caller did not have.
+_NO_REASON: Final = "no reason given"
 
 
-def warn_llama_cpp_unreachable(server: str, reason: str | None) -> None:
+def warn_llama_cpp_unreachable(base_url: str, reason: str | None, cause: BaseException | None = None) -> None:
     """The one WARNING per server (``host:port``, see ``server_address.host_port``) and process that a llama-server cannot be reached.
 
-    The context-window lookup of every ``llama_cpp`` feature, the startup reachability probe and the description startup
-    probe ask a server the same question at boot; all report an outage through here, so one outage is one WARNING whichever
-    finds it first (servers whose labels differ are different servers and each get a line). The one text carries both
-    consequences: calls to the server fail, and the window of a feature on it is the assumed one where none could be read
-    (S8, S34). The line carries the server label and *reason*, the failing path's own one-line cause (an exception type, an
-    HTTP status, or the server's error text of at most ``MAX_SERVER_TEXT_CHARS`` characters); never a prompt, and nothing
-    of the configured URL but its host and port. The record is attributed to this module's logger (``stacklevel`` of
-    ``warn_once`` points at this function), whichever path reported.
+    *base_url* is the configured URL: this function takes its label (``host_port``), so no caller handles the URL or its
+    credentials. The context-window lookup of every ``llama_cpp`` feature, the startup reachability probe and the description
+    startup probe ask a server the same question at boot; all report an outage through here, so one outage is one WARNING
+    whichever finds it first (servers whose labels differ are different servers and each get a line). The one text carries
+    both consequences: calls to the server fail, and the window of a feature on it is the assumed one where none could be
+    read (S8, S34). The line carries the server label and *reason*, the failing path's own one-line cause (an exception
+    type, an HTTP status, or the server's error text of at most ``MAX_SERVER_TEXT_CHARS`` characters; a fixed text when
+    there is none); never a prompt, and nothing of the configured URL but its host and port. The record is attributed to
+    this module's logger (``stacklevel`` of ``warn_once`` points at this function), whichever path reported.
+
+    *cause*, when given, is logged at DEBUG on every call (not once): the types of its exception chain, never the messages.
     """
+    server = host_port(base_url)
+    if cause is not None:
+        _logger.debug("llama_cpp: probe of %s failed (%s)", server, exception_types(cause))
     warn_once(
         _logger,
         f"{_UNREACHABLE_KEY_PREFIX}{server}",
         "llama_cpp: the server at %s is not reachable (%s); requests to it fail until it answers, and where its context window could not be read, %d tokens are assumed",
         server,
-        reason,
+        reason or _NO_REASON,
         ASSUMED_CONTEXT_TOKENS,
     )
 
@@ -141,8 +140,7 @@ class LlamaCppClient:
         try:
             body = await self._request("GET", _PROPS_PATH, timeout_seconds)
         except LlmCallFailure as failure:
-            _logger.debug("llama_cpp: GET %s on %s failed (%s)", _PROPS_PATH, server, exception_types(failure))
-            warn_llama_cpp_unreachable(server, failure.reason)
+            warn_llama_cpp_unreachable(self._base_url, failure.reason, failure)
             return self._window
         try:
             window_size = body["default_generation_settings"]["n_ctx"]

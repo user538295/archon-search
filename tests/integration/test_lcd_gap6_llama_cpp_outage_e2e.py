@@ -109,8 +109,11 @@ def _section(name: str, server: str, *, enabled: bool = True, extra: str = "") -
     )
 
 
-def _graph_section(server: str) -> str:
-    return f'[graph]\nenabled = true\nprovider = "llama_cpp"\nextraction_model = "{_MODEL}"\nllama_cpp_base_url = "http://{server}"\n'
+def _graph_section(server: str, *, enabled: bool = True) -> str:
+    return (
+        f'[graph]\nenabled = {str(enabled).lower()}\nprovider = "llama_cpp"\nextraction_model = "{_MODEL}"\n'
+        f'llama_cpp_base_url = "http://{server}"\n'
+    )
 
 
 def _wait_for(condition: Callable[[], bool], what: str) -> None:
@@ -221,17 +224,18 @@ def test_e2e_one_down_server_spelled_two_ways_is_one_warning(
     assert record.name == _SHARED_LOGGER
 
 
+@pytest.mark.parametrize("feature", ["hyde", "rag_fusion", "graph", "description"])
 def test_e2e_a_disabled_llama_cpp_feature_names_no_server_and_reports_no_probe(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    feature: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A ``[hyde]`` that is off asks nobody: no lookup, no probe, no WARNING, and ``llama_cpp_ok`` stays ``null``."""
+    """A feature that is off asks nobody: no lookup, no probe, no WARNING, and ``llama_cpp_ok`` stays ``null``."""
     states: list[object] = []
     with unreachable_port() as port, caplog.at_level(logging.INFO):
         server = f"{_LOOPBACK}:{port}"
         _boot_and_settle(
             tmp_path,
             monkeypatch,
-            _section("hyde", server, enabled=False),
+            _graph_section(server, enabled=False) if feature == "graph" else _section(feature, server, enabled=False),
             after_boot=lambda client, key: states.append(_status(client, key)["model_validation"]["llama_cpp_ok"]),
         )
 
