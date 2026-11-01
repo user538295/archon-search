@@ -19,30 +19,19 @@ from typing import Any
 import click
 import httpx
 
-from archon_search.cli._helpers import _CONNECT_FAIL, _server_connect_fail_msg
+from archon_search.cli._helpers import (
+    _CONNECT_FAIL,
+    _DEFAULT_API_URL,
+    _resolve_api_key,
+    _server_connect_fail_msg,
+)
 from archon_search.config import ConfigError, load_config
 from archon_search.key_manager import load_key
 from archon_search.paths import get_data_dir
 
-_DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
 _DEFAULT_WAIT_TIMEOUT_SECONDS = 120
 _STATE_FILE_NAME = ".maintenance-state.json"
-
-
-def _resolve_api_key(api_key: str | None) -> str:
-    """Return the API key from the option, env var, or the key file."""
-    if api_key:
-        return api_key
-    key = load_key()
-    if key:
-        return key
-    click.echo(
-        "No API key found. Pass --api-key, set ARCHON_SEARCH_API_KEY, or run the server "
-        "once to auto-generate a key file.",
-        err=True,
-    )
-    raise SystemExit(1)
 
 
 # ---------------------------------------------------------------------------

@@ -8,10 +8,8 @@ from typing import Any
 import click
 import httpx
 
-from archon_search.cli._helpers import _clean, _get_service
+from archon_search.cli._helpers import _DEFAULT_API_URL, _clean, _get_service
 from archon_search.key_manager import load_key
-
-_DEFAULT_API_URL = "http://localhost:8765"
 
 
 def _fetch_server_status(api_url: str, api_key: str | None) -> dict[str, Any] | None:

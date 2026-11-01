@@ -20,11 +20,12 @@ import httpx
 
 from archon_search.cli._helpers import (
     _CONNECT_FAIL,
+    _DEFAULT_API_URL,
     _clean,
     _poll_job,
+    _resolve_api_key,
     _server_connect_fail_msg,
 )
-from archon_search.cli.collection import _DEFAULT_API_URL, _resolve_api_key
 
 _EXIT_1_STATUSES = {"FAILED", "FAILED_EXPIRED", "CANCELLED"}
 _DEFAULT_WAIT_TIMEOUT = 600  # 10 minutes

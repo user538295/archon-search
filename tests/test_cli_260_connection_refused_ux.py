@@ -395,9 +395,9 @@ def test_sequential_collection_add_second_reports_starting_not_stopped() -> None
     ``ca54533b`` (S530) made ``_server_connect_fail_msg`` return
     ``_SERVER_NOT_RUNNING_MSG`` immediately whenever ``base_url is not None``.
     Every CLI ``--api-url`` option carries a click default
-    (``collection.py:_DEFAULT_API_URL``), so ``base_url`` is never ``None`` at
+    (``_helpers.py:_DEFAULT_API_URL``), so ``base_url`` is never ``None`` at
     any call site and the managed-service branch — documented in
-    ``_helpers.py:54`` as "only reached when ``base_url`` is absent" — is dead
+    ``_server_connect_fail_msg``'s docstring as "only reached when ``base_url`` is absent" — is dead
     for the default local flow as well as for an explicit ``--api-url``.
     """
     from archon_search.cli import _helpers

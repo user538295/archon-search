@@ -13,12 +13,14 @@ import httpx
 
 from archon_search.cli._helpers import (
     _CONNECT_FAIL,
+    _DEFAULT_API_URL,
     _DESCRIPTION_SET_REQUEST_TIMEOUT_S,
     _LOCK_WAITING_REQUEST_TIMEOUT_S,
     _clean,
     _jobs_status_hint,
     _poll_job,
     _poll_job_to_end,
+    _resolve_api_key,
     _server_connect_fail_msg,
 )
 from archon_search.collection_meta import (
@@ -30,26 +32,8 @@ from archon_search.constants import (
     DESCRIBE_NOT_CONFIGURED_DETAIL,
 )
 from archon_search.description_write import check_description_text
-from archon_search.key_manager import load_key
 from archon_search.paths import get_data_dir
 from archon_search.types import JobStatus
-
-_DEFAULT_API_URL = "http://localhost:8765"
-
-
-def _resolve_api_key(api_key: str | None) -> str:
-    """Return the API key from the option, env var, or the key file."""
-    if api_key:
-        return api_key
-    key = load_key()
-    if key:
-        return key
-    click.echo(
-        "No API key found. Pass --api-key, set ARCHON_SEARCH_API_KEY, or run the server "
-        "once to auto-generate a key file.",
-        err=True,
-    )
-    raise SystemExit(1)
 
 logger = logging.getLogger(__name__)
 
