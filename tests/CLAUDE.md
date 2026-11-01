@@ -1,6 +1,6 @@
 # Testing rules
 
-Root `CLAUDE.md` carries the two safety rules only. Everything else is here. Marker descriptions and the rationale for `norecursedirs` / `-n 8` / `--cov-fail-under=85` live as comments in `pyproject.toml` `[tool.pytest.ini_options]` — read those, don't duplicate them. Strategy and coverage policy: `Documentation/Architecture/200_testing_strategy.md`.
+The two safety rules (parallel `-n 8`, never `-n auto`; one test suite at a time) are stated only in this file: root `CLAUDE.md` just points here. Everything else about testing is here too. Marker descriptions and the rationale for `norecursedirs` / `-n 8` / `--cov-fail-under=85` live as comments in `pyproject.toml` `[tool.pytest.ini_options]` — read those, don't duplicate them. Strategy and coverage policy: `Documentation/Architecture/200_testing_strategy.md`.
 
 ## Running
 

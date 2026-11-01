@@ -8,7 +8,7 @@
 # at -n 8, --no-cov. Peak RAM-disk footprint ~0.4 GB (so 2 GB is generous).
 # Coverage (the default) adds ~8 %.
 #
-# Safety guards (this is why the script exists — see CLAUDE.md testing policy):
+# Safety guards (this is why the script exists — see tests/CLAUDE.md):
 #   * Refuses to start if ANY pytest is already running anywhere on the machine.
 #     Concurrent runs stack xdist workers and have OOM-crashed this box.
 #   * Single-instance lock so two invocations of this script can't race.
