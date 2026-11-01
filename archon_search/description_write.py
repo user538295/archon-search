@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import unicodedata
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Final, Literal
@@ -22,6 +23,7 @@ from archon_search.collection_meta import (
     DescriptionStoredStatus,
     check_stored_description_value,
 )
+from archon_search.constants import MAX_DESCRIPTION_CHARS
 
 
 class DescriptionWriteOutcome(StrEnum):
@@ -88,10 +90,36 @@ def is_storable_vector(vector: list[float]) -> bool:
     return bool(vector) and all(type(x) in (int, float) and math.isfinite(x) for x in vector)
 
 
+#: Unicode categories a one-line plain-text description holds none of: every control character (tab, line feed,
+#: carriage return, escape, delete and the C1 controls included), the line separator and the paragraph separator.
+_NOT_PLAIN_TEXT_CATEGORIES: Final = frozenset({"Cc", "Zl", "Zp"})
+#: Format characters (zero-width space and joiner, byte-order mark, bidi marks): invisible, so text made of nothing else
+#: is as empty as blank text, though they stay allowed inside real text (the joiner of an emoji sequence, the Persian
+#: non-joiner).
+_INVISIBLE_CATEGORY: Final = "Cf"
+
+
+def _is_blank(text: str) -> bool:
+    return all(character.isspace() or unicodedata.category(character) == _INVISIBLE_CATEGORY for character in text)
+
+
 def check_description_text(text: str) -> None:
-    """Refuse blank *text*: a description is set to text or cleared, never to nothing."""
-    if not text.strip():
+    """Refuse *text* that cannot be stored as a description: blank (nothing but white space and invisible format
+    characters), over ``MAX_DESCRIPTION_CHARS`` characters, or not one line of plain text (any control character, tab and
+    Unicode line or paragraph separator counts as a line break).
+
+    A description is set to text or cleared, never to nothing, and the text is never trimmed or cleaned here: the
+    caller gets the refusal, not a different text. The messages name the rule and the length, never the text.
+
+    Raises:
+        ValueError: when *text* breaks the rule.
+    """
+    if len(text) > MAX_DESCRIPTION_CHARS:  # first and cheap: nothing below runs over an oversized text
+        raise ValueError(f"description has {len(text)} characters; at most {MAX_DESCRIPTION_CHARS} are allowed")
+    if _is_blank(text):
         raise ValueError("description cannot be set to blank text: clear it instead")
+    if any(unicodedata.category(character) in _NOT_PLAIN_TEXT_CATEGORIES for character in text):
+        raise ValueError("description must be one line of plain text: remove line breaks, tabs and control characters")
 
 
 @dataclasses.dataclass(frozen=True)

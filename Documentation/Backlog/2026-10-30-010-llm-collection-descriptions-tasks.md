@@ -562,7 +562,7 @@ flowchart LR
         - #manual_test — Real wizard walk — description question, banner, provider, host, 8192 suggestion, backfill, the `[description]` section, a forced failed install reverts it (non-automatable: the end-to-end patches the byte-moving steps and a real extras install is forbidden in the default and unlocked-deps lanes)
 
 ### Phase 7 · Set or clear a description by hand *(manual wins; REST, MCP and CLI for the namespace owner)*
-- [ ] **BE-31** — `PUT` and `DELETE /collections/{name}/description` in `routes_collections.py` with `SetDescriptionBody` (422 for empty, multi-line, control-character or over-600 text), namespace-owner check by `get_collection_meta`, write called without the collection lock, 200 `CollectionDetail`, 404 for a foreign namespace, 503 `store_busy`, `PUT` added to `_CORS_ALLOWED_METHODS`, clear resets text, source, status, last-described and baseline and starts nothing; regenerated snapshots #backend-role
+- [x] **BE-31** — `PUT` and `DELETE /collections/{name}/description` in `routes_collections.py` with `SetDescriptionBody` (422 for empty, multi-line, control-character or over-600 text), namespace-owner check by `get_collection_meta`, write called without the collection lock, 200 `CollectionDetail`, 404 for a foreign namespace, 503 `store_busy`, `PUT` added to `_CORS_ALLOWED_METHODS`, clear resets text, source, status, last-described and baseline and starts nothing; regenerated snapshots #backend-role
     - Interface Adapters · 6.0h
     - needs BE-20, BE-26 · completes C6, S26, S27, S28, S30, S61, S74
     - Tests

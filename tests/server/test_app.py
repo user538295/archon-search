@@ -250,6 +250,8 @@ class TestCreateAppPipelineWiring:
         assert isinstance(lifecycle, DescriptionLifecycle)
         assert app.state.description_lifecycle is lifecycle
         assert lifecycle._writer._embedders._cache[cfg.embedding_model] is app.state.embedder
+        assert lifecycle._writer is app.state.description_writer
+        assert app.state.description_writer._default_embedding_model == cfg.embedding_model
 
     def test_description_client_is_not_built_while_description_is_disabled(self):
         """S19: ``[description]`` is off by default; nothing is built, so no provider can be touched."""
@@ -275,23 +277,22 @@ class TestCreateAppPipelineWiring:
         assert isinstance(client, LlamaCppClient)
 
     def test_description_lifecycle_runs_the_generator_on_the_given_client_and_store(self):
-        """The lifecycle's generator reads the given store through the given client, and the writer embeds with the cache."""
+        """The lifecycle's generator reads the given store through the given client, and writes through the given writer."""
         from archon_search.description_generator import DescriptionGenerator
         from archon_search.server.app import _build_description_lifecycle
 
         cfg = SearchConfig()
         cfg.description.enabled = True
-        store, client, cache = MagicMock(), MagicMock(), MagicMock()
+        store, client, writer = MagicMock(), MagicMock(), MagicMock()
 
-        lifecycle = _build_description_lifecycle(cfg.description, client, store, cache, default_embedding_model="model-x")
+        lifecycle = _build_description_lifecycle(cfg.description, client, store, writer)
 
         generator = lifecycle._generator
         assert isinstance(generator, DescriptionGenerator)
         assert generator._client is client
         assert generator._config is cfg.description
         assert generator._store is store
-        assert lifecycle._writer._embedders is cache
-        assert lifecycle._writer._default_embedding_model == "model-x"
+        assert lifecycle._writer is writer
 
     def test_create_app_wires_fanout_config_into_pipeline(self, tmp_path):
         """S443 regression: [search] fan-out knobs must reach the SearchPipeline.

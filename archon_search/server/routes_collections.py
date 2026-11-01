@@ -21,6 +21,8 @@ from archon_search._path_safety import (
 from archon_search.collection_meta import CollectionMeta, visible_description_status
 from archon_search.config import SearchConfig, resolve_active_model, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.description_write import DescriptionWriteOutcome
+from archon_search.description_writer import ClearChange, ManualSetChange
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.model_validation import (
@@ -77,12 +79,14 @@ from archon_search.server.schemas import (
     MigrationPendingResponse,
     MigrationSpecSchema,
     PatchCollectionBody,
+    SetDescriptionBody,
 )
 from archon_search.store import (
     STORE_SCHEMA_VERSION,
     ReindexResult,
     SearchStore,
     StoreBusyError,
+    is_valid_collection_name,
 )
 from archon_search.sync import path_to_collection_name
 from archon_search.types import (
@@ -705,19 +709,21 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
 
 
 async def _build_collection_detail(
-    request: Request, name: str, meta: CollectionMeta | None, resolved: str
+    request: Request, name: str, meta: CollectionMeta | None, resolved: str, *, overlay_pending: bool = True
 ) -> CollectionDetail:
-    """The one ``CollectionDetail`` builder: GET /collections/{name} and the PATCH response share it.
+    """The one ``CollectionDetail`` builder: GET /collections/{name}, the PATCH response and the PUT and DELETE
+    ``/description`` responses share it.
 
     *meta* is ``None`` for a configured collection that has no meta row yet (and when the store is absent); every
     count is best-effort and falls back to 0. ``description_status`` carries the lifecycle's ``pending`` overlay while a
-    generation is in flight and the stored status otherwise (C6).
+    generation is in flight (never for a manual description) and the stored status otherwise, which is all it carries
+    when *overlay_pending* is false (C6).
     """
     config: SearchConfig = request.app.state.config
     state_store = request.app.state.state_store
     ns: str = request.state.namespace
     search_store = getattr(request.app.state, "search_store", None)
-    description_lifecycle = getattr(request.app.state, "description_lifecycle", None)
+    description_lifecycle = getattr(request.app.state, "description_lifecycle", None) if overlay_pending else None
 
     # Pull extra detail from state if available
     last_indexed: str | None = None
@@ -990,6 +996,91 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
         return store_busy_503(STORE_BUSY_DETAIL)
 
     return await _build_collection_detail(request, name, meta, path_to_name[name])
+
+
+_ERROR_DESCRIPTION_CHANGE = {
+    **_ERROR_401,
+    404: {
+        "model": ErrorDetail,
+        "description": "The caller's namespace has no such collection (a foreign one reads the same)",
+    },
+    503: {
+        "model": ErrorDetail,
+        "description": (
+            f'{STORE_BUSY_503_DESCRIPTION}; or no search store yet (body {{"detail": "{SERVICE_NOT_READY_DETAIL}"}})'
+        ),
+    },
+}
+
+
+def _collection_not_found(name: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+
+async def _apply_description_change(
+    request: Request, name: str, change: ManualSetChange | ClearChange
+) -> CollectionDetail | JSONResponse:
+    """Set or clear *name*'s description for the caller's namespace and answer the updated ``CollectionDetail`` (C6).
+
+    The caller must own the collection: it has a meta row in the caller's namespace, and anything else, a collection of
+    another namespace or a name the store refuses included, is the same 404. That is the whole rule: no admin key and no
+    config-path entry, so a collection that exists only as meta rows works (and a configured collection that has no meta
+    row yet is 404, unlike on GET: there is no row to write). The shared writer embeds the text, then takes the
+    collection lock itself inside one guarded write, so this route holds no lock while it calls it. A lock that is not
+    free in time is 503 ``store_busy``; a collection dropped meanwhile is 404.
+    """
+    search_store = getattr(request.app.state, "search_store", None)
+    if search_store is None:
+        return JSONResponse({"detail": SERVICE_NOT_READY_DETAIL}, status_code=503)
+    ns: str = request.state.namespace
+    # A name the store refuses cannot belong to any collection, so it is the same 404 as an unknown one; checked before
+    # the read, so a ValueError from reading a real row (a corrupt one) is never mistaken for an absent collection.
+    if not is_valid_collection_name(name) or await search_store.get_collection_meta(name, namespace=ns) is None:
+        raise _collection_not_found(name)
+
+    written = await request.app.state.description_writer.apply(name, ns, change)
+    match written.outcome:
+        case DescriptionWriteOutcome.WRITTEN:
+            pass
+        case DescriptionWriteOutcome.LOCK_TIMEOUT:
+            return store_busy_503(STORE_BUSY_DETAIL)
+        case DescriptionWriteOutcome.COLLECTION_MISSING:
+            raise _collection_not_found(name)
+        case refused:
+            # Set and clear carry no guard, so the store has no reason to refuse them: a refusal is a broken contract.
+            raise RuntimeError(f"an unconditional description write was refused: {refused.value}")
+
+    meta = await search_store.get_collection_meta(name, namespace=ns)
+    if meta is None:  # dropped between the write and this read
+        raise _collection_not_found(name)
+    config: SearchConfig = request.app.state.config
+    # The response says what the write stored: a generation that began earlier is refused at its own write, so it must
+    # not make the cleared (or manual) collection read ``pending``.
+    return await _build_collection_detail(
+        request, name, meta, _all_collection_paths(config).get(name, ""), overlay_pending=False
+    )
+
+
+@router.put("/{name}/description", response_model=CollectionDetail, responses=_ERROR_DESCRIPTION_CHANGE)
+async def set_collection_description(
+    name: str, body: SetDescriptionBody, request: Request
+) -> CollectionDetail | JSONResponse:
+    """Set a manual description (source ``manual``, status ``ok``) and refresh its routing vector.
+
+    One line of plain text within ``MAX_DESCRIPTION_CHARS``, else 422 (never trimmed). Generation never overwrites it.
+    Open to the key whose namespace owns the collection, admin or not (S26, S27).
+    """
+    return await _apply_description_change(request, name, ManualSetChange(text=body.description))
+
+
+@router.delete("/{name}/description", response_model=CollectionDetail, responses=_ERROR_DESCRIPTION_CHANGE)
+async def clear_collection_description(name: str, request: Request) -> CollectionDetail | JSONResponse:
+    """Clear the description: text, source, status, last-described, baseline and routing vector are reset.
+
+    Nothing is generated: the next qualifying trigger (an ingest that changes the collection enough, a describe) does
+    that (S28). Open to the key whose namespace owns the collection, admin or not.
+    """
+    return await _apply_description_change(request, name, ClearChange())
 
 
 _ERROR_REINDEX = {

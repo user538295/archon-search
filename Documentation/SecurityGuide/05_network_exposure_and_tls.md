@@ -40,7 +40,7 @@ By default the server sends no `Access-Control-*` headers, so a browser blocks e
 cors_origins = ["https://app.example.com"]
 ```
 
-Entries must be explicit origins (`scheme://host[:port]`, no path, no wildcard); `*` is a config error. A configured origin may use the methods `GET`, `POST`, `PATCH`, `DELETE`, `OPTIONS` and the headers `Authorization`, `Content-Type`, `X-Request-ID` and `X-Ingested-By`; credentials are never allowed. The CORS middleware sits outside the authentication middleware, so a preflight `OPTIONS` request from a listed origin is answered without a token (browsers cannot send one); the actual request still needs the Bearer token. The 413 body-limit response is produced inside the CORS layer, so a browser client of a listed origin can read it. Command-line and server-to-server clients are unaffected by this setting.
+Entries must be explicit origins (`scheme://host[:port]`, no path, no wildcard); `*` is a config error. A configured origin may use the methods `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` and the headers `Authorization`, `Content-Type`, `X-Request-ID` and `X-Ingested-By`; credentials are never allowed. The CORS middleware sits outside the authentication middleware, so a preflight `OPTIONS` request from a listed origin is answered without a token (browsers cannot send one); the actual request still needs the Bearer token. The 413 body-limit response is produced inside the CORS layer, so a browser client of a listed origin can read it. Command-line and server-to-server clients are unaffected by this setting.
 
 The former wildcard (`Access-Control-Allow-Origin: *`, tracked as `CORS-1`) no longer exists.
 

@@ -86,8 +86,11 @@ _THINKING_UNCLOSED: Final = re.compile(rf"\A\s*<(?:{_THINKING_TAGS})\b[^>]*>.*\Z
 #: A sentence end: a terminator (and any closing quote or bracket) before white space or the end of the text, so ``3.5``
 #: is no end; or a CJK terminator.
 _SENTENCE_END: Final = re.compile(r"[.!?…][\"')\]”’]*(?=\s|\Z)|[。！？]")
-#: Control characters that are not white space (NUL, ESC, DEL, ...): dropped, as a stored description is plain text.
-_CONTROL_CHARACTERS: Final = re.compile(r"[\x00-\x08\x0e-\x1b\x7f]")
+#: Control characters that are not white space (NUL, ESC, DEL, the C1 controls except NEL, ...): dropped, as a stored
+#: description is plain text and the shared text check (``check_description_text``) refuses every control character.
+#: The white-space controls (tab, line feeds, NEL, U+2028/U+2029, ...) are left out on purpose: ``_clean_answer`` collapses
+#: them to one space with ``split``, so no control character or line break survives the cleaning.
+_CONTROL_CHARACTERS: Final = re.compile(r"[\x00-\x08\x0e-\x1b\x7f-\x84\x86-\x9f]")
 #: The failure detail (and WARNING) when the answer has nothing left after cleaning, even after the retry (S21).
 _NO_USABLE_OUTPUT_DETAIL: Final = (
     "the model returned no usable text after one retry (empty, or only thinking); it may be a reasoning model: "

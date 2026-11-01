@@ -92,3 +92,25 @@ def test_openapi_snapshots_regenerated_match(tmp_path: Path) -> None:
         assert {"description_source", "description_status"} <= set(properties), shape
         for field in ("description_source", "description_status"):
             assert {"type": "null"} in properties[field]["anyOf"], f"{shape}.{field} must be nullable"
+
+
+def test_openapi_describes_the_manual_description_routes(tmp_path: Path) -> None:
+    """BE-31 (C6): ``PUT`` and ``DELETE /collections/{name}/description`` answer a ``CollectionDetail`` and document the
+    404 and 503 of the namespace check and the busy lock; the PUT body is ``SetDescriptionBody``."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    spec = create_app(cfg, JobStore(path=tmp_path / "jobs.json")).openapi()
+
+    operations = spec["paths"]["/collections/{name}/description"]
+    assert set(operations) == {"put", "delete"}
+    for verb in ("put", "delete"):
+        responses = operations[verb]["responses"]
+        assert responses["200"]["content"]["application/json"]["schema"] == {"$ref": "#/components/schemas/CollectionDetail"}
+        assert {"401", "404", "503"} <= set(responses)
+    assert operations["put"]["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/SetDescriptionBody"
+    }
+    assert operations["put"]["responses"]["422"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/HTTPValidationError"
+    }
+    assert spec["components"]["schemas"]["SetDescriptionBody"]["required"] == ["description"]

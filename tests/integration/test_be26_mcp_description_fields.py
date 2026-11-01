@@ -34,6 +34,7 @@ pytestmark = pytest.mark.integration
 
 _COLLECTION = "be26-mcp-fields"
 _MANUAL_TEXT = "Hand written note about the planning documents."
+_GENERATED_TEXT = "A description the model wrote about the planning documents."
 _DOCUMENT_TEXT = "Planning notes for the quarter, kept for the search tests.\n" * 5
 
 
@@ -48,6 +49,17 @@ def _manual_fields() -> DescriptionFields:
     return DescriptionFields(
         description=FieldChange.set_to(_MANUAL_TEXT),
         source=FieldChange.set_to("manual"),
+        status=FieldChange.set_to("ok"),
+        last_described=FieldChange.set_to(datetime.now(UTC)),
+        described_at_doc_count=FieldChange.keep(),
+        description_embedding=FieldChange.clear(),
+    )
+
+
+def _generated_fields() -> DescriptionFields:
+    return DescriptionFields(
+        description=FieldChange.set_to(_GENERATED_TEXT),
+        source=FieldChange.set_to("generated"),
         status=FieldChange.set_to("ok"),
         last_described=FieldChange.set_to(datetime.now(UTC)),
         described_at_doc_count=FieldChange.keep(),
@@ -99,8 +111,22 @@ def test_mcp_collection_tools_return_source_and_status(tmp_path: Path, monkeypat
             with monkeypatch.context() as patched:
                 patched.setattr(lifecycle, "is_pending", lambda collection: collection == _COLLECTION)
                 for item in read_all():
-                    assert item["description_status"] == "pending"
+                    # A manual description is never pending: a generation in flight over it is refused at its write (BE-31).
+                    assert item["description_status"] == "ok"
                     assert item["description_source"] == "manual"
+
+            outcome = client.portal.call(  # type: ignore[union-attr]
+                lambda: store.write_description(_COLLECTION, DEFAULT_NAMESPACE, _generated_fields(), UNCONDITIONAL)
+            )
+            assert outcome == "written"
+            for item in read_all():
+                assert item["description_source"] == "generated"
+                assert item["description_status"] == "ok"
+            with monkeypatch.context() as patched:
+                patched.setattr(lifecycle, "is_pending", lambda collection: collection == _COLLECTION)
+                for item in read_all():
+                    assert item["description_status"] == "pending"
+                    assert item["description_source"] == "generated"
 
             for item in read_all():
                 assert item["description_status"] == "ok"

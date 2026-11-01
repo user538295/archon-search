@@ -18,7 +18,8 @@ DESCRIPTION_STATUS_FAILED: DescriptionStoredStatus = "failed"
 DESCRIPTION_SOURCES: tuple[str, ...] = get_args(DescriptionSource)
 DESCRIPTION_STORED_STATUSES: tuple[str, ...] = get_args(DescriptionStoredStatus)
 
-#: What a reader sees: the stored status with ``pending`` laid over it while a generation is in flight.
+#: What a reader sees: the stored status with ``pending`` laid over it while a generation is in flight (never over a
+#: manual description).
 type DescriptionStatus = Literal["ok", "failed", "pending"]
 DESCRIPTION_STATUS_PENDING: DescriptionStatus = "pending"
 
@@ -75,6 +76,12 @@ class CollectionMeta:
 def visible_description_status(meta: CollectionMeta, overlay: DescriptionStatusOverlay | None) -> DescriptionStatus | None:
     """The description status a reader sees for *meta*: the stored value, or ``pending`` while the lifecycle has a
     generation of the collection in flight. *overlay* is ``None`` while ``[description]`` is off, which reads the
-    stored value as it is. Never writes: ``pending`` lives in memory only (C3)."""
+    stored value as it is. Never writes: ``pending`` lives in memory only (C3).
+
+    A manual description never reads ``pending``: a generation that was in flight when it was set is refused at its own
+    write (C11), and none is started for it afterwards, so the stored status is the whole truth.
+    """
     stored = meta.description_status
-    return stored if overlay is None else overlay.overlay_status(meta.name, stored)
+    if overlay is None or meta.description_source == DESCRIPTION_SOURCE_MANUAL:
+        return stored
+    return overlay.overlay_status(meta.name, stored)

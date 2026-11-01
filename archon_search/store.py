@@ -170,6 +170,12 @@ _META_TABLE = "_archon_collection_meta"
 # The most table names one startup "no meta row" warning lists; the count is always exact.
 _ORPHAN_LOG_NAME_LIMIT = 20
 
+
+def is_valid_collection_name(name: str) -> bool:
+    """Whether *name* can be the name of a collection: what every store method validates before it touches a table."""
+    return _COLLECTION_RE.fullmatch(name) is not None
+
+
 _RRF_K = 60
 
 _REINDEX_PROGRESS_INTERVAL = 200
@@ -758,7 +764,7 @@ class SearchStore:
 
     @staticmethod
     def _validate_collection(collection: str) -> None:
-        if not _COLLECTION_RE.fullmatch(collection):
+        if not is_valid_collection_name(collection):
             raise ValueError(
                 f"Invalid collection name: {collection!r} — "
                 "must start with alphanumeric, contain only [a-zA-Z0-9_-], max 64 chars"

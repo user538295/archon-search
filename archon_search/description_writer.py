@@ -140,7 +140,9 @@ class DescriptionWriter:
         collection are returned, never raised, so the caller can record them; a store error propagates.
 
         Raises:
-            ValueError: if the text of *change* is blank (clear it instead); nothing is embedded or written.
+            ValueError: if the text of *change* breaks ``check_description_text`` (blank, over ``MAX_DESCRIPTION_CHARS``
+                characters, or not one line of plain text; clear it instead of setting it blank); nothing is embedded or
+                written.
         """
         if isinstance(change, ClearChange):
             outcome = await self._store.write_description(collection, namespace, _clear_fields(), UNCONDITIONAL)

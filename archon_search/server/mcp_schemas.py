@@ -184,7 +184,8 @@ class _CollectionPublicFields(BaseModel):
 
     ``description`` reaches an agent verbatim and is built from chunk text, so the schema labels it as text derived
     from document content. ``description_status`` is the status a reader sees: the stored value, or ``pending``
-    while a generation is in flight (never stored); *overlay* is the description lifecycle that supplies it.
+    while a generation is in flight (never stored, and never for a manual description); *overlay* is the description
+    lifecycle that supplies it.
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -30,6 +30,7 @@ from archon_search.description_generator import (
     _sizing_template,
 )
 from archon_search.description_sample import StoreReadError
+from archon_search.description_write import check_description_text
 from archon_search.llm_client.budget import exact_budget
 from archon_search.llm_client.protocol import (
     ContextWindow,
@@ -747,6 +748,18 @@ class TestOutputRules:
         outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
 
         assert outcome == DescriptionGenerated(text="A handbook of policies.", trimmed=False)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("code_point", [*range(0x20), *range(0x7F, 0xA0), 0x2028, 0x2029])
+    async def test_a_cleaned_answer_always_passes_the_rule_a_manual_description_must_pass(self, code_point: int) -> None:
+        """BE-31: the shared text check refuses every control character and line break, so the cleaning must leave none;
+        otherwise the guarded write would refuse a generated text the cleaning let through."""
+        client = _SequenceClient(f"A handbook{chr(code_point)}of policies.")
+
+        outcome = await _generator(client, FakeSampleStore(chunk_count=3)).generate(_COLLECTION, _NAMESPACE)
+
+        assert isinstance(outcome, DescriptionGenerated)
+        check_description_text(outcome.text)
 
     @pytest.mark.asyncio
     async def test_an_answer_of_only_control_characters_is_unusable(self) -> None:

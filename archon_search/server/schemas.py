@@ -20,6 +20,7 @@ from pydantic import (
 
 from archon_search.collection_meta import DescriptionSource, DescriptionStatus
 from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
+from archon_search.description_write import check_description_text
 
 # Inclusive valid range for TTL seconds — shared by IngestRequest and PatchCollectionBody.
 _TTL_MIN: int = 1
@@ -666,6 +667,21 @@ class PatchCollectionBody(BaseModel):
     def validate_default_ttl_seconds(cls, v: int | None) -> int | None:
         if v is not None and not (_TTL_MIN <= v <= _TTL_MAX):
             raise ValueError(f"default_ttl_seconds must be in [{_TTL_MIN}, {_TTL_MAX}], got {v}")
+        return v
+
+
+class SetDescriptionBody(BaseModel):
+    """The manual description to store: one line of plain text of at most ``MAX_DESCRIPTION_CHARS`` characters.
+
+    Any other text is refused with 422 (never trimmed), by the same ``check_description_text`` the write operation uses.
+    """
+
+    description: str
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: str) -> str:
+        check_description_text(v)
         return v
 
 

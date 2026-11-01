@@ -3694,6 +3694,20 @@
         "title": "SearchStatusDetail",
         "type": "object"
       },
+      "SetDescriptionBody": {
+        "description": "The manual description to store: one line of plain text of at most ``MAX_DESCRIPTION_CHARS`` characters.\n\nAny other text is refused with 422 (never trimmed), by the same ``check_description_text`` the write operation uses.",
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "title": "SetDescriptionBody",
+        "type": "object"
+      },
       "SkippedItem": {
         "description": "One entry in BackupTriggerResponse.skipped \u2014 collection + machine-readable reason.",
         "properties": {
@@ -4694,6 +4708,164 @@
           }
         ],
         "summary": "Patch Collection"
+      }
+    },
+    "/collections/{name}/description": {
+      "delete": {
+        "description": "Clear the description: text, source, status, last-described, baseline and routing vector are reset.\n\nNothing is generated: the next qualifying trigger (an ingest that changes the collection enough, a describe) does\nthat (S28). Open to the key whose namespace owns the collection, admin or not.",
+        "operationId": "clear_collection_description_collections__name__description_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "The caller's namespace has no such collection (a foreign one reads the same)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Store busy (code store_busy): the collection lock was not acquired in time; or no search store yet (body {\"detail\": \"service not ready\"})"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Clear Collection Description"
+      },
+      "put": {
+        "description": "Set a manual description (source ``manual``, status ``ok``) and refresh its routing vector.\n\nOne line of plain text within ``MAX_DESCRIPTION_CHARS``, else 422 (never trimmed). Generation never overwrites it.\nOpen to the key whose namespace owns the collection, admin or not (S26, S27).",
+        "operationId": "set_collection_description_collections__name__description_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDescriptionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "The caller's namespace has no such collection (a foreign one reads the same)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Store busy (code store_busy): the collection lock was not acquired in time; or no search store yet (body {\"detail\": \"service not ready\"})"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Set Collection Description"
       }
     },
     "/collections/{name}/documents": {

@@ -38,6 +38,7 @@ from archon_search.config import (
     warn_if_legacy_config_ignored,
 )
 from archon_search.constants import BYTES_PER_MIB, DEFAULT_NAMESPACE
+from archon_search.description_writer import DescriptionWriter
 from archon_search.embedder import (
     Embedder,
     EmbedderBackend,
@@ -149,7 +150,7 @@ _STARTUP_SYNC_TIMEOUT_SECONDS: float = 1800.0
 
 # What a configured CORS origin (``[server].cors_origins``) may send: the methods the REST API uses and the headers
 # a Bearer-authenticated JSON client needs. Nothing broader is ever allowed.
-_CORS_ALLOWED_METHODS: list[str] = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
+_CORS_ALLOWED_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 _CORS_ALLOWED_HEADERS: list[str] = ["Authorization", "Content-Type", "X-Request-ID", "X-Ingested-By"]
 
 # Sanitized, wire-facing ``error`` values for the SyncJob that backs the startup
@@ -622,20 +623,16 @@ def _build_description_lifecycle(
     description: DescriptionConfig,
     client: LlmClient,
     store: SearchStore,
-    embedder_cache: EmbedderCache,
-    *,
-    default_embedding_model: str,
+    writer: DescriptionWriter,
 ) -> DescriptionLifecycle:
-    """The description lifecycle (C5): the generator on *client*, the guarded writer embedding with the per-collection
-    embedder cache, and the service that owns the generation tasks."""
+    """The description lifecycle (C5): the generator on *client* and the service that owns the generation tasks, writing
+    through the shared guarded *writer*."""
     # Imported here, not at module level: only a server with ``[description]`` enabled builds a lifecycle, and the other
     # features' generators are composed the same way.
     from archon_search.description_generator import DescriptionGenerator
     from archon_search.description_lifecycle import DescriptionLifecycle
-    from archon_search.description_writer import DescriptionWriter
 
     generator = DescriptionGenerator(description, client, store)
-    writer = DescriptionWriter(store, embedder_cache, default_embedding_model=default_embedding_model)
     return DescriptionLifecycle(store, generator, writer)
 
 
@@ -1332,6 +1329,12 @@ def create_app(
         device=config.device,
         preloaded={config.embedding_model: app.state.embedder},
     )
+    # The one guarded writer of the description fields (C11), built whatever ``[description]`` says: setting or clearing a
+    # description by hand needs no provider (manual wins), only the embedder cache for the text's routing vector. The
+    # PUT and DELETE routes read it from ``app.state``; the lifecycle (below) writes generated text through the same one.
+    app.state.description_writer = DescriptionWriter(
+        app.state.search_store, shared_embedder_cache, default_embedding_model=config.embedding_model
+    )
     # The shared LLM client of the description feature, from [description] alone (BE-25); ``None`` while the feature is
     # off, so nothing is built and no provider can be touched (S19). The lifespan resolves its context window.
     app.state.description_client = _build_description_client(config.description)
@@ -1342,8 +1345,7 @@ def create_app(
             config.description,
             app.state.description_client,
             app.state.search_store,
-            shared_embedder_cache,
-            default_embedding_model=config.embedding_model,
+            app.state.description_writer,
         )
         if app.state.description_client is not None
         else None

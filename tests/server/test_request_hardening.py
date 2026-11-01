@@ -69,6 +69,36 @@ def test_configured_origin_is_allowed_without_credentials(tmp_path: Path) -> Non
     assert "authorization" in preflight.headers["access-control-allow-headers"].lower()
 
 
+_ALLOW_METHODS = "access-control-allow-methods"
+_ALLOWED_CORS_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+
+
+def _preflight_method(client: TestClient, method: str):
+    return client.options(
+        "/collections/docs/description",
+        headers={"Origin": _APP_ORIGIN, "Access-Control-Request-Method": method},
+    )
+
+
+def test_the_advertised_cors_methods_are_exactly_the_rest_verbs_including_put(tmp_path: Path) -> None:
+    """``PUT /collections/{name}/description`` (BE-31) is the first PUT route: a browser client of a listed origin must be
+    allowed to send it, and nothing broader than the verbs the API uses."""
+    client = _client(tmp_path, cors_origins=[_APP_ORIGIN])
+
+    preflight = _preflight_method(client, "PUT")
+
+    assert preflight.status_code == 200
+    advertised = {method.strip() for method in preflight.headers[_ALLOW_METHODS].split(",")}
+    assert advertised == _ALLOWED_CORS_METHODS
+
+
+@pytest.mark.parametrize("method", ["TRACE", "CONNECT", "HEAD"])
+def test_a_method_the_api_does_not_use_stays_refused_in_a_preflight(tmp_path: Path, method: str) -> None:
+    client = _client(tmp_path, cors_origins=[_APP_ORIGIN])
+
+    assert _preflight_method(client, method).status_code == 400
+
+
 def test_unlisted_origin_stays_refused_when_others_are_configured(tmp_path: Path) -> None:
     client = _client(tmp_path, cors_origins=[_APP_ORIGIN])
 
