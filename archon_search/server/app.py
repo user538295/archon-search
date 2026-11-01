@@ -89,6 +89,7 @@ from archon_search.server.description_startup import (
     log_description_startup,
     warn_hybrid_without_descriptions,
 )
+from archon_search.server.disconnect import CancelOnDisconnectMiddleware
 from archon_search.server.graph_view_token import GRAPH_VIEW_SECRET_BYTES
 from archon_search.server.llm_composition import (
     FeatureClient,
@@ -1299,6 +1300,10 @@ def create_app(
         RequestContextMiddleware,
         header_name=config.observability.request_id_header,
     )
+    # Outermost of all: a client that aborts a search or an explain stops the work it started (S12: a ``claude`` child must
+    # not outlive it). It has to read the server's own ``receive``; behind ``BaseHTTPMiddleware`` a disconnect is never seen.
+    # The MCP tools (``/mcp``) run the same HyDE call but are not covered: they are not plain request/response routes.
+    app.add_middleware(CancelOnDisconnectMiddleware, method="POST", paths=("/search", "/explain"))
     logger.info("API key authentication enabled (source: %s)", key_source)
     app.state.key_store = key_store
     # The server's current default key: POST /keys/rotate and the mounted MCP rotate_key

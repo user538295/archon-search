@@ -1084,3 +1084,17 @@ def test_create_app_hyde_disabled_anthropic_missing_ok(
     cfg.db_path = str(tmp_path / "search")
     app = create_app(cfg, job_store)
     assert app is not None
+
+
+def test_create_app_installs_cancel_on_disconnect_outermost_for_search_and_explain(tmp_path: Path, job_store: JobStore) -> None:
+    """T-2: an aborted search must stop its HyDE call; the middleware has to see the server's own ``receive``."""
+    from archon_search.server.disconnect import CancelOnDisconnectMiddleware
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    app = create_app(cfg, job_store)
+
+    outermost = app.user_middleware[0]
+    assert outermost.cls is CancelOnDisconnectMiddleware
+    assert outermost.kwargs == {"method": "POST", "paths": ("/search", "/explain")}
