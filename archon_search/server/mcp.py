@@ -101,17 +101,7 @@ from archon_search.pipeline import (
 )
 from archon_search.progress import IndexingState, IndexingStatus
 from archon_search.router import MultiCollectionRouter
-from archon_search.server.authz import (
-    FORBIDDEN_CODE,
-    AuthIdentity,
-    ForbiddenError,
-    authorize_key_create,
-    authorize_key_listing_namespace,
-    caller_may_revoke,
-    can_manage_key,
-    identity_of,
-    require_admin,
-)
+from archon_search.server.authz import identity_of
 from archon_search.server.mcp_disconnect import CancelMcpToolOnDisconnectMiddleware
 from archon_search.server.mcp_schemas import (
     CollectionDetailSchema,
@@ -139,6 +129,16 @@ from archon_search.server.routes_export import is_ingesting_cancel_leftover
 from archon_search.server.schemas import (
     GRAPH_COMMUNITIES_NOT_BUILT_CODE,
     INVALID_SCOPE_FILTER_CODE,
+)
+from archon_search.services.authz import (
+    FORBIDDEN_CODE,
+    AuthIdentity,
+    ForbiddenError,
+    authorize_key_create,
+    authorize_key_listing_namespace,
+    caller_may_revoke,
+    can_manage_key,
+    require_admin,
 )
 from archon_search.services.request_hyde import RequestHyDE
 from archon_search.services.search_budget import (

@@ -13,7 +13,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 import archon_search.server.mcp as mcp_module
-from archon_search.server.authz import ADMIN_REQUIRED_DETAIL, FORBIDDEN_CODE
+from archon_search.services.authz import ADMIN_REQUIRED_DETAIL, FORBIDDEN_CODE
 
 pytestmark = pytest.mark.usefixtures("real_mcp_auth_context")
 

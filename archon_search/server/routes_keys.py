@@ -25,13 +25,7 @@ from archon_search.key_manager import (
 )
 from archon_search.server.authz import (
     ADMIN_ONLY_RESPONSES,
-    FOREIGN_NAMESPACE_DETAIL,
-    ForbiddenError,
-    authorize_key_create,
-    authorize_key_listing_namespace,
     caller_identity,
-    caller_may_revoke,
-    can_manage_key,
     require_admin_dependency,
 )
 from archon_search.server.schemas import (
@@ -43,6 +37,14 @@ from archon_search.server.schemas import (
     KeyRevokeResponse,
     KeyRotateRequest,
     KeyRotateResponse,
+)
+from archon_search.services.authz import (
+    FOREIGN_NAMESPACE_DETAIL,
+    ForbiddenError,
+    authorize_key_create,
+    authorize_key_listing_namespace,
+    caller_may_revoke,
+    can_manage_key,
 )
 
 logger = logging.getLogger(__name__)

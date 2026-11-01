@@ -145,7 +145,7 @@ flowchart LR
         - #integration_test — `test_wire_text_matches_source_and_every_quoting_doc` — docs 120, 140 and 600 still quote the wire text correctly (also `test_api_reference_states_the_total_and_base_counts` for doc 600)
 
 ### Phase 3 · Check admin authorization without FastAPI
-- [ ] **BE-5** — Create `services/authz.py` with the moved policy (`AuthIdentity`, `ForbiddenError`, `FORBIDDEN_CODE`, the three `*_DETAIL` constants, `require_admin`, `authorize_key_create`, `authorize_key_listing_namespace`, `can_manage_key`, `caller_may_revoke`); trim `server/authz.py` to `identity_of`, `require_admin_dependency`, `caller_identity`, `ADMIN_ONLY_RESPONSES` (importing the policy and `ADMIN_REQUIRED_DETAIL`; no `__all__`) #backend-role
+- [x] **BE-5** — Create `services/authz.py` with the moved policy (`AuthIdentity`, `ForbiddenError`, `FORBIDDEN_CODE`, the three `*_DETAIL` constants, `require_admin`, `authorize_key_create`, `authorize_key_listing_namespace`, `can_manage_key`, `caller_may_revoke`); trim `server/authz.py` to `identity_of`, `require_admin_dependency`, `caller_identity`, `ADMIN_ONLY_RESPONSES` (importing the policy and `ADMIN_REQUIRED_DETAIL`; no `__all__`) #backend-role
     - Use Case · 3.0h
     - needs BE-1 · completes C3
     - Tests

@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from archon_search.key_manager import ENV_VAR
-from archon_search.server.authz import (
+from archon_search.services.authz import (
     ADMIN_KEY_GRANT_DETAIL,
     ADMIN_REQUIRED_DETAIL,
     FOREIGN_NAMESPACE_DETAIL,
