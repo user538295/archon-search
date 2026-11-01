@@ -578,7 +578,7 @@ flowchart LR
         - #unit_test — `test_mcp_set_rejects_invalid_text_with_validation_error` — empty, multi-line and over-long text are refused
         - #integration_test — `test_mcp_tool_count_is_22_with_key_store_and_18_without` — `test_mcp_slice1_be3.py`, `test_mcp_export.py`, `test_mcp_update_collection.py` pins move
         - #integration_test — `test_mcp_set_and_clear_work_on_meta_only_collection_without_admin` — a non-admin namespace key succeeds
-- [ ] **FE-10** — CLI `set-description` and `clear-description` in `cli/collection.py`: client-side validation with the shared 600 limit, 404, 422 and 503 messages, lock-waiting request timeout, hint after clear; strip terminal control characters from printed text #frontend-role
+- [x] **FE-10** — CLI `set-description` and `clear-description` in `cli/collection.py`: client-side validation with the shared 600 limit, 404, 422 and 503 messages, lock-waiting request timeout, hint after clear; strip terminal control characters from printed text #frontend-role
     - Presentation · 3.0h
     - needs BE-31 · completes S26, S28, S60, S62
     - Tests

@@ -11,7 +11,7 @@ import click
 import httpx
 
 from archon_search.config import ConfigError
-from archon_search.constants import INGEST_LOCK_TIMEOUT_S
+from archon_search.constants import EMBED_WAIT_SECONDS, INGEST_LOCK_TIMEOUT_S
 from archon_search.platform.service import SearchServiceLifecycle
 from archon_search.types import JobStatus
 
@@ -45,9 +45,12 @@ _LOCAL_DEFAULT_URL = "http://localhost:8765"
 _LOCK_WAIT_RESPONSE_MARGIN_S = 10.0
 # httpx timeout of a call to a route that may wait up to INGEST_LOCK_TIMEOUT_S for a collection lock before it
 # answers (POST /collections/, DELETE /collections/{name}, POST /ingest, the reindex / reindex-metadata / migrate /
-# rebuild-communities routes): httpx's 5 s default would report "Error contacting server" while the server goes on
-# to act on the request.
+# rebuild-communities routes, PUT and DELETE /collections/{name}/description): httpx's 5 s default would report
+# "Error contacting server" while the server goes on to act on the request.
 _LOCK_WAITING_REQUEST_TIMEOUT_S = INGEST_LOCK_TIMEOUT_S + _LOCK_WAIT_RESPONSE_MARGIN_S
+# httpx timeout of PUT /collections/{name}/description: the route embeds the new text (up to EMBED_WAIT_SECONDS, a cold
+# embedder load included) BEFORE it takes the collection lock, so it can take that long on top of the lock wait.
+_DESCRIPTION_SET_REQUEST_TIMEOUT_S = EMBED_WAIT_SECONDS + _LOCK_WAITING_REQUEST_TIMEOUT_S
 
 
 @contextmanager
@@ -73,9 +76,11 @@ def _clean(value: str) -> str:
     Substitution is 1:1, so the result is length-preserving and callers' column widths
     are unaffected.
 
-    Applied to stdout only. The ``err=True`` error paths are each followed by
+    Applied to stdout; the ``err=True`` error paths are each followed by
     ``SystemExit(1)``, so no row can follow them, and an operator debugging a
-    failure wants the server's bytes verbatim.
+    failure wants the server's bytes verbatim. The exception is the error text of
+    ``collection set-description`` / ``clear-description``, which prints the
+    server's words (a 422 or 503 detail, an unexpected body) through it too.
     """
     return "".join(ch if ch.isprintable() else " " for ch in value)
 

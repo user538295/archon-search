@@ -1,18 +1,23 @@
-"""archon-search collection subcommands: list, add, remove, info, reindex."""
+"""archon-search collection subcommands: list, add, remove, info, set-description, clear-description, reindex."""
 from __future__ import annotations
 
 import logging
+import shlex
+from collections.abc import Callable
+from urllib.parse import quote
 
 import click
 import httpx
 
 from archon_search.cli._helpers import (
     _CONNECT_FAIL,
+    _DESCRIPTION_SET_REQUEST_TIMEOUT_S,
     _LOCK_WAITING_REQUEST_TIMEOUT_S,
     _clean,
     _poll_job,
     _server_connect_fail_msg,
 )
+from archon_search.description_write import check_description_text
 from archon_search.key_manager import load_key
 from archon_search.paths import get_data_dir
 
@@ -39,6 +44,13 @@ _INFO_OMIT_WHEN_EMPTY = frozenset({
     "pending_embedding_model", "reindex_job_id", "description",
     "description_source", "description_status",
 })
+
+# Pydantic prefixes the message of a validator's ValueError with this; the CLI prints the message alone.
+_PYDANTIC_VALUE_ERROR_PREFIX = "Value error, "
+# The ``code`` of the 503 the server answers when the collection lock is not free in time.
+_STORE_BUSY_CODE = "store_busy"
+_EMPTY_SERVER_MESSAGE = "the server refused the description"
+_NOT_UTF8_MESSAGE = "the description is not valid UTF-8 text"
 
 
 @click.group()
@@ -261,6 +273,145 @@ def info(collection_name: str, api_url: str, api_key: str | None) -> None:
         if (val is None or not text.strip()) and field in _INFO_OMIT_WHEN_EMPTY:
             continue
         click.echo(f"{field}: {text}")
+
+
+def _json_body(resp: httpx.Response) -> dict:
+    """The JSON object of *resp*, or ``{}`` when the body is not JSON or not an object (a proxy's error page)."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _description_error(name: str, resp: httpx.Response) -> str:
+    """The stderr line for a failed description request (404, 422, 503 or any other status).
+
+    Server text is stripped of terminal control characters: the 503 ``service not ready`` and the 422 messages are the
+    server's words, not ours.
+    """
+    body = _json_body(resp)
+    if resp.status_code == 404:
+        return f"Error: collection '{name}' not found."
+    if resp.status_code == 503 and body.get("code") == _STORE_BUSY_CODE:
+        return (
+            f"Cannot change the description of '{name}': the server has a write in progress on this collection."
+            " Retry after the active job completes."
+        )
+    if resp.status_code in (422, 503):
+        return f"Error: {_server_message(body.get('detail'), resp.text)}"
+    return f"Error: server returned {resp.status_code}: {_clean(resp.text)}"
+
+
+def _server_message(detail: object, fallback: str) -> str:
+    """The words of a ``detail``: FastAPI's list of ``{"msg": ...}`` items (the validator prefix dropped), a plain
+    string, or *fallback* when the body had none."""
+    if isinstance(detail, list):
+        messages = [str(item.get("msg", "")) for item in detail if isinstance(item, dict)]
+        detail = "; ".join(message.removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX) for message in messages if message)
+    text = _clean(str(detail)) if detail else _clean(fallback)
+    return text or _EMPTY_SERVER_MESSAGE
+
+
+def _call_description_route(
+    name: str, api_url: str, api_key: str | None, send: Callable[[str, dict[str, str]], httpx.Response]
+) -> httpx.Response:
+    """Call ``/collections/{name}/description`` through *send(url, headers)* and return the 200 response.
+
+    Exits 1 with the mapped message on a connect failure or any other answer. The name is one URL path segment: ``quote``
+    leaves ``.`` alone and httpx drops dot segments from the path, so the dots are encoded too, and a name holding
+    ``#``, ``?``, ``/`` or only dots can never reach another route (the clear is a DELETE).
+    """
+    if not name:
+        click.echo("Error: the collection name cannot be empty.", err=True)
+        raise SystemExit(1)
+    headers = {"Authorization": f"Bearer {_resolve_api_key(api_key)}"}
+    base_url = api_url.rstrip("/")
+    segment = quote(name, safe="").replace(".", "%2E")
+    url = f"{base_url}/collections/{segment}/description"
+    try:
+        resp = send(url, headers)
+    except _CONNECT_FAIL:
+        click.echo(_server_connect_fail_msg(base_url), err=True)
+        raise SystemExit(1)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1)
+    if resp.status_code != 200:
+        click.echo(_description_error(name, resp), err=True)
+        raise SystemExit(1)
+    return resp
+
+
+@collection.command("set-description", context_settings={"ignore_unknown_options": True})
+@click.argument("name")
+@click.argument("text")
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def set_description(name: str, text: str, api_url: str, api_key: str | None) -> None:
+    """Set a collection's description by hand (proxies PUT /collections/{name}/description).
+
+    TEXT is one line of plain text of at most 600 characters; any other text is refused and never trimmed. A manual
+    description is never overwritten by generation; to let generation write a new one, clear it first with
+    `collection clear-description`.
+    """
+    try:
+        check_description_text(text)
+        text.encode("utf-8")  # a stray non-UTF-8 byte in argv is a lone surrogate the JSON body cannot carry
+    except ValueError as exc:  # UnicodeEncodeError is a ValueError too
+        click.echo(f"Error: {_NOT_UTF8_MESSAGE if isinstance(exc, UnicodeEncodeError) else exc}", err=True)
+        raise SystemExit(1)
+    resp = _call_description_route(
+        name,
+        api_url,
+        api_key,
+        lambda url, headers: httpx.put(
+            url, json={"description": text}, headers=headers, timeout=_DESCRIPTION_SET_REQUEST_TIMEOUT_S
+        ),
+    )
+    data = _json_body(resp)
+    source = _clean(str(data.get("description_source")))
+    status = _clean(str(data.get("description_status")))
+    click.echo(f"Set the description of '{_clean(name)}' (description_source: {source}, description_status: {status}).")
+
+
+@collection.command("clear-description")
+@click.argument("name")
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def clear_description(name: str, api_url: str, api_key: str | None) -> None:
+    """Clear a collection's description (proxies DELETE /collections/{name}/description).
+
+    Nothing is generated by a clear: the next qualifying ingest, an enabled startup backfill or `collection describe`
+    writes a new description.
+    """
+    _call_description_route(
+        name,
+        api_url,
+        api_key,
+        lambda url, headers: httpx.delete(url, headers=headers, timeout=_LOCK_WAITING_REQUEST_TIMEOUT_S),
+    )
+    shown = _clean(name)
+    click.echo(f"Cleared the description of '{shown}'.")
+    click.echo(f"Run `archon-search collection describe {shlex.quote(shown)}` to generate a new one.")
 
 
 @collection.command("reindex-metadata")
