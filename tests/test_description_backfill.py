@@ -203,6 +203,23 @@ async def test_error_status_and_dead_port_read_unreachable_without_raising() -> 
     assert dead.reason is not None and f"127.0.0.1:{port}" in dead.reason
 
 
+async def test_llama_cpp_probe_reasons_do_not_repeat_the_host_the_warning_names() -> None:
+    """The one llama_cpp WARNING already reads ``the server at <host:port> is not reachable (<reason>)``: its reason is host-free."""
+    with FakeModelServer(status_overrides={"/props": 503}) as server:
+        failing = await probe_description_reachability(
+            _description(provider="llama_cpp", llama_cpp_base_url=server.base_url), timeout_seconds=_PROBE_TIMEOUT_SECONDS
+        )
+    assert failing == DescriptionReachability(False, "answered HTTP 503")
+
+    with unreachable_port() as port:
+        dead = await probe_description_reachability(
+            _description(provider="llama_cpp", llama_cpp_base_url=f"http://127.0.0.1:{port}"),
+            timeout_seconds=_SHORT_PROBE_TIMEOUT_SECONDS,
+        )
+    assert dead.reachable is False
+    assert dead.reason is not None and dead.reason.startswith("no answer (") and "127.0.0.1" not in dead.reason
+
+
 async def test_probe_reason_names_host_and_port_only_never_credentials_or_path() -> None:
     result = await probe_description_reachability(
         _description(provider="ollama", ollama_base_url="http://user:secret@127.0.0.1:1/private/path"),
@@ -225,7 +242,7 @@ async def test_scheme_less_host_and_port_is_probed_like_the_sdk_reads_it() -> No
 
 async def test_ipv6_host_keeps_its_brackets_in_the_reason() -> None:
     result = await probe_description_reachability(
-        _description(provider="llama_cpp", llama_cpp_base_url="http://[::1]:1"), timeout_seconds=_SHORT_PROBE_TIMEOUT_SECONDS
+        _description(provider="ollama", ollama_base_url="http://[::1]:1"), timeout_seconds=_SHORT_PROBE_TIMEOUT_SECONDS
     )
     assert result.reachable is False
     assert result.reason is not None and "[::1]:1" in result.reason
@@ -325,11 +342,26 @@ async def test_a_down_llama_server_found_by_the_probe_and_the_window_lookup_is_o
                 await client.probe_context_window(_SHORT_PROBE_TIMEOUT_SECONDS)
 
     assert state.description_reachability.reachable is False
-    [warning] = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
-    assert server in warning
-    assert "not reachable" in warning
-    assert str(ASSUMED_CONTEXT_TOKENS) in warning
+    [record] = [record for record in caplog.records if record.levelno == logging.WARNING]
+    warning = record.getMessage()
+    assert warning.startswith(f"llama_cpp: the server at {server} is not reachable (")
+    assert warning.endswith(f"requests to it fail until it answers, and where its context window could not be read, {ASSUMED_CONTEXT_TOKENS} tokens are assumed")
+    assert warning.count(server) == 1  # the reason does not repeat the host
+    assert record.name == "archon_search.llm_client.llama_cpp_client"  # the shared line, whichever path logged it
     assert DESCRIPTION_UNREACHABLE_WARN_KEY not in once_per_process._warned_keys
+
+
+async def test_a_down_llama_server_spelled_differently_by_the_probe_is_still_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with unreachable_port() as port:
+        client = LlamaCppClient(model="m", base_url=f"http://127.0.0.1:{port}")
+        state = SimpleNamespace(description_reachability=None)
+        config = _description(provider="llama_cpp", llama_cpp_base_url=f"HTTP://user:secret@127.0.0.1:{port}/v1/?x=1")
+
+        with caplog.at_level(logging.WARNING):
+            await client.probe_context_window(_SHORT_PROBE_TIMEOUT_SECONDS)
+            await run_description_probe(state, config)
+
+    assert len([record for record in caplog.records if record.levelno == logging.WARNING]) == 1
 
 
 async def test_probe_of_a_down_llama_server_names_host_and_port_never_credentials(caplog: pytest.LogCaptureFixture) -> None:

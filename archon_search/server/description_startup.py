@@ -2,9 +2,11 @@
 
 One validator, called once from the lifespan, that tells the operator why descriptions will not work or what they send
 where. It never blocks the boot and never raises (a failing check logs one WARNING naming the error type), and a disabled
-``[description]`` logs nothing except the off-notice. The window WARNINGs belong to the shared client layer (C1); the
-unreachable-local-server finding is the startup probe's (``description_backfill``), which shares one ``warn_once`` key
-with this module's cloud-key and missing-package findings so the problem is logged once however it was found.
+``[description]`` logs nothing except the off-notice. The window WARNINGs belong to the shared client layer (C1). An
+unreachable local server is the startup probe's (``description_backfill``): for ``ollama`` and the cloud providers it shares
+the ``warn_once`` key of this module's cloud-key and missing-package findings, so the problem is logged once however it was
+found; for ``llama_cpp`` it is the one per-server WARNING keyed ``llama_cpp_unreachable:<host:port>``
+(``warn_llama_cpp_unreachable``), shared with the window lookup and the reachability probe.
 
 "Local" means a loopback host, never the provider's name: :func:`is_loopback_host` decides it for the privacy INFO and both
 restricted-chunk WARNINGs.

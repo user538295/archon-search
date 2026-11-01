@@ -19,7 +19,10 @@ import httpx
 
 from archon_search.embedder import EmbedderBackend, ModelEmbedder
 from archon_search.llm_client.claude_cli_client import resolve_claude_binary
-from archon_search.llm_client.llama_cpp_client import warn_llama_cpp_unreachable
+from archon_search.llm_client.llama_cpp_client import (
+    exception_types,
+    warn_llama_cpp_unreachable,
+)
 from archon_search.llm_client.protocol import LlmCallRequest, LlmCallTimeout
 from archon_search.llm_client.server_address import host_port
 from archon_search.model_specs import UnsupportedModelError, get_embedder_spec
@@ -39,7 +42,7 @@ logger = logging.getLogger(__name__)
 # independently of the caller's overall `timeout_seconds` budget for the
 # embedder/reranker probe, since this is an unrelated side check.
 _LLAMA_CPP_PROBE_TIMEOUT_SECONDS: float = 3.0
-# The ``provider`` value that selects a local llama-server in ``[hyde]``/``[rag_fusion]``/``[graph]``.
+# The ``provider`` value that selects a local llama-server in ``[hyde]``/``[rag_fusion]``/``[graph]``/``[description]``.
 _LLAMA_CPP_PROVIDER: Final[str] = "llama_cpp"
 # The ``provider`` value that selects the ``claude`` program in ``[graph]``.
 _CLAUDE_CLI_PROVIDER: Final[str] = "claude_cli"
@@ -132,10 +135,10 @@ class ModelValidationResult:
     embedder and the reranker probe, which construction enforces. See
     ``D6-model-validation-status.tsp`` (C1).
 
-    ``llama_cpp_ok``: ``None`` while the llama-server reachability
-    probe has not run, or when ``llama_cpp`` is not configured as the provider in
-    any of ``[hyde]``/``[rag_fusion]``/``[graph]`` (no probe is attempted); ``True``
-    when the probe reached ``GET /v1/models``; ``False`` otherwise. This probe is
+    ``llama_cpp_ok``: ``None`` while the llama-server reachability probe has not run, or when no ENABLED feature among
+    ``[hyde]``/``[rag_fusion]``/``[graph]``/``[description]`` uses ``llama_cpp`` (no probe is attempted); otherwise
+    ``True`` when every such server (one per ``host:port``) answered ``GET /v1/models`` with a 2xx, ``False`` when any
+    did not (each unreachable server has its own WARNING; the flag does not say which). This probe is
     warn-not-block: it must never feed the ``checks.models`` FAIL status.
     """
 
@@ -150,39 +153,23 @@ class ModelValidationResult:
             raise ValueError("validated_at is set but the embedder and reranker probes are not both resolved")
 
 
-def _llama_cpp_probe_url(config: SearchConfig) -> str | None:
-    """Return the llama-server base URL to probe, or ``None`` if ``llama_cpp`` is not
-    configured as the provider in any of ``[hyde]``/``[rag_fusion]``/``[graph]``.
+def _llama_cpp_base_urls(config: SearchConfig) -> list[str]:
+    """The base URL of every llama-server an ENABLED feature uses, one per ``host:port`` label (the first spelling wins), in
+    the fixed section order ``[hyde]``, ``[rag_fusion]``, ``[graph]``, ``[description]``.
 
-    Checked in a fixed section order — the wizard writes the same base URL to every
-    section it configures for a given local llama-server, so the first configured
-    match is representative.
+    A section that is disabled uses no server, whatever its ``provider`` says. Servers are told apart by the same label
+    the shared "not reachable" WARNING is keyed on, so one server is probed once however its URL is spelled.
     """
-    if config.hyde.provider == _LLAMA_CPP_PROVIDER:
-        return config.hyde.llama_cpp_base_url
-    if config.rag_fusion.provider == _LLAMA_CPP_PROVIDER:
-        return config.rag_fusion.llama_cpp_base_url
-    if config.graph.provider == _LLAMA_CPP_PROVIDER:
-        return config.graph.llama_cpp_base_url
-    return None
+    urls: dict[str, str] = {}
+    for section in (config.hyde, config.rag_fusion, config.graph, config.description):
+        if section.enabled and section.provider == _LLAMA_CPP_PROVIDER:
+            urls.setdefault(host_port(section.llama_cpp_base_url), section.llama_cpp_base_url)
+    return list(urls.values())
 
 
-async def _probe_llama_cpp(config: SearchConfig) -> bool | None:
-    """Non-blocking llama-server reachability probe.
-
-    Returns ``None`` when ``llama_cpp`` is not configured anywhere (no probe
-    attempted). Otherwise issues ``GET {base_url}/v1/models`` under a short, fixed
-    timeout and returns ``True`` on any 2xx response, ``False`` on any failure
-    (connection error, timeout, non-2xx status). Never raises — a WARNING is
-    logged on failure (the one per-server "not reachable" WARNING shared with the
-    context-window lookup and the description probe) so boot can continue uninterrupted (S7). It never blocks
-    startup or queries, but it runs before the embedder/reranker probe inside
-    background validation, so its duration extends the ``/ready`` 503 window
-    (``checks.models`` stays ``pending`` until validation finishes).
-    """
-    base_url = _llama_cpp_probe_url(config)
-    if base_url is None:
-        return None
+async def _probe_llama_cpp_server(base_url: str) -> bool:
+    """``GET {base_url}/v1/models`` under a short, fixed timeout: ``True`` on any 2xx answer, else ``False`` after the one
+    per-server "not reachable" WARNING (shared with the context-window lookup and the description probe). Never raises."""
     try:
         async with httpx.AsyncClient(
             base_url=base_url, timeout=_LLAMA_CPP_PROBE_TIMEOUT_SECONDS
@@ -191,9 +178,28 @@ async def _probe_llama_cpp(config: SearchConfig) -> bool | None:
             response.raise_for_status()
         return True
     except Exception as exc:  # noqa: BLE001 — probe reports any failure as "unreachable" (False); it must never raise
+        server = host_port(base_url)  # host:port only: the URL may carry credentials
         reason = f"HTTP {exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
-        warn_llama_cpp_unreachable(host_port(base_url), reason)  # host:port only: the URL may carry credentials
+        logger.debug("llama_cpp: GET /v1/models on %s failed (%s)", server, exception_types(exc))
+        warn_llama_cpp_unreachable(server, reason)
         return False
+
+
+async def _probe_llama_cpp(config: SearchConfig) -> dict[str, bool] | None:
+    """Non-blocking llama-server reachability probe of every server an enabled feature uses.
+
+    Returns ``None`` when no enabled feature uses ``llama_cpp`` (no probe attempted). Otherwise each distinct server (see
+    :func:`_llama_cpp_base_urls`) is probed concurrently, and the answer is ``{host:port label: reachable}``. Never raises —
+    a failed server logs its own WARNING (the one per-server "not reachable" WARNING shared with the context-window lookup
+    and the description probe) so boot can continue uninterrupted (S7). It never blocks startup or queries, but it runs
+    before the embedder/reranker probe inside background validation, so its duration extends the ``/ready`` 503 window
+    (``checks.models`` stays ``pending`` until validation finishes).
+    """
+    base_urls = _llama_cpp_base_urls(config)
+    if not base_urls:
+        return None
+    outcomes = await asyncio.gather(*(_probe_llama_cpp_server(base_url) for base_url in base_urls))
+    return {host_port(base_url): reachable for base_url, reachable in zip(base_urls, outcomes, strict=True)}
 
 
 async def failed_result(reason: str, config: SearchConfig) -> ModelValidationResult:
@@ -340,9 +346,10 @@ async def _probe_extraction_model(
 
     Returns ``[]`` (skipped, no probe attempted) when ``[graph].enabled`` is False,
     ``extraction_model`` is unset (the gate ingest itself uses), ``provider`` is unset, or no
-    *graph_client_factory* was given. Also skipped when ``provider == "llama_cpp"`` and
-    *llama_cpp_ok* is ``False`` — :func:`_probe_llama_cpp` already found the server unreachable,
-    and re-probing here would only produce a second, confusing warning for the same root cause.
+    *graph_client_factory* was given. Also skipped when ``provider == "llama_cpp"`` and *llama_cpp_ok* is ``False``:
+    here *llama_cpp_ok* is the reachability of the graph's OWN server (``[graph].llama_cpp_base_url``, as
+    :func:`_probe_llama_cpp` found it; ``None`` when it was not probed), so a server already reported unreachable is not
+    called again for a second WARNING with a traceback, while a live graph server is probed whatever another server did.
     """
     graph_config = config.graph
     if not graph_config.enabled or not graph_config.extraction_model:
@@ -556,9 +563,9 @@ async def validate_models_async(
     every provider but ``claude_cli``, whose probe needs no client.
 
     Also runs the llama-server reachability probe — see
-    :func:`_probe_llama_cpp`. This is an independent, short-timeout side check;
-    its outcome (``llama_cpp_ok``) is attached to every returned result, including
-    the timeout/failure early-return paths below.
+    :func:`_probe_llama_cpp`. This is an independent, short-timeout side check of every llama-server an enabled
+    feature uses; its outcome (``llama_cpp_ok``: every probed server answered) is attached to every returned result,
+    including the timeout/failure early-return paths below.
 
     Likewise :func:`graph_ner_status` — dispatched to a thread
     since it does filesystem globbing and package-metadata scanning — and
@@ -569,10 +576,12 @@ async def validate_models_async(
     guarantee is structural, not a convention each return
     site could forget.
     """
-    llama_cpp_ok = await _probe_llama_cpp(config)
+    llama_servers = await _probe_llama_cpp(config)
+    llama_cpp_ok = None if llama_servers is None else all(llama_servers.values())
+    graph_server_ok = None if llama_servers is None else llama_servers.get(host_port(config.graph.llama_cpp_base_url))
     graph_warnings = await asyncio.to_thread(graph_ner_status, config)
     graph_warnings = graph_warnings + await _probe_extraction_model(
-        config, llama_cpp_ok=llama_cpp_ok, graph_client_factory=graph_client_factory
+        config, llama_cpp_ok=graph_server_ok, graph_client_factory=graph_client_factory
     )
 
     def _result(

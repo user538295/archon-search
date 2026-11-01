@@ -4,7 +4,7 @@ Thin wrapper over ``httpx`` (a core dependency) talking to a llama-server (llama
 
 * ``GET /props`` holds the window under ``default_generation_settings.n_ctx``; :meth:`LlamaCppClient.probe_context_window`
   reads it once at composition time (``context_window`` is synchronous). Until it succeeds, and when it fails, the
-  window is ``ASSUMED_CONTEXT_TOKENS`` and one WARNING per host and process says so (S8).
+  window is ``ASSUMED_CONTEXT_TOKENS`` and one WARNING per server (``host:port``) and process says so (S8).
 * ``POST /apply-template`` (``{"messages": [...]}`` answers ``{"prompt": "..."}``) renders a message through the model's
   chat template and ``POST /tokenize`` (``{"content": text}`` answers ``{"tokens": [...]}``) counts it: the exact count
   :meth:`input_budget` sizes with (S11, ``llm_client.budget.exact_budget``), chat framing included.
@@ -62,7 +62,11 @@ _ENABLE_THINKING_KWARG: Final = "enable_thinking"
 _UNREACHABLE_KEY_PREFIX: Final = "llama_cpp_unreachable:"
 _NO_WINDOW_KEY_PREFIX: Final = "llama_cpp_no_window:"
 
-#: A SentencePiece vocabulary may spend one token on its dummy prefix: the one token a byte count can undercount by.
+#: The dummy-prefix token a SentencePiece vocabulary may put ahead of a text, which a byte count does not include
+#: (``"€"`` on Llama 2 is the prefix plus three byte tokens). The ``+ 1`` bounds the whole text only because ``/tokenize``
+#: parses special tokens by default and the text of every special token is at least two bytes (``<s>``): such a token costs
+#: one token for at least two bytes, so it saves at least one token against the byte count, which pays for the dummy
+#: prefix of the fragment that follows it. A special token of one byte would break the bound.
 _SPM_DUMMY_PREFIX_TOKENS: Final = 1
 
 
@@ -74,18 +78,33 @@ def _unexpected_reply(exc: Exception) -> LlmCallFailure:
     return LlmCallFailure(PROVIDER_NAME, f"unexpected reply ({type(exc).__name__}); is the base URL a llama-server?")
 
 
-def warn_llama_cpp_unreachable(server: str, reason: str) -> None:
+def exception_types(exc: BaseException) -> str:
+    """The types of *exc* and of its causes, outermost first (``LlmCallFailure < ConnectError < OSError``). Never the
+    messages: those of a malformed base URL repeat the credentials it carries."""
+    types: list[str] = []
+    current: BaseException | None = exc
+    while current is not None:
+        types.append(type(current).__name__)
+        current = current.__cause__
+    return " < ".join(types)
+
+
+def warn_llama_cpp_unreachable(server: str, reason: str | None) -> None:
     """The one WARNING per server (``host:port``, see ``server_address.host_port``) and process that a llama-server cannot be reached.
 
-    The context-window lookup of every ``llama_cpp`` feature and the description startup probe ask the same server the same
-    question at boot; both report an outage through here, so one outage is one WARNING whichever finds it first. The one text
-    carries both consequences: calls to the server fail, and the window of every feature on it is the assumed one until a
-    lookup succeeds (S8, S34). *reason* names the cause and never a prompt.
+    The context-window lookup of every ``llama_cpp`` feature, the startup reachability probe and the description startup
+    probe ask a server the same question at boot; all report an outage through here, so one outage is one WARNING whichever
+    finds it first (servers whose labels differ are different servers and each get a line). The one text carries both
+    consequences: calls to the server fail, and the window of a feature on it is the assumed one where none could be read
+    (S8, S34). The line carries the server label and *reason*, the failing path's own one-line cause (an exception type, an
+    HTTP status, or the server's error text of at most ``MAX_SERVER_TEXT_CHARS`` characters); never a prompt, and nothing
+    of the configured URL but its host and port. The record is attributed to this module's logger (``stacklevel`` of
+    ``warn_once`` points at this function), whichever path reported.
     """
     warn_once(
         _logger,
         f"{_UNREACHABLE_KEY_PREFIX}{server}",
-        "llama_cpp: the server at %s is not reachable (%s); requests to it fail until it answers, and a context window of %d tokens is assumed until then",
+        "llama_cpp: the server at %s is not reachable (%s); requests to it fail until it answers, and where its context window could not be read, %d tokens are assumed",
         server,
         reason,
         ASSUMED_CONTEXT_TOKENS,
@@ -93,7 +112,7 @@ def warn_llama_cpp_unreachable(server: str, reason: str) -> None:
 
 
 class LlamaCppClient:
-    """``LlmClient`` for one llama-server feature: one model on one host."""
+    """``LlmClient`` for one llama-server feature: one model on one server."""
 
     def __init__(self, *, model: str, base_url: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
         """
@@ -112,14 +131,17 @@ class LlamaCppClient:
         """Read the window from ``GET /props`` and make it the client's window; never raises.
 
         A failed probe leaves the window as it was (assumed until a probe succeeds) and logs one WARNING per server and
-        process (S8): the shared "not reachable" one (``warn_llama_cpp_unreachable``, also the description startup probe's)
-        when the server does not answer properly, a "no usable window" one when it answers without an ``n_ctx``. A WARNING
-        names host and port only, never credentials or a query string of the configured URL.
+        process (S8): the shared "not reachable" one (``warn_llama_cpp_unreachable``, also the other startup probes') when
+        the server does not answer properly, a "no usable window" one when it answers without an ``n_ctx``. A WARNING names
+        the server as host and port only, never credentials, path or query of the configured URL; the cause in the
+        "not reachable" one is the failure's own bounded one-line reason (see ``warn_llama_cpp_unreachable``), and the
+        types of its exception chain go to DEBUG (never the messages: a malformed URL's carries the credentials).
         """
         server = host_port(self._base_url)
         try:
             body = await self._request("GET", _PROPS_PATH, timeout_seconds)
         except LlmCallFailure as failure:
+            _logger.debug("llama_cpp: GET %s on %s failed (%s)", _PROPS_PATH, server, exception_types(failure))
             warn_llama_cpp_unreachable(server, failure.reason)
             return self._window
         try:
@@ -169,7 +191,9 @@ class LlamaCppClient:
     def token_ceiling(self, text: str) -> int:
         """Bytes of *text* plus the SentencePiece dummy-prefix token. ``/tokenize`` adds no BOS (``add_special`` defaults to
         false); a byte-fallback vocabulary then spends at most one token per byte, and a SentencePiece one may put its
-        dummy prefix ahead of them as a token of its own (``"€"`` on Llama 2: prefix plus three byte tokens)."""
+        dummy prefix ahead of them as a token of its own (``"€"`` on Llama 2: prefix plus three byte tokens). The one extra
+        token holds for the whole text because ``/tokenize`` parses special tokens by default and every special token's
+        text is at least two bytes (see ``_SPM_DUMMY_PREFIX_TOKENS``)."""
         return len(text.encode("utf-8", "surrogatepass")) + _SPM_DUMMY_PREFIX_TOKENS
 
     async def _count_framed_tokens(self, text: str) -> int:

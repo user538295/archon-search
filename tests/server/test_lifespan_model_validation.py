@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -13,7 +12,11 @@ from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.model_validation import ModelValidationResult
 from archon_search.server.app import create_app
+from tests._fake_model_server import keep_loopback_out_of_proxies, unreachable_port
 from tests.test_app import wait_for_models_check_to_settle
+
+_WINDOW_LOOKUP_WAIT_SECONDS = 30.0
+_POLL_SECONDS = 0.02
 
 
 def _make_config(tmp_path: Path) -> SearchConfig:
@@ -81,42 +84,43 @@ def test_background_task_exception_sets_failure_result(tmp_path: Path) -> None:
 
 @pytest.mark.integration
 def test_startup_warning_logged_llama_cpp_unreachable(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """BE-9 (S7): unreachable llama-server at startup logs a WARNING and boot completes.
+    """BE-9 (S7): unreachable llama-server at startup logs ONE WARNING and boot completes.
 
-    The real (un-patched) ``validate_models_async`` runs as the lifespan background
-    task; only ``httpx.AsyncClient`` (the llama-server probe transport) is patched
-    to simulate an unreachable server, per the grounding note's mocking convention.
+    ``[hyde]`` is enabled on the llama_cpp provider, so two startup paths ask the same down server (the context-window
+    lookup of the hyde client and the background validation's reachability probe) and share the one per-server WARNING,
+    whichever finds it first. Nothing is patched: the server is a loopback port nothing answers on.
     """
     import logging
+    import time
 
-    cfg = _make_config(tmp_path)
-    cfg.hyde.provider = "llama_cpp"
-    cfg.hyde.llama_cpp_base_url = "http://localhost:8080"
-    job_store = _make_job_store(tmp_path)
-    app = create_app(cfg, job_store)
+    keep_loopback_out_of_proxies(monkeypatch)
+    with unreachable_port() as port:
+        server = f"127.0.0.1:{port}"
+        cfg = _make_config(tmp_path)
+        cfg.hyde.enabled = True
+        cfg.hyde.provider = "llama_cpp"
+        cfg.hyde.llama_cpp_base_url = f"http://{server}"
+        app = create_app(cfg, _make_job_store(tmp_path))
 
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_cls = MagicMock(return_value=mock_client)
-
-    with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
-         caplog.at_level(logging.WARNING), TestClient(app) as client:
-        # /ready gates on a pending checks.models, which lasts until both the
-        # background warm-up and the background validation finish (S631); the
-        # lifespan awaits neither — wait both out, or this asserts on a race
-        # rather than on the probe failure.
-        wait_for_models_check_to_settle(app)
-        # Boot completed normally — /ready is reachable despite the probe failure.
-        assert client.get("/ready").status_code == 200
+        with caplog.at_level(logging.WARNING), TestClient(app) as client:
+            # /ready gates on a pending checks.models, which lasts until both the background warm-up and the background
+            # validation finish (S631); the lifespan awaits neither, nor the window lookup: wait all out, or this asserts
+            # on a race rather than on the probe failure.
+            wait_for_models_check_to_settle(app)
+            deadline = time.monotonic() + _WINDOW_LOOKUP_WAIT_SECONDS
+            while not app.state._llm_window_task.done():
+                assert time.monotonic() < deadline, "the context-window lookup did not end"
+                time.sleep(_POLL_SECONDS)
+            # Boot completed normally — /ready is reachable despite the probe failure.
+            assert client.get("/ready").status_code == 200
 
     assert app.state.model_validation is not None
     assert app.state.model_validation.llama_cpp_ok is False
-    [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and "localhost:8080" in r.getMessage()]
-    assert "not reachable" in warning  # one WARNING per server, shared with the window lookup (S7, S8)
+    [record] = [r for r in caplog.records if r.levelno == logging.WARNING and server in r.getMessage()]
+    assert "is not reachable" in record.getMessage()
+    assert record.name == "archon_search.llm_client.llama_cpp_client"
 
 
 @pytest.mark.integration

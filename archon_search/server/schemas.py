@@ -240,10 +240,10 @@ class ModelValidationStatus(BaseModel):
     completed. ``validated_at`` is ``None`` while validation is pending and a UTC
     timestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1).
 
-    ``llama_cpp_ok`` (S7, S17): ``None`` while pending or when ``llama_cpp`` is not
-    configured as the provider in any of ``[hyde]``/``[rag_fusion]``/``[graph]``;
-    ``True``/``False`` reflects llama-server reachability. Warn-not-block — never
-    feeds the ``checks.models`` FAIL status (S25).
+    ``llama_cpp_ok`` (S7, S17): ``None`` while pending or when no ENABLED feature among
+    ``[hyde]``/``[rag_fusion]``/``[graph]``/``[description]`` uses ``llama_cpp`` as its provider;
+    otherwise ``True`` when every llama-server those features name answered and ``False`` when any
+    did not. Warn-not-block — never feeds the ``checks.models`` FAIL status (S25).
     """
 
     embedder_ok: bool | None = None

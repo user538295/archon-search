@@ -14,8 +14,10 @@ a time, across every namespace, for each collection that has no description. The
 and of the sync state (it runs whenever the feature is enabled), so an unreachable provider is one WARNING and
 ``/status`` reachability even when the backfill is off or skipped; S86's "no provider is called" means no generation
 call, since the probe sends no prompt and no document text. A down llama-server is also found by the context-window
-lookup of every ``llama_cpp`` feature (the same ``GET /props``); the probe reports it through the lookup's own WARNING
-(``warn_llama_cpp_unreachable``), so the outage is one WARNING per server, not one per path.
+lookup of every ``llama_cpp`` feature (the same ``GET /props``) and by the startup reachability probe (``GET /v1/models``);
+the probe reports it through the shared WARNING (``warn_llama_cpp_unreachable``, one per ``host:port`` label and process,
+logged by ``archon_search.llm_client.llama_cpp_client``), so one outage is one WARNING for that server, not one per path.
+Its reason is host-free: the WARNING already names the server.
 """
 
 from __future__ import annotations
@@ -67,12 +69,11 @@ _API_KEY_VARIABLES: Final = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI
 #: The cheap read-only endpoint each local server is asked: Ollama's model list, llama-server's properties.
 _PROBE_PATHS: Final = {_OLLAMA: "/api/tags", _LLAMA_CPP: "/props"}
 _OLLAMA_DEFAULT_PORT: Final = 11434
-_UNKNOWN_REASON: Final = "no reason was reported"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class DescriptionReachability:
-    """The startup probe's verdict. ``reason`` is operator-readable and free of credentials and paths; ``None`` when reachable."""
+    """The startup probe's verdict. ``reason`` is operator-readable and free of credentials and paths; ``None`` exactly when reachable."""
 
     reachable: bool
     reason: str | None
@@ -144,16 +145,20 @@ async def probe_description_reachability(
 
 
 async def _probe_local_server(provider: str, base_url: str, timeout_seconds: float) -> DescriptionReachability:
+    # An Ollama reason names the server (the WARNING does not); a llama_cpp reason does not, because its WARNING already
+    # reads "the server at <host:port> is not reachable (<reason>)".
+    host = host_port(base_url)
+    named = f" from {host}" if provider == _OLLAMA else ""
     try:
-        host = host_port(base_url)
         url = _probe_url(provider, base_url)
         # httpx limits each phase, not the whole request: the outer bound keeps a trickling server from holding the probe.
         async with asyncio.timeout(timeout_seconds), httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.get(url)
     except Exception as failure:  # noqa: BLE001 — every failure reads as "not reachable"; the probe never raises
-        return DescriptionReachability(False, f"no answer from {host_port(base_url)} ({type(failure).__name__})")
+        return DescriptionReachability(False, f"no answer{named} ({type(failure).__name__})")
     if not response.is_success:
-        return DescriptionReachability(False, f"{host} answered HTTP {response.status_code}")
+        answered = f"{host} answered" if provider == _OLLAMA else "answered"
+        return DescriptionReachability(False, f"{answered} HTTP {response.status_code}")
     return DescriptionReachability(True, None)
 
 
@@ -170,8 +175,9 @@ def _probe_url(provider: str, base_url: str) -> str:
 async def run_description_probe(state: State, description: DescriptionConfig) -> None:
     """The probe task: publish the verdict on ``state.description_reachability`` and log one WARNING when the provider is
     not usable. Never raises (a probe bug reads as unreachable). A llama-server that does not answer is reported through
-    ``warn_llama_cpp_unreachable``, the context-window lookup's own WARNING for that server, so the two paths that find the
-    same outage log it once."""
+    ``warn_llama_cpp_unreachable``, the one WARNING per server (``host:port``) that the context-window lookup and the
+    startup reachability probe use too, so the paths that find the same outage log it once; that line is attributed to
+    ``archon_search.llm_client.llama_cpp_client``, not to this module's logger."""
     try:
         verdict = await probe_description_reachability(description)
     except Exception as failure:  # noqa: BLE001 — never raises: an unexpected probe failure is a finding, not a crash
@@ -180,7 +186,7 @@ async def run_description_probe(state: State, description: DescriptionConfig) ->
     if verdict.reachable:
         return
     if description.provider == _LLAMA_CPP:
-        warn_llama_cpp_unreachable(host_port(local_server_url(description)), verdict.reason or _UNKNOWN_REASON)
+        warn_llama_cpp_unreachable(host_port(local_server_url(description)), verdict.reason)
     else:
         warn_description_unreachable(description.provider, verdict.reason)
 

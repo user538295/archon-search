@@ -4,7 +4,7 @@ One server answers the endpoints of both local providers, so a wrapper test talk
 real SDK or ``httpx`` instead of a mock:
 
 * Ollama (what the ``ollama`` SDK calls): ``POST /api/chat`` and ``POST /api/show``, and ``GET /api/tags`` (the model list the description reachability probe reads).
-* llama.cpp ``llama-server``: ``GET /props``, ``POST /tokenize``, ``POST /apply-template`` and ``POST /v1/chat/completions``.
+* llama.cpp ``llama-server``: ``GET /props`` and ``GET /v1/models`` (the startup reachability probe), ``POST /tokenize``, ``POST /apply-template`` and ``POST /v1/chat/completions``.
 
 Every request is recorded (method, path, decoded JSON body) for assertions on what a wrapper sent. The server listens
 on ``127.0.0.1`` with an OS-chosen port and runs in a daemon thread; use it as a context manager::
@@ -57,7 +57,7 @@ _MODEL_NAME = "fake-model"
 _POLL_INTERVAL_SECONDS = 0.01  # how soon ``shutdown`` is noticed; the default 0.5 s would slow every test
 
 # llama-server nests its errors as {"error": {"code", "message", "type"}}; Ollama answers {"error": "<text>"}.
-_LLAMA_PATHS = frozenset({"/props", "/tokenize", "/apply-template", "/v1/chat/completions"})
+_LLAMA_PATHS = frozenset({"/props", "/v1/models", "/tokenize", "/apply-template", "/v1/chat/completions"})
 _LLAMA_ERROR_TYPES = {400: "invalid_request_error", 404: "not_found_error", 503: "unavailable_error"}
 _LLAMA_OTHER_ERROR_TYPE = "server_error"
 
@@ -201,6 +201,8 @@ class FakeModelServer:
             return _OK, self._ollama_show()
         if route == ("GET", "/api/tags"):
             return _OK, {"models": [{"name": _MODEL_NAME, "model": _MODEL_NAME}]}
+        if route == ("GET", "/v1/models"):
+            return _OK, {"object": "list", "data": [{"id": _MODEL_NAME, "object": "model"}]}
         if route == ("GET", "/props"):
             return _OK, {"default_generation_settings": {"n_ctx": self._llama_n_ctx}, "total_slots": 1}
         if route == ("POST", "/tokenize"):

@@ -19,7 +19,9 @@ def warn_once(logger: logging.Logger, key: str, message: str, *args: object) -> 
     """Log *message* at WARNING the first time *key* is seen in this process.
 
     *message* and *args* follow ``logger.warning``. The caller owns the text: it MUST NOT contain a
-    prompt, a query, a hypothetical document or an excerpt (C1).
+    prompt, a query, a hypothetical document or an excerpt (C1). The record carries *logger*'s name and, through
+    ``stacklevel=2``, the file and function of the caller of this function: a helper that several features share (for
+    example ``warn_llama_cpp_unreachable``) is what the record names, not the feature that reached it first.
 
     Returns:
         ``True`` when this call logged, ``False`` when *key* had already logged.

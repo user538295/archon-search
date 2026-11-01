@@ -14,15 +14,73 @@ from archon_search.llm_client.server_address import UNKNOWN_HOST, host_port
         ("http://localhost:8080", "localhost:8080"),
         ("localhost:11434", "localhost:11434"),
         ("http://[::1]:8080/v1", "[::1]:8080"),
-        ("http://[::1", UNKNOWN_HOST),
-        ("", UNKNOWN_HOST),
+        ("[::1]:8080", "[::1]:8080"),
+        ("LOCALHOST:8080", "localhost:8080"),
+        ("http://LocalHost:8080", "localhost:8080"),
+        ("http://llama.test.:8080", "llama.test:8080"),
+        ("http://localhost", "localhost:80"),
+        ("HTTP://localhost/v1", "localhost:80"),
+        ("https://llama.test/v1", "llama.test:443"),
+        ("https://llama.test:8443", "llama.test:8443"),
+        ("localhost", "localhost"),
+        ("localhost/v1", "localhost"),
+        ("localhost:8080/v1//models", "localhost:8080"),
+        ("//localhost:8080", "localhost:8080"),
+        ("http://[::1]", "[::1]:80"),
     ],
 )
 def test_host_port_names_host_and_port_only(base_url: str, expected: str) -> None:
     assert host_port(base_url) == expected
 
 
-def test_every_spelling_of_one_server_has_one_label() -> None:
-    spellings = ["http://llama.test:8080", "http://llama.test:8080/v1/", "https://u:p@llama.test:8080/?x=1", "llama.test:8080"]
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://[::1", "", "http://", "http://:8080", "http://host:notaport", "http://host:99999", "http://.:80", "http://host:-1"],
+)
+def test_host_port_of_a_value_that_does_not_parse_is_the_unknown_host(base_url: str) -> None:
+    assert host_port(base_url) == UNKNOWN_HOST
 
-    assert {host_port(spelling) for spelling in spellings} == {"llama.test:8080"}
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://user:pa/ss@h.test:8080",
+        "http://user:pa?ss@h.test:8080",
+        "http://user:pa#ss@h.test:8080",
+        "user:pa/ss@h.test:8080",
+        "http://user:pa%2Fss@h.test:8080",
+    ],
+)
+def test_host_port_never_carries_a_password_whatever_the_userinfo_holds(base_url: str) -> None:
+    label = host_port(base_url)
+
+    assert "pa" not in label.replace("h.test", "")
+    assert "ss" not in label.replace("h.test", "")
+    assert label in {"h.test:8080", UNKNOWN_HOST}
+
+
+@pytest.mark.parametrize(
+    "spellings",
+    [
+        ["http://llama.test:8080", "http://llama.test:8080/v1/", "https://u:p@llama.test:8080/?x=1", "llama.test:8080"],
+        ["LOCALHOST:8080", "localhost:8080", "http://localhost.:8080/", "http://LOCALHOST:8080/v1"],
+        ["http://localhost", "http://localhost:80", "http://localhost/v1", "HTTP://LocalHost:80"],
+        ["https://llama.test", "https://llama.test:443/"],
+    ],
+)
+def test_spellings_that_normalise_to_one_label_are_one_server(spellings: list[str]) -> None:
+    assert len({host_port(spelling) for spelling in spellings}) == 1
+
+
+def test_different_names_of_one_machine_are_different_servers() -> None:
+    labels = {host_port(f"http://{name}:8080") for name in ("localhost", "127.0.0.1", "[::1]")}
+
+    assert len(labels) == 3
+
+
+def test_every_unparsable_value_shares_the_unknown_host() -> None:
+    assert {host_port(value) for value in ("http://[::1", "http://a:b", "")} == {UNKNOWN_HOST}
+
+
+def test_a_scheme_default_port_is_not_filled_for_an_unknown_scheme() -> None:
+    assert host_port("ftp://files.test/pub") == "files.test"

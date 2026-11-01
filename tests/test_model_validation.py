@@ -507,8 +507,9 @@ async def test_validate_models_async_propagates_task_cancellation(caplog: pytest
 
 
 def _llama_cpp_cfg(**kw) -> SearchConfig:
-    """SearchConfig with [hyde].provider="llama_cpp" — triggers the probe."""
+    """SearchConfig with [hyde] enabled on provider "llama_cpp" — triggers the probe."""
     cfg = _cfg()
+    cfg.hyde.enabled = True
     cfg.hyde.provider = "llama_cpp"
     cfg.hyde.llama_cpp_base_url = kw.get("llama_cpp_base_url", "http://localhost:8080")
     return cfg
@@ -578,18 +579,240 @@ async def test_probe_failure_does_not_block_boot(caplog: pytest.LogCaptureFixtur
 
 
 @pytest.mark.asyncio
-async def test_probe_failure_names_host_and_port_never_the_credentials_of_the_url(caplog: pytest.LogCaptureFixture):
-    """The probe's WARNING carries ``host:port`` only: the base URL may hold ``user:password@`` and a query string."""
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://user:s3cr3t@gpu.test:8080/?token=t0k3n",
+        "http://user:s3cr3t/x@gpu.test:8080",
+        "http://user:s3cr3t?x@gpu.test:8080",
+        "http://user:s3cr3t#x@gpu.test:8080",
+    ],
+)
+async def test_probe_failure_logs_never_carry_the_credentials_of_the_url(base_url: str, caplog: pytest.LogCaptureFixture):
+    """Neither the WARNING nor the DEBUG line (message and traceback) holds a piece of the userinfo or the query."""
     mock_cls = _make_async_client_cls(get_side_effect=httpx.ConnectError("refused"))
-    config = _llama_cpp_cfg(llama_cpp_base_url="http://user:secret@gpu.test:8080/?token=abc")
+    with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
+         patch(_VALIDATE_DEVICE, return_value=(True, True, [])), \
+         caplog.at_level(logging.DEBUG):
+        await validate_models_async(_llama_cpp_cfg(llama_cpp_base_url=base_url), timeout_seconds=5)
+
+    [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warning.startswith("llama_cpp: the server at ")
+    logged = caplog.text + "".join(logging.Formatter().formatException(r.exc_info) for r in caplog.records if r.exc_info)
+    for secret in ("s3cr3t", "t0k3n", "user"):
+        assert secret not in logged, secret
+
+
+@pytest.mark.asyncio
+async def test_probe_failure_warning_is_the_shared_text_of_the_client_logger(caplog: pytest.LogCaptureFixture):
+    """Deliberate: the one line every path shares is attributed to the client's logger, not to this module's."""
+    mock_cls = _make_async_client_cls(get_side_effect=httpx.ConnectError("refused"))
     with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
          patch(_VALIDATE_DEVICE, return_value=(True, True, [])), \
          caplog.at_level(logging.WARNING):
-        await validate_models_async(config, timeout_seconds=5)
+        await validate_models_async(_llama_cpp_cfg(), timeout_seconds=5)
 
-    assert "gpu.test:8080" in caplog.text
-    assert "secret" not in caplog.text
-    assert "abc" not in caplog.text
+    [record] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert record.name == "archon_search.llm_client.llama_cpp_client"
+    assert record.getMessage() == (
+        "llama_cpp: the server at localhost:8080 is not reachable (ConnectError); requests to it fail until it answers, "
+        "and where its context window could not be read, 4096 tokens are assumed"
+    )
+
+
+def _http_error_response(status: int) -> MagicMock:
+    response = MagicMock()
+    response.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError("boom", request=httpx.Request("GET", "http://x"), response=httpx.Response(status))
+    )
+    return response
+
+
+@pytest.mark.asyncio
+async def test_probe_http_error_reason_is_the_status_code_only(caplog: pytest.LogCaptureFixture):
+    """A non-2xx answer reads ``HTTP <code>``: no server text reaches the line (this probe has no body to bound)."""
+    mock_cls = _make_async_client_cls(response=_http_error_response(503))
+    with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
+         patch(_VALIDATE_DEVICE, return_value=(True, True, [])), \
+         caplog.at_level(logging.WARNING):
+        result = await validate_models_async(_llama_cpp_cfg(), timeout_seconds=5)
+
+    assert result.llama_cpp_ok is False
+    [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert "is not reachable (HTTP 503);" in warning
+
+
+@pytest.mark.asyncio
+async def test_probe_failure_keeps_the_exception_types_at_debug(caplog: pytest.LogCaptureFixture):
+    mock_cls = _make_async_client_cls(get_side_effect=httpx.ConnectError("refused"))
+    with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
+         patch(_VALIDATE_DEVICE, return_value=(True, True, [])), \
+         caplog.at_level(logging.DEBUG, logger="archon_search.model_validation"):
+        await validate_models_async(_llama_cpp_cfg(), timeout_seconds=5)
+
+    [debug] = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG and r.name == "archon_search.model_validation"]
+    assert debug == "llama_cpp: GET /v1/models on localhost:8080 failed (ConnectError)"
+
+
+# The probe asks every llama-server an ENABLED feature uses, once per ``host:port``: a disabled section is not a server
+# anyone uses, and a second server is not hidden behind the first.
+
+
+def _servers_client_cls(*, down: frozenset[str] = frozenset()) -> MagicMock:
+    """Stands in for ``httpx.AsyncClient``: a client built for a base URL in *down* fails its GET, any other answers 200."""
+    def build(*, base_url: str, **_: object) -> AsyncMock:
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=httpx.ConnectError("refused")) if base_url in down else AsyncMock(return_value=_ok_response())
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        return client
+
+    return MagicMock(side_effect=build)
+
+
+def _probed_urls(mock_cls: MagicMock) -> list[str]:
+    return [call.kwargs["base_url"] for call in mock_cls.call_args_list]
+
+
+async def _validate(config: SearchConfig, mock_cls: MagicMock, **kwargs) -> ModelValidationResult:
+    with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
+         patch(_VALIDATE_DEVICE, return_value=(True, True, [])), \
+         patch("archon_search.model_validation.graph_ner_status", return_value=[]):
+        return await validate_models_async(config, timeout_seconds=5, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_llama_cpp_section_is_not_probed_and_warns_nothing(caplog: pytest.LogCaptureFixture):
+    config = _cfg()
+    config.hyde.provider = "llama_cpp"  # [hyde] stays disabled
+    mock_cls = _servers_client_cls(down=frozenset({config.hyde.llama_cpp_base_url}))
+
+    with caplog.at_level(logging.WARNING):
+        result = await _validate(config, mock_cls)
+
+    assert result.llama_cpp_ok is None
+    assert _probed_urls(mock_cls) == []
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("section", ["rag_fusion", "graph", "description"])
+async def test_each_enabled_llama_cpp_section_is_probed(section: str):
+    config = _cfg()
+    target = getattr(config, section)
+    target.enabled = True
+    target.provider = "llama_cpp"
+    target.llama_cpp_base_url = "http://gpu.test:9000"
+    mock_cls = _servers_client_cls()
+
+    result = await _validate(config, mock_cls)
+
+    assert _probed_urls(mock_cls) == ["http://gpu.test:9000"]
+    assert result.llama_cpp_ok is True
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_section_does_not_hide_the_server_of_an_enabled_one():
+    config = _cfg()
+    config.hyde.provider = "llama_cpp"  # disabled, default URL
+    config.rag_fusion.enabled = True
+    config.rag_fusion.provider = "llama_cpp"
+    config.rag_fusion.llama_cpp_base_url = "http://gpu.test:9000"
+    mock_cls = _servers_client_cls()
+
+    await _validate(config, mock_cls)
+
+    assert _probed_urls(mock_cls) == ["http://gpu.test:9000"]
+
+
+@pytest.mark.asyncio
+async def test_features_on_one_server_probe_it_once_whatever_the_spelling(caplog: pytest.LogCaptureFixture):
+    config = _cfg()
+    for section, url in (("hyde", "http://GPU.test:8080"), ("rag_fusion", "http://gpu.test.:8080/v1"), ("description", "http://u:p@gpu.test:8080")):
+        target = getattr(config, section)
+        target.enabled = True
+        target.provider = "llama_cpp"
+        target.llama_cpp_base_url = url
+    mock_cls = _servers_client_cls(down=frozenset({"http://GPU.test:8080"}))
+
+    with caplog.at_level(logging.WARNING):
+        result = await _validate(config, mock_cls)
+
+    assert _probed_urls(mock_cls) == ["http://GPU.test:8080"]
+    assert result.llama_cpp_ok is False
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+
+def _two_server_config(*, graph_url: str = "http://graph.test:9000") -> SearchConfig:
+    config = _cfg()
+    config.hyde.enabled = True
+    config.hyde.provider = "llama_cpp"
+    config.hyde.llama_cpp_base_url = "http://hyde.test:8080"
+    config.graph = GraphConfig(enabled=True, provider="llama_cpp", extraction_model="m", llama_cpp_base_url=graph_url)
+    return config
+
+
+def _graph_client() -> AsyncMock:
+    client = AsyncMock()
+    client.call = AsyncMock(return_value=None)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_llama_cpp_ok_is_false_when_any_enabled_server_is_down_and_each_down_server_warns_once(caplog: pytest.LogCaptureFixture):
+    mock_cls = _servers_client_cls(down=frozenset({"http://hyde.test:8080", "http://graph.test:9000"}))
+
+    with caplog.at_level(logging.WARNING):
+        result = await _validate(_two_server_config(), mock_cls, graph_client_factory=_graph_client)
+
+    assert result.llama_cpp_ok is False
+    messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(messages) == 2
+    assert sum("hyde.test:8080" in m for m in messages) == sum("graph.test:9000" in m for m in messages) == 1
+    assert all(r.exc_info is None for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_down_hyde_server_does_not_skip_the_graph_probe_of_a_live_graph_server(caplog: pytest.LogCaptureFixture):
+    mock_cls = _servers_client_cls(down=frozenset({"http://hyde.test:8080"}))
+    graph_client = _graph_client()
+
+    with caplog.at_level(logging.WARNING):
+        result = await _validate(_two_server_config(), mock_cls, graph_client_factory=lambda: graph_client)
+
+    assert result.llama_cpp_ok is False
+    graph_client.call.assert_awaited_once()
+    assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_down_graph_server_is_one_warning_and_no_second_one_from_the_graph_probe(caplog: pytest.LogCaptureFixture):
+    """hyde's server is up, the graph's is down: the graph probe must not call the dead server and log a traceback too."""
+    mock_cls = _servers_client_cls(down=frozenset({"http://graph.test:9000"}))
+    graph_client = _graph_client()
+    graph_client.call.side_effect = RuntimeError("would be a second WARNING with a traceback")
+
+    with caplog.at_level(logging.WARNING):
+        result = await _validate(_two_server_config(), mock_cls, graph_client_factory=lambda: graph_client)
+
+    assert result.llama_cpp_ok is False
+    graph_client.call.assert_not_awaited()
+    assert EXTRACTION_MODEL_PROBE_ERROR_WARNING not in result.provider_warnings
+    [warning] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert "graph.test:9000" in warning.getMessage()
+    assert warning.exc_info is None
+
+
+@pytest.mark.asyncio
+async def test_a_graph_on_the_same_server_as_a_down_hyde_is_skipped_by_label_not_by_spelling(caplog: pytest.LogCaptureFixture):
+    mock_cls = _servers_client_cls(down=frozenset({"http://hyde.test:8080"}))
+    graph_client = _graph_client()
+
+    with caplog.at_level(logging.WARNING):
+        await _validate(_two_server_config(graph_url="http://HYDE.test:8080/v1"), mock_cls, graph_client_factory=lambda: graph_client)
+
+    graph_client.call.assert_not_awaited()
+    assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
 
 
 # ---------------------------------------------------------------------------

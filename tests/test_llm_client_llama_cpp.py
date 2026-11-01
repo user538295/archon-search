@@ -146,17 +146,54 @@ async def test_llama_cpp_probe_failure_warns_once_per_host(caplog: pytest.LogCap
     assert {"llama.test:8080" in record.getMessage() for record in _warnings(caplog)} == {True, False}
 
 
-async def test_llama_cpp_unreachable_server_warning_says_unreachable_and_the_assumed_window(caplog: pytest.LogCaptureFixture) -> None:
+async def test_llama_cpp_unreachable_server_warning_text(caplog: pytest.LogCaptureFixture) -> None:
+    """The one line says both consequences and no more: calls fail, and the assumed window applies only where none was read."""
     client = _client(_Server(failures={"/props": httpx.ConnectError("refused")}))
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         await client.probe_context_window(_TIMEOUT_SECONDS)
 
     [warning] = _warnings(caplog)
-    message = warning.getMessage()
-    assert "llama.test:8080" in message
-    assert "not reachable" in message
-    assert str(ASSUMED_CONTEXT_TOKENS) in message
+    assert warning.getMessage() == (
+        "llama_cpp: the server at llama.test:8080 is not reachable (cannot connect to the llama-server); "
+        f"requests to it fail until it answers, and where its context window could not be read, {ASSUMED_CONTEXT_TOKENS} tokens are assumed"
+    )
+
+
+async def test_llama_cpp_unreachable_warning_is_attributed_to_the_shared_client_logger(caplog: pytest.LogCaptureFixture) -> None:
+    """Deliberate: the line is shared by every path that finds the outage, so it belongs to the client's logger, not to the
+    probe that happened to log it (a filter on ``archon_search.model_validation`` does not see it)."""
+    client = _client(_Server(failures={"/props": httpx.ConnectError("refused")}))
+
+    with caplog.at_level(logging.WARNING):
+        await client.probe_context_window(_TIMEOUT_SECONDS)
+
+    [record] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert record.name == _LOGGER_NAME == "archon_search.llm_client.llama_cpp_client"
+
+
+async def test_llama_cpp_unreachable_server_probe_logs_the_exception_types_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """The cause the WARNING's one-line reason hides stays diagnosable at DEBUG, as types only (a message may repeat credentials)."""
+    client = _client(_Server(failures={"/props": httpx.ConnectError("refused")}))
+
+    with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
+        await client.probe_context_window(_TIMEOUT_SECONDS)
+
+    [debug] = [r for r in caplog.records if r.levelno == logging.DEBUG and r.name == _LOGGER_NAME]
+    assert debug.getMessage() == "llama_cpp: GET /props on llama.test:8080 failed (LlmCallFailure < ConnectError)"
+    assert "refused" not in caplog.text
+
+
+async def test_llama_cpp_http_error_probe_reason_carries_the_status_and_the_servers_bounded_text(caplog: pytest.LogCaptureFixture) -> None:
+    """What the line carries about the cause: the failure's own one-line reason (the server's error text is at most
+    ``MAX_SERVER_TEXT_CHARS`` characters), nothing from the configured URL."""
+    client = _client(_Server(statuses={"/props": (503, {"error": {"message": "loading model"}})}))
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        await client.probe_context_window(_TIMEOUT_SECONDS)
+
+    [warning] = _warnings(caplog)
+    assert "(HTTP 503: loading model)" in warning.getMessage()
 
 
 async def test_llama_cpp_server_that_answers_without_a_window_is_not_called_unreachable(caplog: pytest.LogCaptureFixture) -> None:
@@ -171,8 +208,13 @@ async def test_llama_cpp_server_that_answers_without_a_window_is_not_called_unre
     assert str(ASSUMED_CONTEXT_TOKENS) in warning.getMessage()
 
 
-@pytest.mark.parametrize("second_url", ["http://llama.test:8080/v1", "http://user:secret@llama.test:8080/?token=abc", "llama.test:8080"])
-async def test_llama_cpp_one_server_in_any_spelling_is_one_warning(second_url: str, caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize(
+    "second_url",
+    ["http://llama.test:8080/v1", "http://user:secret@llama.test:8080/?token=abc", "HTTP://LLAMA.test.:8080", "http://llama.test:8080#frag"],
+)
+async def test_llama_cpp_warning_is_kept_per_host_port_label(second_url: str, caplog: pytest.LogCaptureFixture) -> None:
+    """Two base URLs whose ``host_port`` label is the same share one WARNING (a statement about the label, not about what a
+    real HTTP client would reach: the transport here is a mock)."""
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused")
 
@@ -185,6 +227,22 @@ async def test_llama_cpp_one_server_in_any_spelling_is_one_warning(second_url: s
         await second.probe_context_window(_TIMEOUT_SECONDS)
 
     assert len(_warnings(caplog)) == 1
+
+
+@pytest.mark.parametrize("other_url", ["http://127.0.0.1:8080", "http://llama.test:8081", "http://llama.test"])
+async def test_llama_cpp_a_different_label_is_a_different_warning(other_url: str, caplog: pytest.LogCaptureFixture) -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    failing = httpx.MockTransport(refuse)
+    first = LlamaCppClient(model=_MODEL, base_url=_HOST, transport=failing)
+    second = LlamaCppClient(model=_MODEL, base_url=other_url, transport=failing)
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        await first.probe_context_window(_TIMEOUT_SECONDS)
+        await second.probe_context_window(_TIMEOUT_SECONDS)
+
+    assert len(_warnings(caplog)) == 2
 
 
 async def test_llama_cpp_unreachable_and_no_window_are_separate_findings(caplog: pytest.LogCaptureFixture) -> None:
@@ -491,17 +549,69 @@ async def test_llama_cpp_probe_rejects_unusable_n_ctx_values(window: object) -> 
     assert (await client.probe_context_window(_TIMEOUT_SECONDS)).source is ContextWindowSource.ASSUMED
 
 
-async def test_llama_cpp_probe_warning_hides_credentials_of_the_base_url(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://user:s3cr3t@llama.test:8080/?token=t0k3n",
+        "http://user:s3cr3t/x@llama.test:8080",
+        "http://user:s3cr3t?x@llama.test:8080",
+        "http://user:s3cr3t#x@llama.test:8080",
+    ],
+)
+async def test_llama_cpp_probe_logs_never_carry_credentials_of_the_base_url(base_url: str, caplog: pytest.LogCaptureFixture) -> None:
+    """No log line of the failed probe (WARNING and DEBUG, message and traceback) holds a piece of the userinfo or the query."""
     failing = _Server(failures={"/props": httpx.ConnectError("refused")})
-    client = LlamaCppClient(model=_MODEL, base_url="http://user:secret@llama.test:8080/?token=abc", transport=httpx.MockTransport(failing))
+    client = LlamaCppClient(model=_MODEL, base_url=base_url, transport=httpx.MockTransport(failing))
 
-    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+    with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
         await client.probe_context_window(_TIMEOUT_SECONDS)
 
     [warning] = _warnings(caplog)
-    assert "llama.test:8080" in warning.getMessage()
-    assert "secret" not in warning.getMessage()
-    assert "abc" not in warning.getMessage()
+    assert warning.getMessage().startswith("llama_cpp: the server at ")
+    logged = caplog.text + "".join(logging.Formatter().formatException(r.exc_info) for r in caplog.records if r.exc_info)
+    for secret in ("s3cr3t", "t0k3n", "user"):
+        assert secret not in logged, secret
+
+
+async def test_llama_cpp_successful_reprobe_with_an_unchanged_window_still_recounts_the_template() -> None:
+    """A server that answers again may be another model with the same window: the cached template count is dropped."""
+    server = _Server()
+    client = _client(server)
+    await client.probe_context_window(_TIMEOUT_SECONDS)
+    await client.input_budget(_TEMPLATE)
+
+    await client.probe_context_window(_TIMEOUT_SECONDS)
+    await client.input_budget(_TEMPLATE)
+
+    assert _paths(server) == ["/props", *_TEMPLATE_REQUESTS, "/props", *_TEMPLATE_REQUESTS]
+
+
+async def test_llama_cpp_template_count_in_flight_when_the_probe_succeeds_is_not_stored() -> None:
+    """The count that was being taken from the server before the probe answered belongs to the server it asked: it is
+    returned to its caller but not kept, so the next budget asks again."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    served = _Server()
+    state = {"gate": True}
+
+    async def server(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/tokenize" and state["gate"]:
+            state["gate"] = False
+            started.set()
+            await release.wait()
+        return served(request)
+
+    client = _client(server)
+    in_flight = asyncio.create_task(client.input_budget(_TEMPLATE))
+    await asyncio.wait_for(started.wait(), _TIMEOUT_SECONDS)
+
+    await client.probe_context_window(_TIMEOUT_SECONDS)
+    release.set()
+    await in_flight
+    served.requests.clear()
+    await client.input_budget(_TEMPLATE)
+
+    assert _paths(served) == _TEMPLATE_REQUESTS
 
 
 @pytest.mark.parametrize(
