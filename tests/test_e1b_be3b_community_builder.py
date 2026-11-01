@@ -11,6 +11,7 @@ from archon_search.config import GraphConfig
 from archon_search.constants import ANSWER_RESERVE_TOKENS
 from archon_search.graph_types import EntityType, GraphNode
 from archon_search.llm_client.budget import exact_budget
+from archon_search.llm_client.fit import MAX_CHARS_PER_TOKEN
 from archon_search.llm_client.protocol import (
     UNBOUNDED,
     ContextWindow,
@@ -20,6 +21,7 @@ from archon_search.llm_client.protocol import (
     LlmCallFailure,
     LlmCallRequest,
     LlmCallResult,
+    ThinkSetting,
 )
 
 
@@ -111,7 +113,7 @@ class _GraphClient:
     def context_window(self) -> ContextWindow:
         return UNBOUNDED
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         self.budget_templates.append(template_text)
         return self.budget
 
@@ -348,7 +350,7 @@ async def test_community_chunks_sized_to_budget():
     from archon_search.community_builder import CommunityBuilder
 
     class _WindowedClient(_GraphClient):
-        async def input_budget(self, template_text: str) -> InputBudget:
+        async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
             self.budget_templates.append(template_text)
             return await exact_budget(
                 ContextWindowTokens(_WINDOW_TOKENS, ContextWindowSource.CONFIGURED), template_text, self.count_tokens
@@ -439,13 +441,19 @@ class _CountingClient(_GraphClient):
         return await super().count_tokens(text)
 
 
-def _one_large_community(client: _GraphClient, names: list[str]):
-    """A builder over one node per name (the entity name is the name), plus the node ids Leiden is stubbed to return as one group."""
+def _one_large_community(client: _GraphClient, names: list[str], chunks: list[dict] | None = None):
+    """A builder over one node per name (the entity name is the name), plus the node ids Leiden is stubbed to return as one group.
+
+    *chunks* are the passages the store holds for the nodes' one document (none: no passage to send).
+    """
     from archon_search.community_builder import CommunityBuilder
 
     nodes = [GraphNode(f"id-{name}", name, EntityType.concept, "doc-1", "test") for name in names]
-    settings = GraphConfig(enabled=True, provider="ollama", extraction_model="m", max_community_size=len(names))
-    builder = CommunityBuilder(make_graph_store(nodes, []), settings, graph_client=client)
+    settings = GraphConfig(
+        enabled=True, provider="ollama", extraction_model="m", max_community_size=len(names), community_summary_chunks=len(chunks or [])
+    )
+    search_store = make_search_store({"doc-1": chunks}) if chunks else None
+    builder = CommunityBuilder(make_graph_store(nodes, []), settings, search_store=search_store, graph_client=client)
     return builder, [node.id for node in nodes]
 
 
@@ -505,6 +513,87 @@ async def test_cutting_the_entity_names_to_the_budget_takes_a_logarithmic_number
 
     assert len(client.counted) <= 1 + math.ceil(math.log2(_NAME_COUNT))
 
+
+_PASSAGE_BUDGET = 400  # holds half of it as names plus the 151-word passage, but not 400 names plus the passage
+_HUGE_COMMUNITY_NAMES = 100_000
+
+
+@pytest.mark.asyncio
+async def test_names_that_must_be_cut_leave_the_passages_their_share_of_the_budget(caplog):
+    """The names take at most ``NAMES_CUT_SHARE_PERCENT`` of the budget when they do not all fit and passages follow,
+    so the summary still sees a representative passage; before, the longest prefix of names took the whole budget."""
+    from archon_search.community_builder import NAMES_CUT_SHARE_PERCENT
+
+    names = [f"secret-{index}" for index in range(_NAME_COUNT)]
+    client = _CountingClient(InputBudget(_PASSAGE_BUDGET))
+    builder, group = _one_large_community(client, names, [_word_chunk("chunk-a", [1.0, 0.0])])
+
+    with patch("archon_search.community_builder._run_leiden_partition_sync", return_value=[group]), caplog.at_level(
+        logging.WARNING, logger="archon_search.community_builder"
+    ):
+        communities = await builder.build("test-col", ns="default")
+
+    (request,) = client.requests
+    assert _sent_entity_names(request.prompt) == names[: _PASSAGE_BUDGET * NAMES_CUT_SHARE_PERCENT // 100]
+    assert "chunk-a " in request.prompt
+    assert len(_sent_entity_names(request.prompt)) + 1 + _WORDS_PER_CHUNK + 1 <= _PASSAGE_BUDGET  # names, "---", the passage's words
+    assert communities[0].summary_text == "a summary"
+    (warning,) = _build_warnings(caplog)  # only the names cut: the passage fits, so no "no passage" warning
+    assert "names" in warning and "secret-" not in caplog.text and "chunk-a" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_names_that_fit_the_budget_keep_all_of_it_even_when_no_passage_fits_after_them(caplog):
+    """The share only applies to names that must be cut: all names within the budget go, and the passages get what is
+    left, which may be nothing (the ``no passage`` warning, as before)."""
+    names = [f"secret-{index}" for index in range(_PASSAGE_BUDGET)]
+    client = _GraphClient(budget=InputBudget(_PASSAGE_BUDGET))
+    builder, group = _one_large_community(client, names, [_word_chunk("chunk-a", [1.0, 0.0])])
+
+    with patch("archon_search.community_builder._run_leiden_partition_sync", return_value=[group]), caplog.at_level(
+        logging.WARNING, logger="archon_search.community_builder"
+    ):
+        await builder.build("test-col", ns="default")
+
+    (request,) = client.requests
+    assert _sent_entity_names(request.prompt) == names
+    assert "chunk-a" not in request.prompt
+    (warning,) = _build_warnings(caplog)
+    assert "no representative passage fits" in warning
+
+
+@pytest.mark.asyncio
+async def test_a_first_name_larger_than_the_names_share_is_still_sent_when_it_fits_the_budget():
+    """Capped at the share, not even the first name would fit; the cap then gives way to the whole budget (the call is
+    not skipped), the names being cut to what the budget holds."""
+    big_name = " ".join(["word"] * (_PASSAGE_BUDGET * 3 // 4))
+    names = [big_name, *(f"secret-{index}" for index in range(_NAME_COUNT))]
+    client = _GraphClient(budget=InputBudget(_PASSAGE_BUDGET))
+    builder, group = _one_large_community(client, names, [_word_chunk("chunk-a", [1.0, 0.0])])
+
+    with patch("archon_search.community_builder._run_leiden_partition_sync", return_value=[group]):
+        await builder.build("test-col", ns="default")
+
+    (request,) = client.requests
+    sent = _sent_entity_names(request.prompt)
+    assert sent[0] == big_name and 1 < len(sent) < len(names)
+    assert await client.count_tokens(", ".join(sent)) <= _PASSAGE_BUDGET
+
+
+@pytest.mark.asyncio
+async def test_a_huge_community_is_never_counted_whole_the_names_are_cut_to_the_budgets_reach_first():
+    """One ``/tokenize`` request for a 100 000-name community can pass a server's time limit and lose the whole summary:
+    no counted text is longer than ``MAX_CHARS_PER_TOKEN`` characters per budget token (as ``fit_text_to_budget`` limits a head)."""
+    names = [f"secret-{index}" for index in range(_HUGE_COMMUNITY_NAMES)]
+    client = _CountingClient(InputBudget(_NAMES_THAT_FIT))
+    builder, group = _one_large_community(client, names)
+
+    with patch("archon_search.community_builder._run_leiden_partition_sync", return_value=[group]):
+        await builder.build("test-col", ns="default")
+
+    (request,) = client.requests
+    assert _sent_entity_names(request.prompt) == names[:_NAMES_THAT_FIT]
+    assert max(len(text) for text in client.counted) <= _NAMES_THAT_FIT * MAX_CHARS_PER_TOKEN
 
 @pytest.mark.asyncio
 async def test_a_first_entity_name_that_alone_exceeds_the_budget_skips_the_call_with_one_warning(caplog):

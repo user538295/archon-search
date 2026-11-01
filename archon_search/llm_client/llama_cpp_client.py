@@ -9,7 +9,8 @@ Thin wrapper over ``httpx`` (a core dependency) talking to a llama-server (llama
   renders a message through the model's chat template with the thinking switch the call will send, and
   ``POST /tokenize`` (``{"content": text}`` answers ``{"tokens": [...]}``) counts it: the exact count
   :meth:`input_budget` sizes with (S11, ``llm_client.budget.exact_budget``), chat framing included. The two requests
-  share one deadline (``SIZING_DEADLINE_SECONDS``); a failure names the request (``POST /apply-template: HTTP 404: ...``).
+  share one deadline (``SIZING_DEADLINE_SECONDS``); a failure names the request (``POST /apply-template: HTTP 404: ...``),
+  the deadline's too (``POST /tokenize: sizing the template took longer than 10s``).
 * ``POST /v1/chat/completions`` carries every call: one fresh user message, nothing carried over (S6). llama-server
   rejects an oversized prompt with an error, which is raised as a failure.
 * ``think``: ``ON`` / ``OFF`` send ``chat_template_kwargs: {"enable_thinking": true / false}`` (the chat template decides
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import functools
 import logging
 from collections.abc import Iterator
@@ -95,13 +97,22 @@ def _thinking_fields(think: ThinkSetting) -> dict[str, dict[str, bool]]:
     return {_TEMPLATE_KWARGS_FIELD: {_ENABLE_THINKING_KWARG: enable_thinking}}
 
 
+@dataclasses.dataclass(slots=True)
+class _InFlight:
+    """The path of the request a sizing is waiting on, kept for the sizing deadline, which cancels it and so cannot name it."""
+
+    path: str | None = None
+
+
 @contextlib.contextmanager
-def _naming_endpoint(path: str) -> Iterator[None]:
+def _naming_endpoint(path: str, in_flight: _InFlight) -> Iterator[None]:
     """Prefix the reason of a failure raised inside with the request that failed (``POST /apply-template: HTTP 404: ...``).
 
     A server without the endpoint answers a bare 404 that names nothing; the path is a constant of this module, never
     part of the configured URL, so it carries no credentials. The failure keeps its type (a timeout stays a timeout).
+    *in_flight* records *path* while the request runs.
     """
+    in_flight.path = path
     try:
         yield
     except LlmCallFailure as failure:
@@ -216,14 +227,21 @@ class LlamaCppClient:
 
         The count is asked of the server once per template and setting (``/apply-template``, then ``/tokenize``); the window
         is read live, so one resolved later is used. The whole sizing, both requests together, is bounded by
-        ``SIZING_DEADLINE_SECONDS``; a server that does not answer in time raises ``LlmCallTimeout`` and nothing is cached.
+        ``SIZING_DEADLINE_SECONDS``; a server that does not answer in time raises ``LlmCallTimeout`` naming the request it
+        was waiting on (the deadline starts before, and may equal, that request's own allowance) and nothing is cached.
         """
-        count = self._template_costs[think].memoize_async(functools.partial(self._count_framed_tokens, think=think))
+        in_flight = _InFlight()
+        count = self._template_costs[think].memoize_async(
+            functools.partial(self._count_framed_tokens, think=think, in_flight=in_flight)
+        )
         try:
             async with asyncio.timeout(SIZING_DEADLINE_SECONDS):
                 return await exact_budget(self._window, template_text, count)
         except TimeoutError as exc:
-            raise LlmCallTimeout(PROVIDER_NAME, f"sizing the template took longer than {SIZING_DEADLINE_SECONDS:g}s") from exc
+            waiting_on = f"POST {in_flight.path}: " if in_flight.path is not None else ""
+            raise LlmCallTimeout(
+                PROVIDER_NAME, f"{waiting_on}sizing the template took longer than {SIZING_DEADLINE_SECONDS:g}s"
+            ) from exc
 
     def token_ceiling(self, text: str) -> int:
         """Bytes of *text* plus the SentencePiece dummy-prefix token. ``/tokenize`` adds no BOS (``add_special`` defaults to
@@ -233,17 +251,18 @@ class LlamaCppClient:
         text is at least two bytes (see ``_SPM_DUMMY_PREFIX_TOKENS``)."""
         return len(text.encode("utf-8", "surrogatepass")) + _SPM_DUMMY_PREFIX_TOKENS
 
-    async def _count_framed_tokens(self, text: str, think: ThinkSetting) -> int:
+    async def _count_framed_tokens(self, text: str, think: ThinkSetting, in_flight: _InFlight) -> int:
         """Tokens of *text* as one user message after the server's chat template (system block, role markers, generation
         prompt), rendered with the thinking switch a call of *think* sends.
 
         The server cuts the reserved answer space by these tokens when it builds the prompt of a call, so the budget counts
         them (T-2: with the plain count a prompt of exactly the budget overran ``n_ctx - ANSWER_RESERVE_TOKENS`` by 29
         tokens on Qwen2.5). A template may frame differently per switch (Qwen3 appends an empty think block when
-        ``enable_thinking`` is false), so the request carries the same ``chat_template_kwargs`` the call will.
+        ``enable_thinking`` is false), so the request carries the same ``chat_template_kwargs`` the call will. *in_flight*
+        is told which of the two requests is being waited on.
         """
         payload = {"messages": [{"role": "user", "content": text}], **_thinking_fields(think)}
-        with _naming_endpoint(_APPLY_TEMPLATE_PATH):
+        with _naming_endpoint(_APPLY_TEMPLATE_PATH, in_flight):
             body = await self._request("POST", _APPLY_TEMPLATE_PATH, TOKENIZE_TIMEOUT_SECONDS, payload, prompt=text)
             try:
                 framed = body["prompt"]
@@ -251,10 +270,13 @@ class LlamaCppClient:
                 raise _unexpected_reply(exc) from exc
             if not isinstance(framed, str):
                 raise _unexpected_reply(TypeError("prompt is not a string"))
-        return await self.count_tokens(framed)
+        return await self._count_tokens(framed, in_flight)
 
     async def count_tokens(self, text: str) -> int:
-        with _naming_endpoint(_TOKENIZE_PATH):
+        return await self._count_tokens(text, _InFlight())
+
+    async def _count_tokens(self, text: str, in_flight: _InFlight) -> int:
+        with _naming_endpoint(_TOKENIZE_PATH, in_flight):
             body = await self._request("POST", _TOKENIZE_PATH, TOKENIZE_TIMEOUT_SECONDS, {"content": text}, prompt=text)
             try:
                 tokens = body["tokens"]

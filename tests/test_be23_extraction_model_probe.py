@@ -35,6 +35,7 @@ from archon_search.llm_client.protocol import (
     LlmCallRequest,
     LlmCallResult,
     LlmCallTimeout,
+    ThinkSetting,
 )
 from archon_search.model_validation import (
     EXTRACTION_MODEL_PROBE_CLAUDE_MISSING_WARNING,
@@ -69,7 +70,7 @@ class _Client:
     def context_window(self) -> ContextWindow:
         return UNBOUNDED
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         return InputBudget(UNBOUNDED)
 
 

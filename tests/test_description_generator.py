@@ -1106,10 +1106,14 @@ class TestSampleSizeLog:
         assert f"{_SMALL_WINDOW_BUDGET_TOKENS} tokens" in message
         assert f"{_SMALL_WINDOW_SIZE} tokens, configured" in message
         assert "chunk-" not in message and _DESCRIPTION_TEXT not in message
+        assert "thinking" not in message, "no headroom was held back: think is false"
 
     @pytest.mark.asyncio
-    async def test_the_line_names_the_room_left_after_the_thinking_headroom(self, caplog: pytest.LogCaptureFixture) -> None:
-        """A 4000-token budget gives 2000 to the thinking headroom (``TestThinkingHeadroom``): the sample fits the other 2000."""
+    async def test_the_line_names_the_models_room_and_the_thinking_headroom_held_back_from_it(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A 4000-token budget gives 2000 to the thinking headroom (``TestThinkingHeadroom``): the sample fits the other
+        2000, and the line says both, not the sample's 2000 as if it were the model's room."""
         window = ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
         client = CountingClient(budget_tokens=4000, window=window, reply=_DESCRIPTION_TEXT)
 
@@ -1117,7 +1121,8 @@ class TestSampleSizeLog:
             await _generator(client, FakeSampleStore(), think=None).generate(_COLLECTION, _NAMESPACE)
 
         (message,) = self._info_messages(caplog)
-        assert " of 100 " in message and "2000 tokens" in message
+        assert " of 100 " in message
+        assert "input room of 4000 tokens, less 2000 held back for thinking" in message
 
     @pytest.mark.asyncio
     async def test_a_sample_that_fits_whole_logs_nothing(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -1125,6 +1130,21 @@ class TestSampleSizeLog:
             await _generator(_large_window_client(), FakeSampleStore()).generate(_COLLECTION, _NAMESPACE)
 
         assert self._info_messages(caplog) == []
+
+    @pytest.mark.asyncio
+    async def test_a_cut_sample_reports_the_excerpts_sent_not_the_picks_when_some_vanished_before_the_read(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The budget cut 100 picks to 20 (``min(99, 100 * 300 // 1443)`` after the first read's 50 survivors), the store
+        kept every other one: ten excerpts went to the model, and ten is what the line says."""
+        store = _VanishingChunksStore()
+
+        with caplog.at_level("INFO", logger="archon_search.description_generator"):
+            await _generator(_small_window_client(), store, think=False).generate(_COLLECTION, _NAMESPACE)
+
+        (message,) = self._info_messages(caplog)
+        assert len(_read_ids(store)) == 10  # the ids the store read are the excerpts sent
+        assert "cut to 10 of 100 excerpts" in message
 
     @pytest.mark.asyncio
     async def test_excerpts_that_vanished_before_the_read_are_not_blamed_on_the_budget(self, caplog: pytest.LogCaptureFixture) -> None:

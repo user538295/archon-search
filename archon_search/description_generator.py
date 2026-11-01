@@ -48,7 +48,8 @@ fails every collection the same way. Every other failure (a window too small, a 
 collection and logs every time. The one exception is ``think = true`` on a model with no thinking mode: its own WARNING
 (model name, no collection) replaces the failure line and appears once per process and model. A sample the budget cut
 below the count asked for (``max_sample_chunks`` or the number of open chunks) is not a failure and logs one INFO line per
-generation with the collection name, ``N of M`` excerpts, the input room they fit and the window: the sizes only.
+generation with the collection name, ``N of M`` excerpts (N is the number actually sent), the model's input room (with the
+thinking headroom held back from it, if any) and the window: the sizes only.
 """
 from __future__ import annotations
 
@@ -69,10 +70,10 @@ from archon_search.constants import (
 )
 from archon_search.description_sample import DescriptionSampleStore, StoreReadError
 from archon_search.description_write import collapse_to_one_line, trim_to_last_sentence
+from archon_search.llm_client.fit import describe_window
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.protocol import (
     UNBOUNDED,
-    ContextWindowTokens,
     LlmCallFailure,
     LlmCallRequest,
     LlmClient,
@@ -304,21 +305,32 @@ class DescriptionGenerator:
         if thinking_possible:
             headroom = min(DESCRIPTION_THINKING_HEADROOM_TOKENS, budget // 2)
             try:
-                excerpts = await self._fit(collection, namespace, chunk_ids, include_restricted, budget - headroom, count)
+                excerpts = await self._fit(
+                    collection, namespace, chunk_ids, include_restricted, budget - headroom, count, headroom
+                )
             except _WindowTooSmall:
                 pass  # not even one excerpt fits beside the headroom: a small window keeps the sample, not the thinking room
             else:
                 return excerpts, ANSWER_RESERVE_TOKENS + headroom
-        excerpts = await self._fit(collection, namespace, chunk_ids, include_restricted, budget, count)
+        excerpts = await self._fit(collection, namespace, chunk_ids, include_restricted, budget, count, headroom=0)
         return excerpts, ANSWER_RESERVE_TOKENS
 
     async def _fit(
-        self, collection: str, namespace: str, chunk_ids: list[str], include_restricted: bool, budget: int, count: int
+        self,
+        collection: str,
+        namespace: str,
+        chunk_ids: list[str],
+        include_restricted: bool,
+        budget: int,
+        count: int,
+        headroom: int,
     ) -> list[str]:
         """Draw, count and shrink until the excerpts fit *budget* (the stated loop of the module docstring).
 
-        A sample the budget cut below the *count* asked for is logged at INFO (the sizes only): a window can shrink
-        ``max_sample_chunks`` to a handful of excerpts and nothing else would tell the operator.
+        *headroom* is the thinking room already taken off the model's input room to give *budget* (0 when none was). A
+        sample the budget cut below the *count* asked for is logged at INFO (the sizes only, with the number of excerpts
+        actually sent): a window can shrink ``max_sample_chunks`` to a handful of excerpts and nothing else would tell the
+        operator.
         """
         if budget == 0:
             raise self._window_too_small(budget)
@@ -337,12 +349,13 @@ class DescriptionGenerator:
                 if count < asked:
                     logger.info(
                         "Description sample for collection %r cut to %d of %d excerpts to fit the model's input room of "
-                        "%d tokens (context window: %s)",
+                        "%d tokens%s (context window: %s)",
                         collection,
-                        count,
+                        len(excerpts),
                         asked,
-                        budget,
-                        self._named_window(),
+                        budget + headroom,
+                        f", less {headroom} held back for thinking" if headroom else "",
+                        describe_window(self._client.context_window()),
                     )
                 return excerpts
             if count == 1:
@@ -360,16 +373,12 @@ class DescriptionGenerator:
             raise _no_open_chunk("none of the sampled chunks could be read as unrestricted text")
         return excerpts
 
-    def _named_window(self) -> str:
-        """The client's window as a message names it: its size and where the size came from."""
-        window = self._client.context_window()
-        return f"{window.size} tokens, {window.source.value}" if isinstance(window, ContextWindowTokens) else str(window)
-
     def _window_too_small(self, budget: int) -> _WindowTooSmall:
         room = "the prompt and one excerpt" if budget == 0 else "one excerpt"
         return _WindowTooSmall(
             DescriptionFailureReason.CALL_FAILED,
-            f"the model's context window ({self._named_window()}) leaves {budget} input tokens, too little for {room}",
+            f"the model's context window ({describe_window(self._client.context_window())}) leaves {budget} input tokens, "
+            f"too little for {room}",
         )
 
     async def _ask(self, collection: str, sample: list[str], answer_ceiling: int) -> DescriptionGenerated:

@@ -39,6 +39,7 @@ _LONGER_THAN_THE_TIMEOUT_SECONDS = 1.0
 _SLOW_ANSWER_SECONDS = 0.4  # one sizing request fits the deadline below, the two together do not
 _SIZING_DEADLINE_SECONDS = 0.6
 _GENEROUS_DEADLINE_SECONDS = 30.0
+_SHORT_ALLOWANCE_SECONDS = 0.3  # the sizing deadline and the per-request allowance of the wedged-server test
 # The fake's tokenize counts one token per whitespace-separated word.
 _TEMPLATE = "Describe the collection in one sentence."
 _TEMPLATE_TOKENS = 6
@@ -159,5 +160,21 @@ async def test_llama_cpp_sizing_is_bounded_as_a_whole_not_per_request(monkeypatc
         monkeypatch.setattr(llama_cpp_client, "SIZING_DEADLINE_SECONDS", _GENEROUS_DEADLINE_SECONDS)
         within = await client.input_budget(_TEMPLATE)
 
-    assert raised.value.reason == f"sizing the template took longer than {_SIZING_DEADLINE_SECONDS:g}s"
+    # The first request answers in 0.4 s; the deadline (0.6 s) fires while the second, /tokenize, is waited on.
+    assert raised.value.reason == f"POST /tokenize: sizing the template took longer than {_SIZING_DEADLINE_SECONDS:g}s"
     assert isinstance(within.tokens, int)
+
+
+async def test_llama_cpp_sizing_of_a_wedged_server_names_the_endpoint_it_waited_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The server holds every answer past both the deadline and the per-request allowance (both shrunk to 0.3 s), as the
+    shipped settings, which are equal, would: the failure still names the request in flight."""
+    monkeypatch.setattr(llama_cpp_client, "SIZING_DEADLINE_SECONDS", _SHORT_ALLOWANCE_SECONDS)
+    monkeypatch.setattr(llama_cpp_client, "TOKENIZE_TIMEOUT_SECONDS", _SHORT_ALLOWANCE_SECONDS)
+    with FakeModelServer(response_delay_seconds=_LONGER_THAN_THE_TIMEOUT_SECONDS) as wedged:
+        client = LlamaCppClient(model=_MODEL, base_url=wedged.base_url)
+
+        with pytest.raises(LlmCallTimeout) as raised:
+            await client.input_budget(_TEMPLATE)
+
+    assert raised.value.reason.startswith("POST /apply-template: ")
+    assert _TEMPLATE not in raised.value.reason

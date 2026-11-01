@@ -6,9 +6,10 @@ margin on prose, code and non-Latin scripts, but two kinds of text break it (T-2
 four tokenizer families: llama3.1 8b, qwen2.5, gemma3, tinyllama): digits (per-digit tokenizers cost up to 1.68x the gpt2
 count on digit tables, 1.9x on single digits separated by spaces, 2.8x on two-digit numbers) and characters outside the
 Basic Multilingual Plane such as emoji (byte-fallback tokenizers cost up to 1.55x). The estimate therefore counts every
-ASCII digit as one token (plus one per digit run) and every such character as its four UTF-8 bytes, and the one literal
-gpt2 reads as a special token (``<|endoftext|>``, which Llama and Qwen vocabularies split into several tokens) as its 13
-UTF-8 bytes; the rest of the text is counted by gpt2. The real count of every measured text class then stays within 1.2x
+ASCII digit as one token (plus one per digit run) and every such character as its four UTF-8 bytes, a lone surrogate (which
+gpt2 refuses to encode) as its three, and the one literal gpt2 reads as a special token (``<|endoftext|>``, which Llama and
+Qwen vocabularies split into several tokens, a literal re-formed by removing another included) as its 13 UTF-8 bytes; the
+rest of the text is counted by gpt2. The real count of every measured text class then stays within 1.2x
 this estimate (worst measured: 1.15, digit-free English prose on tinyllama, a Llama 2 sentencepiece model).
 
 The tokenizer is the pinned ``tokenizer.json`` of
@@ -52,6 +53,33 @@ _ASTRAL_CHARACTER_TOKENS = 4
 # the gpt2 text and charged its UTF-8 length: the most any tokenizer spends on it, the bound ``ceiling`` states.
 _SPECIAL_TOKEN_LITERAL = "<|endoftext|>"
 _SPECIAL_TOKEN_LITERAL_TOKENS = len(_SPECIAL_TOKEN_LITERAL)  # ASCII: one byte, at most one token, per character
+_SPECIAL_TOKEN_LITERAL_CHARACTERS = list(_SPECIAL_TOKEN_LITERAL)
+_SPECIAL_TOKEN_LITERAL_LAST_CHARACTER = _SPECIAL_TOKEN_LITERAL[-1]  # the only ``>`` of the literal
+
+# A lone surrogate (a prompt can hold one from a bad document) is text the gpt2 tokenizer refuses to encode, so it is removed
+# from the gpt2 text and counted as the three bytes ``surrogatepass`` encodes it as, the form ``ceiling`` charges.
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+_LONE_SURROGATE_TOKENS = 3
+
+
+def _remove_special_token_literals(text: str) -> tuple[str, int]:
+    """*text* without ``<|endoftext|>`` and how many literals were removed, joined halves included.
+
+    Removing a literal can join the text around it into another one (``<|endof<|endoftext|>text|>``), which gpt2 would
+    read as one token again, so the removal runs until none is left: one pass over the text with a stack that drops the
+    literal the moment it ends on it, linear however deep the literals nest. A text without the literal (nearly every
+    text) costs one substring search.
+    """
+    if _SPECIAL_TOKEN_LITERAL not in text:
+        return text, 0
+    kept: list[str] = []
+    removed = 0
+    for character in text:
+        kept.append(character)
+        if character == _SPECIAL_TOKEN_LITERAL_LAST_CHARACTER and kept[-_SPECIAL_TOKEN_LITERAL_TOKENS:] == _SPECIAL_TOKEN_LITERAL_CHARACTERS:
+            del kept[-_SPECIAL_TOKEN_LITERAL_TOKENS:]
+            removed += 1
+    return "".join(kept), removed
 
 
 class _Encoding(Protocol):
@@ -98,18 +126,20 @@ class TokenCounter:
         self._lock = threading.Lock()
 
     def count(self, text: str) -> int:
-        """The token estimate of *text* (see the module docstring): gpt2 tokens plus the three surcharges."""
+        """The token estimate of *text* (see the module docstring): gpt2 tokens plus the four surcharges."""
         digits = sum(len(run) for run in _DIGIT_RUN.findall(text))
         astral_characters = len(_ASTRAL_CHARACTER.findall(text))
-        # The literal is looked for after the astral characters are gone: removing one can leave the literal behind.
-        gpt2_text = _ASTRAL_CHARACTER.sub("", _DIGIT_RUN.sub("0", text))
-        special_token_literals = gpt2_text.count(_SPECIAL_TOKEN_LITERAL)
-        gpt2_text = gpt2_text.replace(_SPECIAL_TOKEN_LITERAL, "")
+        lone_surrogates = len(_LONE_SURROGATE.findall(text))
+        # The literal is looked for after the astral characters and lone surrogates are gone: removing one can leave the
+        # literal behind.
+        gpt2_text = _LONE_SURROGATE.sub("", _ASTRAL_CHARACTER.sub("", _DIGIT_RUN.sub("0", text)))
+        gpt2_text, special_token_literals = _remove_special_token_literals(gpt2_text)
         gpt2_tokens = len(self._get_tokenizer().encode(gpt2_text, add_special_tokens=False).ids)
         return (
             gpt2_tokens
             + digits
             + _ASTRAL_CHARACTER_TOKENS * astral_characters
+            + _LONE_SURROGATE_TOKENS * lone_surrogates
             + _SPECIAL_TOKEN_LITERAL_TOKENS * special_token_literals
         )
 
@@ -118,7 +148,7 @@ class TokenCounter:
         """An upper bound of :meth:`count` that needs no tokenizer: the UTF-8 length plus one per digit run.
 
         gpt2 is byte-level, so a token covers at least one byte and the gpt2 part is at most the bytes of the text it is
-        given; an astral character and a special-token literal are charged their bytes (as many as they have); a digit
+        given; an astral character, a lone surrogate and a special-token literal are charged their bytes (as many as they have); a digit
         run of N digits is charged N plus one placeholder that stands for N bytes already counted. Hence
         ``count(text) <= len(utf8) + digit runs``.
         """

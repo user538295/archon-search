@@ -21,9 +21,10 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from archon_search.constants import ANSWER_RESERVE_TOKENS
+from archon_search.llm_client.fit import MAX_CHARS_PER_TOKEN, describe_window
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.protocol import (
     LlmCallFailure,
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
     from archon_search.config import GraphConfig
     from archon_search.graph_store import GraphStore
     from archon_search.graph_types import Community, GraphEdge, GraphNode
-    from archon_search.llm_client.protocol import ContextWindow, LlmClient
+    from archon_search.llm_client.protocol import LlmClient
     from archon_search.store import SearchStore
 
 _logger = logging.getLogger(__name__)
@@ -65,6 +66,11 @@ _SUMMARY_NO_PASSAGE_WARN_KEY = "graph_community_summary_no_passage"
 _SUMMARY_EMPTY_WARN_KEY = "graph_community_summary_empty"
 #: ``warn_once`` key: one WARNING per process for the first community whose entity names are cut to the budget.
 _SUMMARY_NAMES_CUT_WARN_KEY = "graph_community_summary_names_cut"
+#: Share of the input budget (percent) the entity names may take when they do not all fit and passages follow: a community
+#: whose names must be cut keeps the rest of the budget for its representative passages. Names that all fit in the budget
+#: are all sent, whatever they leave.
+NAMES_CUT_SHARE_PERCENT: Final = 50
+_PERCENT: Final = 100
 
 
 def render_summary_prompt(entity_names: Sequence[str], chunk_texts: Sequence[str]) -> str:
@@ -105,8 +111,18 @@ async def _longest_fitting_prefix(total: int, fits: Callable[[int], Awaitable[bo
     return fitting
 
 
-def _describe_window(window: ContextWindow) -> str:
-    return "unbounded window" if isinstance(window, str) else f"window of {window.size} tokens"
+def _names_within_reach(entity_names: Sequence[str], room: int) -> int:
+    """How many leading names join into a text of at most ``MAX_CHARS_PER_TOKEN`` characters per token of *room*.
+
+    A longer text is taken not to fit *room* tokens, as :func:`fit_text_to_budget` takes a head longer than that.
+    """
+    reach = room * MAX_CHARS_PER_TOKEN
+    length = -len(_ENTITY_SEPARATOR)  # a separator sits between two names only
+    for index, name in enumerate(entity_names):
+        length += len(name) + len(_ENTITY_SEPARATOR)
+        if length > reach:
+            return index
+    return len(entity_names)
 
 
 class CommunityDependencyError(ImportError):
@@ -475,8 +491,9 @@ class CommunityBuilder:
         ``summary_text=None`` (the client raises, callers decide the fallback).
 
         The names and passages are sized to the client's input budget first (C1): the budget is the window minus the answer
-        reserve minus the template. The entity names go first, in the order given (all of them, or the longest prefix that
-        fits: a community can have hundreds of entities), then as many passages as fit in what is left. A cloud client has
+        reserve minus the template. The entity names go first, in the order given (all of them when they fit the budget;
+        else the longest prefix that fits, held to ``NAMES_CUT_SHARE_PERCENT`` of the budget when passages follow: a
+        community can have hundreds of entities), then as many passages as fit in what is left. A cloud client has
         no budget, so everything goes. The budget holds ``ANSWER_RESERVE_TOKENS`` back for the answer: an
         ``extraction_token_budget`` above that comes out of the room for the names and passages, so the prompt and the
         answer together still fit the window.
@@ -490,10 +507,11 @@ class CommunityBuilder:
                 warn_once(
                     _logger,
                     _SUMMARY_BUDGET_WARN_KEY,
-                    "community_builder: the model's input budget is %d tokens (%s); not even the first entity name of a "
-                    "community fits, so communities are built without summaries (later skips in this process are not logged)",
+                    "community_builder: the model's input budget is %d tokens (context window: %s); not even the first entity "
+                    "name of a community fits, so communities are built without summaries (later skips in this process are not "
+                    "logged)",
                     budget,
-                    _describe_window(client.context_window()),
+                    describe_window(client.context_window()),
                 )
                 return None
             if len(fitted.entity_names) < len(entity_names):
@@ -501,19 +519,22 @@ class CommunityBuilder:
                     _logger,
                     _SUMMARY_NAMES_CUT_WARN_KEY,
                     "community_builder: a community has more entity names than the model's input budget of %d tokens "
-                    "(%s) holds; only the first names that fit are sent (%d of %d in this community), so its summary may "
-                    "leave entities out (later cases in this process are not logged)",
+                    "(context window: %s) holds; only the first names that fit are sent (%d of %d in this community; at most "
+                    "%d%% of the budget when passages are sent too, so that they keep room), so its summary may leave "
+                    "entities out (later cases in this process are not logged)",
                     budget,
-                    _describe_window(client.context_window()),
+                    describe_window(client.context_window()),
                     len(fitted.entity_names),
                     len(entity_names),
+                    NAMES_CUT_SHARE_PERCENT,
                 )
             if chunk_texts and not fitted.chunk_texts:
                 warn_once(
                     _logger,
                     _SUMMARY_NO_PASSAGE_WARN_KEY,
-                    "community_builder: no representative passage fits the model's input budget of %d tokens; "
-                    "communities are summarised from their entity names alone (later cases in this process are not logged)",
+                    "community_builder: no representative passage fits what the entity names leave of the model's input "
+                    "budget of %d tokens; communities are summarised from their entity names alone (later cases in this "
+                    "process are not logged)",
                     budget,
                 )
             entity_names, chunk_texts = fitted.entity_names, fitted.chunk_texts
@@ -542,11 +563,15 @@ class CommunityBuilder:
     ) -> _FittedInput | None:
         """The entity names and passages of one prompt, cut to *budget* tokens; ``None`` when not even the first name fits.
 
-        The names go first and in the order given: all of them when they fit, else the longest prefix that does (found
-        with a logarithmic number of counts: a count is a request to the server for ``llama_cpp``). The passages then
-        take what is left: the longest prefix of *chunk_texts* that fits with those names. Tokens are counted by the
-        client, in the unit its budget is measured in (``llama_cpp``: the server's tokenizer; ``ollama``: the token
-        estimate).
+        The names go first and in the order given: all of them when they fit the budget, which leaves the passages what is
+        left (possibly nothing). When they do not all fit and there are passages, the names are held to
+        ``NAMES_CUT_SHARE_PERCENT`` of the budget, so the passages keep the rest; a first name larger than that share
+        gives way to the whole budget. Without passages the names take the whole budget. A prefix is found with a
+        logarithmic number of counts (a count is a request to the server for ``llama_cpp``), over the names that stay
+        within ``MAX_CHARS_PER_TOKEN`` characters per token of the room, so no count is of a text far longer than the
+        room (a community can have 100 000 names). The passages then take what is left: the longest prefix of *chunk_texts*
+        that fits with those names. Tokens are counted by the client, in the unit its budget is measured in (``llama_cpp``:
+        the server's tokenizer; ``ollama``: the token estimate).
 
         Raises:
             LlmCallFailure: the client has a budget but cannot count tokens, or the count failed.
@@ -557,14 +582,23 @@ class CommunityBuilder:
         async def _count(names: list[str], passages: list[str]) -> int:
             return await client.count_tokens(_variable_text(names, passages))
 
-        async def _names_fit(count: int) -> bool:
-            return await _count(entity_names[:count], []) <= budget
+        async def _fitting_names(room: int) -> int:
+            """How many leading names *room* tokens hold."""
+            reachable = _names_within_reach(entity_names, room)
 
-        names = entity_names
-        if not await _names_fit(len(entity_names)):
-            names = entity_names[: await _longest_fitting_prefix(len(entity_names), _names_fit)]
-            if not names:
-                return None
+            async def _names_fit(count: int) -> bool:
+                return await _count(entity_names[:count], []) <= room
+
+            if reachable == 0 or await _names_fit(reachable):
+                return reachable
+            return await _longest_fitting_prefix(reachable, _names_fit)
+
+        kept = await _fitting_names(budget)
+        if kept < len(entity_names) and chunk_texts:
+            kept = await _fitting_names(budget * NAMES_CUT_SHARE_PERCENT // _PERCENT) or kept
+        if kept == 0 and entity_names:
+            return None
+        names = entity_names[:kept]
         fitting: list[str] = []
         for text in chunk_texts:
             if await _count(names, [*fitting, text]) > budget:

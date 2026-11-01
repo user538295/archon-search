@@ -9,12 +9,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import httpx
 import pytest
 
 from archon_search.constants import ANSWER_RESERVE_TOKENS, ASSUMED_CONTEXT_TOKENS
+from archon_search.llm_client import llama_cpp_client
 from archon_search.llm_client.llama_cpp_client import (
     LlamaCppClient,
     warn_llama_cpp_unreachable,
@@ -498,6 +499,43 @@ async def test_llama_cpp_sizing_timeout_keeps_its_type_and_names_the_endpoint() 
 
     assert raised.value.reason.startswith("POST /apply-template: no answer within ")
 
+
+_SHORT_DEADLINE_SECONDS = 0.3
+_GENEROUS_REQUEST_TIMEOUT_SECONDS = 30.0
+
+
+def _hanging_on(path: str) -> Callable[[httpx.Request], Awaitable[httpx.Response]]:
+    """A server that answers every path but *path*, which it holds until its caller gives up (an Event nobody sets)."""
+    hold = asyncio.Event()
+    answering = _Server()
+
+    async def server(request: httpx.Request) -> httpx.Response:
+        if request.url.path == path:
+            await hold.wait()
+        return answering(request)
+
+    return server
+
+
+@pytest.mark.parametrize("path", ["/apply-template", "/tokenize"])
+@pytest.mark.parametrize(
+    "request_timeout_seconds",
+    [_GENEROUS_REQUEST_TIMEOUT_SECONDS, _SHORT_DEADLINE_SECONDS],
+    ids=["only-the-deadline-can-fire", "request-timeout-equals-the-deadline"],
+)
+async def test_llama_cpp_a_wedged_server_fails_the_sizing_naming_the_endpoint_in_flight(
+    path: str, request_timeout_seconds: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deadline (10 s) equals the per-request allowance (10 s) and starts first, so on a wedged server the deadline
+    fires and used to name nothing: the failure now names the request the sizing was waiting on, whichever fires first."""
+    monkeypatch.setattr(llama_cpp_client, "SIZING_DEADLINE_SECONDS", _SHORT_DEADLINE_SECONDS)
+    monkeypatch.setattr(llama_cpp_client, "TOKENIZE_TIMEOUT_SECONDS", request_timeout_seconds)
+
+    with pytest.raises(LlmCallTimeout) as raised:
+        await _client(_hanging_on(path)).input_budget(_TEMPLATE)
+
+    assert raised.value.reason.startswith(f"POST {path}: ")
+    assert _TEMPLATE not in raised.value.reason
 
 @pytest.mark.parametrize("path", ["/apply-template", "/tokenize"])
 async def test_llama_cpp_sizing_failure_masks_the_prompt_the_server_echoes(path: str) -> None:

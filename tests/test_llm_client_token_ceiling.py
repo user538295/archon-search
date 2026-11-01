@@ -20,9 +20,11 @@ import importlib
 import json
 import os
 import re
+import time
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import httpx
 import pytest
@@ -347,7 +349,7 @@ def test_the_ollama_ceiling_holds_on_the_real_gpt2_vocabulary_for_the_examples(r
 
 
 @settings(max_examples=300, deadline=None)
-@given(st.text(alphabet=st.characters(codec="utf-8")))  # a lone surrogate makes the real ``encode`` raise
+@given(st.text(alphabet=st.characters(codec="utf-8")))  # lone surrogates have their own tests below
 def test_the_ollama_ceiling_holds_on_the_real_gpt2_vocabulary_for_any_text(real_gpt2_counter: TokenCounter, text: str) -> None:
     assert real_gpt2_counter.count(text) <= TokenCounter.ceiling(text)
 
@@ -413,3 +415,90 @@ async def test_a_query_of_special_token_literals_is_cut_to_what_a_splitting_toke
     prompt_tokens = len(splitting.encode(HYDE_PROMPT_TEMPLATE.format(query=sent), add_special_tokens=False).ids)
     assert sent, "the window has room for part of the query"
     assert prompt_tokens + ANSWER_RESERVE_TOKENS <= window
+
+
+# --- a special-token literal re-formed by removing another, and lone surrogates ------------------------------------------
+
+_NESTED_LITERAL = "<|endof<|endoftext|>text|>"  # removing the inner literal joins the halves into a second one
+_LITERAL_FRAGMENTS = ("<|endoftext|>", "<|", "|>", "<|endof", "text|>", "end", "of", "text", "<", ">", "|", "a", "🙂", "1", "\ud83d", "\ude00")
+_DEEP_NESTING = 100_000  # 1.3 million characters, each literal inside the next
+_DEEP_NESTING_BOUND_SECONDS = 10.0  # a quadratic removal takes minutes here, the single pass well under a second
+_LONE_SURROGATE_BYTES = 3  # what ``surrogatepass`` encodes one as
+_LONE_SURROGATES = "\ud83d\ude00"
+_DROP_SURROGATES = str.maketrans("", "", _LONE_SURROGATES)
+
+
+class _LiteralIsOneToken:
+    """The pinned gpt2 reading of a text: a byte per token, except that each ``<|endoftext|>`` it finds is a single token."""
+
+    def encode(self, text: str, add_special_tokens: bool = True) -> StubEncoding:
+        return StubEncoding(ids=list(range(_utf8_length(text) - (len(_SPECIAL_TOKEN_LITERAL) - 1) * text.count(_SPECIAL_TOKEN_LITERAL))))
+
+
+def _literal_stub_counter() -> TokenCounter:
+    return TokenCounter(load_tokenizer=_LiteralIsOneToken)
+
+
+def test_a_literal_re_formed_by_removing_another_is_still_charged_by_its_bytes() -> None:
+    counter = _literal_stub_counter()
+
+    assert counter.count(_NESTED_LITERAL) == len(_NESTED_LITERAL)  # two literals of 13 bytes, nothing left for the tokenizer
+    assert counter.count(_NESTED_LITERAL) <= TokenCounter.ceiling(_NESTED_LITERAL)
+
+
+def test_a_literal_re_formed_by_removing_another_is_charged_by_its_bytes_on_the_real_gpt2_vocabulary(real_gpt2_counter: TokenCounter) -> None:
+    assert real_gpt2_counter.count(_NESTED_LITERAL) == len(_NESTED_LITERAL)
+
+
+@settings(max_examples=500, deadline=None)
+@given(st.lists(st.sampled_from(_LITERAL_FRAGMENTS), max_size=30).map("".join))
+def test_the_stub_estimate_of_texts_built_from_fragments_of_the_special_token_literal_reaches_the_ceiling(text: str) -> None:
+    """A byte-per-token tokenizer that reads each literal it finds as one token: with every literal removed first, the
+    estimate is exactly the ceiling, so a literal that survives the removal (counted as 1) would show as a shortfall."""
+    assert _literal_stub_counter().count(text) == TokenCounter.ceiling(text)
+
+
+@pytest.fixture(scope="module")
+def splitting_gpt2_tokenizer(pinned_tokenizer_file: Path) -> Any:
+    """The pinned vocabulary without its added token: how a Llama or Qwen byte-level BPE reads ``<|endoftext|>`` (as plain pieces)."""
+    tokenizers = _import_tokenizers()
+    data = json.loads(pinned_tokenizer_file.read_text(encoding="utf-8"))
+    data["added_tokens"] = []
+    return tokenizers.Tokenizer.from_str(json.dumps(data))
+
+
+@settings(max_examples=500, deadline=None)
+@given(st.lists(st.sampled_from(_LITERAL_FRAGMENTS), max_size=30).map("".join))
+def test_the_real_gpt2_estimate_of_texts_built_from_fragments_of_the_special_token_literal_is_between_a_splitting_tokenizer_and_the_ceiling(
+    real_gpt2_counter: TokenCounter, splitting_gpt2_tokenizer: Any, text: str
+) -> None:
+    surrogates = sum(character in _LONE_SURROGATES for character in text)
+    readable = text.translate(_DROP_SURROGATES)  # the splitting stand-in refuses a lone surrogate too
+    splitting_count = len(splitting_gpt2_tokenizer.encode(readable, add_special_tokens=False).ids) + _LONE_SURROGATE_BYTES * surrogates
+
+    assert splitting_count <= real_gpt2_counter.count(text) <= TokenCounter.ceiling(text)
+
+
+def test_literals_nested_a_hundred_thousand_deep_are_all_charged_in_linear_time() -> None:
+    text = "<|endof" * _DEEP_NESTING + _SPECIAL_TOKEN_LITERAL + "text|>" * _DEEP_NESTING
+    counter = _literal_stub_counter()
+    started = time.perf_counter()
+
+    counted = counter.count(text)
+
+    assert time.perf_counter() - started < _DEEP_NESTING_BOUND_SECONDS
+    assert counted == len(text)  # every character belongs to one of the nested literals
+
+
+def test_a_lone_surrogate_is_charged_the_bytes_of_its_utf8_form_on_the_real_gpt2_vocabulary(real_gpt2_counter: TokenCounter) -> None:
+    """A prompt can hold one (a bad document); the tokenizer refuses it, so the counter must not pass it on."""
+    assert real_gpt2_counter.count(_LONE_SURROGATE) == _LONE_SURROGATE_BYTES
+    assert real_gpt2_counter.count("before \ud83d after \ude00") == real_gpt2_counter.count("before  after ") + 2 * _LONE_SURROGATE_BYTES
+
+
+def test_a_lone_surrogate_between_the_halves_of_a_literal_does_not_hide_it() -> None:
+    text = "<|endof\ud83dtext|>"
+    counter = _literal_stub_counter()
+
+    assert counter.count(text) == len(_SPECIAL_TOKEN_LITERAL) + _LONE_SURROGATE_BYTES
+    assert counter.count(text) <= TokenCounter.ceiling(text)

@@ -29,6 +29,7 @@ from archon_search.llm_client.protocol import (
     ContextWindowTokens,
     InputBudget,
     LlmCallFailure,
+    ThinkSetting,
 )
 from archon_search.llm_client.token_counter import TokenCounter
 from tests._hyde_stubs import BudgetedLlmClient, ScriptedLlmClient
@@ -340,7 +341,7 @@ async def test_a_zero_budget_has_no_room_for_the_query_and_names_the_window_not_
 
 async def test_a_zero_budget_is_no_room_even_for_a_client_that_cannot_count() -> None:
     class CannotCount(ScriptedLlmClient):
-        async def input_budget(self, template_text: str) -> InputBudget:
+        async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
             return InputBudget(0)
 
     with pytest.raises(NoRoomForInput):
@@ -356,7 +357,7 @@ async def test_a_budget_too_small_for_even_one_word_has_no_room() -> None:
 
 async def test_a_client_with_a_budget_that_cannot_count_is_a_failure() -> None:
     class CannotCount(ScriptedLlmClient):
-        async def input_budget(self, template_text: str) -> InputBudget:
+        async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
             return InputBudget(100)
 
     with pytest.raises(LlmCallFailure) as raised:
@@ -371,7 +372,7 @@ async def test_a_client_that_supplies_its_counting_methods_through_getattr_is_na
     """``isinstance`` does not see a method supplied by ``__getattr__``, yet ``getattr`` finds it: the message still names a method."""
 
     class Dynamic(ScriptedLlmClient):
-        async def input_budget(self, template_text: str) -> InputBudget:
+        async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
             return InputBudget(100)
 
         def __getattr__(self, name: str) -> Callable[..., object]:
@@ -477,7 +478,7 @@ class _RealLlamaClient(LlamaCppClient):
         self.requests.append(content)
         return httpx.Response(200, json={"tokens": list(range(len(content.encode("utf-8")) + 1))})
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         return InputBudget(self._budget)
 
 
@@ -500,7 +501,7 @@ class _RealOllamaClient(OllamaClient):
         super().__init__(model="m", base_url="http://ollama.test:11434", context_tokens=8192, token_counter=TokenCounter(load_tokenizer=lambda: self.tokenizer))
         self._budget = budget
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         return InputBudget(self._budget)
 
     @property
@@ -563,7 +564,7 @@ async def test_an_ollama_budget_equal_to_the_bytes_is_not_a_fast_path_when_there
 
 async def test_a_client_that_counts_but_has_no_ceiling_is_named_as_such_not_as_unable_to_count() -> None:
     class NoCeiling(ScriptedLlmClient):
-        async def input_budget(self, template_text: str) -> InputBudget:
+        async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
             return InputBudget(100)
 
         async def count_tokens(self, text: str) -> int:
