@@ -53,7 +53,7 @@ ps -Ao args= | grep -E '[/]bin/pytest|[u]v run pytest'
 
 Match on `args`, never `comm` (macOS truncates a Homebrew interpreter to `/opt/homebrew/Ce`, so the older `awk '$1 ~ /[Pp]ython/'` form reports "no workers" mid-suite). `pgrep -fl pytest` self-matches the shell. Stacked runs multiply workers and OOM-crashed the 48 GB machine on 2026-07-05.
 
-While iterating, run scoped paths; run the full suite once at task completion and always report its wall-clock duration (last measured: ~317 s, default `addopts` with coverage, `-n 8`, 15067 tests collected, 2026-11-01).
+While iterating, run scoped paths; run the full suite once at task completion and always report its wall-clock duration (last measured: ~350 s, default `addopts` with coverage, `-n 8`, 15253 tests collected, 2026-11-01).
 
 An error that pytest reports as an unraisable exception (`PytestUnraisableExceptionWarning`, a `ResourceWarning` from an unclosed transport) names the test that was running when the garbage collector finalised the object, not the test that leaked it: pytest forces a collection only at the end of the session. When such an error shows up in one full run and not in the next, run `uv run pytest -p tests._gc_each_test_plugin` (about five times slower): it collects after every test and reports the exception against the leaking test. The full suite was run that way on 2026-11-01 (15229 passed, no unraisable exception), so a new occurrence is a new leak.
 
