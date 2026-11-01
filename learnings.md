@@ -5,7 +5,7 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 ## What Has Failed
 - **[2026-10-12] (×62) pytest OOM/memory RCA**: rules: `tests/CLAUDE.md`. Never pytest a `tests/eval/corpus` path (.pyc breaks the corpus loader: 54 eval fails). Rotating timing fail = contention; failure-path budget 5s→30s. Leaks: archive.
 - **[2026-10-12] (×2) release-path CI**: GH caches are ref-scoped — a tag run reads its own tag or `main` only, and nothing runs on `main` here, so a release cache step never hits, only evicts the PR gate's. Autouse function fixtures beat module env.
-- **[2026-11-01] (×1) LLM sizing (manual runs)**: tokenizer estimates miss digits/emoji → count on the REAL server; llama.cpp counts chat framing (`/apply-template`); a thinking model needs answer headroom or answers empty; `think` rides every call.
+- **[2026-11-01] (×2) LLM sizing (manual runs)**: estimates miss digits/emoji → count on the REAL server; llama.cpp counts chat framing (`/apply-template`); hold back the CALLER's own `max_output_tokens`, never a global reserve; thinking needs headroom.
 - **[2026-11-01] (×1) request lifetime**: an aborted /search or MCP call must cancel the provider call (assert the fake server saw it); bind MCP sessions to their credential; unraisable flake = pooled client closed on a dead loop (use the plugin).
 ## What Has Worked
 - **[2026-10-21] (×142) briefs**: failing repro FIRST; fix at guard layer. Re-filed → `<name>-reopened.md`. Same symptom as a sibling S-report (S40=S27)? Check its fix first. Non-disk `source_path` writer needs a `_run_orphan_cleanup` exemption.

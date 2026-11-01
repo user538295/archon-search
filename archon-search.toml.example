@@ -665,8 +665,8 @@ enabled = false
 # extraction_rate_limit_rpm = 60
 
 # Max output tokens requested per enrichment LLM call. Must be >= 1. On ollama and
-# llama_cpp the prompt is sized to the model's window minus 1024 tokens for the
-# answer, so a value above 1024 comes out of the room for the community's passages.
+# llama_cpp the prompt is sized to the model's window minus this value (the answer
+# ceiling of the call), so a higher value takes room from the community's passages.
 # extraction_token_budget = 1024
 
 # Rough empirical edge-count threshold (integer, default 10,000) above which NetworkX
