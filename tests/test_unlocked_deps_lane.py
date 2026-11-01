@@ -18,6 +18,7 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "test-unlocked-deps.sh"
 LOCAL_BUILD = "archon-search @ file:///checkout"
 FROZEN = f"{LOCAL_BUILD}\niniconfig==2.3.1\n"
+PREFETCH_SCRIPT = "scripts/prefetch-token-counter.py"
 
 
 def _executable(path: Path, body: str) -> None:
@@ -32,10 +33,13 @@ def _lane(
     freeze: str,
     pytest_rewrites_freeze_to: str | None = None,
     platform: tuple[str, str] | None = None,
+    prefetch_failures: int = 0,
 ) -> dict:
     """A repo copy holding the script, a fake `uv` and a work dir; returns the run env.
 
-    The fake `uv` appends each `pip install` argument line to ``tmp_path / "install_args.txt"``.
+    The fake `uv` appends each `pip install` argument line to ``tmp_path / "install_args.txt"``. The fake venv python
+    appends every call's arguments to ``tmp_path / "python_calls.txt"`` and fails the first *prefetch_failures* runs of
+    the token-counter prefetch script; a fake `sleep` keeps the retry backoff instant.
     *platform* is a ``(uname -s, uname -m)`` pair served by a fake `uname`.
     """
     repo = tmp_path / "repo"
@@ -50,7 +54,16 @@ def _lane(
         if pytest_rewrites_freeze_to is not None
         else ":"
     )
-    python_body = f'if [ "$1 $2" = "-m pytest" ]; then {rewrite}; exit 0; fi\nexit 0\n'
+    calls, counter = tmp_path / "python_calls.txt", tmp_path / "prefetch_runs.txt"
+    python_body = (
+        f"echo \"$*\" >> '{calls}'\n"
+        f'if [ "$1 $2" = "-m pytest" ]; then {rewrite}; exit 0; fi\n'
+        f'if [ "$1" = "{PREFETCH_SCRIPT}" ]; then\n'
+        f"    runs=$(cat '{counter}' 2>/dev/null || echo 0); echo $((runs + 1)) > '{counter}'\n"
+        f'    [ "$runs" -ge {prefetch_failures} ] || exit 1\n'
+        "fi\nexit 0\n"
+    )
+    _executable(tmp_path / "bin" / "sleep", ":\n")
     _executable(
         tmp_path / "bin" / "uv",
         f"""case "$1 $2" in
@@ -103,6 +116,44 @@ def test_suite_fails_when_a_test_changes_the_venv(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "changed the venv under test" in result.stderr
     assert "iniconfig==2.3.0" in result.stderr, "the diff names what moved"
+
+
+def _python_calls(tmp_path: Path) -> list[str]:
+    return (tmp_path / "python_calls.txt").read_text().splitlines()
+
+
+def test_suite_fetches_the_pinned_tokenizer_with_the_venv_python_before_pytest(tmp_path: Path) -> None:
+    # The default suite's real-gpt2 tests fail on CI (`CI` set) when the tokenizer is not cached.
+    env = _lane(tmp_path, freeze=FROZEN)
+    assert _run(tmp_path, env, "install").returncode == 0
+
+    result = _run(tmp_path, env, "suite")
+
+    assert result.returncode == 0, result.stderr
+    calls = [c for c in _python_calls(tmp_path) if c == PREFETCH_SCRIPT or c.startswith("-m pytest")]
+    assert [c.split()[0] for c in calls] == [PREFETCH_SCRIPT, "-m"], calls
+
+
+def test_suite_retries_the_tokenizer_prefetch_before_running_pytest(tmp_path: Path) -> None:
+    env = _lane(tmp_path, freeze=FROZEN, prefetch_failures=2)
+    assert _run(tmp_path, env, "install").returncode == 0
+
+    result = _run(tmp_path, env, "suite")
+
+    assert result.returncode == 0, result.stderr
+    assert _python_calls(tmp_path).count(PREFETCH_SCRIPT) == 3
+
+
+def test_suite_fails_without_running_pytest_when_the_tokenizer_prefetch_keeps_failing(tmp_path: Path) -> None:
+    env = _lane(tmp_path, freeze=FROZEN, prefetch_failures=3)
+    assert _run(tmp_path, env, "install").returncode == 0
+
+    result = _run(tmp_path, env, "suite")
+
+    assert result.returncode != 0
+    assert "tokenizer prefetch failed after 3 attempts" in result.stderr
+    assert _python_calls(tmp_path).count(PREFETCH_SCRIPT) == 3
+    assert not any(c.startswith("-m pytest") for c in _python_calls(tmp_path))
 
 
 def test_lane_step_without_an_install_says_to_install_first(tmp_path: Path) -> None:

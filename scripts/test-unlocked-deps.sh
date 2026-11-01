@@ -22,7 +22,8 @@
 #
 # Usage: bash scripts/test-unlocked-deps.sh [install|suite|docling|graph|all]   (default: all)
 #   install  fresh venv + unlocked install + versions that differ from uv.lock
-#   suite    the full default suite (pyproject addopts: integration + eval, 85% coverage)
+#   suite    the full default suite (pyproject addopts: integration + eval, 85% coverage), after
+#            fetching the pinned gpt2 tokenizer its real-vocabulary tests fail without on CI
 #   docling  the real docling/RapidOCR lane, with its non-vacuity check
 #   graph    the real GLiNER lane (artifact prefetch, lane, non-vacuity check)
 # Every lane also fails if it changed the venv it tests (see assert_venv_unchanged).
@@ -31,7 +32,8 @@
 #                           (default /var/tmp/archon-search-unlocked). Keep it disk-backed:
 #                           the crash-injection integration tests skip on tmpfs.
 #   ARCHON_SEARCH_DATA_DIR  data dir whose models/graph/ holds or receives the pinned GLiNER
-#                           checkpoint (graph lane only; default $HOME/.archon-search).
+#                           checkpoint (graph lane) and whose models/token-counter/ holds or receives the
+#                           pinned gpt2 tokenizer (suite lane); default $HOME/.archon-search.
 #
 set -euo pipefail
 
@@ -126,8 +128,23 @@ for name in sorted(drift):
 PY
 }
 
+# The default suite's real-gpt2 ceiling tests (tests/test_llm_client_token_ceiling.py) read the pinned gpt2
+# tokenizer.json (1.3 MB) from <ARCHON_SEARCH_DATA_DIR>/models/token-counter and, with CI set (GitHub), fail instead
+# of skipping when it is missing. The venv under test fetches it, through the loader the service uses.
+prefetch_token_counter() {
+    local attempt
+    for attempt in $(seq "$PREFETCH_ATTEMPTS"); do
+        "$PY" scripts/prefetch-token-counter.py && return 0
+        [ "$attempt" -lt "$PREFETCH_ATTEMPTS" ] || break
+        echo "Attempt $attempt failed; retrying in $((attempt * 5))s..."
+        sleep $((attempt * 5))
+    done
+    die "token-counter tokenizer prefetch failed after $PREFETCH_ATTEMPTS attempts"
+}
+
 suite() {
     require_venv
+    prefetch_token_counter
     # COVERAGE_FILE keeps this run's data out of ./.coverage, which release.sh's own
     # --cov-append lanes accumulate into before their final fail-under check.
     # The -m filter is pyproject addopts' own plus `not benchmark`, as the release `test`

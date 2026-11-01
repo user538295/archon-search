@@ -6,6 +6,9 @@ Run by the Dockerfile with ``ARCHON_SEARCH_DATA_DIR`` already pointing at ``/dat
 there the first sized prompt needs no network; a volume that already holds data and a host bind mount are not
 seeded, and the tokenizer downloads on first use (or at the wizard's pre-warm). Counting a sample text fails the
 build if the snapshot cannot be loaded.
+
+The release workflow's ``test`` job and ``scripts/test-unlocked-deps.sh suite`` run it too, ahead of the default suite,
+whose real-gpt2 ceiling tests (``tests/test_llm_client_token_ceiling.py``) fail on CI when the tokenizer is missing.
 """
 from __future__ import annotations
 

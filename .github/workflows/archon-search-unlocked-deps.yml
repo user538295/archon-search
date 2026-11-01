@@ -67,6 +67,8 @@ jobs:
         # so it should fit every GitHub-hosted ubuntu runner; fewer vCPUs only slow it down.
         # `benchmark` is deselected, as in the release `test` job: its latency ceilings do
         # not hold under 8 workers on a 4-vCPU runner.
+        # The script first fetches the 1.3 MB pinned gpt2 tokenizer (inside the venv under test, with
+        # retries): the suite's real-gpt2 tests fail on GitHub (CI set) when it is not cached.
         timeout-minutes: 60
         run: bash scripts/test-unlocked-deps.sh suite
 

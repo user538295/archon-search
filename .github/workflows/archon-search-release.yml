@@ -25,9 +25,9 @@ jobs:
   # ---------------------------------------------------------------------------
   test:
     runs-on: ubuntu-latest
-    # The step timeouts alone sum to 205 min (45 docling + 30 prefetch + 130 graph lane) and
-    # the untimed suite/eval/integration steps sit on top. GitHub's 360-min default would let
-    # a wedged step hold the publish for six hours; 270 leaves ~65 min of headroom over the
+    # The step timeouts alone sum to 215 min (10 tokenizer prefetch + 45 docling + 30 graph prefetch + 130 graph
+    # lane) and the untimed suite/eval/integration steps sit on top. GitHub's 360-min default would let
+    # a wedged step hold the publish for six hours; 270 leaves ~55 min of headroom over the
     # capped steps and still fails fast enough to be actionable.
     timeout-minutes: 270
     steps:
@@ -51,6 +51,22 @@ jobs:
 
       - name: Verify pytest-cov plugin is importable
         run: uv run python -c "import pytest_cov"
+
+      - name: Prefetch the pinned gpt2 tokenizer (3 attempts, linear backoff)
+        # tests/test_llm_client_token_ceiling.py is in the default suite below; its real-gpt2 tests fail
+        # (not skip) on GitHub (CI set) when the tokenizer is not cached. Only the 1.3 MB tokenizer.json is
+        # fetched, cold on every run: no actions/cache step, for the reason given at the graph prefetch below.
+        timeout-minutes: 10
+        run: |
+          prefetch_ok=false
+          for attempt in 1 2 3; do
+            uv run python scripts/prefetch-token-counter.py && { prefetch_ok=true; break; }
+            echo "Attempt $attempt failed; retrying in $((attempt * 5))s..."
+            sleep $((attempt * 5))
+          done
+          if [ "$prefetch_ok" != "true" ]; then
+            echo "All prefetch attempts failed"; exit 1
+          fi
 
       - name: Run default suite with coverage (no fail-under)
         run: uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append -n0 -m "not live and not eval and not benchmark and not integration and not live_eval and not docling and not graph_real_artifact"

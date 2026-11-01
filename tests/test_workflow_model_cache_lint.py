@@ -11,6 +11,7 @@ its time budget.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,14 @@ OFFLINE_EXPORT = "export HF_HUB_OFFLINE=1"
 # The one workflow that still installs fastembed: the CPU benchmark gate's comparison baseline.
 BASELINE_WORKFLOW = "archon-search-runtime-bench.yml"
 PARITY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "archon-search-runtime-parity.yml"
+UNLOCKED_DEPS_SCRIPT = REPO_ROOT / "scripts" / "test-unlocked-deps.sh"
+# Either command downloads the pinned gpt2 tokenizer: the narrow script (1.3 MB) or the live-lane prefetch, whose `__main__` ends with it.
+TOKENIZER_PREFETCH_COMMANDS = ("scripts/prefetch-token-counter.py", PREFETCH_COMMAND)
+PYTEST_INVOCATION = re.compile(r"(?:uv run |python -m )pytest\b")
+MARKER_EXPRESSION = re.compile(r"""(?<!\S)-m\s+(?:"([^"]*)"|(\S+))""")
+UNLOCKED_DEPS_DEFAULT_SUITE = re.compile(r"test-unlocked-deps\.sh\s+(?:suite|all)\b")
+UNLOCKED_DEPS_SUITE_FUNCTION = re.compile(r"^suite\(\) \{\n(?P<body>.*?)^\}$", re.DOTALL | re.MULTILINE)
+UNLOCKED_DEPS_PREFETCH_FUNCTION = "prefetch_token_counter"
 
 
 def _steps(workflow: Path) -> list[dict]:
@@ -96,6 +105,148 @@ def test_pr_workflow_caches_the_pinned_token_counter_tokenizer() -> None:
 
     assert TOKEN_COUNTER_DIR in {p.rstrip("/") for p in step["with"]["path"].split()}
     assert TOKEN_COUNTER_MODEL_REVISION in step["with"]["key"]
+
+
+# --- every lane that runs the default suite fetches the pinned gpt2 tokenizer ------------------------------------------
+# `tests/test_llm_client_token_ceiling.py` is unmarked, so any lane that runs the default suite also runs its real-gpt2
+# tests, which fail (not skip) on GitHub (`CI` set) when the tokenizer is not cached.
+
+
+def _runs_the_default_suite(run: str) -> bool:
+    """True when a pytest call selects unmarked tests: no ``-m`` filter, or one made only of ``not <marker>`` terms."""
+    if not PYTEST_INVOCATION.search(run):
+        return False
+    match = MARKER_EXPRESSION.search(run)
+    if match is None:
+        return True
+    terms = re.split(r"\s+(?:and|or)\s+", match.group(1) or match.group(2))
+    return all(term.startswith("not ") for term in terms)
+
+
+def _unlocked_deps_suite_prefetches_first(script: str) -> bool:
+    """True when ``suite()`` of the unlocked-deps script calls the tokenizer prefetch before its pytest run."""
+    suite = UNLOCKED_DEPS_SUITE_FUNCTION.search(script)
+    assert suite is not None, "scripts/test-unlocked-deps.sh has no suite() function"
+    body = suite.group("body")
+    prefetch_call = body.find(UNLOCKED_DEPS_PREFETCH_FUNCTION)
+    return 0 <= prefetch_call < body.find("-m pytest") and any(
+        command in script for command in TOKENIZER_PREFETCH_COMMANDS
+    )
+
+
+def _default_suite_steps_without_the_tokenizer(workflow: Path, unlocked_deps_script: str) -> list[str]:
+    """``job: step`` of every step that runs the default suite with no tokenizer prefetch before it in its job."""
+    missing: list[str] = []
+    for job_name, job in yaml.safe_load(workflow.read_text())["jobs"].items():
+        fetched = False
+        for step in job.get("steps", []):
+            run = step.get("run", "")
+            if UNLOCKED_DEPS_DEFAULT_SUITE.search(run):
+                covered = _unlocked_deps_suite_prefetches_first(unlocked_deps_script)
+            elif _runs_the_default_suite(run):
+                covered = fetched
+            else:
+                fetched = fetched or any(command in run for command in TOKENIZER_PREFETCH_COMMANDS)
+                continue
+            if not covered:
+                missing.append(f"{job_name}: {step.get('name')}")
+    return missing
+
+
+def _workflow_text(*steps: str) -> str:
+    return "jobs:\n  test:\n    steps:\n" + "".join(f"      - {step}\n" for step in steps)
+
+
+@pytest.mark.parametrize(
+    ("run", "expected"),
+    [
+        ('uv run pytest -o addopts= -n0 -m "not live and not eval and not integration"', True),
+        ("uv run pytest tests/", True),
+        ('uv run pytest -m "integration and not eval" tests/', False),
+        ("uv run pytest -m docling tests/", False),
+        ("uv run pytest --strict-markers -m live_eval tests/eval/live/", False),
+        ('uv run python -c "import pytest_cov"', False),
+        ("uv run python -m tests._live_model_cache", False),
+    ],
+)
+def test_a_pytest_call_runs_the_default_suite_only_without_a_positive_marker(run: str, expected: bool) -> None:
+    assert _runs_the_default_suite(run) is expected
+
+
+def test_scan_finds_every_lane_that_runs_the_default_suite() -> None:
+    # Presence anchor: the per-workflow check below must not pass vacuously, nor sweep in the marker-selected lanes.
+    def runs_it(workflow: Path) -> bool:
+        runs = [step.get("run", "") for step in _steps(workflow)]
+        return any(_runs_the_default_suite(r) or UNLOCKED_DEPS_DEFAULT_SUITE.search(r) for r in runs)
+
+    names = {w.name for w in WORKFLOWS if runs_it(w)}
+    assert names == {"archon-search-pr.yml", "archon-search-release.yml", "archon-search-unlocked-deps.yml"}, names
+
+
+@pytest.mark.parametrize("workflow", WORKFLOWS, ids=lambda p: p.name)
+def test_every_lane_running_the_default_suite_fetches_the_pinned_tokenizer(workflow: Path) -> None:
+    missing = _default_suite_steps_without_the_tokenizer(workflow, UNLOCKED_DEPS_SCRIPT.read_text())
+
+    assert not missing, (
+        f"{workflow.name}: {missing} run the default suite, whose real-gpt2 tests fail on CI without the pinned "
+        f"tokenizer; add a step running one of {TOKENIZER_PREFETCH_COMMANDS} before it"
+    )
+
+
+def test_the_scan_flags_a_default_suite_step_without_a_prefetch(tmp_path: Path) -> None:
+    workflow = tmp_path / "lane.yml"
+    workflow.write_text(_workflow_text("name: Default suite\n        run: uv run pytest -m \"not live\""))
+
+    assert _default_suite_steps_without_the_tokenizer(workflow, "") == ["test: Default suite"]
+
+
+def test_the_scan_flags_a_prefetch_that_runs_after_the_suite(tmp_path: Path) -> None:
+    workflow = tmp_path / "lane.yml"
+    workflow.write_text(
+        _workflow_text(
+            "name: Default suite\n        run: uv run pytest -m \"not live\"",
+            "name: Prefetch\n        run: uv run python scripts/prefetch-token-counter.py",
+        )
+    )
+
+    assert _default_suite_steps_without_the_tokenizer(workflow, "") == ["test: Default suite"]
+
+
+@pytest.mark.parametrize("command", TOKENIZER_PREFETCH_COMMANDS)
+def test_the_scan_accepts_a_prefetch_before_the_suite(tmp_path: Path, command: str) -> None:
+    workflow = tmp_path / "lane.yml"
+    workflow.write_text(
+        _workflow_text(
+            f"name: Prefetch\n        run: uv run python {command}",
+            "name: Default suite\n        run: uv run pytest -m \"not live\"",
+        )
+    )
+
+    assert _default_suite_steps_without_the_tokenizer(workflow, "") == []
+
+
+def test_the_scan_leaves_a_marker_selected_lane_alone(tmp_path: Path) -> None:
+    workflow = tmp_path / "lane.yml"
+    workflow.write_text(_workflow_text("name: Docling\n        run: uv run pytest -m docling tests/"))
+
+    assert _default_suite_steps_without_the_tokenizer(workflow, "") == []
+
+
+def test_the_scan_delegates_an_unlocked_deps_suite_step_to_the_script(tmp_path: Path) -> None:
+    workflow = tmp_path / "lane.yml"
+    workflow.write_text(_workflow_text("name: Suite\n        run: bash scripts/test-unlocked-deps.sh suite"))
+    script = UNLOCKED_DEPS_SCRIPT.read_text()
+    bare_script = script.replace(UNLOCKED_DEPS_PREFETCH_FUNCTION, "true")
+
+    assert _default_suite_steps_without_the_tokenizer(workflow, script) == []
+    assert _default_suite_steps_without_the_tokenizer(workflow, bare_script) == ["test: Suite"]
+
+
+def test_the_unlocked_deps_suite_prefetches_the_tokenizer_inside_the_venv_before_pytest() -> None:
+    script = UNLOCKED_DEPS_SCRIPT.read_text()
+
+    assert _unlocked_deps_suite_prefetches_first(script)
+    assert '"$PY" scripts/prefetch-token-counter.py' in script, "the prefetch must use the venv under test, not uv's"
 
 
 def test_prefetch_downloads_the_token_counter_tokenizer(monkeypatch: pytest.MonkeyPatch) -> None:
