@@ -21,6 +21,7 @@ import json
 import os
 import signal
 import socket
+import subprocess
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -68,11 +69,20 @@ def _await(predicate: Callable[[], bool], what: str) -> None:
 
 
 def _is_gone(pid: int) -> bool:
+    """Whether no process of ours has *pid* any more (a process of another user that took the number over is not it)."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return True
+    except PermissionError:
+        return True
     return False
+
+
+def _is_this_fake(pid: int, fake: _fake_claude.FakeClaude) -> bool:
+    """Whether *pid* still is the fake binary of *fake* (its command line names the launcher directory), not a recycled number."""
+    command = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, check=False).stdout
+    return str(fake.path.parent) in command
 
 
 @pytest.fixture(autouse=True)
@@ -90,7 +100,7 @@ def held_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[_fa
     monkeypatch.setenv("PATH", f"{fake.path.parent}{os.pathsep}{os.environ['PATH']}")
     yield fake
     for invocation in fake.invocations():
-        if not _is_gone(invocation.pid):
+        if not _is_gone(invocation.pid) and _is_this_fake(invocation.pid, fake):
             os.kill(invocation.pid, signal.SIGKILL)
 
 

@@ -10,6 +10,9 @@ after each test.  Usage::
     with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
         ...
 
+``serve_real_app`` yields ``(base_url, config, api_key)`` of the same app behind a real uvicorn socket
+(``tests/_uvicorn_server.py``), for tests that must close a real connection mid-request.
+
 ``ingest_doc`` POSTs to /ingest and polls GET /jobs/{id} until done.
 
 ``search`` POSTs to /search and returns the result items.
@@ -102,19 +105,19 @@ def _assemble_real_app(
     tmp_path,
     monkeypatch,
     *,
-    backup_enabled: bool,
-    maintenance_enabled: bool,
-    mcp_enabled: bool,
-    telemetry_enabled: bool,
-    hash_doc_ids_enabled: bool,
-    namespaces: dict[str, str] | None,
-    hyde_enabled: bool,
-    rag_fusion_enabled: bool,
-    max_fanout: int | None,
-    top_k_max: int | None,
-    toml_content: str | None,
-    graph_enabled: bool,
-    openai_shim_enabled: bool,
+    backup_enabled: bool = False,
+    maintenance_enabled: bool = False,
+    mcp_enabled: bool = False,
+    telemetry_enabled: bool = False,
+    hash_doc_ids_enabled: bool = False,
+    namespaces: dict[str, str] | None = None,
+    hyde_enabled: bool = False,
+    rag_fusion_enabled: bool = False,
+    max_fanout: int | None = None,
+    top_k_max: int | None = None,
+    toml_content: str | None = None,
+    graph_enabled: bool = False,
+    openai_shim_enabled: bool = False,
 ) -> tuple[Any, Any, str]:
     """Build the real app over real stores in ``tmp_path`` and return ``(app, config, api_key)``, not yet started.
 
@@ -291,23 +294,7 @@ def serve_real_app(
     """
     from tests._uvicorn_server import LOOPBACK, serving
 
-    app, cfg, api_key = _assemble_real_app(
-        tmp_path,
-        monkeypatch,
-        backup_enabled=False,
-        maintenance_enabled=False,
-        mcp_enabled=mcp_enabled,
-        telemetry_enabled=False,
-        hash_doc_ids_enabled=False,
-        namespaces=None,
-        hyde_enabled=False,
-        rag_fusion_enabled=False,
-        max_fanout=None,
-        top_k_max=None,
-        toml_content=toml_content,
-        graph_enabled=False,
-        openai_shim_enabled=False,
-    )
+    app, cfg, api_key = _assemble_real_app(tmp_path, monkeypatch, mcp_enabled=mcp_enabled, toml_content=toml_content)
     with serving(app) as port:
         _await_startup_sync(app)
         yield f"http://{LOOPBACK}:{port}", cfg, api_key

@@ -977,6 +977,33 @@ async def test_a_write_that_lands_after_the_run_has_its_row_ends_the_memory_of_i
     assert rig.lifecycle.overlay_status(_COLLECTION, "ok") == "ok"
 
 
+async def test_a_hot_writer_cannot_keep_the_run_reading_its_row_forever(rig: Rig) -> None:
+    """A description write that lands during every row read must not hold the one generation slot for good: the read is
+    repeated a bounded number of times, then the run goes on with the version read before its last read, which reads as
+    stale (the stored status shows) and never as ``failed`` over a row the run did not see."""
+    from archon_search.description_lifecycle import ROW_READ_ATTEMPTS
+
+    rig.store.rows[_COLLECTION] = _meta()
+    _save_meets_a_busy_collection(rig)
+    reads = 0
+    read = rig.store.get_collection_meta
+
+    async def read_under_a_hot_writer(name: str, namespace: str = _NAMESPACE) -> CollectionMeta | None:
+        nonlocal reads
+        reads += 1
+        meta = await read(name, namespace)
+        rig.store.bump(name)
+        return meta
+
+    rig.store.get_collection_meta = read_under_a_hot_writer  # type: ignore[method-assign]
+    ticket = await rig.request()
+    settlement = await asyncio.wait_for(ticket.settled, timeout=_SETTLE_TIMEOUT_S)
+
+    assert settlement.result is GenerationResult.FAILED
+    assert reads == (_SLOT_TIME_READ - 1) + ROW_READ_ATTEMPTS
+    assert rig.lifecycle.overlay_status(_COLLECTION, "ok") == "ok"
+
+
 async def test_a_run_that_breaks_before_it_can_record_anything_still_reads_failed(
     rig: Rig, caplog: pytest.LogCaptureFixture
 ) -> None:

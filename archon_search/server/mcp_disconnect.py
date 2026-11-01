@@ -18,10 +18,18 @@ gets the whole operation, as it does today, and can cancel it explicitly. The MC
 disconnect as a cancel because a stream may be resumable; this server's streams are not (no event store is configured), so
 the answer of an abandoned call can never be delivered and finishing it only costs money. REST ``POST /search`` and
 ``POST /explain`` are covered by :class:`archon_search.server.disconnect.CancelOnDisconnectMiddleware`.
+
+Limits. A request that is not cancelled: one pipelined behind another on the same connection (uvicorn marks only the newest
+request of a connection as disconnected), one whose body is larger than ``MAX_CAPTURED_BODY_BYTES`` (never parsed), one that
+carries no ``mcp-session-id`` (the stateless transport of MCP protocol 2026-07-28, which cancels on disconnect itself). A
+client that reuses a JSON-RPC request id while the first call with it is still running breaks MCP, which requires unique ids
+per session; the cancel then names that id and the library cancels the call that holds it, as it would for the client's own
+notification.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Collection
@@ -33,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 #: A ``tools/call`` body is a few hundred bytes; a body past this is not parsed (nothing is cancelled for it).
 MAX_CAPTURED_BODY_BYTES: Final = 1 << 20
+
+#: Longest wait for the application to take the cancel notification: it answers ``202`` at once, so a longer wait means a
+#: stuck transport, and the already abandoned request must not be held by it.
+CANCEL_DELIVERY_TIMEOUT_SECONDS: Final = 5.0
 
 _DISCONNECT_TYPE: Final = "http.disconnect"
 _SESSION_HEADER: Final = b"mcp-session-id"
@@ -117,7 +129,8 @@ class CancelMcpToolOnDisconnectMiddleware:
             return None
 
         try:
-            await self._app(scope, receive, discard)
+            async with asyncio.timeout(CANCEL_DELIVERY_TIMEOUT_SECONDS):
+                await self._app(scope, receive, discard)
         except Exception as exc:  # noqa: BLE001 — a cancel the session cannot take (it ended) must never fail the finished request
             logger.warning("could not deliver the cancel of an abandoned MCP call (%s)", type(exc).__name__)
 

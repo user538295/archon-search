@@ -2643,6 +2643,7 @@ def create_mcp_http_app(
         namespaces=config.namespaces if config is not None else {},
         key_store=key_store,
         api_key_state=api_key_state,
+        bind_sessions=True,
     )
     starlette_app.add_middleware(RequestContextMiddleware, header_name=request_id_header)
     return starlette_app

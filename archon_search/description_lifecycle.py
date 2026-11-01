@@ -83,6 +83,9 @@ logger = logging.getLogger(__name__)
 #: ``warn_once`` key: one WARNING per process for every dropped ingest or backfill request.
 _QUEUE_FULL_WARN_KEY: Final = "description_generation_queue_full"
 GENERATION_TASK_NAME_PREFIX: Final = "description-generation:"
+#: How often a run re-reads its row when a description write keeps landing during the read before it goes on with the
+#: version read before its last read (:meth:`DescriptionLifecycle._read_row`).
+ROW_READ_ATTEMPTS: Final = 3
 
 
 class GenerationKind(StrEnum):
@@ -542,16 +545,18 @@ class DescriptionLifecycle:
         write landed during the read and the snapshot may be on either side of it, so the row is read again. Neither
         single read order is right: version first, and a write between the two tags the run's failure with a version
         older than its row (readers then treat the failure as stale); row first, and it is tagged with one newer than its
-        row (readers then see ``failed`` over a row the run never saw). Every repeat needs a landed write of this
-        collection's description state, so the loop ends when those stop. What stays is the store's own gap between a
-        write's commit and its version move: a row that is already new under a version that is still old makes the
-        failure read as stale (the stored status shows), never as failed over a row the run never saw. The version is set
-        before the read, so a read that raises (the run settles ``failed``) still leaves one."""
-        while True:
+        row (readers then see ``failed`` over a row the run never saw). A description write that lands during every one of
+        ``ROW_READ_ATTEMPTS`` reads cannot hold the one generation slot for good: the run then goes on with the row of its
+        last read and the version read before it, which is older than a row a write may have changed, so the failure
+        reads as stale (the stored status shows), never as failed over a row the run never saw. The same holds for the
+        store's own gap between a write's commit and its version move. The version is set before the read, so a read
+        that raises (the run settles ``failed``) still leaves one."""
+        for _ in range(ROW_READ_ATTEMPTS):
             job.version = self._store.description_version(job.collection)
             meta = await self._store.get_collection_meta(job.collection, job.namespace)
             if self._store.description_version(job.collection) == job.version:
-                return meta
+                break
+        return meta
 
     async def _generate(self, job: _Job) -> DescriptionOutcome:
         """The generator never raises; a stand-in or a bug that does is a failed call, so the slot and the status hold."""

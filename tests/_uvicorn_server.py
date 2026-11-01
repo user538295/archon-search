@@ -33,7 +33,7 @@ def serving(app: ASGIApp) -> Iterator[int]:
     """Run *app* on ``127.0.0.1`` on a free port until the block ends; yield the port."""
     listener = socket.socket()
     listener.bind((LOOPBACK, 0))
-    config = uvicorn.Config(app, log_config=None, log_level="warning", timeout_graceful_shutdown=int(SHUTDOWN_SECONDS))
+    config = uvicorn.Config(app, log_config=None, log_level=None, timeout_graceful_shutdown=int(SHUTDOWN_SECONDS))
     server = uvicorn.Server(config)
     thread = threading.Thread(target=lambda: server.run(sockets=[listener]), daemon=True)
     thread.start()

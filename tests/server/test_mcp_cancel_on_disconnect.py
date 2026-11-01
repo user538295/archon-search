@@ -76,12 +76,25 @@ class _Client:
 class _Transport:
     """The application under the middleware: records every request it is handed, plays the transport's part."""
 
-    def __init__(self, *, answer_before_return: bool = False, raises: Exception | None = None, fail_on_cancel: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        answer_before_return: bool = False,
+        raises: Exception | None = None,
+        fail_on_cancel: bool = False,
+        partial_chunk_first: bool = False,
+        parks_on_cancel: bool = False,
+        writes_to_scope: bool = False,
+    ) -> None:
         self.requests: list[tuple[Scope, bytes]] = []
         self.after_the_cancel_body: list[str] = []  # what a transport that reads on after the cancel's body is told next
+        self.cancel_entered = asyncio.Event()
         self._answer_before_return = answer_before_return
         self._raises = raises
         self._fail_on_cancel = fail_on_cancel
+        self._partial_chunk_first = partial_chunk_first
+        self._parks_on_cancel = parks_on_cancel
+        self._writes_to_scope = writes_to_scope
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         body = b""
@@ -94,15 +107,23 @@ class _Transport:
                 break
         method = _method_of(body)
         self.requests.append((scope, body))
+        if self._writes_to_scope and len(self.requests) == 1:
+            scope["router_wrote"] = "endpoint"  # what a router does to the scope it is handed
         if self._raises is not None:
             raise self._raises
         if self._fail_on_cancel and len(self.requests) > 1:
             raise RuntimeError("the session is gone")
         if method == "notifications/cancelled":
+            if self._parks_on_cancel:
+                self.cancel_entered.set()
+                await asyncio.Event().wait()
             self.after_the_cancel_body.append((await receive())["type"])
             await send({"type": "http.response.start", "status": 202, "headers": []})
             await send({"type": "http.response.body", "body": b""})
             return
+        if self._partial_chunk_first:  # an SSE ping or a progress event goes out before the answer: the response is not complete
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b": ping", "more_body": True})
         if self._answer_before_return:
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b"data: {}", "more_body": False})
@@ -243,6 +264,17 @@ async def test_a_return_without_a_disconnect_is_not_a_cancel() -> None:
     assert len(transport.requests) == 1
 
 
+@pytest.mark.parametrize(("extra_bytes", "cancelled"), [(0, True), (1, False)], ids=["exactly-the-limit", "one-byte-more"])
+async def test_the_capture_limit_is_inclusive(monkeypatch: pytest.MonkeyPatch, extra_bytes: int, cancelled: bool) -> None:
+    body = _call("search")
+    monkeypatch.setattr(mcp_disconnect, "MAX_CAPTURED_BODY_BYTES", len(body) - extra_bytes)
+    transport = _Transport()
+
+    await _run(_middleware(transport), _scope(), _Client(body))
+
+    assert (len(transport.requests) == 2) is cancelled
+
+
 async def test_a_body_beyond_the_capture_limit_is_not_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mcp_disconnect, "MAX_CAPTURED_BODY_BYTES", 10)
     transport = _Transport()
@@ -250,6 +282,50 @@ async def test_a_body_beyond_the_capture_limit_is_not_parsed(monkeypatch: pytest
     await _run(_middleware(transport), _scope(), _Client(_call("search")))
 
     assert len(transport.requests) == 1
+
+
+async def test_a_partial_answer_before_the_disconnect_is_still_a_cancel() -> None:
+    """Real streams send ``more_body`` chunks (pings, progress) before the answer: only the last chunk completes a response."""
+    transport = _Transport(partial_chunk_first=True)
+
+    await _run(_middleware(transport), _scope(), _Client(_call("search")))
+
+    assert len(transport.requests) == 2
+
+
+async def test_the_cancel_is_built_from_the_scope_the_request_entered_with() -> None:
+    """A router writes into the scope it is handed (``endpoint``, ``path_params``): the cancel must not inherit that."""
+    transport = _Transport(writes_to_scope=True)
+
+    await _run(_middleware(transport), _scope(), _Client(_call("search")))
+
+    first_scope, cancel_scope = transport.requests[0][0], transport.requests[1][0]
+    assert first_scope["router_wrote"] == "endpoint"
+    assert "router_wrote" not in cancel_scope
+
+
+async def test_the_cancel_does_not_carry_the_transfer_encoding_of_the_original_request() -> None:
+    transport = _Transport()
+    scope = _scope()
+    scope["headers"].append((b"transfer-encoding", b"chunked"))
+
+    await _run(_middleware(transport), scope, _Client(_call("search")))
+
+    assert b"transfer-encoding" not in dict(transport.requests[1][0]["headers"])
+
+
+async def test_a_cancel_the_transport_never_takes_is_given_up_and_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG, logger=mcp_disconnect.__name__)
+    monkeypatch.setattr(mcp_disconnect, "CANCEL_DELIVERY_TIMEOUT_SECONDS", 0.01)
+    transport = _Transport(parks_on_cancel=True)
+
+    await _run(_middleware(transport), _scope(), _Client(_call("search")))
+
+    assert transport.cancel_entered.is_set()
+    assert "could not deliver the cancel" in caplog.text
+    assert "TimeoutError" in caplog.text
 
 
 @pytest.mark.parametrize("scope", [_scope(method="GET"), _scope(method="DELETE"), _scope(scope_type="websocket"), _scope(scope_type="lifespan")])
@@ -298,23 +374,16 @@ async def test_the_cancel_is_logged_with_the_tool_name_only(caplog: pytest.LogCa
     assert "id-that-is-the-clients-text" not in caplog.text
 
 
-async def test_cancelling_the_request_task_propagates_the_cancellation() -> None:
-    transport = _Transport()
-    client = _Client(_call("search"), disconnect=False)
-    entered = asyncio.Event()
+async def test_cancelling_the_request_task_while_the_cancel_is_delivered_propagates_the_cancellation() -> None:
+    """The cancel delivery is the part that catches ``Exception``: a cancellation of the request must still get through it."""
+    transport, client = _Transport(parks_on_cancel=True), _Client(_call("search"))
+    request = asyncio.create_task(_middleware(transport)(_scope(), client.receive, client.send))
+    await asyncio.wait_for(transport.cancel_entered.wait(), _DEADLINE_SECONDS)
 
-    async def parked(scope: Scope, receive: Receive, send: Send) -> None:
-        await receive()
-        entered.set()
-        await asyncio.Event().wait()
-
-    request = asyncio.create_task(_middleware(parked)(_scope(), client.receive, client.send))
-    await asyncio.wait_for(entered.wait(), _DEADLINE_SECONDS)
     request.cancel()
 
     with pytest.raises(asyncio.CancelledError):
-        await request
-    assert transport.requests == []
+        await asyncio.wait_for(request, _DEADLINE_SECONDS)
 
 
 def test_every_cancelled_tool_name_is_a_registered_tool() -> None:

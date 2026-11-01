@@ -395,7 +395,7 @@ class _Wire:
                 try:
                     # The server answers http.disconnect as soon as the response is out; the middleware reads it and must
                     # not cancel this task. Wait until that read happened, then give the loop turns to do the wrong thing.
-                    await asyncio.wait_for(asyncio.to_thread(wire.spy.disconnect_seen.wait, _DEADLINE_SECONDS), _DEADLINE_SECONDS)
+                    assert await asyncio.wait_for(asyncio.to_thread(wire.spy.disconnect_seen.wait, _DEADLINE_SECONDS), _DEADLINE_SECONDS)
                     await _settle()
                 except asyncio.CancelledError:
                     wire.background_end = "cancelled"

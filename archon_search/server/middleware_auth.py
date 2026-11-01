@@ -152,6 +152,19 @@ def _unauthorized() -> Response:
     return Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})
 
 
+def _session_principal(token: str) -> object:
+    """The principal the MCP library binds a session to: the credential, as a fingerprint that is not the credential.
+
+    The library refuses a request for a session whose principal differs from the one that created it, and answers as if the
+    session did not exist; it looks for an ``AuthenticatedUser`` in the ASGI scope. Imported here because only the mounted
+    MCP app needs it.
+    """
+    from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+    from mcp.server.auth.provider import AccessToken
+
+    return AuthenticatedUser(AccessToken(token="", client_id=hash_token(token), scopes=[]))
+
+
 class APIKeyMiddleware(BaseHTTPMiddleware):
     """Bearer-token auth; the legacy default key is read per request from ``<state>.api_key``.
 
@@ -162,6 +175,10 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
     On success it stamps ``request.state.namespace`` and ``request.state.admin`` (see
     ``archon_search.server.authz``). ``exempt_paths`` are served without a token.
+
+    ``bind_sessions`` (the mounted MCP app sets it) also stamps the credential's principal into the ASGI scope, so the MCP
+    library ties each session to the credential that created it: another key that learns a session id (it travels in a
+    header and is no secret of the key) gets ``404`` and can neither use the session nor cancel a call running in it.
     """
 
     def __init__(
@@ -172,6 +189,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         key_store: KeyStore | None = None,
         api_key_state: State | None = None,
         exempt_paths: frozenset[str] = _EXEMPT_PATHS,
+        bind_sessions: bool = False,
     ) -> None:
         super().__init__(app)
         self._api_key = api_key
@@ -179,6 +197,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         self._key_store = key_store
         self._api_key_state = api_key_state
         self._exempt_paths = exempt_paths
+        self._bind_sessions = bind_sessions
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if request.url.path in self._exempt_paths:
@@ -215,6 +234,8 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         identity = result if isinstance(result, AuthIdentity) else _view_token_identity(request, token)
         if identity is None:
             return _unauthorized()
+        if self._bind_sessions:
+            request.scope["user"] = _session_principal(token)
         return await self._forward(request, call_next, identity)
 
     @staticmethod
