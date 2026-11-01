@@ -119,7 +119,7 @@ def _document(marker: str) -> str:
 
 
 def _ingest(client: TestClient, api_key: str, directory: Path) -> None:
-    """Ingest the corpus DIRECTORY: only a batch ingest finalises the collection and asks for a description."""
+    """Ingest the corpus DIRECTORY through ``POST /ingest`` (one job, one description request for the whole batch)."""
     ingest_file_via_path(client, _COLLECTION, str(directory), api_key=api_key)
 
 

@@ -117,7 +117,7 @@ def _write_document(tmp_path: Path) -> Path:
 
 
 def _ingest_corpus(client: TestClient, tmp_path: Path, api_key: str) -> None:
-    """Ingest the corpus DIRECTORY: only a batch ingest finalises the collection and asks for a description."""
+    """Ingest the corpus DIRECTORY through ``POST /ingest`` (one job, one description request for the whole batch)."""
     ingest_file_via_path(client, _COLLECTION, str(_write_document(tmp_path).parent), api_key=api_key)
 
 

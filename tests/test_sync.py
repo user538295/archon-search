@@ -3682,6 +3682,13 @@ def _make_mock_pipeline_with_ingest_file(tmp_path, existing_collections=None, ma
     pipeline.delete_by_source_path = AsyncMock(return_value=1)
     pipeline.store.get_collection_meta = AsyncMock(return_value=None)
     pipeline.recompute_collection_meta = AsyncMock()
+
+    async def finalize(name, namespace, *, recompute, force=False):
+        """What the real routine does with the sync's decision: recompute when asked (stamp and request elided)."""
+        if recompute:
+            await pipeline.recompute_collection_meta(name, pipeline._global_embedder, namespace=namespace)
+
+    pipeline.finalize_collection_change = AsyncMock(side_effect=finalize)
     return pipeline
 
 
@@ -4559,7 +4566,7 @@ class TestTask46:
 
         # ingest_file must have been called with the changed file, collection name, and rebuild_fts=False
         from unittest.mock import ANY
-        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher", collection_root=ANY, namespace=ANY)
+        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher", collection_root=ANY, namespace=ANY, finalize=False)
 
         # The collection should be in errors (FAILED), not updated
         assert len(result.errors) == 1
@@ -4716,7 +4723,7 @@ class TestTask46:
 
         # ingest_file must have been called with the changed file, collection name, and rebuild_fts=False
         from unittest.mock import ANY
-        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher", collection_root=ANY, namespace=ANY)
+        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher", collection_root=ANY, namespace=ANY, finalize=False)
         assert "myproject" in result.updated
         assert result.errors == []
 

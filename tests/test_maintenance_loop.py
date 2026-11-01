@@ -28,6 +28,7 @@ from archon_search.jobs.maintenance_loop import (
     ORPHAN_CLEANUP_FAILED_DETAIL,
     MaintenanceLoop,
     RebuildState,
+    _SourcePathDocIds,
 )
 from archon_search.store import FTSIndexNotFoundError
 
@@ -1857,3 +1858,67 @@ async def test_cancelling_run_cancels_and_awaits_in_flight_rebuilds_without_resp
     assert state.task.cancelled()
     assert state.pending is False
     assert cleaned_up.is_set()
+
+
+async def _sweep_with_one_orphan(tmp_path: Path, hook: Any, *, orphans: bool = True) -> None:
+    """Run the real orphan cleanup over a store double that holds one chunk whose file is (not) missing."""
+    gone = str(tmp_path / "gone.md")
+    present = tmp_path / "present.md"
+    present.write_text("x")
+    store = _locking_search_store()
+    store.list_chunks_raw = AsyncMock(
+        return_value=[{"source_path": gone if orphans else str(present), "doc_id": "a" * 64, "metadata": "{}"}]
+    )
+    loop = _make_loop(tmp_path, search_store=store)
+    loop._on_documents_removed = hook
+    loop._scan_source_paths = AsyncMock(  # type: ignore[method-assign]
+        return_value={gone if orphans else str(present): _SourcePathDocIds(disk_ingested={"a" * 64})}
+    )
+    await loop._run_orphan_cleanup("docs", "tenantA")
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_that_removed_documents_asks_for_the_collection_to_be_finalized(tmp_path: Path) -> None:
+    hook = AsyncMock()
+
+    await _sweep_with_one_orphan(tmp_path, hook)
+
+    hook.assert_awaited_once_with("docs", "tenantA", False)
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_that_removed_nothing_does_not_ask(tmp_path: Path) -> None:
+    hook = AsyncMock()
+
+    await _sweep_with_one_orphan(tmp_path, hook, orphans=False)
+
+    hook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_failing_finalize_hook_does_not_fail_the_sweep(tmp_path: Path) -> None:
+    hook = AsyncMock(side_effect=OSError("disk gone"))
+
+    await _sweep_with_one_orphan(tmp_path, hook)
+
+    hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("pruned", "asked"), [(["a" * 64], True), ([], False)], ids=["pruned", "nothing-expired"])
+async def test_expiry_pruning_that_removed_documents_asks_with_stale_counts(
+    tmp_path: Path, pruned: list[str], asked: bool
+) -> None:
+    """Expiry removes chunks without touching the row, so the hook is told the counts are stale (a recompute is due)."""
+    store = _locking_search_store()
+    store.prune_expired_chunks = AsyncMock(return_value=pruned)
+    hook = AsyncMock()
+    loop = _make_loop(tmp_path, search_store=store)
+    loop._on_documents_removed = hook
+
+    await loop._run_expired_chunk_pruning("docs", "tenantA")
+
+    if asked:
+        hook.assert_awaited_once_with("docs", "tenantA", True)
+    else:
+        hook.assert_not_awaited()

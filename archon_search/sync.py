@@ -824,14 +824,18 @@ class SearchCollectionSync:
             # nobody is the same as no notice at all (C2-I-3). Aggregated to
             # one line per collection rather than one per file.
             degraded_files = 0
+            # Whether any document was added, replaced or removed: only then is there anything to settle and describe.
+            collection_changed = False
             degrade_reasons: set[str] = set()
 
             try:
                 # Deletions
                 for path in deleted_paths:
-                    await self._pipeline.delete_by_source_path(
+                    deleted_chunks = await self._pipeline.delete_by_source_path(
                         name, path, namespace=namespace, skip_fts_optimize=True
                     )
+                    if deleted_chunks:
+                        collection_changed = True
                     file_mtimes.pop(path, None)
                     if path in processed_paths:
                         processed_paths.remove(path)
@@ -849,12 +853,13 @@ class SearchCollectionSync:
 
                 # Changed files
                 for file in changed_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by=ingested_by, collection_root=source_path, namespace=namespace)
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by=ingested_by, collection_root=source_path, namespace=namespace, finalize=False)
                     resolved_str = str(file.resolve())
                     if ingest_result.warnings:
                         degraded_files += 1
                         degrade_reasons.update(ingest_result.warnings)
                     if ingest_result.status == "ok":
+                        collection_changed = True
                         try:
                             file_mtimes[resolved_str] = file.stat().st_mtime
                         except OSError:
@@ -879,11 +884,12 @@ class SearchCollectionSync:
 
                 # New files
                 for file in new_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by=ingested_by, collection_root=source_path, namespace=namespace)
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by=ingested_by, collection_root=source_path, namespace=namespace, finalize=False)
                     if ingest_result.warnings:
                         degraded_files += 1
                         degrade_reasons.update(ingest_result.warnings)
                     if ingest_result.status == "ok":
+                        collection_changed = True
                         try:
                             file_mtimes[str(file.resolve())] = file.stat().st_mtime
                         except OSError:
@@ -912,18 +918,29 @@ class SearchCollectionSync:
                 # Optimize FTS once after all file operations
                 await refresh_fts(self._pipeline.store, name)
 
-                # Centroid maintenance: incremental path fires when checkpoint signal raised.
+                # Centroid maintenance: the incremental path recomputes when the checkpoint signal is raised. When this
+                # sync changed documents, the shared routine of every ingest path also stamps the row and asks for a
+                # description, after that recompute.
                 try:
                     store_cfg = getattr(self._pipeline.store, "_config", None)
                     threshold = int(getattr(store_cfg, "centroid_recompute_threshold", 10_000))
                     centroid_meta = await self._pipeline.store.get_collection_meta(name, namespace)
-                    if centroid_meta and (
-                        centroid_meta.needs_recompute
-                        or centroid_meta.mutations_since_recompute >= threshold
-                    ):
+                    recompute = bool(
+                        centroid_meta
+                        and (
+                            centroid_meta.needs_recompute
+                            or centroid_meta.mutations_since_recompute >= threshold
+                        )
+                    )
+                    if recompute:
                         logger.debug("Recompute collection meta for %r after sync", name)
-                        # TODO(C1): pass per-collection embedder once centroid IoC is updated
-                        await self._pipeline.recompute_collection_meta(name, self._pipeline._global_embedder, namespace=namespace)
+                    # TODO(C1): pass per-collection embedder once centroid IoC is updated
+                    if collection_changed:
+                        await self._pipeline.finalize_collection_change(name, namespace, recompute=recompute)
+                    elif recompute:
+                        await self._pipeline.recompute_collection_meta(
+                            name, self._pipeline._global_embedder, namespace=namespace
+                        )
                 except Exception:
                     logger.warning(
                         "Failed to recompute collection meta for %r after sync; centroid may be stale",

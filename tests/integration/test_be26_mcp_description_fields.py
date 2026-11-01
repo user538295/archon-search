@@ -9,6 +9,7 @@ own lifecycle says a run is in flight (``is_pending`` is stubbed here; the real 
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,8 @@ from tests.integration.test_mcp_roundtrip_t2 import (
 pytestmark = pytest.mark.integration
 
 _COLLECTION = "be26-mcp-fields"
+_SETTLE_SECONDS = 30.0
+_POLL_SECONDS = 0.02
 _MANUAL_TEXT = "Hand written note about the planning documents."
 _GENERATED_TEXT = "A description the model wrote about the planning documents."
 _DOCUMENT_TEXT = "Planning notes for the quarter, kept for the search tests.\n" * 5
@@ -88,6 +91,13 @@ def test_mcp_collection_tools_return_source_and_status(tmp_path: Path, monkeypat
 
             ingested = call("ingest_file", {"collection": _COLLECTION, "path": str(document)})
             assert ingested["status"] == "ok"
+            # The ingest asked for a description (S17); the unreachable provider fails it. Let that run end, or its
+            # `pending` overlay would hide the stored status this test is about.
+            lifecycle_at_ingest: DescriptionLifecycle = client.app.state.description_lifecycle
+            deadline = time.monotonic() + _SETTLE_SECONDS
+            while lifecycle_at_ingest.is_pending(_COLLECTION):
+                assert time.monotonic() < deadline, "the ingest-triggered generation did not settle"
+                time.sleep(_POLL_SECONDS)
             store = client.app.state.search_store
             outcome = client.portal.call(  # type: ignore[union-attr]
                 lambda: store.write_description(_COLLECTION, DEFAULT_NAMESPACE, _manual_fields(), UNCONDITIONAL)

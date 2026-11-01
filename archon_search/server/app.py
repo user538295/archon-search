@@ -962,6 +962,8 @@ def create_app(
             graph_client=app.state.graph_client,
             # Failed-ingest retries run through POST /ingest's ingest task (jobs/ never imports server/).
             dispatch_retry=make_retry_dispatcher(app.state),
+            # A pass that removes documents (orphan sweep, expiry) may regenerate a description (no-op without a lifecycle).
+            on_documents_removed=app.state.pipeline.finalize_after_removal,
         )
         app.state.maintenance_loop = maintenance_loop
         maintenance_task = asyncio.create_task(maintenance_loop.run())

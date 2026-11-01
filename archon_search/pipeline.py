@@ -710,7 +710,15 @@ class SearchPipeline:
         chunk_scopes: list[str] | None = None,
         _access_checked: bool = False,
         _directory_cache: dict[Path, frozenset[tuple[int, int]] | None] | None = None,
+        finalize: bool = True,
     ) -> IngestResult:
+        """Ingest one file.
+
+        *finalize* is ``True`` for a caller that ingests this file on its own (REST, MCP, CLI): when a description
+        lifecycle is injected, a successful ingest then settles the collection row and asks for a description through
+        :meth:`finalize_collection_change` (without one the method does nothing extra). A caller that ingests many
+        files and finalizes once (``ingest_directory``, the sync) passes ``False``.
+        """
         # Ownership before anything else (the parse and the embed are the expensive part, and a foreign namespace
         # must not get either, nor touch the owner's lock): a batch caller checked once for all its files already.
         if not _access_checked:
@@ -764,7 +772,7 @@ class SearchPipeline:
                 error=PARSE_FAILED_TEMPLATE.format(path=path, reason=e.detail), code=PARSE_ERROR_CODE,
             )
 
-        return await self._ingest_text(
+        result = await self._ingest_text(
             markdown,
             path,
             collection,
@@ -779,6 +787,12 @@ class SearchPipeline:
             chunk_ttl_seconds=chunk_ttl_seconds,
             chunk_scopes=chunk_scopes,
         )
+        if finalize and result.status == "ok" and self._description_lifecycle is not None:
+            # With ``rebuild_fts`` the ingest already ran the recompute its chunk writes asked for.
+            await self._finalize_quietly(
+                collection, namespace, recompute=result.needs_recompute and not rebuild_fts
+            )
+        return result
 
     async def _ingest_text(
         self,
@@ -1284,6 +1298,7 @@ class SearchPipeline:
                 chunk_scopes=chunk_scopes,
                 _access_checked=True,
                 _directory_cache=directory_cache,
+                finalize=False,
             )
             results.append(result)
             if on_file_complete is not None and result.status == "ok":
@@ -1324,37 +1339,82 @@ class SearchPipeline:
         namespace: str,
         rebuild_fts: bool = True,
     ) -> None:
-        """Rebuild FTS, refresh collection metadata once and ask for a description after a batch ingest.
+        """Rebuild FTS once, then finalize the collection after a batch ingest.
 
-        Shared by ``ingest_directory`` and ``ingest_documents`` so a batch pays the
-        FTS optimize and the centroid recompute once, not per document.
-        No-op when no document in the batch was ingested successfully.
+        Shared by ``ingest_directory`` and ``ingest_documents`` so a batch pays the FTS optimize and the centroid
+        recompute once, not per document. No-op when no document in the batch was ingested successfully; the
+        finalizing itself is :meth:`finalize_collection_change`.
+        """
+        if not any(r.status == "ok" for r in results):
+            return
+        if rebuild_fts:
+            await refresh_fts(self.store, collection)
+        await self.finalize_collection_change(
+            collection, namespace, recompute=any(r.needs_recompute for r in results)
+        )
+
+    async def finalize_collection_change(
+        self, collection: str, namespace: str, *, recompute: bool, force: bool = False
+    ) -> None:
+        """Settle a collection's row after its documents changed, then ask for a description: the one routine every
+        path that adds, replaces or removes documents ends with (batch ingest, single-file ingest, incremental sync
+        and watcher, document delete, orphan sweep, expired-chunk pruning).
 
         The order matters. The stamp comes first, so a recompute that fails (a busy collection lock) still leaves it.
-        A re-ingest deletes a document's chunks before it adds them, and that delete zeroes the incremental centroid
-        sum, so the batch leaves the row's counts stale and ``needs_recompute`` set until the recompute runs. The
-        recompute therefore precedes the request: the lifecycle reads the row itself and applies its 20% rule to counts
-        that are right (S24, S25). The request returns at once: the model call runs in the lifecycle's own task and
-        this method never awaits it.
+        A re-ingest deletes a document's chunks before it adds them, and when that delete empties the collection it
+        zeroes the incremental centroid sum, so the change leaves the row's counts stale and ``needs_recompute`` set
+        until the recompute runs (*recompute* says the caller saw that signal; *force* runs it even when the row does
+        not say so, for a caller that changed chunks without touching the row). The recompute therefore precedes the
+        request: the lifecycle reads the row itself and applies its 20% rule to counts that are right (S18, S24). The
+        request returns at once: the model call runs in the lifecycle's own task and this method never awaits it
+        (S17, S25). Without a lifecycle (``[description]`` off, eval, installer) no request is made (S19).
+
+        A failure of the stamp or the recompute propagates, as it always did for a batch ingest.
         """
-        # Optimize (or rebuild) FTS once if at least one successful ingest
-        if rebuild_fts and any(r.status == "ok" for r in results):
-            await refresh_fts(self.store, collection)
+        await self.store.touch_last_indexed(collection, datetime.now(UTC), namespace=namespace)
+        if recompute:
+            await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace, force=force)
+        if self._description_lifecycle is not None:
+            # Imported here, not at module level: the lifecycle module imports the generator and the LLM client
+            # protocol, which a pipeline that never generates (CLI store commands, eval, installer) must not load.
+            from archon_search.description_lifecycle import GenerationKind
 
-        # Only update metadata when at least one file was successfully ingested
-        if any(r.status == "ok" for r in results):
-            await self.store.touch_last_indexed(collection, datetime.now(UTC), namespace=namespace)
+            await self._description_lifecycle.request_generation(collection, namespace, GenerationKind.INGEST)
 
-            # Aggregate needs_recompute signal: if any file triggered it, fire recompute
-            if any(r.needs_recompute for r in results):
-                await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
+    async def _finalize_quietly(
+        self, collection: str, namespace: str, *, recompute: bool, force: bool = False
+    ) -> None:
+        """:meth:`finalize_collection_change` for a caller whose documents are written and whose own result must not
+        depend on it (a single-file ingest, a delete, a maintenance pass): a failure (a busy lock, an unreadable row)
+        is logged and the counts or description lag until the next change."""
+        try:
+            await self.finalize_collection_change(collection, namespace, recompute=recompute, force=force)
+        except Exception:
+            logger.warning(
+                "Could not settle collection %r after its documents changed; its counts or description may lag "
+                "until the next change",
+                collection,
+                exc_info=True,
+            )
 
-            if self._description_lifecycle is not None:
-                # Imported here, not at module level: the lifecycle module imports the generator and the LLM client
-                # protocol, which a pipeline that never generates (CLI store commands, eval, installer) must not load.
-                from archon_search.description_lifecycle import GenerationKind
-
-                await self._description_lifecycle.request_generation(collection, namespace, GenerationKind.INGEST)
+    async def finalize_after_removal(self, collection: str, namespace: str, counts_stale: bool = False) -> None:
+        """:meth:`_finalize_quietly` for a path that only removed documents (a document delete, the orphan sweep,
+        expired-chunk pruning). A delete subtracts the removed chunks from the row itself, so a recompute is needed
+        only when that subtraction could not run (``needs_recompute``); *counts_stale* says the caller removed chunks
+        without touching the row (expiry pruning), which always needs a forced one. Without a lifecycle nothing is
+        done: a removal without descriptions stays exactly what it was.
+        """
+        if self._description_lifecycle is None:
+            return
+        recompute = counts_stale
+        if not recompute:
+            try:
+                meta = await self.store.get_collection_meta(collection, namespace=namespace)
+            except Exception:
+                logger.warning("Could not read the row of collection %r after a removal", collection, exc_info=True)
+                return
+            recompute = meta is not None and meta.needs_recompute
+        await self._finalize_quietly(collection, namespace, recompute=recompute, force=counts_stale)
 
     async def ingest_documents(
         self,
@@ -3846,6 +3906,8 @@ class SearchPipeline:
             raise ValueError(f"collection {collection!r} not found in namespace {namespace!r}")
         deleted = await self.store.delete_document(collection, doc_id, namespace=namespace)
         await self._cleanup_graph_for_doc(doc_id, collection, namespace)
+        if deleted:
+            await self.finalize_after_removal(collection, namespace)
         return deleted
 
     async def delete_by_source_path(

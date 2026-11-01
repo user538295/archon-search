@@ -49,7 +49,7 @@ from archon_search.types import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from archon_search.config import GraphConfig, MaintenanceConfig
     from archon_search.graph_store import GraphStore
@@ -280,9 +280,15 @@ class MaintenanceLoop:
         graph_store: GraphStore | None = None,
         graph_config: GraphConfig | None = None,
         graph_client: LlmClient | None = None,
+        on_documents_removed: Callable[[str, str, bool], Awaitable[None]] | None = None,
     ) -> None:
         """*dispatch_retry* starts each PENDING retry job the failed-ingest retry creates
-        (``routes_jobs.make_retry_dispatcher`` in the lifespan); required, as nothing else would run the job."""
+        (``routes_jobs.make_retry_dispatcher`` in the lifespan); required, as nothing else would run the job.
+        *on_documents_removed* (collection, namespace, counts_stale) runs after a pass removed documents of a
+        collection (the orphan sweep, expired-chunk pruning; *counts_stale* is true when the removal left the row's
+        counts untouched): the lifespan passes the pipeline's ``finalize_after_removal`` so the removal can
+        regenerate a description."""
+        self._on_documents_removed = on_documents_removed
         self._job_store = job_store
         self._dispatch_retry = dispatch_retry
         self._search_store = search_store
@@ -548,6 +554,9 @@ class MaintenanceLoop:
                 finally:
                     lock.release()
 
+            # The sweep shrank the collection: settle its row and let the description rule judge the new count.
+            await self._notify_documents_removed(collection, namespace, counts_stale=False)
+
         # Phase 4: elapsed time warning (covers full operation: scan + delete + FTS).
         elapsed = time.monotonic() - start
         if elapsed > _ELAPSED_LIMIT_S:
@@ -562,6 +571,21 @@ class MaintenanceLoop:
         # Update per-collection health dict.
         if hasattr(self, "_current_health"):
             self._current_health["orphans_removed_last_run"] = orphan_count
+
+    async def _notify_documents_removed(self, collection: str, namespace: str, *, counts_stale: bool) -> None:
+        """Tell the removal hook (the pipeline's description finalize) that a pass removed documents; a failure of the
+        hook is logged and never fails the pass that already deleted."""
+        if self._on_documents_removed is None:
+            return
+        try:
+            await self._on_documents_removed(collection, namespace, counts_stale)
+        except Exception:
+            logger.warning(
+                "MaintenanceLoop: post-removal collection finalize failed for %s/%s",
+                namespace,
+                collection,
+                exc_info=True,
+            )
 
     async def _run_expired_chunk_pruning(self, collection: str, namespace: str) -> None:
         """Prune expired chunks for a single collection (BE-7, E2a).
@@ -612,6 +636,10 @@ class MaintenanceLoop:
                         doc_id,
                         exc,
                     )
+
+        if n > 0:
+            # Expiry removes chunks without touching the collection row, so its counts are stale.
+            await self._notify_documents_removed(collection, namespace, counts_stale=True)
 
         if hasattr(self, "_current_health"):
             self._current_health["expired_chunks_removed_last_run"] = n
