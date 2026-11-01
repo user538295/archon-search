@@ -10,7 +10,7 @@ Root cause exercised here: ``routes_search.py`` resolves the request's embedder 
 ``asyncio.wait_for(embedder_cache.get_or_load(...), _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS)``
 *before* ``warmup_for_search``.  That wait used to run for 30 s and then raise
 ``EmbedderNotReadyError`` → 503, which defeats the S290 policy stated in
-``_search_budget.py`` — an unavailable embedder must degrade to the FTS leg alone
+``search_budget.py`` — an unavailable embedder must degrade to the FTS leg alone
 (``fts_only=True``), never park the connection.  The FTS index is built at ingest,
 so the corpus below is fully answerable without any query vector.
 
@@ -120,7 +120,7 @@ def test_s299_prefix_filter_survives_cold_query_embedder(
         assert resp.status_code == 200, (
             f"unfiltered POST /search returned {resp.status_code} after {elapsed:.2f}s: "
             f"{resp.text} — a cold query embedder must degrade to the FTS leg "
-            f"(fts_only=True, _search_budget.py EMBEDDER_WARMUP_WAIT_SECONDS), not park "
+            f"(fts_only=True, search_budget.py EMBEDDER_WARMUP_WAIT_SECONDS), not park "
             f"the connection on the cold build and then 503"
         )
         unfiltered = resp.json()["results"]

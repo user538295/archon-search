@@ -15,7 +15,7 @@ Wire truth (derived from code, never hardcoded):
   property on ``search`` / ``search_with_context``, only on ``explain``; REST ``SearchRequest`` has
   no ``rerank`` field either.
 * The ``search`` tool's cold-reranker wait is ``RERANKER_WARMUP_WAIT_SECONDS``
-  (``server/_search_budget.py``).
+  (``services/search_budget.py``).
 
 Doc contract:
 

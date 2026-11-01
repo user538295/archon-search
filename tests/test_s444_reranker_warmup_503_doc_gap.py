@@ -8,7 +8,7 @@ not documented anywhere, and the code says the opposite:
 * ``archon_search/pipeline.py:487-512`` swallows every reranker warm-up failure (including
   ``RerankerWarmupTimeout``) into a WARNING and returns ``self._reranker.is_warm``; its docstring
   (``pipeline.py:456``) states "Never raises".
-* ``archon_search/server/_search_budget.py:63-94`` (``warmup_for_search``, bounded by
+* ``archon_search/services/search_budget.py:63-94`` (``warmup_for_search``, bounded by
   ``RERANKER_WARMUP_WAIT_SECONDS = 0.5``) turns that into ``SearchWarmup(rerank=False, ...)``, which
   ``routes_search.py:295`` / ``:473`` pass straight into the pipeline — a cold cross-encoder degrades
   the request to the fused vector+FTS ranking, it does not fail it.

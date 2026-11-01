@@ -17,7 +17,7 @@ touched, so the over-ceiling request answers instantly, while the within-ceiling
 one goes on to ``warmup_for_search`` and blocks.
 
 Root cause. A restart leaves every ONNX model cold in the new process.
-``_search_budget.warmup_for_search`` bounds only the *reranker* leg
+``search_budget.warmup_for_search`` bounds only the *reranker* leg
 (``RERANKER_WARMUP_WAIT_SECONDS``); ``SearchPipeline.warmup_models`` awaits
 ``target_embedder.warmup()`` with no timeout at all (``pipeline.py``, "The
 embedder leg is deliberately unbounded"), and that await sits *outside*

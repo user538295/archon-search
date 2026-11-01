@@ -20,7 +20,7 @@ def _warmup_pending(request: Request) -> bool:
     """True while model warm-up is still running.
 
     Warm-up builds the PyTorch models (minutes); until it finishes the models are
-    not usable yet and search runs degraded (``_search_budget.warmup_for_search``),
+    not usable yet and search runs degraded (``search_budget.warmup_for_search``),
     so ``_model_check_status`` reports ``PENDING`` and readiness is gated through it.
 
     This must NOT be conditioned on ``config.eager_load_embedders`` (S279): that
@@ -195,7 +195,7 @@ async def ready(request: Request) -> JSONResponse:
     # A running startup sync means the index is still being (re)built. Any other WARN/FAIL
     # models stay informational: search still answers, degraded — FTS-only while a
     # per-collection query embedder is cold, unreranked while the cross-encoder is
-    # (``_search_budget.warmup_for_search``).
+    # (``search_budget.warmup_for_search``).
     ready_flag = (
         storage_ok
         and models_status is not CheckStatus.PENDING

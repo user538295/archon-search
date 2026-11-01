@@ -542,7 +542,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             # Outside the wait_for below by design (S184): a cold model build must not
             # consume the search budget. Both legs are bounded and degrade instead of
             # parking the connection — the reranker to the fused ranking (S288), the
-            # embedder to the FTS leg alone (S290); see _search_budget.warmup_for_search.
+            # embedder to the FTS leg alone (S290); see search_budget.warmup_for_search.
             # The same cold-model root cause is reported by S278/S288/S299/S302.
             # A failed warm-up attempt is not latched: the next call retries it (S283).
             warmup = await warmup_for_search(pipeline, embedder)
