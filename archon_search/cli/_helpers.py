@@ -12,6 +12,7 @@ import httpx
 
 from archon_search.config import ConfigError
 from archon_search.constants import EMBED_WAIT_SECONDS, INGEST_LOCK_TIMEOUT_S
+from archon_search.key_manager import load_key
 from archon_search.platform.service import SearchServiceLifecycle
 from archon_search.types import JobStatus
 
@@ -39,8 +40,8 @@ _CONTAINER_MSG = (
     "Service management is not available in container mode. "
     "Use 'archon-search serve' to run the server."
 )
-# Must match the click default in every CLI command (collection.py:_DEFAULT_API_URL, etc.).
-_LOCAL_DEFAULT_URL = "http://localhost:8765"
+# The default every CLI ``--api-url`` option uses.
+_DEFAULT_API_URL = "http://localhost:8765"
 # Slack, beyond the server's collection-lock wait, for the server to act on the request once it holds the lock.
 _LOCK_WAIT_RESPONSE_MARGIN_S = 10.0
 # httpx timeout of a call to a route that may wait up to INGEST_LOCK_TIMEOUT_S for a collection lock before it
@@ -61,6 +62,21 @@ def _exit_on_config_error() -> Iterator[None]:
     except ConfigError as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
+
+
+def _resolve_api_key(api_key: str | None) -> str:
+    """Return the API key from the option, env var, or the key file."""
+    if api_key:
+        return api_key
+    key = load_key()
+    if key:
+        return key
+    click.echo(
+        "No API key found. Pass --api-key, set ARCHON_SEARCH_API_KEY, or run the server "
+        "once to auto-generate a key file.",
+        err=True,
+    )
+    raise SystemExit(1)
 
 
 def _clean(value: str) -> str:
@@ -106,10 +122,10 @@ def _server_connect_fail_msg(base_url: str | None = None) -> str:
     widening the gate would just accept more malformed bodies as "usable".
 
     When the probe *fails* (connection refused, timeout, non-JSON body):
-    - Custom ``--api-url`` target (not ``_LOCAL_DEFAULT_URL``): return
+    - Custom ``--api-url`` target (not ``_DEFAULT_API_URL``): return
       ``_SERVER_NOT_RUNNING_MSG`` immediately — never consult the local service
       manager; it describes a different server (S530).
-    - Default local URL (``_LOCAL_DEFAULT_URL``): fall through to the managed-
+    - Default local URL (``_DEFAULT_API_URL``): fall through to the managed-
       service check — the port may be temporarily closed while the process is
       alive and loading models (c7829cbd sequential-add window).
 
@@ -126,7 +142,7 @@ def _server_connect_fail_msg(base_url: str | None = None) -> str:
     never a hard diagnosis.
     """
     if base_url is not None:
-        _is_custom = base_url.rstrip("/") != _LOCAL_DEFAULT_URL
+        _is_custom = base_url.rstrip("/") != _DEFAULT_API_URL
         try:
             resp = httpx.get(f"{base_url}/ready", timeout=2)
             body = resp.json()

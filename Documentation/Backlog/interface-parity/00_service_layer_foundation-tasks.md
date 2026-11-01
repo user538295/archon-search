@@ -174,7 +174,7 @@ flowchart LR
         - #e2e_test — `test_smoke_mcp_search_returns_results` — `fastmcp.Client` with `StreamableHttpTransport` on `/mcp/` and the smoke API key calls `search` on the `smoke` collection and gets non-empty results; client closed cleanly (`ResourceWarning` is an error)
 
 ### Phase 4 · Resolve the API key and URL once for every CLI command
-- [ ] **FE-1** — Add `load_key`, `_DEFAULT_API_URL` and `_resolve_api_key` to `cli/_helpers.py` (body identical to the five copies; `ConfigError` must propagate); drop `_LOCAL_DEFAULT_URL` and update its uses and the stale comment; move the four resolver tests from `tests/test_cli_collection.py` to a `_helpers` test, patching `archon_search.cli._helpers.load_key` #frontend-role
+- [x] **FE-1** — Add `load_key`, `_DEFAULT_API_URL` and `_resolve_api_key` to `cli/_helpers.py` (body identical to the five copies; `ConfigError` must propagate); drop `_LOCAL_DEFAULT_URL` and update its uses and the stale comment; move the four resolver tests from `tests/test_cli_collection.py` to a `_helpers` test, patching `archon_search.cli._helpers.load_key` #frontend-role
     - Presentation · 1.5h
     - needs K1 · completes C5
     - Tests
