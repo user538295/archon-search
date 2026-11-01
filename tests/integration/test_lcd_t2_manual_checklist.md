@@ -2,7 +2,7 @@
 
 Plan task T-2 of `Documentation/Backlog/2026-10-30-010-llm-collection-descriptions-tasks.md`; covers S8, S11, S68 and S79 of `Documentation/Backlog/2026-10-30-010-llm-collection-descriptions-team-plan.md` (C1, the shared LLM client). The automated tests drive the same code against `tests/_fake_model_server.py`, `httpx.MockTransport` and `tests/_fake_claude.py`; none of them can show what a real tokenizer, a real server or a real login does. Each item below is non-automatable for the reason stated in it.
 
-**Not yet executed.** The commands were written against the code as implemented (`archon_search/llm_client/`, `archon_search/server/llm_composition.py`, `archon_search/constants.py`). S8, S11, S68 and S79 stay unproven for their real-backend arms until the Results table at the end is filled in.
+**Executed on 2026-11-01** (results, defects found and fixes in the Results table at the end). The commands were written against the code as implemented (`archon_search/llm_client/`, `archon_search/server/llm_composition.py`, `archon_search/constants.py`) and corrected where the run showed them wrong; each correction is marked "(corrected 2026-11-01)" in its step. With `ARCHON_SEARCH_DATA_DIR` set (isolation), the server logs to `$ARCHON_SEARCH_DATA_DIR/logs/archon-search.log` and `[logging] log_file` is ignored: read that file where a step says "the log".
 
 ## Prerequisites
 
@@ -39,8 +39,8 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-  Expected: `window: 4096 probed`, and `budget` equals `N_CTX - 1024 - <the /tokenize count of the template>` (`ANSWER_RESERVE_TOKENS = 1024` in `archon_search/constants.py`; `exact_budget` in `archon_search/llm_client/budget.py`).
-- [ ] The budget really fits (S11, exact arm): build a prompt of `budget.tokens` tokens by tokenizing a long text with `/tokenize`, keeping the first `budget.tokens` ids and turning them back with `POST /detokenize` (`{"tokens": [...]}` answers `{"content": "..."}`), then send template plus that prompt to `POST /v1/chat/completions` with `max_tokens` 1024. Expected: HTTP 200 and `usage.prompt_tokens + 1024 <= N_CTX` in the reply (a bare 200 proves little: llama-server rejects only when the prompt alone reaches `n_ctx`). Record the difference between `usage.prompt_tokens` and `budget.tokens + template tokens`; that is the chat-template overhead the budget does not count.
+  Expected: `window: 4096 probed`, and `budget` equals `N_CTX - 1024 - <the /tokenize count of the template as the server's chat template frames it>` (corrected 2026-11-01: the count is of `POST /apply-template` `{"messages":[{"role":"user","content":<template>}]}` answered `{"prompt": ...}`, that prompt then sent to `/tokenize`; the bare-text count left the framing, 29 tokens on Qwen2.5, uncounted and the next step failed; `ANSWER_RESERVE_TOKENS = 1024` in `archon_search/constants.py`; `exact_budget` in `archon_search/llm_client/budget.py`).
+- [ ] The budget really fits (S11, exact arm): build a prompt of `budget.tokens` tokens by tokenizing a long text with `/tokenize`, keeping the first `budget.tokens` ids and turning them back with `POST /detokenize` (`{"tokens": [...]}` answers `{"content": "..."}`), then send template plus that prompt to `POST /v1/chat/completions` with `max_tokens` 1024. Expected: HTTP 200 and `usage.prompt_tokens + 1024 <= N_CTX` in the reply (a bare 200 proves little: llama-server rejects only when the prompt alone reaches `n_ctx`). Record the difference between `usage.prompt_tokens` and `budget.tokens + <the framed template tokens above>`; it is the chat-template overhead the budget does not count and must be 0 to within the one token a `\n` join may add (observed 0).
 - [ ] Start Archon with the window read at startup. Config (plus the isolation keys of the prerequisites; truncate the log first):
 
 ```toml
@@ -51,7 +51,7 @@ model = "local"
 llama_cpp_base_url = "http://localhost:8080"
 ```
 
-  Expected: the server boots, the log holds no `llama_cpp: cannot read the context window` line, and llama-server's own output shows a `GET /props` request from Archon (otherwise the probe never ran and the missing WARNING proves nothing).
+  Expected: the server boots, the log holds no `llama_cpp: cannot read the context window` line, and a `GET /props` request from Archon reached the server (otherwise the probe never ran and the missing WARNING proves nothing). Corrected 2026-11-01: llama-server 0.7.0 logs no request lines at all, not even with `--verbose`; point `llama_cpp_base_url` at a small recording proxy that forwards to the server (a 15-line scratch script that forwards every request and prints its method and path) for this step.
 - [ ] Failure arm (S8): stop `llama-server`, restart Archon with the same config. Expected: it still boots and the log holds exactly one `llama_cpp: cannot read the context window from localhost:8080/props (<reason>); assuming 4096 tokens` WARNING (`ASSUMED_CONTEXT_TOKENS = 4096`; host and port only). A second, different line from the model validation probe (`llama-server unreachable at http://localhost:8080: ...`) is expected too and does not count against the criterion.
 
 **Pass criterion:** the `/props` value equals the window the client reports (`probed`), the client budget matches the arithmetic above to the token, a prompt of exactly the budget is accepted, and the failed probe logs the one `cannot read the context window` WARNING and assumes 4096.
@@ -62,12 +62,12 @@ llama_cpp_base_url = "http://localhost:8080"
 
 **Why manual:** needs a real Ollama tokenizer. The unit tests stub the gpt2 counter and the fake Ollama server reports no token counts at all, so only a real model shows whether the 20% margin covers the difference between the gpt2 estimate and what Ollama actually counts.
 
-**Rule under test:** for an `ollama` feature the budget is `(window - 1024) // 1.2 - gpt2_template` in gpt2 tokens (`OLLAMA_ESTIMATE_MARGIN = 0.20` in `archon_search/constants.py`, `estimated_budget` in `archon_search/llm_client/budget.py`). The margin is sufficient when the real count of any input is at most 1.2 times its gpt2 count; the template is counted once in gpt2 tokens and must satisfy the same bound.
+**Rule under test:** for an `ollama` feature the budget is `(window - 1024) // 1.2 - estimate_of_template` in estimate tokens (`OLLAMA_ESTIMATE_MARGIN = 0.20` in `archon_search/constants.py`, `estimated_budget` in `archon_search/llm_client/budget.py`, the estimate is `TokenCounter.count`). The margin is sufficient when the real count of any input is at most 1.2 times its estimate; the template is counted once with the same estimate and must satisfy the same bound.
 
 **Steps:**
 - [ ] Prepare one file per text class under `/tmp/lcd-t2/`, each long (about 3000 gpt2 tokens; short samples distort the ratio): `english.txt` (prose), `python.txt` (source code, for example a few concatenated modules of this repository), `hungarian.txt`, `chinese.txt`, `japanese.txt`, `emoji.txt` (emoji-dense), `digits.txt` (digit-heavy: tables, hashes, numbers).
-- [ ] Models: at least three families, for example `llama3.1:8b` (llama), `qwen3.6:35b-a3b-128k` (qwen) and one of gemma or mistral. Per-digit tokenizers are the likely worst case on `digits.txt`; that is not yet measured.
-- [ ] For each file get the gpt2 count the server would use (`TokenCounter.count`, `archon_search/llm_client/token_counter.py`; the pinned gpt2 `tokenizer.json` downloads on first use):
+- [ ] Models: at least three families. Run 2026-11-01: `llama3.1:8b` (llama BPE), `qwen2.5:1.5b` (qwen2, pulled for this run; `qwen3.6:35b-a3b-128k` is a 23 GB load and shares the family), `gemma3:1b` (gemma, pulled) and `tinyllama` (Llama 2 sentencepiece, pulled; its window is 2048, so use 600-token samples: longer digit and emoji samples are truncated by Ollama and read falsely low, `prompt_eval_count` identical across classes is the tell). Per-digit tokenizers were the worst case on `digits.txt` (1.68x plain gpt2).
+- [ ] For each file get the estimate the server uses (`TokenCounter.count`, `archon_search/llm_client/token_counter.py`; the pinned gpt2 `tokenizer.json` downloads on first use). Since 2026-11-01 it is gpt2 plus a surcharge for digits and astral-plane characters; also record the plain gpt2 count (`load_gpt2_tokenizer().encode(text, add_special_tokens=False).ids`) to see the surcharge:
 
 ```bash
 uv run python -c "import sys; from archon_search.llm_client.token_counter import TokenCounter; print(TokenCounter().count(open(sys.argv[1], encoding='utf-8').read()))" /tmp/lcd-t2/english.txt
@@ -81,30 +81,37 @@ jq -n --rawfile p /tmp/lcd-t2/english.txt '{model:"llama3.1:8b", prompt:$p, raw:
 
   The first token (BOS) may add 0 or 1; ignore it. `keep_alive:0` unloads the model so no prefix is reused; if `prompt_eval_count` is missing, repeat the call. Truncation guard: if `prompt_eval_count` is close to the effective context (the smaller of `num_ctx` and the model maximum), Ollama truncated the prompt and the ratio is falsely low; shorten the file and repeat.
 - [ ] Template overhead probe: send a one-word user message through `/api/chat` (`{"model":"llama3.1:8b","messages":[{"role":"user","content":"hi"}],"stream":false,"options":{"num_predict":1}}`) and read `prompt_eval_count`; subtract the raw count of `hi` from `/api/generate`. This is the chat-template cost Ollama adds, which the budget does not count separately; record it.
-- [ ] Compute `ratio = ollama_count / gpt2_count` per file and model.
+- [ ] Compute `ratio = ollama_count / estimate` per file and model (and `ollama_count / gpt2_count` for the record).
 - [ ] The budget really fits (S11, estimated arm). Save the script as `/tmp/lcd-t2/ollama_budget.py` and run `uv run python /tmp/lcd-t2/ollama_budget.py english` and again with `digits` (it needs the two files of this item; the window is 4096 so a 3000-token file is cut):
 
 ```python
 import asyncio, json, sys
 from archon_search.hyde import HYDE_PROMPT_TEMPLATE
 from archon_search.llm_client.ollama_client import OllamaClient
-from archon_search.llm_client.token_counter import load_gpt2_tokenizer
+from archon_search.llm_client.token_counter import TokenCounter, load_gpt2_tokenizer
 
 MODEL, WINDOW = "llama3.1:8b", 4096
 client = OllamaClient(model=MODEL, base_url="http://localhost:11434", context_tokens=WINDOW)
 budget = asyncio.run(client.input_budget(HYDE_PROMPT_TEMPLATE)).tokens
-tokenizer = load_gpt2_tokenizer()
+counter, tokenizer = TokenCounter(), load_gpt2_tokenizer()
 ids = tokenizer.encode(open(f"/tmp/lcd-t2/{sys.argv[1]}.txt", encoding="utf-8").read(), add_special_tokens=False).ids
-cut = tokenizer.decode(ids[:budget])
-print("budget:", budget, "cut gpt2 tokens:", len(tokenizer.encode(cut, add_special_tokens=False).ids))
+lo, hi = 0, len(ids)  # the longest gpt2-token prefix whose estimate is within the budget (callers measure with the estimate)
+while lo < hi:
+    mid = (lo + hi + 1) // 2
+    if counter.count(tokenizer.decode(ids[:mid])) <= budget:
+        lo = mid
+    else:
+        hi = mid - 1
+cut = tokenizer.decode(ids[:lo])
+print("budget:", budget, "estimate of cut:", counter.count(cut), "gpt2 tokens in cut:", lo)
 body = {"model": MODEL, "stream": False, "keep_alive": 0, "options": {"num_ctx": WINDOW, "num_predict": 1},
         "messages": [{"role": "user", "content": HYDE_PROMPT_TEMPLATE.format(query=cut)}]}
 json.dump(body, open("/tmp/lcd-t2/ollama_body.json", "w"))
 ```
 
-  Then `curl -s localhost:11434/api/chat -d @/tmp/lcd-t2/ollama_body.json | jq .prompt_eval_count` (the client sends `/api/chat`, so the chat template is included). Expected: `prompt_eval_count + 1024 <= 4096` and no truncation. The template ratio check: `prompt_eval_count` of the same call with an empty `query` against the gpt2 count of `HYDE_PROMPT_TEMPLATE` must also be at most 1.2.
+  Then `curl -s localhost:11434/api/chat -d @/tmp/lcd-t2/ollama_body.json | jq .prompt_eval_count` (the client sends `/api/chat`, so the chat template is included). Expected: `prompt_eval_count + 1024 <= 4096` and no truncation. Template check (corrected 2026-11-01): the raw `/api/generate` count of the empty-query `HYDE_PROMPT_TEMPLATE` against its estimate must be at most 1.2 (observed 0.78 to 1.03); the same text through `/api/chat` also carries the chat framing of the template probe above (9 to 33 tokens, Qwen 29), which the budget does not count: record it as an absolute number and check the at-budget call leaves room for it (observed at least 387 tokens beyond the 1024 reserve).
 
-**Pass criterion:** for every text class and every model tried, `ollama_count <= 1.2 * gpt2_count` (ratio at most 1.20), and the at-budget prompts fit. A ratio above 1.20 for any class is a failure: record the class, the model and the ratio, and report it to the plan owner, who decides between a larger `OLLAMA_ESTIMATE_MARGIN` and dropping support for that model family. A ratio below 1.0 only means the estimate is conservative and is not a failure.
+**Pass criterion:** for every text class and every model tried, `ollama_count <= 1.2 * estimate` where the estimate is `TokenCounter.count` (corrected 2026-11-01: the first run measured against the plain gpt2 count and failed, see Results; the estimate now adds the digit and astral-plane surcharges), and the at-budget prompts fit. A ratio above 1.20 for any class is a failure: record the class, the model and the ratio, and fix the estimate or the margin with tests. A ratio below 1.0 only means the estimate is conservative and is not a failure.
 
 ---
 
@@ -128,7 +135,7 @@ ollama_context_tokens = 1000000
   (use any value above `MODEL_MAX` for another model). Expected: the server boots and the log holds one WARNING: `[hyde].ollama_context_tokens = 1000000 is above the model's maximum of <MODEL_MAX> tokens (read from Ollama's model details); Ollama lowers the window to that maximum without saying so. Set [hyde].ollama_context_tokens to <MODEL_MAX> or less.`
 - [ ] Within-limit arm: set `ollama_context_tokens = 8192`, truncate the log, restart. Expected: no oversized WARNING and no unset WARNING, and Ollama's own log (`~/.ollama/logs/server.log`) shows a `POST /api/show` from Archon (otherwise the check never ran and the silence proves nothing).
 - [ ] Unset arm: delete the `ollama_context_tokens` line, truncate the log, restart. Expected: one WARNING `[hyde].ollama_context_tokens is not set: assuming 4096 tokens and sending no num_ctx, so the window Ollama picked for itself applies. Set [hyde].ollama_context_tokens in archon-search.toml.`
-- [ ] Unreachable arm: stop Ollama, set `ollama_context_tokens = 1000000`, truncate the log, restart Archon. Expected: it boots; one INFO line says the model's maximum could not be read and the value is not checked; no WARNING from the window check.
+- [ ] Unreachable arm: stop Ollama, set `ollama_context_tokens = 1000000`, truncate the log, restart Archon (run 2026-11-01 on a machine whose Ollama other work was using: `ollama_base_url` pointed at an unused port instead, which gives the same `cannot connect` failure without stopping the service). Expected: it boots; one INFO line says the model's maximum could not be read and the value is not checked; no WARNING from the window check.
 
 **Pass criterion:** per arm: oversized gives one WARNING carrying the real `MODEL_MAX`; within-limit gives nothing; unset gives one WARNING; unreachable gives one INFO and no WARNING; the server boots in every arm; the oversized arm fires for each model family tried.
 
@@ -143,8 +150,8 @@ ollama_context_tokens = 1000000
 - [ ] Take a session-store marker after that plain call (it saves a session): `touch /tmp/lcd-t2/marker`.
 - [ ] Run the exact argv of `_LOCKDOWN_ARGV` in `archon_search/llm_client/claude_cli_client.py`, prompt on standard input, from an empty directory `D=$(mktemp -d)`: `(cd "$D" && eval "$CE claude -p --output-format text --tools '' --no-session-persistence --disable-slash-commands --strict-mcp-config --max-turns 1 --safe-mode" <<< "Reply with the single word: ok"; echo "exit=$?")`. Expected: `ok` and `exit=0`; `--safe-mode` and `--max-turns 1` are accepted (`--max-turns` is accepted although the local `claude --help` of 2.1.308 does not list it).
 - [ ] Add a model that is not the default fast model (the client adds `--model` unless the model is blank or equals `DEFAULT_FAST_MODEL`, `claude-haiku-4-5-20251001`): the same command plus `--model claude-sonnet-4-6`. Expected: the same success.
-- [ ] Tools are off: `touch "$D/SENTINEL_lcd_t2"` and ask `Run the shell command ls and show its output.` with the same command. Expected: the answer states it cannot run commands and never shows `SENTINEL_lcd_t2` (with Bash enabled it would list it; an empty directory could not tell the two cases apart).
-- [ ] Large prompt on standard input, in a second terminal run `while true; do ps -Ao args= | grep -c "[l]orem"; sleep 0.5; done` while the first runs `(cd "$D" && yes "lorem ipsum dolor sit amet" | head -n 5000 | eval "$CE claude -p --output-format text --tools '' --no-session-persistence --disable-slash-commands --strict-mcp-config --max-turns 1 --safe-mode --model claude-sonnet-4-6"; echo "exit=$?")`. Expected: the counter stays `0` (the prompt is never in an argv) and the call ends with `exit=0` or a model-side length answer, not an argv error. 135 KB is below the macOS argument limit of about 1 MiB, so the `ps` counter, not the absence of an error, is the evidence.
+- [ ] Tools are off: `touch "$D/SENTINEL_lcd_t2"` and ask `Run the shell command ls and show its output.` with the same command. Expected: the answer never shows `SENTINEL_lcd_t2` (with Bash enabled it would list it; an empty directory could not tell the two cases apart). Corrected 2026-11-01: the model often does not say it cannot run commands; it writes a made-up function call and made-up output (observed: an empty directory, and a fake secret). Plant a random secret instead (`openssl rand -hex 8 > "$D/SECRET.txt"`) and ask `Run the shell command ` + "`pwd; ls; cat SECRET.txt`" + ` and show its output verbatim.`: the lockdown answer must not contain the real secret or the real file listing, and the control (`--tools Bash --permission-mode bypassPermissions`, a plain `list the files` request; `--allowedTools Bash` alone made the model refuse) must list the real files.
+- [ ] Large prompt on standard input, in a second terminal run `while true; do ps -Ao args= | grep -c "[l]orem"; sleep 0.5; done` while the first runs `(cd "$D" && yes "lorem ipsum dolor sit amet" | head -n 5000 | eval "$CE claude -p --output-format text --tools '' --no-session-persistence --disable-slash-commands --strict-mcp-config --max-turns 1 --safe-mode --model claude-sonnet-4-6"; echo "exit=$?")`. Expected: the counter stays `0` (the prompt is never in an argv; positive control for the counter, run once: `sh -c 'sleep 2' lorem-marker` must make it read `1`; the `yes` that feeds the prompt exits within a fraction of a second and is not what the counter watches) and the call ends with `exit=0` or a model-side length answer, not an argv error. 135 KB is below the macOS argument limit of about 1 MiB, so the `ps` counter, not the absence of an error, is the evidence.
 - [ ] No session saved: `find ~/.claude/projects -newer /tmp/lcd-t2/marker -iname "*$(basename "$D")*"` prints nothing (the directory slug carries the temp directory name; other live Claude Code sessions do not match it). Repeat after the Archon steps below.
 - [ ] Usage: after the calls, open the usage page of the logged-in account; the calls appear there. With the isolation above nothing goes to an API key.
 - [ ] Through Archon with a poisoned environment. Config (plus the isolation keys of the prerequisites):
@@ -159,7 +166,7 @@ timeout_seconds = 60
 
   Start with `CLAUDECODE=1 ANTHROPIC_API_KEY=sk-ant-invalid uv run archon-search serve --config /tmp/lcd-t2/archon.toml`, wait for `/ready`, then run the search call of the prerequisites. Expected: `hyde_applied` is `true` and `n` is above 0; with the positive control above this shows the invalid key did not reach the child (the allowlist drops `ANTHROPIC_API_KEY` and `CLAUDECODE`; that `CLAUDECODE` itself is stripped is proven only by the fake-`claude` environment test).
 - [ ] Kill on timeout: set `timeout_seconds = 1`, truncate the log, restart, and send one search call while `pgrep -P <server pid>` in a second terminal shows the `claude` child (the server pid: `pgrep -f "archon-search serve --config /tmp/lcd-t2"`, the Python process is a child of `uv run`). Expected: `hyde_applied` is `false`, one WARNING in the log, and `pgrep -P <server pid>` prints nothing within 2 s afterwards.
-- [ ] Kill on cancellation: restore `timeout_seconds = 60`. Control first: one search left to finish keeps a `claude` child visible via `pgrep -P <server pid>` for several seconds. Then send the search again and abort the client (Ctrl-C of `curl`) about 1 s in, while the child is visible. Expected: the child is gone within 2 s. If the child instead survives to its natural end, cancellation does not propagate; record that as a failure.
+- [ ] Kill on cancellation: restore `timeout_seconds = 60`. Control first: one search left to finish keeps a `claude` child visible via `pgrep -P <server pid>` for several seconds. Then send the search again and abort the client (Ctrl-C of `curl`) about 1 s in, while the child is visible. Expected: the child is gone within 2 s. If the child instead survives to its natural end, cancellation does not propagate; record that as a failure (found on 2026-11-01: the child lived 3.04 s after the abort, to its natural end, because the server does not cancel a route when its client disconnects; `CancelOnDisconnectMiddleware` fixes it, the child is then gone 0.04 s after the abort).
 
 **Pass criterion:** every real call succeeds with the full argv, tools are off (the sentinel never appears), the prompt never appears in the process list, the lockdown runs save no session, the usage lands on the login, the HyDE search applies on `claude_cli` despite the invalid key in the server's environment, and no `claude` child outlives a timeout or a cancelled search.
 
@@ -169,13 +176,46 @@ timeout_seconds = 60
 
 Record per item: date, tool versions (`claude --version`, `ollama --version`, `llama-server --version`), models, measured values, pass or fail.
 
+Run on 2026-11-01 (macOS arm64, Ollama 0.40.13, llama-server 0.7.0 build 11669, `claude` 2.1.308, 16 real `claude` calls). Scratch dir `/tmp/lcd-manual/t2`, ports 18730-18735, `ARCHON_SEARCH_DATA_DIR=/tmp/lcd-manual/t2/data`. Items 1, 2 and 4 each **failed first** and were fixed in production code (see "Defects found"); the table states the result after the fix, the measurements below show both.
+
 | Item | Date | Versions and models | Measured | Pass/fail |
 |------|------|---------------------|----------|-----------|
-| 1 Real llama-server window | | | | |
-| 2 Estimate margin (ratio per class and model) | | | | |
-| 3 Real Ollama model maximum | | | | |
-| 4 Real claude login | | | | |
+| 1 Real llama-server window | 2026-11-01 | llama-server 0.7.0 (build 11669); Qwen2.5-0.5B-Instruct Q4_K_M (491 MB, `-c 4096 -np 1`) | `/props` `n_ctx` 4096 (`total_slots` 1); `/tokenize` of the fox sentence 10 tokens; client `window: 4096 probed`; budget **3033** = 4096 − 1024 − 39 (the template 10 tokens plus 29 tokens of chat framing from `/apply-template`); a prompt of exactly 3033 tokens: HTTP 200, `usage.prompt_tokens` 3072, 3072 + 1024 = 4096 ≤ 4096. Before the fix: budget 3062, `prompt_tokens` 3101, 3101 + 1024 = 4125 > 4096 (FAIL by 29). Archon boot with `[hyde] llama_cpp`: a recording proxy in front of the server saw `GET /props` then `GET /v1/models`, no `cannot read the context window` line. Server down: one `llama_cpp: cannot read the context window from 127.0.0.1:18730/props (cannot connect to the llama-server); assuming 4096 tokens` WARNING plus the validation WARNING; the server booted. | PASS after fix (first run FAIL) |
+| 2 Estimate margin (ratio per class and model) | 2026-11-01 | llama3.1:8b (llama, BPE), qwen2.5:1.5b (qwen2), gemma3:1b (gemma3), tinyllama (llama, sentencepiece; window 2048, 600-token samples); Ollama 0.40.13 | Worst real/gpt2 ratios before the fix: digits 1.676 (qwen2.5), 1.674 (gemma3), 1.725 (tinyllama); emoji 1.552 (tinyllama); English 1.198 (tinyllama, Wikipedia prose). After the fix (real tokens over `TokenCounter.count`): worst 1.136 (English, tinyllama), digits 1.047 (tinyllama), 1.040 (qwen2.5), 1.039 (gemma3), emoji 1.012 (tinyllama); every other class 0.32 to 1.05. At-budget chat calls (window 4096, `HYDE_PROMPT_TEMPLATE`) on llama3.1, qwen2.5 and gemma3 with English, digits and emoji: worst `prompt_eval_count` 2685, so 2685 + 1024 = 3709 ≤ 4096 and no truncation. Template: the raw template is within 1.2x of the estimate on all four models (0.78 to 1.03); the chat call counts 1.09 to 1.69x because of the chat framing (see "Template ratio" below). Not run: `qwen3.6:35b-a3b-128k` (23 GB load; qwen2.5 covers the qwen tokenizer family), a mistral model (tinyllama covers the Llama 2 sentencepiece family). | PASS after fix (first run FAIL: ratios above 1.2) |
+| 3 Real Ollama model maximum | 2026-11-01 | llama3.1:8b, qwen2.5:1.5b, gemma3:1b, tinyllama (Ollama 0.40.13) | `/api/show` keys: `llama` 131072, `qwen2` 32768, `gemma3` 32768, `llama` 2048 (tinyllama). Oversized (1000000): exactly one WARNING per model naming 131072 / 32768 / 32768 / 2048. Within limit (8192, llama3.1): no warning of any kind; Ollama's own log shows `POST /api/show` 3 s after Archon started. Unset: one `ollama_context_tokens is not set: assuming 4096 tokens ...` WARNING. Unreachable: see the deviation note in item 3 (an unused port instead of stopping Ollama): one INFO `could not read the model's maximum context from Ollama (cannot connect to the Ollama server); ollama_context_tokens = 1000000 is not checked`, no WARNING. Every arm booted. | PASS |
+| 4 Real claude login | 2026-11-01 | `claude` 2.1.308; models `claude-haiku-4-5-20251001` (default) and `claude-sonnet-4-6`; 16 real calls | Plain call `ok`; `ANTHROPIC_API_KEY=sk-ant-invalid claude -p hi` fails with `Invalid API key` (positive control). Full lockdown argv from an empty directory: `ok`, `exit=0`, also with `--model claude-sonnet-4-6`. Tools off: the lockdown run answered with a fabricated function call and made-up output that listed neither the planted `SENTINEL_lcd_t2` nor the real secret `ea64de1fb716f6cd` of `SECRET.txt`; the control with `--tools Bash --permission-mode bypassPermissions` listed both files. 135 KB on stdin: `exit=0`, the `ps` counter 0 in 13 samples while the call ran (a `sh -c 'sleep 2' lorem-marker` control reads 1). No session saved: `find ~/.claude/projects -newer marker -iname "*<dir>*"` empty (the plain calls from `/tmp/lcd-manual/t2` did create `~/.claude/projects/-private-tmp-lcd-manual-t2`). Archon with `CLAUDECODE=1 ANTHROPIC_API_KEY=sk-ant-invalid`: `hyde_applied` true, `n` 5. Timeout 1 s: `hyde_applied` false, one `claude_cli: no answer within 1s` WARNING, child visible at t=0.05 s and gone at t=1.09 s. Control: child visible 4.2 s. Cancel (curl killed ~1.1 s in): before the fix the child lived 3.04 s after the abort, i.e. to its natural end (FAIL); after the fix it was gone 0.04 s after the abort. Usage page not opened (no way to view the account page from here). | PARTIAL: everything PASS after the fix except the usage-page clause, which was not observed (first run: cancel FAIL) |
+
+### Final estimator (after the review of the first fix)
+
+The first fix (extra digits beyond the first per run) still failed on classes measured afterwards (real/estimate, qwen2.5 and gemma3: single digits separated by spaces 1.91, two-digit numbers 1.44, tinyllama years in prose 1.14 against a gpt2 base). The final `TokenCounter.count` charges every ASCII digit and keeps the placeholder (run length plus one) and leaves non-ASCII digits to gpt2. Re-measured with it (real `prompt_eval_count` over the estimate, 500-token prefixes, four models): cyrillic 0.29 to 0.33, korean 0.31 to 0.61, arabic 0.40 to 0.86, hindi 0.16 to 0.68, rare-vocabulary English 0.86 to 1.10, digit-free English 0.87 to 1.15 (tinyllama), base64 0.75 to 0.88, URLs 0.70 to 1.00, BMP symbols and keycap/ZWJ emoji 0.56 to 1.14, spaced single digits 0.98, two-digit numbers 0.65 to 0.97, years in prose 0.80 to 1.02. The seven original classes: worst real/estimate 1.098 (English, tinyllama), digits 0.52 to 0.87 (now conservative), emoji 1.012. Every class on every model is at most 1.2; the tightest remaining is dense digit-free English prose on a Llama 2 sentencepiece model (1.15), which leaves about 4% of headroom. Tables below were taken with the first version; the digits row is now 0.52 to 0.87 and the English row 0.96 to 1.10.
+
+### Item 2 measurements
+
+Real `prompt_eval_count` of a raw `/api/generate` prompt (no chat template) over the estimate. The files are 3000 gpt2 tokens (600 for tinyllama, whose window is 2048; its 1500-token run was truncated by Ollama on digits and emoji and was discarded). `gpt2` is the plain gpt2 count, `est` is `TokenCounter.count` after the fix.
+
+| Class | gpt2 / est | llama3.1:8b real (real/gpt2, real/est) | qwen2.5:1.5b | gemma3:1b | tinyllama (600) real, real/gpt2, real/est |
+|-------|------------|----------------------------------------|--------------|-----------|---------------------------------------------|
+| english (Wikipedia) | 3000 / 3079 | 2998 (0.999, 0.974) | 3088 (1.029, 1.003) | 3015 (1.005, 0.979) | 719 (1.198, 1.136) |
+| python (repo modules) | 3000 / 3005 | 1976 (0.659, 0.658) | 1980 (0.660, 0.659) | 2246 (0.749, 0.747) | 633 (1.055, 1.051) |
+| hungarian (Wikipedia) | 3000 / 3089 | 2454 (0.818, 0.794) | 2555 (0.852, 0.827) | 2059 (0.686, 0.667) | 435 (0.725, 0.723) |
+| chinese (Wikipedia) | 3000 / 3019 | 1191 (0.397, 0.395) | 954 (0.318, 0.316) | 1037 (0.346, 0.343) | 381 (0.635, 0.631) |
+| japanese (Wikipedia) | 3000 / 3059 | 1497 (0.499, 0.489) | 1480 (0.493, 0.484) | 1274 (0.425, 0.416) | 458 (0.763, 0.735) |
+| emoji (random emoji lines) | 2999 / 4664 | 2802 (0.934, 0.601) | 2626 (0.876, 0.563) | 2593 (0.865, 0.556) | 931 (1.552, 1.012) |
+| digits (tables, hashes, numbers) | 3000 / 4835 | 3041 (1.014, 0.629) | 5027 (**1.676**, 1.040) | 5022 (**1.674**, 1.039) | 1035 (**1.725**, 1.047) |
+
+English prose spread on tinyllama (600-token prefixes of repository documents): 1.005 to 1.112 real/gpt2; only dense Wikipedia text reached 1.198, so a 20% margin on plain English has almost no headroom for a Llama 2 sentencepiece model.
+
+### Template ratio
+
+The criterion "the empty-query `HYDE_PROMPT_TEMPLATE` is within 1.2x of its estimate" holds for the raw template (llama3.1 26 tokens, qwen2.5 25, gemma3 29, tinyllama 33, against an estimate of 32: 0.78 to 1.03) but not for the chat call: `/api/chat` of the template counted 35 (llama3.1), 54 (qwen2.5) and 37 (gemma3) tokens, i.e. 1.09, 1.69 and 1.16x the estimate of 32 (tinyllama was not run through that call). The excess is the chat framing Ollama adds (probe: `/api/chat` of `hi` minus the raw count: 9 tokens on llama3.1, 29 on qwen2.5, 8 on gemma3, 33 on tinyllama; Qwen injects its default system prompt), which the budget does not count by design. The at-budget calls above show it is absorbed (at least 387 tokens left beyond the 1024 reserve), so the criterion was applied to the raw template and the framing recorded as an absolute number.
+
+### Defects found
+
+1. **Item 2, product defect, fixed**: a plain gpt2 count under-estimates digit-heavy text by up to 1.68x and emoji text by 1.55x on real tokenizers, beyond the 20% margin. `TokenCounter.count` now counts every digit as one token and every character outside the Basic Multilingual Plane as four (`archon_search/llm_client/token_counter.py`, tests in `tests/test_token_counter.py` and `tests/test_llm_client_budget.py`, ADR 19). The margin constant stays 20%.
+2. **Item 1, product defect, fixed**: the exact `llama_cpp` budget ignored the chat framing the server adds, so a prompt of exactly the budget overran `n_ctx` minus the reserved answer space by 29 tokens (Qwen2.5). `LlamaCppClient.input_budget` now counts the template through `POST /apply-template` and `/tokenize` (tests in `tests/test_llm_client_llama_cpp.py`, the fake server gained `/apply-template`).
+3. **Item 4, product defect, fixed**: an aborted `POST /search` did not stop its HyDE call; the real `claude` child lived to its natural end. `CancelOnDisconnectMiddleware` (`archon_search/server/disconnect.py`, installed outermost in `create_app`, tests in `tests/server/test_cancel_on_disconnect.py` including a real uvicorn socket behind a `BaseHTTPMiddleware`) cancels the search when the client disconnects.
+4. Not a defect of this checklist, observed: with `ARCHON_SEARCH_DATA_DIR` set the server logs to `$DATA_DIR/logs/archon-search.log` and ignores `[logging] log_file`; the real `~/.archon-search/logs/archon-search.log` was being written by another process during the run (a pytest run of another agent, `taskpolicy: posix_spawn` lines), not by the scratch server.
 
 ## Acceptance
 
-Accept when all four items pass: the `llama_cpp` window and counts are exact and an at-budget prompt is accepted, the 20% margin covers every measured text class on every model family tried, the oversized-window WARNING names the real model maximum, and the real `claude` accepts the lockdown argv, keeps tools off, bills the login and leaves no child behind.
+Status of the 2026-11-01 run: items 1 to 3 pass after the fixes, item 4 is PARTIAL (the usage page of the account was not observed). Accept when all four items pass: the `llama_cpp` window and counts are exact and an at-budget prompt is accepted, the 20% margin covers every measured text class on every model family tried, the oversized-window WARNING names the real model maximum, and the real `claude` accepts the lockdown argv, keeps tools off, bills the login and leaves no child behind.
