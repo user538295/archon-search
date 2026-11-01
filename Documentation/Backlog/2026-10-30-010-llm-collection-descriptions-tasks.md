@@ -672,7 +672,7 @@ flowchart LR
         - #unit_test — `test_status_reachability_null_until_probed` — before and after the startup probe
         - #integration_test — `test_ready_unaffected_when_description_provider_down` — `/ready` ignores description health
         - #integration_test — `test_status_response_additive_for_existing_consumers` — existing fields and parsing are unchanged
-- [ ] **FE-12** — CLI `status` renders the description block (nothing when null) with its own key-warning wording #frontend-role
+- [x] **FE-12** — CLI `status` renders the description block (nothing when null) with its own key-warning wording #frontend-role
     - Presentation · 2.5h
     - needs BE-37 · completes S39, S66
     - Tests

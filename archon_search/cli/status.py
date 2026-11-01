@@ -8,7 +8,7 @@ from typing import Any
 import click
 import httpx
 
-from archon_search.cli._helpers import _get_service
+from archon_search.cli._helpers import _clean, _get_service
 from archon_search.key_manager import load_key
 
 _DEFAULT_API_URL = "http://localhost:8765"
@@ -43,12 +43,18 @@ def _fetch_server_status(api_url: str, api_key: str | None) -> dict[str, Any] | 
         return None
 
 
-# ponytail: only key-gated providers; ollama, claude_cli and llama_cpp are keyless
-# (key_available always True server-side — llm_client/provider_key.py)
+# ponytail: only key-gated providers; ollama and llama_cpp are keyless. HyDE/RAG report key_available
+# always True for claude_cli (llm_client/provider_key.py); the description block reports whether
+# the `claude` program was found.
 _PROVIDER_ENV_VAR: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
 }
+
+
+def _key_name(provider: str) -> str:
+    """Return the env var holding the provider's key, or a generic phrase for an unknown provider."""
+    return _PROVIDER_ENV_VAR.get(provider, f"the '{provider}' API key")
 
 
 def _warn_if_expansion_key_absent(sub: Any, label: str) -> None:
@@ -58,7 +64,7 @@ def _warn_if_expansion_key_absent(sub: Any, label: str) -> None:
     if sub.get("key_available") is not False:
         return
     provider = sub.get("provider") or "anthropic"
-    env_var = _PROVIDER_ENV_VAR.get(provider, f"the '{provider}' API key")
+    env_var = _key_name(provider)
     click.echo(
         f"Warning: {label} enabled but {env_var} is not set — "
         "expansion will fall back to plain search.",
@@ -75,6 +81,67 @@ def _print_expansion_key_warnings(server_payload: dict[str, Any]) -> None:
     """
     _warn_if_expansion_key_absent(server_payload.get("hyde"), "HyDE")
     _warn_if_expansion_key_absent(server_payload.get("rag_fusion"), "RAG Fusion")
+
+
+_CLAUDE_CLI_PROVIDER = "claude_cli"
+_UNKNOWN_PROVIDER = "unknown"
+
+
+def _description_key_warning(provider: str) -> str:
+    """Return the description-specific missing-credential wording (never the query-expansion text)."""
+    if provider == _CLAUDE_CLI_PROVIDER:
+        return "Warning: collection descriptions enabled but the `claude` program was not found — descriptions will fail until it is installed."
+    env_var = "the provider's API key" if provider == _UNKNOWN_PROVIDER else _key_name(provider)
+    return f"Warning: collection descriptions enabled but {env_var} is not set — descriptions will fail until {env_var} is set."
+
+
+def _format_flag(value: object, *, true_text: str, false_text: str, other_text: str) -> str:
+    """Render a strict bool; any other value (null, a string) never reads as true or false."""
+    if value is True:
+        return true_text
+    if value is False:
+        return false_text
+    return other_text
+
+
+def _format_context_window(tokens: object, source: object) -> str:
+    if tokens is None:
+        return "not limited"
+    return f"{_clean(str(tokens))} tokens ({_clean(str(source))})"
+
+
+def _format_last_attempt(ok: object, at: object) -> str:
+    if ok is None:
+        return "none since start"
+    verdict = _format_flag(ok, true_text="ok", false_text="failed", other_text="unknown")
+    return f"{verdict} at {_clean(str(at))}"
+
+
+def _print_description_status(server_payload: dict[str, Any]) -> None:
+    """Render the collection-description block from GET /status; nothing when it is null or absent (S39, S66).
+
+    Every server-supplied value goes through ``_clean``; the last attempt shows only its verdict and time.
+    Reachability is the startup probe's verdict, which the server never refreshes.
+    """
+    block = server_payload.get("description")
+    if not isinstance(block, dict):
+        return
+    provider = str(block.get("provider") or _UNKNOWN_PROVIDER)
+    key_available = block.get("key_available")
+    click.echo("\nCollection descriptions:")
+    click.echo(f"  provider: {_clean(provider)}")
+    click.echo(f"  key: {_format_flag(key_available, true_text='available', false_text='missing', other_text='unknown')}")
+    reachable = _format_flag(block.get("reachable"), true_text="yes", false_text="no", other_text="not probed yet")
+    click.echo(f"  reachable (startup probe): {reachable}")
+    click.echo(
+        "  context window: "
+        + _format_context_window(block.get("effective_context_tokens"), block.get("context_window_source"))
+    )
+    backfill = _format_flag(block.get("backfill_on_startup"), true_text="yes", false_text="no", other_text="unknown")
+    click.echo(f"  backfill on startup: {backfill}")
+    click.echo(f"  last attempt: {_format_last_attempt(block.get('last_attempt_ok'), block.get('last_attempt_at'))}")
+    if key_available is False:
+        click.echo(_clean(_description_key_warning(provider)), err=True)
 
 
 def _print_failed_expired_count(server_payload: dict[str, Any]) -> None:
@@ -258,6 +325,7 @@ def status(as_json: bool, api_url: str, api_key: str | None) -> None:
     _print_expansion_key_warnings(server_payload)
     _print_failed_expired_count(server_payload)
     _print_graph_gc_status(server_payload)
+    _print_description_status(server_payload)
     _print_active_jobs(api_url, api_key)
     _print_collections(server_payload)
 

@@ -43,6 +43,8 @@ Flags:
 
 When the server is reachable, `status` also prints a **Collections** block — one line per namespace-visible collection with its cached document count and the absolute configured source path (e.g. `mydocs: 142 document(s) — /Users/you/projects/mydocs`); collections with no configured path show `(no configured path)`. Printed even when telemetry is disabled.
 
+With `[description] enabled = true` it also prints a **Collection descriptions** block (provider, key, startup-probe reachability, context window, backfill flag, last attempt); with the feature off nothing is printed. See [Troubleshooting](160_troubleshooting.md).
+
 ## Liveness vs readiness
 
 Two auth-exempt probes are distinct on purpose:
