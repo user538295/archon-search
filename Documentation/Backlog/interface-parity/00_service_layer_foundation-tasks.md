@@ -167,7 +167,7 @@ flowchart LR
     - Tests
         - #integration_test — `test_security_guide_home_mention_is_not_data_dir_relocation` — the guides that may mention HOME stay exactly as pinned
         - #integration_test — `test_wire_text_matches_source_and_every_quoting_doc` — the quoting docs stay correct (also `test_readme_mcp_tool_count_matches_source` for the root README and `test_api_reference_states_the_total_and_base_counts` for doc 600)
-- [ ] **T-1** — e2e: a real MCP client connected to `/mcp` of a real server calls `search` and gets results (new smoke test over `smoke_server`) #tester-role
+- [x] **T-1** — e2e: a real MCP client connected to `/mcp` of a real server calls `search` and gets results (new smoke test over `smoke_server`) #tester-role
     - — · 3.0h
     - needs BE-4, BE-6 · completes S30
     - Tests

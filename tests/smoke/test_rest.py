@@ -1,7 +1,7 @@
-"""Smoke tests for REST endpoints (subprocess-server-level), plus meta-tests
+"""Smoke tests for REST and MCP endpoints (subprocess-server-level), plus meta-tests
 about the smoke suite as a whole.
 
-Most tests here issue real HTTP requests (via ``httpx``) against the
+Most tests here issue real HTTP requests (via ``httpx``; one drives ``/mcp/`` with a real ``fastmcp`` client) against the
 session-scoped ``smoke_server`` fixture's live ``archon-search serve``
 subprocess, and assert responses are correctly shaped and human-readable
 (no raw ``CollectionMeta(`` repr, etc.). Two tests instead invoke ``pytest``
@@ -18,6 +18,7 @@ the pattern in ``tests/smoke/test_cli.py``).
 
 from __future__ import annotations
 
+import gc
 import os
 import re
 import subprocess
@@ -26,6 +27,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 
 pytestmark = pytest.mark.xdist_group("smoke_e2e")
 
@@ -133,6 +136,31 @@ def test_search_returns_results_within_5s(smoke_server) -> None:
     assert "[0." not in response.text
     assert "CollectionMeta(" not in response.text
     assert elapsed < 5.0
+
+
+_MCP_CALL_TIMEOUT_S: float = 30.0
+
+
+async def test_smoke_mcp_search_returns_results(smoke_server) -> None:
+    """A real ``fastmcp`` client on ``/mcp/`` of the live server calls ``search`` on the
+    pre-seeded ``smoke`` collection with the smoke API key and gets non-empty results (S30).
+    The client is closed by its ``async with``; ``gc.collect()`` makes a leaked transport
+    surface here (``error::ResourceWarning``), not in a later test.
+    """
+    headers = {"Authorization": f"Bearer {smoke_server.api_key}"}
+    transport = StreamableHttpTransport(f"{smoke_server.base_url}/mcp/", headers=headers)
+    async with Client(transport, timeout=_MCP_CALL_TIMEOUT_S, init_timeout=_MCP_CALL_TIMEOUT_S) as mcp:
+        result = await mcp.call_tool("search", {"query": "cross-encoder reranker", "collection": "smoke"})
+    gc.collect()
+
+    payload = result.structured_content
+    assert payload is not None, result
+    # A tool-level failure comes back as a normal ``{error, code}`` dict, not as an MCP error result.
+    assert "code" not in payload, payload
+    assert payload["results"], payload
+    assert any("reranker" in hit["text"].lower() for hit in payload["results"]), payload
+    assert "[0." not in str(payload)
+    assert "CollectionMeta(" not in str(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -297,8 +325,8 @@ def test_e2e_explain_acl_gate_always_present(smoke_server) -> None:
 _RECURSION_GUARD_ENV = "_ARCHON_E2E_SUBPROCESS"
 
 # Number of tests in tests/smoke/ that pass outright inside the child run.
-# 31 test functions collected total (test_cli.py: 18, test_conftest.py: 4,
-# test_rest.py: 9). Conditional skips that reduce the count:
+# 32 test functions collected total (test_cli.py: 18, test_conftest.py: 4,
+# test_rest.py: 10). Conditional skips that reduce the count:
 # - 1 recursion-guard skip: test_full_smoke_suite_passes itself
 # - 1 leidenalg/gliner importorskip: test_e2e_graph_build_communities_wait_against_server
 # - 2 smoke_server_graph_enabled consumers in test_conftest.py (same importorskip)
