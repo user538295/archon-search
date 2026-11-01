@@ -71,7 +71,7 @@ Severity means:
 | SEC-03 | Medium | Long-lived bearer credentials are accepted in URLs and embedded in HTML | Secret handling |
 | SEC-04 | Medium | Telemetry and export artifacts can be group/world readable | Least privilege |
 | TYPE-01 | Low | Core boundaries are weakly typed and no linter/type-checker gate exists | Interface safety |
-| EXT-01 | Low | Query-expansion provider metadata is distributed across multiple modules | OCP, registry pattern |
+| EXT-01 | Low | LLM provider metadata is distributed across multiple modules | OCP, registry pattern |
 | DUP-01 | Low | API-key resolution is copied across five CLI modules | DRY |
 
 ## High-severity findings
@@ -375,11 +375,11 @@ Create new sensitive directories with `0700` and new telemetry, temp, and export
 
 Add Ruff and Pyright or mypy incrementally. Start with application-service interfaces, domain results, lifecycle ownership, key rotation, and new/changed code. Establish a ratchet in selected modules: no unexplained suppressions and no new `Any` at core boundaries. Do not block adoption on making all 48,825 lines strict in one change.
 
-### EXT-01 — Query-expansion providers need a registry
+### EXT-01 — LLM providers need a registry
 
 Provider names, dependency checks, factories, credential policy, rate-limit behavior, installer extras, and wizard choices are distributed across `archon_search/config.py`, `archon_search/server/app.py`, `archon_search/llm_client/provider_key.py`, `archon_search/hyde.py`, `archon_search/rag_fusion.py`, `archon_search/install/extras.py`, and `archon_search/install/wizard.py`. Adding a provider requires coordinated edits in each location.
 
-Create a `QueryExpansionProviderSpec` registry containing the provider name, factory, dependency/extra metadata, credential check, rate-limit policy, and optional configuration hook. Keep providers as strategies; make the registry the single source of provider metadata.
+Create an `LlmProviderSpec` registry (one entry per provider, consumed by the shared `archon_search/llm_client/` wrappers that replaced the per-feature adapters, ADR 19) containing the provider name, factory, dependency/extra metadata, credential check, rate-limit policy, and optional configuration hook. Keep providers as strategies; make the registry the single source of provider metadata.
 
 ### DUP-01 — CLI API-key resolution is copied
 
