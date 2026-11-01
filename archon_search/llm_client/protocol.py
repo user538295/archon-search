@@ -189,3 +189,13 @@ class TokenCountingClient(Protocol):
             LlmCallFailure: the count failed (an unreachable tokenize endpoint).
         """
         ...
+
+    def token_ceiling(self, text: str) -> int:
+        """An upper bound of ``count_tokens(text)`` that needs no request and no tokenizer, in the same unit.
+
+        Invariant behind it: a token covers at least one byte of the UTF-8 text, so a byte-level or byte-fallback tokenizer
+        cannot produce more tokens than the text has bytes. A caller whose text has a ceiling within its budget may skip the
+        count. Exotic tokenizers add a constant or a per-run surcharge, which each client's ceiling includes
+        (``llama_cpp``: the SentencePiece dummy-prefix token; ``ollama``: one placeholder per digit run).
+        """
+        ...

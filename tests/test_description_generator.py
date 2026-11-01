@@ -114,6 +114,9 @@ class CountingClient(ScriptedLlmClient):
     async def count_tokens(self, text: str) -> int:
         return len(text)
 
+    def token_ceiling(self, text: str) -> int:
+        return len(text.encode("utf-8"))
+
 
 def _small_window_client(**scripted: Any) -> CountingClient:
     window = ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
@@ -183,6 +186,9 @@ class _CharCountingClient(_SequenceClient):
 
     async def count_tokens(self, text: str) -> int:
         return len(text)
+
+    def token_ceiling(self, text: str) -> int:
+        return len(text.encode("utf-8"))
 
 
 class TestConstants:

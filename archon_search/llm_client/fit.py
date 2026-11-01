@@ -101,6 +101,11 @@ async def fit_query_to_window(client: LlmClient, template_text: str, query: str,
     if budget > 0:
         if not isinstance(client, TokenCountingClient):
             raise LlmCallFailure(provider, "the client sizes its input to a budget but cannot count tokens")
+        if len(query) <= budget and client.token_ceiling(query) <= budget:
+            # Fast path: a token covers at least one byte, so a text whose request-free ceiling (its UTF-8 length plus the
+            # client's own surcharge, see ``TokenCountingClient.token_ceiling``) is within the budget cannot exceed it. A
+            # text with more characters than the budget has more bytes too, so its ceiling is not even computed.
+            return query
         fitted = await fit_text_to_budget(query, budget, client.count_tokens)
         if fitted or not query:
             return fitted

@@ -97,6 +97,16 @@ class TokenCounter:
         gpt2_tokens = len(self._get_tokenizer().encode(gpt2_text, add_special_tokens=False).ids)
         return gpt2_tokens + digits + _ASTRAL_CHARACTER_TOKENS * astral_characters
 
+    @staticmethod
+    def ceiling(text: str) -> int:
+        """An upper bound of :meth:`count` that needs no tokenizer: the UTF-8 length plus one per digit run.
+
+        gpt2 is byte-level, so a token covers at least one byte and the gpt2 part is at most the bytes of the text it is
+        given; an astral character is charged its four bytes (as many as it has); a digit run of N digits is charged N plus
+        one placeholder that stands for N bytes already counted. Hence ``count(text) <= len(utf8) + digit runs``.
+        """
+        return len(text.encode("utf-8", "surrogatepass")) + len(_DIGIT_RUN.findall(text))
+
     def _get_tokenizer(self) -> Tokenizer:
         with self._lock:
             if self._tokenizer is None:

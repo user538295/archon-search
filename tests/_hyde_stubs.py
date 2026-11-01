@@ -86,6 +86,9 @@ class BudgetedLlmClient(ScriptedLlmClient):
             raise self.count_failure
         return self.tokens_per_word * len(text.split())
 
+    def token_ceiling(self, text: str) -> int:
+        return self.tokens_per_word * len(text.encode("utf-8"))  # a word is at least one byte
+
 
 def stub_hyde_generator(**generate: Any) -> MagicMock:
     """A ``HyDEGenerator`` stand-in whose ``generate`` is ``AsyncMock(**generate)``.

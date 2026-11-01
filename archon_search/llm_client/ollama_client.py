@@ -24,7 +24,7 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any, Final
 
 from archon_search.constants import ASSUMED_CONTEXT_TOKENS
-from archon_search.llm_client.budget import estimated_budget
+from archon_search.llm_client.budget import TemplateCostCache, estimated_budget
 from archon_search.llm_client.protocol import (
     ContextWindowSource,
     ContextWindowTokens,
@@ -84,6 +84,7 @@ class OllamaClient:
         self._context_tokens = context_tokens
         self._token_counter = token_counter if token_counter is not None else TokenCounter()
         self._client_factory = client_factory
+        self._template_costs = TemplateCostCache()
         if context_tokens is None:
             self._window = ContextWindowTokens(size=ASSUMED_CONTEXT_TOKENS, source=ContextWindowSource.ASSUMED)
         else:
@@ -113,9 +114,13 @@ class OllamaClient:
 
     async def input_budget(self, template_text: str) -> InputBudget:
         try:
-            return await estimated_budget(self._window, template_text, self._token_counter.count)
+            return await estimated_budget(self._window, template_text, self._template_costs.memoize(self._token_counter.count))
         except Exception as exc:
             raise LlmCallFailure(PROVIDER_NAME, f"cannot size the prompt: the gpt2 token counter failed ({type(exc).__name__})") from exc
+
+    def token_ceiling(self, text: str) -> int:
+        """The request-free bound of :meth:`count_tokens` (``TokenCounter.ceiling``: UTF-8 bytes plus one per digit run)."""
+        return TokenCounter.ceiling(text)
 
     async def count_tokens(self, text: str) -> int:
         """The token estimate of *text* (gpt2 plus the digit and astral-plane surcharges), the unit :meth:`input_budget` is measured in (callers that size passages to the

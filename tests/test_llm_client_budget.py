@@ -9,8 +9,16 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from archon_search.constants import ANSWER_RESERVE_TOKENS, ASSUMED_CONTEXT_TOKENS
-from archon_search.llm_client.budget import cloud_budget, estimated_budget, exact_budget
+from archon_search.llm_client.budget import (
+    MAX_CACHED_TEMPLATES,
+    TemplateCostCache,
+    cloud_budget,
+    estimated_budget,
+    exact_budget,
+)
 from archon_search.llm_client.protocol import (
     UNBOUNDED,
     ContextWindowSource,
@@ -140,3 +148,127 @@ async def test_ollama_estimate_runs_off_the_event_loop_thread() -> None:
     await estimated_budget(_window(_WINDOW), _TEMPLATE, TokenCounter(load_tokenizer=load).count)
 
     assert threads and threads[0] != loop_thread
+
+
+# --- the template cost is a fixed part: counted once ----------------------------------------------------------------
+
+
+async def test_a_template_is_counted_once_however_often_the_budget_is_asked_for() -> None:
+    cache = TemplateCostCache()
+    seen: list[str] = []
+
+    async def tokenize_count(text: str) -> int:
+        seen.append(text)
+        return 100
+
+    window = _window(_WINDOW, ContextWindowSource.PROBED)
+    budgets = [await exact_budget(window, _TEMPLATE, cache.memoize_async(tokenize_count)) for _ in range(5)]
+
+    assert budgets == [InputBudget(tokens=_WINDOW - ANSWER_RESERVE_TOKENS - 100)] * 5
+    assert seen == [_TEMPLATE]
+
+
+async def test_the_budget_follows_the_window_while_the_template_count_is_kept() -> None:
+    """What is cached is the count of the template, which does not depend on the window: a window that resolves later
+    (BE-10) is read live each time, so a budget computed under the assumed window is never served after the answer."""
+    cache = TemplateCostCache()
+    seen: list[str] = []
+
+    async def tokenize_count(text: str) -> int:
+        seen.append(text)
+        return 100
+
+    count = cache.memoize_async(tokenize_count)
+    assumed = await exact_budget(_window(ASSUMED_CONTEXT_TOKENS, ContextWindowSource.ASSUMED), _TEMPLATE, count)
+    probed = await exact_budget(_window(_WINDOW, ContextWindowSource.PROBED), _TEMPLATE, count)
+
+    assert assumed == InputBudget(tokens=ASSUMED_CONTEXT_TOKENS - ANSWER_RESERVE_TOKENS - 100)
+    assert probed == InputBudget(tokens=_WINDOW - ANSWER_RESERVE_TOKENS - 100)
+    assert seen == [_TEMPLATE]
+
+
+async def test_each_template_has_its_own_entry() -> None:
+    cache = TemplateCostCache()
+    seen: list[str] = []
+
+    async def tokenize_count(text: str) -> int:
+        seen.append(text)
+        return len(text.split())
+
+    count = cache.memoize_async(tokenize_count)
+    first = await count(_TEMPLATE)
+    second = await count(_RETRY_REMINDER)
+    again = [await count(_TEMPLATE), await count(_RETRY_REMINDER)]
+
+    assert (first, second) == (_TEMPLATE_TOKENS, _RETRY_REMINDER_TOKENS)
+    assert again == [first, second]
+    assert seen == [_TEMPLATE, _RETRY_REMINDER]
+
+
+async def test_a_failing_count_is_not_remembered() -> None:
+    cache = TemplateCostCache()
+    attempts: list[str] = []
+
+    async def flaky(text: str) -> int:
+        attempts.append(text)
+        if len(attempts) == 1:
+            raise OSError("tokenize endpoint unreachable")
+        return 7
+
+    count = cache.memoize_async(flaky)
+    with pytest.raises(OSError, match="unreachable"):
+        await count(_TEMPLATE)
+
+    assert await count(_TEMPLATE) == 7
+    assert await count(_TEMPLATE) == 7
+    assert attempts == [_TEMPLATE, _TEMPLATE]
+
+
+def test_the_sync_count_of_the_ollama_estimate_is_remembered_the_same_way() -> None:
+    cache = TemplateCostCache()
+    seen: list[str] = []
+
+    def estimate(text: str) -> int:
+        seen.append(text)
+        return len(text.split())
+
+    count = cache.memoize(estimate)
+
+    assert [count(_TEMPLATE) for _ in range(3)] == [_TEMPLATE_TOKENS] * 3
+    assert seen == [_TEMPLATE]
+
+
+async def test_clear_makes_every_template_be_counted_again() -> None:
+    cache = TemplateCostCache()
+    seen: list[str] = []
+
+    async def tokenize_count(text: str) -> int:
+        seen.append(text)
+        return 1
+
+    count = cache.memoize_async(tokenize_count)
+    await count(_TEMPLATE)
+    cache.clear()
+    await count(_TEMPLATE)
+
+    assert seen == [_TEMPLATE, _TEMPLATE]
+
+
+async def test_the_cache_stays_bounded_when_every_template_differs() -> None:
+    """A description template carries the collection name, so a server with many collections must not grow it forever."""
+    cache = TemplateCostCache()
+    seen: list[str] = []
+
+    async def tokenize_count(text: str) -> int:
+        seen.append(text)
+        return 1
+
+    count = cache.memoize_async(tokenize_count)
+    for number in range(MAX_CACHED_TEMPLATES + 1):
+        await count(f"template number {number}")
+    seen.clear()
+
+    await count("template number 0")  # forgotten when the full cache was cleared to make room
+
+    assert seen == ["template number 0"]
+    assert len(cache) <= MAX_CACHED_TEMPLATES

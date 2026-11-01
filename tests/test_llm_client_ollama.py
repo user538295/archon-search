@@ -342,6 +342,52 @@ async def test_failing_counter_raises_call_failure() -> None:
     assert raised.value.provider == "ollama"
 
 
+async def test_input_budget_counts_a_template_once_per_process() -> None:
+    """The gpt2 count of the fixed template is not repeated for every search that sizes a query."""
+    stub = StubTokenizer()
+    wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW, counter=TokenCounter(load_tokenizer=lambda: stub))
+
+    budgets = [await wrapper.input_budget(_TEMPLATE) for _ in range(4)]
+
+    assert budgets == [InputBudget(tokens=_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)] * 4
+    assert stub.calls == [_TEMPLATE]
+
+
+async def test_input_budget_keeps_one_count_per_template_and_does_not_cache_query_counts() -> None:
+    stub = StubTokenizer()
+    wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW, counter=TokenCounter(load_tokenizer=lambda: stub))
+
+    await wrapper.input_budget(_TEMPLATE)
+    await wrapper.input_budget(_SECOND_PROMPT)
+    await wrapper.input_budget(_TEMPLATE)
+    await wrapper.count_tokens(_PROMPT)
+    await wrapper.count_tokens(_PROMPT)
+
+    assert stub.calls == [_TEMPLATE, _SECOND_PROMPT, _PROMPT, _PROMPT]
+
+
+async def test_a_failed_template_count_is_not_cached() -> None:
+    attempts: list[str] = []
+
+    def flaky_loader() -> StubTokenizer:
+        attempts.append("load")
+        if len(attempts) == 1:
+            raise OSError("tokenizer cannot be downloaded")
+        return StubTokenizer()
+
+    wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW, counter=TokenCounter(load_tokenizer=flaky_loader))
+    with pytest.raises(LlmCallFailure):
+        await wrapper.input_budget(_TEMPLATE)
+
+    assert await wrapper.input_budget(_TEMPLATE) == InputBudget(tokens=_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)
+
+
+def test_token_ceiling_is_the_estimate_bound_of_the_counter() -> None:
+    wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW)
+
+    assert wrapper.token_ceiling("order 66 and 🙂") == TokenCounter.ceiling("order 66 and 🙂")
+
+
 async def test_count_tokens_is_the_gpt2_count_the_budget_is_measured_in() -> None:
     wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW)
 

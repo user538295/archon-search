@@ -375,6 +375,96 @@ async def test_llama_cpp_input_budget_malformed_apply_template_answer_raises_fai
     assert "unexpected reply" in raised.value.reason
 
 
+_ASSUMED_BUDGET = ASSUMED_CONTEXT_TOKENS - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS
+_OTHER_TEMPLATE = "Summarise this other collection in one sentence."
+_OTHER_TEMPLATE_TOKENS = 7
+_TEMPLATE_REQUESTS = ["/apply-template", "/tokenize"]  # what sizing one template asks the server: render it, count it
+
+
+def _paths(server: _Server) -> list[str]:
+    return [request.url.path for request in server.requests]
+
+
+async def test_llama_cpp_input_budget_counts_a_template_once_per_process() -> None:
+    """The template is the fixed part of every query: its framed count is asked of the server once, not per search."""
+    server = _Server()
+    client = _client(server)
+
+    first = await client.input_budget(_TEMPLATE)
+    second = await client.input_budget(_TEMPLATE)
+    third = await client.input_budget(_TEMPLATE)
+
+    assert first == second == third == InputBudget(tokens=_ASSUMED_BUDGET)
+    assert _paths(server) == _TEMPLATE_REQUESTS
+
+
+async def test_llama_cpp_input_budget_keeps_one_count_per_template() -> None:
+    server = _Server()
+    client = _client(server)
+
+    await client.input_budget(_TEMPLATE)
+    other = await client.input_budget(_OTHER_TEMPLATE)
+    await client.input_budget(_TEMPLATE)
+    await client.input_budget(_OTHER_TEMPLATE)
+
+    assert other == InputBudget(tokens=ASSUMED_CONTEXT_TOKENS - ANSWER_RESERVE_TOKENS - _OTHER_TEMPLATE_TOKENS - _FRAME_TOKENS)
+    assert _paths(server) == _TEMPLATE_REQUESTS * 2
+
+
+async def test_llama_cpp_cached_template_count_does_not_freeze_the_assumed_window() -> None:
+    """The window is resolved after start-up (BE-10): a budget asked for before it must not outlive the answer, and the
+    template is counted again because a server that answers may be another model than the one assumed."""
+    server = _Server()
+    client = _client(server)
+    assumed = await client.input_budget(_TEMPLATE)
+
+    await client.probe_context_window(_TIMEOUT_SECONDS)
+    probed = await client.input_budget(_TEMPLATE)
+    await client.input_budget(_TEMPLATE)
+
+    assert assumed == InputBudget(tokens=_ASSUMED_BUDGET)
+    assert probed == InputBudget(tokens=_PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS)
+    assert _paths(server) == [*_TEMPLATE_REQUESTS, "/props", *_TEMPLATE_REQUESTS]
+
+
+async def test_llama_cpp_failed_probe_keeps_the_cached_template_count() -> None:
+    server = _Server(failures={"/props": httpx.ConnectError("refused")})
+    client = _client(server)
+    await client.input_budget(_TEMPLATE)
+
+    await client.probe_context_window(_TIMEOUT_SECONDS)
+    await client.input_budget(_TEMPLATE)
+
+    assert _paths(server) == [*_TEMPLATE_REQUESTS, "/props"]
+
+
+async def test_llama_cpp_failed_template_count_is_not_cached() -> None:
+    state = {"up": False}
+
+    def server(request: httpx.Request) -> httpx.Response:
+        if not state["up"]:
+            raise httpx.ConnectError("refused")
+        return _Server()(request)
+
+    client = _client(server)
+    with pytest.raises(LlmCallFailure):
+        await client.input_budget(_TEMPLATE)
+    state["up"] = True
+
+    assert await client.input_budget(_TEMPLATE) == InputBudget(tokens=_ASSUMED_BUDGET)
+
+
+async def test_llama_cpp_query_count_is_not_cached() -> None:
+    """Only the template is a fixed part: every text counted through ``count_tokens`` goes to the server."""
+    server = _Server()
+    client = _client(server)
+
+    await client.count_tokens(_PROMPT)
+    await client.count_tokens(_PROMPT)
+
+    assert _paths(server) == ["/tokenize", "/tokenize"]
+
+
 def test_llama_cpp_client_satisfies_the_llm_client_protocol() -> None:
     assert isinstance(_client(_Server()), LlmClient)
 

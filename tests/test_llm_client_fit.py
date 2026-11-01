@@ -361,6 +361,91 @@ async def test_a_client_with_a_budget_that_cannot_count_is_a_failure() -> None:
     assert raised.value.provider == "llama_cpp"
 
 
+# --- the byte-bound fast path -------------------------------------------------------------------------------------
+
+
+async def test_a_query_whose_ceiling_fits_the_budget_is_returned_untouched_without_any_count() -> None:
+    """A token covers at least one byte, so a text of at most ``budget`` bytes cannot cost more than ``budget`` tokens."""
+    client = BudgetedLlmClient(window_tokens=4096, budget=200)
+    query = words(10)
+
+    assert await fit_query_to_window(client, "the template", query, provider="llama_cpp") is query
+    assert client.counted == []
+    assert client.templates == ["the template"]
+
+
+async def test_an_empty_query_needs_no_count() -> None:
+    client = BudgetedLlmClient(window_tokens=4096, budget=40)
+
+    assert await fit_query_to_window(client, "the template", "", provider="llama_cpp") == ""
+    assert client.counted == []
+
+
+async def test_a_query_exactly_at_the_ceiling_goes_untouched_and_one_byte_more_is_counted() -> None:
+    at_the_ceiling = "x" * 40
+    client = BudgetedLlmClient(window_tokens=4096, budget=40)
+
+    assert await fit_query_to_window(client, "the template", at_the_ceiling, provider="llama_cpp") is at_the_ceiling
+    assert client.counted == []
+
+    over_by_one_byte = "x" * 41  # one long word: the count says one token, the byte bound cannot know that
+    assert await fit_query_to_window(client, "the template", over_by_one_byte, provider="llama_cpp") == over_by_one_byte
+    assert client.counted == [over_by_one_byte]
+
+
+async def test_a_query_over_the_ceiling_is_counted_and_cut_as_before() -> None:
+    client = BudgetedLlmClient(window_tokens=4096, budget=40)
+
+    fitted = await fit_query_to_window(client, "the template", words(500), provider="llama_cpp")
+
+    assert client.counted, "only a text longer than the budget in bytes goes through the counting loop"
+    assert len(fitted.split()) <= 40
+
+
+async def test_the_ceiling_counts_bytes_not_characters() -> None:
+    """Thirty CJK characters are within a budget of 50 as characters but ninety bytes: the byte bound does not apply."""
+    client = BudgetedLlmClient(window_tokens=4096, budget=50)
+    query = "検" * 30
+
+    assert await fit_query_to_window(client, "the template", query, provider="llama_cpp") == query
+    assert client.counted == [query], "counted once, and it fits (the stub counts the unspaced run as one word)"
+
+
+async def test_a_query_longer_than_the_budget_in_characters_is_not_encoded_to_find_its_ceiling() -> None:
+    """Characters never outnumber bytes, so a text with more characters than the budget has too many bytes too: the
+    ceiling (an O(n) pass over a possibly megabyte-long query) is not computed for it."""
+    ceilings: list[str] = []
+
+    class Spying(BudgetedLlmClient):
+        def token_ceiling(self, text: str) -> int:
+            ceilings.append(text)
+            return super().token_ceiling(text)
+
+    client = Spying(window_tokens=4096, budget=40)
+
+    await fit_query_to_window(client, "the template", words(500), provider="llama_cpp")
+
+    assert ceilings == []
+
+
+async def test_a_ceiling_above_the_budget_is_not_a_verdict_the_count_decides() -> None:
+    """Eight one-letter words are fifteen bytes (above a budget of 10) but eight tokens: the count lets the whole text through."""
+    client = BudgetedLlmClient(window_tokens=4096, budget=10)
+    query = "a b c d e f g h"
+
+    assert await fit_query_to_window(client, "the template", query, provider="llama_cpp") == query
+    assert client.counted == [query]
+
+
+@pytest.mark.parametrize("text", ["plain words in a short query", "検索拡張生成", "🙂 emoji 👍🏽", "1 2 3 4", ""])
+async def test_the_fast_path_returns_what_the_counting_path_would(text: str) -> None:
+    """With the worst-case count (a token per byte), a text the ceiling lets through is also one the count says fits whole."""
+    budget = len(text.encode("utf-8")) + 1
+    counter = _Counter(lambda candidate: len(candidate.encode("utf-8")))
+
+    assert await fit_text_to_budget(text, budget, counter) == text
+
+
 def test_describe_window_names_size_and_source_or_unbounded() -> None:
     assert describe_window(ContextWindowTokens(size=4096, source=ContextWindowSource.ASSUMED)) == "4096 tokens, assumed"
     assert describe_window(ContextWindowTokens(size=8192, source=ContextWindowSource.PROBED)) == "8192 tokens, probed"

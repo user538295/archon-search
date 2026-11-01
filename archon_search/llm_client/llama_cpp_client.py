@@ -25,7 +25,7 @@ from typing import Any, Final
 import httpx
 
 from archon_search.constants import ASSUMED_CONTEXT_TOKENS
-from archon_search.llm_client.budget import exact_budget
+from archon_search.llm_client.budget import TemplateCostCache, exact_budget
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.protocol import (
     ContextWindowSource,
@@ -61,6 +61,9 @@ _ENABLE_THINKING_KWARG: Final = "enable_thinking"
 #: different findings and keep different keys; the unreachable one is shared with the description startup probe.
 _UNREACHABLE_KEY_PREFIX: Final = "llama_cpp_unreachable:"
 _NO_WINDOW_KEY_PREFIX: Final = "llama_cpp_no_window:"
+
+#: A SentencePiece vocabulary may spend one token on its dummy prefix: the one token a byte count can undercount by.
+_SPM_DUMMY_PREFIX_TOKENS: Final = 1
 
 
 def _assumed_window() -> ContextWindowTokens:
@@ -103,6 +106,7 @@ class LlamaCppClient:
         self._base_url = base_url
         self._transport = transport
         self._window = _assumed_window()
+        self._template_costs = TemplateCostCache()
 
     async def probe_context_window(self, timeout_seconds: float) -> ContextWindowTokens:
         """Read the window from ``GET /props`` and make it the client's window; never raises.
@@ -134,6 +138,7 @@ class LlamaCppClient:
             )
         else:
             self._window = ContextWindowTokens(size=window_size, source=ContextWindowSource.PROBED)
+            self._template_costs.clear()  # the server that answers may be another model than the one counted before
         return self._window
 
     async def call(self, request: LlmCallRequest) -> LlmCallResult:
@@ -158,7 +163,14 @@ class LlamaCppClient:
         return self._window
 
     async def input_budget(self, template_text: str) -> InputBudget:
-        return await exact_budget(self._window, template_text, self._count_framed_tokens)
+        # The template's framed count is asked of the server once; the window is read live, so a window resolved later is used.
+        return await exact_budget(self._window, template_text, self._template_costs.memoize_async(self._count_framed_tokens))
+
+    def token_ceiling(self, text: str) -> int:
+        """Bytes of *text* plus the SentencePiece dummy-prefix token. ``/tokenize`` adds no BOS (``add_special`` defaults to
+        false); a byte-fallback vocabulary then spends at most one token per byte, and a SentencePiece one may put its
+        dummy prefix ahead of them as a token of its own (``"€"`` on Llama 2: prefix plus three byte tokens)."""
+        return len(text.encode("utf-8", "surrogatepass")) + _SPM_DUMMY_PREFIX_TOKENS
 
     async def _count_framed_tokens(self, text: str) -> int:
         """Tokens of *text* as one user message after the server's chat template (system block, role markers, generation prompt).
