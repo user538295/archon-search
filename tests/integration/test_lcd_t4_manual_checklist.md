@@ -108,7 +108,7 @@ asyncio.run(main())
 
 Record per item: date, `claude --version`, model, measured values (`communities_built`, passage bytes per community, seconds per call, number of summarised communities per arm), pass or fail.
 
-Run 2026-11-01, `claude` 2.1.308 (real login), scratch dir `/tmp/lcd-manual/t4`, port 18740, two-document corpus (329,186 and 330,218 bytes), `[graph] provider = "claude_cli"` with a blank model (`extraction_model='claude-haiku-4-5-20251001'` in the log, no `--model` on the argv). Real `claude` calls billed to the login: about 10 (1 plain control, 2 healthy build, 1 throttle arm, up to 2 one-second-timeout attempts, 1 session control, 2 in the cancel-by-DELETE probe, 1 in the shutdown probe), plus 1 call with an invalid key that the CLI rejected (no billing).
+Run 2026-11-01, `claude` 2.1.308 (real login), scratch dir `/tmp/lcd-manual/t4`, port 18740, two-document corpus (329,186 and 330,218 bytes), `[graph] provider = "claude_cli"` with a blank model (`extraction_model='claude-haiku-4-5-20251001'` in the log, no `--model` on the argv). Real `claude` calls made on the login (whether they were billed was not observed, item 1g): about 10 (1 plain control, 2 healthy build, 1 throttle arm, up to 2 one-second-timeout attempts, 1 session control, 2 in the cancel-by-DELETE probe, 1 in the shutdown probe), plus 1 call with an invalid key that the CLI rejected.
 
 | Item | Date | Versions and models | Measured | Pass/fail |
 |------|------|---------------------|----------|-----------|

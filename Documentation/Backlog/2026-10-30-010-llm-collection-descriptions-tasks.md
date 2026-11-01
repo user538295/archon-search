@@ -1,7 +1,7 @@
 ---
 feature: Provider-based collection descriptions and a shared LLM client
 plan: 2026-10-30-010-llm-collection-descriptions-team-plan.md
-status: draft        # draft → in-progress → done
+status: done        # draft → in-progress → done
 ---
 
 # LCD · Provider-based collection descriptions and a shared LLM client — Task Breakdown
@@ -545,6 +545,7 @@ flowchart LR
         - #unit_test — `test_description_asked_even_when_enable_hyde_flag_given` — the flag does not skip the question
         - #integration_test — `test_e2e_wizard_description_flow_writes_section` — the dev-written wizard end-to-end for S44, S45, S46, S48, S71 in `test_e2e_wizard_optional_features.py`
         - #integration_test — `test_wizard_help_has_no_enable_description_flag` — `install --help` lists no such flag
+    - Revised after implementation (2026-11-01): "default no" and "backfill (default no)" are not Enter defaults: Enter at the description question and at the backfill question re-asks ("Please answer y or n.") and only a closed stdin answers no (the banner still says "Default: disabled.", meaning the feature's state). For `ollama` and `llama_cpp` the host is asked before the model; `anthropic` asks no model and `llama_cpp` asks no context window. A blank model for `openai`, `ollama` or `llama_cpp` leaves the feature disabled (exit 0, nothing written). The tests above live in `tests/test_install_wizard_features.py` and `tests/test_e2e_wizard_optional_features.py`.
 - [x] **FE-8** — Description provider extra and shared revert path, `.secrets.env` gate and message for description and graph providers, the post-install key tip, and the install summary bullets for description and graph #frontend-role
     - Presentation · 6.0h
     - needs FE-7, FE-3 · completes C4, S47, S71
@@ -630,7 +631,7 @@ flowchart LR
         - #unit_test — `test_describe_all_fills_empty_or_failed_and_skips_manual_and_ok` — the skip rule and the printed list
         - #unit_test — `test_describe_all_stops_on_not_configured_409` — exit 1 after the first setup message
         - #unit_test — `test_describe_manual_409_prints_clear_first_and_exits_1` — the message says to clear it first
-    - Revised after implementation (2026-11-01): `describe --all` first reads `GET /status`; when description is not configured it prints the setup message and exits 1 even if every collection would be skipped. Tests also live in `tests/integration/test_fe11_describe_cli_bridge.py`.
+    - Revised after implementation (2026-11-01): `describe --all` first reads `GET /status`; when description is not configured it prints the setup message and exits 1 even if every collection would be skipped. The exit-code test is the family `test_describe_exit_code_per_outcome_*` in `tests/test_cli_collection_describe.py`; tests also live in `tests/integration/test_fe11_describe_cli_bridge.py`.
 - [x] **T-10** — e2e: `describe` and `describe --all` through REST and the CLI bridge #tester-role
     - — · 6.0h
     - needs BE-34, FE-11 · completes S29, S31, S32, S58, S59, S80, S87
@@ -653,7 +654,7 @@ flowchart LR
         - #integration_test — `test_backfill_cancelled_cleanly_at_shutdown` — a mid-run cancel leaves no half-written description
         - #integration_test — `test_provider_down_boots_and_skips_backfill` — the server boots, a WARNING is logged, backfill never starts
         - #unit_test — `test_claude_cli_reachability_is_presence_check_without_model_call` — no model call, and no check when description does not use `claude_cli`
-    - Revised after implementation (2026-11-01): tests also live in `tests/test_be35_description_backfill.py`. The probe runs whenever descriptions are enabled, independent of backfill and sync state, with one WARNING per llama.cpp server.
+    - Revised after implementation (2026-11-01): tests also live in `tests/integration/test_be35_description_backfill.py`. The probe runs whenever descriptions are enabled, independent of backfill and sync state, with one WARNING per llama.cpp server.
 - [x] **T-11** — e2e: backfill across namespaces, provider down, suppressed sync and shutdown mid-backfill #tester-role
     - — · 5.0h
     - needs BE-35 · completes S33, S34, S35, S86
@@ -675,7 +676,7 @@ flowchart LR
         - #integration_test — `test_privacy_info_for_cloud_and_non_loopback_hosts_only` — a loopback Ollama gets no INFO
         - #integration_test — `test_hybrid_without_descriptions_warns_centroid_fallback` — the WARNING names the fallback
         - #integration_test — `test_missing_description_package_warns_and_generation_fails_visibly` — status `failed`, one WARNING per process
-    - Revised after implementation (2026-11-01): tests also live in `tests/test_be36_description_startup.py`; the package guard is the shared `server/provider_dependency.py` (C12).
+    - Revised after implementation (2026-11-01): tests also live in `tests/integration/test_be36_description_startup.py`; the package guard is the shared `server/provider_dependency.py` (C12).
 - [x] **BE-37** — `/status` description block: `DescriptionStatusDetail` and a nullable additive `StatusResponse.description` in `schemas.py`, builder beside `_build_hyde_status` in `routes_status.py` (provider, key availability, reachability null until probed, effective context tokens and source, backfill flag, last attempt), never in `/ready` or `provider_warnings`; regenerated snapshots #backend-role
     - Interface Adapters · 4.0h
     - needs BE-25, BE-35 · completes C7, S39, S52, S66
@@ -684,7 +685,7 @@ flowchart LR
         - #unit_test — `test_status_reachability_null_until_probed` — before and after the startup probe
         - #integration_test — `test_ready_unaffected_when_description_provider_down` — `/ready` ignores description health
         - #integration_test — `test_status_response_additive_for_existing_consumers` — existing fields and parsing are unchanged
-    - Revised after implementation (2026-11-01): tests also live in `tests/test_be37_status_description_block.py`; the block's optional fields default to null (not required-nullable).
+    - Revised after implementation (2026-11-01): tests also live in `tests/integration/test_be37_status_description_block.py`; the block's optional fields default to null (not required-nullable).
 - [x] **FE-12** — CLI `status` renders the description block (nothing when null) with its own key-warning wording #frontend-role
     - Presentation · 2.5h
     - needs BE-37 · completes S39, S66
@@ -712,7 +713,7 @@ flowchart LR
         - #integration_test — `test_manual_description_round_trips_through_export_and_import` — text and source restored, status `ok`
         - #integration_test — `test_bypassed_v1_description_imports_generated_and_normalised` — a sourceless description imports as `generated`
         - #integration_test — `test_empty_archive_description_written_on_its_own` — no recompute is needed
-    - Revised after implementation (2026-11-01): tests also live in `tests/test_be38_export_import_description.py`; export manifest version 2 is `EXPORT_SCHEMA_VERSION = 2`.
+    - Revised after implementation (2026-11-01): tests also live in `tests/integration/test_be38_export_import_description.py`; export manifest version 2 is `EXPORT_SCHEMA_VERSION = 2`.
 - [x] **BE-39** — Write the new ADR (next free number, 19 today), the `BREAKING.md` entries with their mandatory `03_breaking_changes_index.md` rows, and the `990_documentation_index_and_contribution_guide.md` index row; the entries cover off-by-default, SDK removal, graph packages, Ollama WARNING, export version 2, startup `default_ttl_seconds` migration, MCP counts and the new routes #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-38, BE-32, BE-34 · completes C6, C9
