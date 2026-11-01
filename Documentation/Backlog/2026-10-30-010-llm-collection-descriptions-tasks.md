@@ -586,7 +586,7 @@ flowchart LR
         - #unit_test — `test_set_description_rejects_multiline_before_calling_server` — no request is made for invalid text
         - #unit_test — `test_clear_description_prints_describe_hint` — the hint names `collection describe <name>`
         - #unit_test — `test_description_verbs_use_lock_waiting_timeout` — the timeout parametrisation includes both verbs
-- [ ] **T-9** — e2e: set, clear and protection of a manual description through REST, MCP and CLI #tester-role
+- [x] **T-9** — e2e: set, clear and protection of a manual description through REST, MCP and CLI #tester-role
     - — · 6.0h
     - needs BE-32, FE-10, T-5 · completes S26, S27, S28, S30, S60, S61, S62
     - Tests
