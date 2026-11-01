@@ -84,7 +84,7 @@ class OllamaClient:
         self._context_tokens = context_tokens
         self._token_counter = token_counter if token_counter is not None else TokenCounter()
         self._client_factory = client_factory
-        self._template_costs = TemplateCostCache()
+        self._cached_template_count = TemplateCostCache().memoize_async(self._count_in_thread)
         if context_tokens is None:
             self._window = ContextWindowTokens(size=ASSUMED_CONTEXT_TOKENS, source=ContextWindowSource.ASSUMED)
         else:
@@ -113,8 +113,9 @@ class OllamaClient:
         return self._window
 
     async def input_budget(self, template_text: str) -> InputBudget:
+        # The count of the fixed template is kept; only a miss pays the worker thread (the first count may download the tokenizer).
         try:
-            return await estimated_budget(self._window, template_text, self._template_costs.memoize(self._token_counter.count))
+            return await estimated_budget(self._window, template_text, self._cached_template_count)
         except Exception as exc:
             raise LlmCallFailure(PROVIDER_NAME, f"cannot size the prompt: the gpt2 token counter failed ({type(exc).__name__})") from exc
 
@@ -122,11 +123,14 @@ class OllamaClient:
         """The request-free bound of :meth:`count_tokens` (``TokenCounter.ceiling``: UTF-8 bytes plus one per digit run)."""
         return TokenCounter.ceiling(text)
 
+    async def _count_in_thread(self, text: str) -> int:
+        return await asyncio.to_thread(self._token_counter.count, text)
+
     async def count_tokens(self, text: str) -> int:
         """The token estimate of *text* (gpt2 plus the digit and astral-plane surcharges), the unit :meth:`input_budget` is measured in (callers that size passages to the
         budget count with this); the count runs in a thread because the counter's first use may download its tokenizer."""
         try:
-            return await asyncio.to_thread(self._token_counter.count, text)
+            return await self._count_in_thread(text)
         except Exception as exc:
             raise LlmCallFailure(PROVIDER_NAME, f"cannot count tokens: the gpt2 token counter failed ({type(exc).__name__})") from exc
 

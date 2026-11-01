@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
 from typing import Any, Self
 
@@ -351,6 +352,33 @@ async def test_input_budget_counts_a_template_once_per_process() -> None:
 
     assert budgets == [InputBudget(tokens=_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)] * 4
     assert stub.calls == [_TEMPLATE]
+
+
+async def test_the_first_template_count_runs_off_the_event_loop_thread() -> None:
+    loop_thread = threading.get_ident()
+    threads: list[int] = []
+
+    def load() -> StubTokenizer:
+        threads.append(threading.get_ident())  # the first count loads (and may download) the tokenizer
+        return StubTokenizer()
+
+    wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW, counter=TokenCounter(load_tokenizer=load))
+
+    await wrapper.input_budget(_TEMPLATE)
+
+    assert threads and threads[0] != loop_thread
+
+
+async def test_a_cached_template_is_sized_without_a_hop_to_a_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW)
+    first = await wrapper.input_budget(_TEMPLATE)
+
+    async def no_thread_expected(*_args: object, **_kwargs: object) -> int:
+        raise AssertionError("a cache hit must not leave the event loop thread")
+
+    monkeypatch.setattr(asyncio, "to_thread", no_thread_expected)
+
+    assert await wrapper.input_budget(_TEMPLATE) == first
 
 
 async def test_input_budget_keeps_one_count_per_template_and_does_not_cache_query_counts() -> None:
