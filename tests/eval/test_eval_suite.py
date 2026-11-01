@@ -622,7 +622,7 @@ async def test_eval_hyde_regression_scenario(tmp_path: Path) -> None:
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
     from archon_search.reranker import Reranker
-    from archon_search.server._hyde import RequestHyDE
+    from archon_search.services.request_hyde import RequestHyDE
     from archon_search.services.search_budget import SEARCH_TIMEOUT_SECONDS
     from archon_search.store import SearchStore
 
@@ -790,7 +790,7 @@ async def test_eval_hyde_false_fast_path_no_overhead(tmp_path: Path) -> None:
 
     from archon_search.config import HyDEConfig
     from archon_search.hyde import HyDEGenerator
-    from archon_search.server._hyde import RequestHyDE
+    from archon_search.services.request_hyde import RequestHyDE
     from archon_search.services.search_budget import SEARCH_TIMEOUT_SECONDS
 
     config = HyDEConfig(enabled=True, max_requests_per_minute=60)

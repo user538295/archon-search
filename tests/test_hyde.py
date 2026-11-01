@@ -134,7 +134,7 @@ async def test_a_long_query_goes_to_a_client_without_a_limit_whole() -> None:
 @pytest.mark.asyncio
 async def test_hyde_failure_returns_no_document_and_flags_not_applied(failure: LlmCallFailure) -> None:
     """A raising client yields no document, so the request reports ``hyde_applied: false`` and searches the plain query."""
-    from archon_search.server._hyde import RequestHyDE
+    from archon_search.services.request_hyde import RequestHyDE
 
     config = _make_config()
     embedder = _make_embedder()
@@ -313,7 +313,7 @@ def test_is_key_available_is_true_for_keyless_providers(provider: str) -> None:
 async def test_hyde_end_to_end_with_llama_cpp_client(monkeypatch: pytest.MonkeyPatch) -> None:
     """S1: a HyDEGenerator over a real ``LlamaCppClient`` embeds the server's answer and reports HyDE applied."""
     from archon_search.llm_client.llama_cpp_client import LlamaCppClient
-    from archon_search.server._hyde import RequestHyDE
+    from archon_search.services.request_hyde import RequestHyDE
     from archon_search.services.search_budget import SEARCH_TIMEOUT_SECONDS
     from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
 
@@ -344,7 +344,7 @@ async def test_hyde_end_to_end_with_llama_cpp_client(monkeypatch: pytest.MonkeyP
 async def test_llama_cpp_fallback_on_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     """S2: llama-server unreachable → the client raises, HyDE falls back with no exception and embeds nothing."""
     from archon_search.llm_client.llama_cpp_client import LlamaCppClient
-    from archon_search.server._hyde import RequestHyDE
+    from archon_search.services.request_hyde import RequestHyDE
     from archon_search.services.search_budget import SEARCH_TIMEOUT_SECONDS
     from tests._fake_model_server import keep_loopback_out_of_proxies, unreachable_port
 

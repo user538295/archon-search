@@ -125,7 +125,7 @@ flowchart LR
         - #integration_test — `test_s299_prefix_filter_survives_cold_query_embedder` — existing test that patches the embedder-wait alias; a cold embedder still degrades to FTS-only through the moved budget
 
 ### Phase 2 · Resolve HyDE and scope filters from services/
-- [ ] **BE-3** — Move `server/_hyde.py` to `services/request_hyde.py` (renamed: root `hyde.py` exists) and `server/_validators.py` to `services/validators.py`; delete the old modules; move `test_request_hyde.py` and `test_validators.py` to `tests/services/`, re-pointing the string patch of the HyDE resolver, the module docstrings and the logger name passed to the `caplog` scope at `test_request_hyde.py:221` (a stale name still captures through the root logger, so it would stay green silently); no shim or alias left behind #backend-role
+- [x] **BE-3** — Move `server/_hyde.py` to `services/request_hyde.py` (renamed: root `hyde.py` exists) and `server/_validators.py` to `services/validators.py`; delete the old modules; move `test_request_hyde.py` and `test_validators.py` to `tests/services/`, re-pointing the string patch of the HyDE resolver, the module docstrings and the logger name passed to the `caplog` scope at `test_request_hyde.py:221` (a stale name still captures through the root logger, so it would stay green silently); no shim or alias left behind #backend-role
     - Use Case · 2.5h
     - needs BE-1, BE-2 · completes C2, S2, S20
     - Tests

@@ -1,4 +1,4 @@
-"""Tests for ``archon_search.server._hyde.RequestHyDE`` — the one HyDE path every
+"""Tests for ``archon_search.services.request_hyde.RequestHyDE`` — the one HyDE path every
 search/explain transport shares (REST /search, /explain; MCP search, search_with_context,
 explain)."""
 from __future__ import annotations
@@ -10,7 +10,7 @@ import pytest
 
 from archon_search.config import HyDEConfig
 from archon_search.observability import _stage_recorder, bind_stage_recorder
-from archon_search.server._hyde import (
+from archon_search.services.request_hyde import (
     HYDE_EXPANSION_FAILED_WARNING,
     HyDEOutcome,
     RequestHyDE,
@@ -101,7 +101,7 @@ async def test_an_early_outcome_starts_no_budget_task(overrides: dict, expansion
     budget = AsyncMock()
     generator = _generator()
 
-    with patch("archon_search.server._hyde.resolve_hyde_within_budget", new=budget):
+    with patch("archon_search.services.request_hyde.resolve_hyde_within_budget", new=budget):
         outcome = await _resolve(**{"generator": generator, **overrides})
 
     assert outcome == HyDEOutcome(vector=None, applied=False, expansion_warning=expansion_warning)
@@ -218,7 +218,7 @@ async def test_resolve_hyde_within_budget_cancels_and_degrades_on_overrun(
             raise
         return _VECTOR  # pragma: no cover - unreachable, the sleep is cancelled
 
-    with caplog.at_level("WARNING", logger="archon_search.server._hyde"):
+    with caplog.at_level("WARNING", logger="archon_search.services.request_hyde"):
         result = await resolve_hyde_within_budget(_silent_provider(), timeout=_SHORT_BUDGET_SECONDS)
         again = await resolve_hyde_within_budget(_silent_provider(), timeout=_SHORT_BUDGET_SECONDS)
 

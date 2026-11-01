@@ -1,8 +1,8 @@
-"""Unit tests for archon_search.server._validators."""
+"""Unit tests for archon_search.services.validators."""
 
 import pytest
 
-from archon_search.server._validators import validate_scope_filter
+from archon_search.services.validators import validate_scope_filter
 
 
 @pytest.mark.parametrize(
