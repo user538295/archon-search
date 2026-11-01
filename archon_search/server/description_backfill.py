@@ -13,7 +13,9 @@ the provider is not reachable) and for the context-window resolution, and then a
 a time, across every namespace, for each collection that has no description. The probe is independent of the backfill
 and of the sync state (it runs whenever the feature is enabled), so an unreachable provider is one WARNING and
 ``/status`` reachability even when the backfill is off or skipped; S86's "no provider is called" means no generation
-call, since the probe sends no prompt and no document text.
+call, since the probe sends no prompt and no document text. A down llama-server is also found by the context-window
+lookup of every ``llama_cpp`` feature (the same ``GET /props``); the probe reports it through the lookup's own WARNING
+(``warn_llama_cpp_unreachable``), so the outage is one WARNING per server, not one per path.
 """
 
 from __future__ import annotations
@@ -40,8 +42,10 @@ from archon_search.description_lifecycle import (
     RequestOutcome,
 )
 from archon_search.llm_client.claude_cli_client import resolve_claude_binary
+from archon_search.llm_client.llama_cpp_client import warn_llama_cpp_unreachable
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.provider_key import provider_key_available
+from archon_search.llm_client.server_address import host_port
 from archon_search.server.provider_dependency import check_provider_package
 from archon_search.server.schemas import StartupSyncResult
 
@@ -62,8 +66,8 @@ _CLAUDE_CLI: Final = "claude_cli"
 _API_KEY_VARIABLES: Final = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 #: The cheap read-only endpoint each local server is asked: Ollama's model list, llama-server's properties.
 _PROBE_PATHS: Final = {_OLLAMA: "/api/tags", _LLAMA_CPP: "/props"}
-_UNKNOWN_HOST: Final = "the configured host"
 _OLLAMA_DEFAULT_PORT: Final = 11434
+_UNKNOWN_REASON: Final = "no reason was reported"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -80,15 +84,6 @@ class BackfillStore(Protocol):
 
 class BackfillLifecycle(Protocol):
     async def request_generation(self, collection: str, namespace: str, kind: GenerationKind) -> GenerationTicket: ...
-
-
-def host_port(base_url: str) -> str:
-    """``host:port`` of *base_url*: what a log line may name (no credentials, path or query)."""
-    try:
-        authority = urlsplit(base_url if "//" in base_url else f"//{base_url}").netloc.rpartition("@")[2]
-    except ValueError:  # an unparsable value such as ``http://[::1``
-        return _UNKNOWN_HOST
-    return authority or _UNKNOWN_HOST
 
 
 def local_server_url(description: DescriptionConfig) -> str:
@@ -174,13 +169,19 @@ def _probe_url(provider: str, base_url: str) -> str:
 
 async def run_description_probe(state: State, description: DescriptionConfig) -> None:
     """The probe task: publish the verdict on ``state.description_reachability`` and log one WARNING when the provider is
-    not usable. Never raises (a probe bug reads as unreachable)."""
+    not usable. Never raises (a probe bug reads as unreachable). A llama-server that does not answer is reported through
+    ``warn_llama_cpp_unreachable``, the context-window lookup's own WARNING for that server, so the two paths that find the
+    same outage log it once."""
     try:
         verdict = await probe_description_reachability(description)
     except Exception as failure:  # noqa: BLE001 — never raises: an unexpected probe failure is a finding, not a crash
         verdict = DescriptionReachability(False, f"the probe failed unexpectedly ({type(failure).__name__})")
     state.description_reachability = verdict
-    if not verdict.reachable:
+    if verdict.reachable:
+        return
+    if description.provider == _LLAMA_CPP:
+        warn_llama_cpp_unreachable(host_port(local_server_url(description)), verdict.reason or _UNKNOWN_REASON)
+    else:
         warn_description_unreachable(description.provider, verdict.reason)
 
 

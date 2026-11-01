@@ -22,8 +22,8 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.config import DescriptionConfig
 from archon_search.constants import RESTRICTED_CHUNK_PROVIDERS
 from archon_search.llm_client.provider_key import provider_key_available
+from archon_search.llm_client.server_address import host_port
 from archon_search.server.description_backfill import (
-    host_port,
     local_server_url,
     static_provider_problem,
     warn_description_unreachable,

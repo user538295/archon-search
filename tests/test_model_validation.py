@@ -563,16 +563,33 @@ async def test_probe_pending_is_none():
 
 @pytest.mark.asyncio
 async def test_probe_failure_does_not_block_boot(caplog: pytest.LogCaptureFixture):
-    """Probe ConnectError never raises — validate_models_async returns normally and logs a WARNING."""
+    """Probe ConnectError never raises — validate_models_async returns normally and logs one "not reachable" WARNING."""
     mock_cls = _make_async_client_cls(get_side_effect=httpx.ConnectError("refused"))
     with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
          patch(_VALIDATE_DEVICE, return_value=(True, True, [])), \
-         caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+         caplog.at_level(logging.WARNING):
         result = await validate_models_async(_llama_cpp_cfg(), timeout_seconds=5)
 
     assert isinstance(result, ModelValidationResult)
     assert result.llama_cpp_ok is False
-    assert "llama-server unreachable" in caplog.text
+    [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and "localhost:8080" in r.getMessage()]
+    assert "not reachable" in warning
+    assert "ConnectError" in warning
+
+
+@pytest.mark.asyncio
+async def test_probe_failure_names_host_and_port_never_the_credentials_of_the_url(caplog: pytest.LogCaptureFixture):
+    """The probe's WARNING carries ``host:port`` only: the base URL may hold ``user:password@`` and a query string."""
+    mock_cls = _make_async_client_cls(get_side_effect=httpx.ConnectError("refused"))
+    config = _llama_cpp_cfg(llama_cpp_base_url="http://user:secret@gpu.test:8080/?token=abc")
+    with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
+         patch(_VALIDATE_DEVICE, return_value=(True, True, [])), \
+         caplog.at_level(logging.WARNING):
+        await validate_models_async(config, timeout_seconds=5)
+
+    assert "gpu.test:8080" in caplog.text
+    assert "secret" not in caplog.text
+    assert "abc" not in caplog.text
 
 
 # ---------------------------------------------------------------------------

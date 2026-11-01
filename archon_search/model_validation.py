@@ -19,7 +19,9 @@ import httpx
 
 from archon_search.embedder import EmbedderBackend, ModelEmbedder
 from archon_search.llm_client.claude_cli_client import resolve_claude_binary
+from archon_search.llm_client.llama_cpp_client import warn_llama_cpp_unreachable
 from archon_search.llm_client.protocol import LlmCallRequest, LlmCallTimeout
+from archon_search.llm_client.server_address import host_port
 from archon_search.model_specs import UnsupportedModelError, get_embedder_spec
 from archon_search.reranker import ModelReranker, RerankerBackend
 from archon_search.torch_runtime import AUTO_DEVICE, CPU_DEVICE, resolve_device
@@ -172,7 +174,8 @@ async def _probe_llama_cpp(config: SearchConfig) -> bool | None:
     attempted). Otherwise issues ``GET {base_url}/v1/models`` under a short, fixed
     timeout and returns ``True`` on any 2xx response, ``False`` on any failure
     (connection error, timeout, non-2xx status). Never raises — a WARNING is
-    logged on failure so boot can continue uninterrupted (S7). It never blocks
+    logged on failure (the one per-server "not reachable" WARNING shared with the
+    context-window lookup and the description probe) so boot can continue uninterrupted (S7). It never blocks
     startup or queries, but it runs before the embedder/reranker probe inside
     background validation, so its duration extends the ``/ready`` 503 window
     (``checks.models`` stays ``pending`` until validation finishes).
@@ -188,7 +191,8 @@ async def _probe_llama_cpp(config: SearchConfig) -> bool | None:
             response.raise_for_status()
         return True
     except Exception as exc:  # noqa: BLE001 — probe reports any failure as "unreachable" (False); it must never raise
-        logger.warning("llama-server unreachable at %s: %s", base_url, exc)
+        reason = f"HTTP {exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
+        warn_llama_cpp_unreachable(host_port(base_url), reason)  # host:port only: the URL may carry credentials
         return False
 
 

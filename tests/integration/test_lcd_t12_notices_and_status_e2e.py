@@ -47,7 +47,7 @@ from archon_search.collection_meta import (
     DESCRIPTION_STATUS_OK,
 )
 from archon_search.description_lifecycle import GenerationResult
-from archon_search.llm_client import once_per_process
+from archon_search.llm_client import llama_cpp_client, once_per_process
 from archon_search.platform.service import ServiceStatus
 from archon_search.server import description_backfill, description_startup
 from archon_search.server.schemas import StatusResponse, WarmupResult
@@ -94,7 +94,8 @@ _HTTP_ACCEPTED = 202
 _HTTP_UNAVAILABLE = 503
 _HTTP_SERVER_ERROR = 500
 _LEAVE_THE_MACHINE = "leave the machine"
-_LOGGERS = {description_startup.__name__, description_backfill.__name__}
+#: A down llama-server is reported by the one per-server WARNING of ``llama_cpp_client`` (shared with the description probe).
+_LOGGERS = {description_startup.__name__, description_backfill.__name__, llama_cpp_client.__name__}
 _STARTUP_TASKS = (
     "_startup_sync_task",
     "_llm_window_task",

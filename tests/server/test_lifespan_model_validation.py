@@ -104,7 +104,7 @@ def test_startup_warning_logged_llama_cpp_unreachable(
     mock_cls = MagicMock(return_value=mock_client)
 
     with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
-         caplog.at_level(logging.WARNING, logger="archon_search.model_validation"), TestClient(app) as client:
+         caplog.at_level(logging.WARNING), TestClient(app) as client:
         # /ready gates on a pending checks.models, which lasts until both the
         # background warm-up and the background validation finish (S631); the
         # lifespan awaits neither — wait both out, or this asserts on a race
@@ -115,7 +115,8 @@ def test_startup_warning_logged_llama_cpp_unreachable(
 
     assert app.state.model_validation is not None
     assert app.state.model_validation.llama_cpp_ok is False
-    assert "llama-server unreachable" in caplog.text
+    [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and "localhost:8080" in r.getMessage()]
+    assert "not reachable" in warning  # one WARNING per server, shared with the window lookup (S7, S8)
 
 
 @pytest.mark.integration

@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any, Final
-from urllib.parse import urlsplit
 
 import httpx
 
@@ -37,6 +36,7 @@ from archon_search.llm_client.protocol import (
     LlmCallResult,
     LlmCallTimeout,
 )
+from archon_search.llm_client.server_address import host_port
 from archon_search.llm_client.server_text import bounded_server_text
 
 PROVIDER_NAME: Final = "llama_cpp"
@@ -57,8 +57,10 @@ _CHAT_PATH: Final = "/v1/chat/completions"
 _TEMPLATE_KWARGS_FIELD: Final = "chat_template_kwargs"
 _ENABLE_THINKING_KWARG: Final = "enable_thinking"
 
-#: Stands in for the server in the probe WARNING when the configured URL does not parse.
-_UNPARSEABLE_URL_LABEL: Final = "the configured base URL"
+#: ``warn_once`` keys, one per server and process. An unreachable server and a reachable one with no usable window are
+#: different findings and keep different keys; the unreachable one is shared with the description startup probe.
+_UNREACHABLE_KEY_PREFIX: Final = "llama_cpp_unreachable:"
+_NO_WINDOW_KEY_PREFIX: Final = "llama_cpp_no_window:"
 
 
 def _assumed_window() -> ContextWindowTokens:
@@ -67,6 +69,24 @@ def _assumed_window() -> ContextWindowTokens:
 
 def _unexpected_reply(exc: Exception) -> LlmCallFailure:
     return LlmCallFailure(PROVIDER_NAME, f"unexpected reply ({type(exc).__name__}); is the base URL a llama-server?")
+
+
+def warn_llama_cpp_unreachable(server: str, reason: str) -> None:
+    """The one WARNING per server (``host:port``, see ``server_address.host_port``) and process that a llama-server cannot be reached.
+
+    The context-window lookup of every ``llama_cpp`` feature and the description startup probe ask the same server the same
+    question at boot; both report an outage through here, so one outage is one WARNING whichever finds it first. The one text
+    carries both consequences: calls to the server fail, and the window of every feature on it is the assumed one until a
+    lookup succeeds (S8, S34). *reason* names the cause and never a prompt.
+    """
+    warn_once(
+        _logger,
+        f"{_UNREACHABLE_KEY_PREFIX}{server}",
+        "llama_cpp: the server at %s is not reachable (%s); requests to it fail until it answers, and a context window of %d tokens is assumed until then",
+        server,
+        reason,
+        ASSUMED_CONTEXT_TOKENS,
+    )
 
 
 class LlamaCppClient:
@@ -87,25 +107,29 @@ class LlamaCppClient:
     async def probe_context_window(self, timeout_seconds: float) -> ContextWindowTokens:
         """Read the window from ``GET /props`` and make it the client's window; never raises.
 
-        A failed probe (unreachable, error status, no usable ``n_ctx``) leaves the window as it was (assumed until a
-        probe succeeds) and logs one WARNING per server and process (S8). The WARNING names host and port only,
-        never credentials or a query string of the configured URL.
+        A failed probe leaves the window as it was (assumed until a probe succeeds) and logs one WARNING per server and
+        process (S8): the shared "not reachable" one (``warn_llama_cpp_unreachable``, also the description startup probe's)
+        when the server does not answer properly, a "no usable window" one when it answers without an ``n_ctx``. A WARNING
+        names host and port only, never credentials or a query string of the configured URL.
         """
+        server = host_port(self._base_url)
         try:
             body = await self._request("GET", _PROPS_PATH, timeout_seconds)
+        except LlmCallFailure as failure:
+            warn_llama_cpp_unreachable(server, failure.reason)
+            return self._window
+        try:
             window_size = body["default_generation_settings"]["n_ctx"]
             if not isinstance(window_size, int) or isinstance(window_size, bool) or window_size < 1:
                 raise ValueError("n_ctx is not a positive integer")
-        except (LlmCallFailure, KeyError, TypeError, ValueError) as exc:
-            reason = exc.reason if isinstance(exc, LlmCallFailure) else f"no usable window in the reply ({type(exc).__name__})"
-            server = self._server_label()
+        except (KeyError, TypeError, ValueError) as exc:
             warn_once(
                 _logger,
-                f"llama_cpp_probe:{server}",
-                "llama_cpp: cannot read the context window from %s%s (%s); assuming %d tokens",
+                f"{_NO_WINDOW_KEY_PREFIX}{server}",
+                "llama_cpp: the server at %s answered %s without a usable context window (%s); assuming %d tokens",
                 server,
                 _PROPS_PATH,
-                reason,
+                type(exc).__name__,
                 ASSUMED_CONTEXT_TOKENS,
             )
         else:
@@ -129,13 +153,6 @@ class LlamaCppClient:
         if not isinstance(text, str):
             raise _unexpected_reply(TypeError("content is not a string"))
         return LlmCallResult(text=text)
-
-    def _server_label(self) -> str:
-        """Host and port of the configured URL for logs: no credentials, no query; a URL that does not parse gets a fixed label."""
-        try:
-            return urlsplit(self._base_url).netloc.rpartition("@")[2]
-        except ValueError:
-            return _UNPARSEABLE_URL_LABEL
 
     def context_window(self) -> ContextWindowTokens:
         return self._window

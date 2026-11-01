@@ -146,6 +146,59 @@ async def test_llama_cpp_probe_failure_warns_once_per_host(caplog: pytest.LogCap
     assert {"llama.test:8080" in record.getMessage() for record in _warnings(caplog)} == {True, False}
 
 
+async def test_llama_cpp_unreachable_server_warning_says_unreachable_and_the_assumed_window(caplog: pytest.LogCaptureFixture) -> None:
+    client = _client(_Server(failures={"/props": httpx.ConnectError("refused")}))
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        await client.probe_context_window(_TIMEOUT_SECONDS)
+
+    [warning] = _warnings(caplog)
+    message = warning.getMessage()
+    assert "llama.test:8080" in message
+    assert "not reachable" in message
+    assert str(ASSUMED_CONTEXT_TOKENS) in message
+
+
+async def test_llama_cpp_server_that_answers_without_a_window_is_not_called_unreachable(caplog: pytest.LogCaptureFixture) -> None:
+    client = _client(_Server(props={"total_slots": 1}))
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        await client.probe_context_window(_TIMEOUT_SECONDS)
+
+    [warning] = _warnings(caplog)
+    assert "not reachable" not in warning.getMessage()
+    assert "without a usable context window" in warning.getMessage()
+    assert str(ASSUMED_CONTEXT_TOKENS) in warning.getMessage()
+
+
+@pytest.mark.parametrize("second_url", ["http://llama.test:8080/v1", "http://user:secret@llama.test:8080/?token=abc", "llama.test:8080"])
+async def test_llama_cpp_one_server_in_any_spelling_is_one_warning(second_url: str, caplog: pytest.LogCaptureFixture) -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    failing = httpx.MockTransport(refuse)
+    first = LlamaCppClient(model=_MODEL, base_url=_HOST, transport=failing)
+    second = LlamaCppClient(model=_MODEL, base_url=second_url, transport=failing)
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        await first.probe_context_window(_TIMEOUT_SECONDS)
+        await second.probe_context_window(_TIMEOUT_SECONDS)
+
+    assert len(_warnings(caplog)) == 1
+
+
+async def test_llama_cpp_unreachable_and_no_window_are_separate_findings(caplog: pytest.LogCaptureFixture) -> None:
+    """A server that went down and one that answers without a window are different problems: neither hides the other."""
+    down = _client(_Server(failures={"/props": httpx.ConnectError("refused")}))
+    no_window = _client(_Server(props={"total_slots": 1}))
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        await down.probe_context_window(_TIMEOUT_SECONDS)
+        await no_window.probe_context_window(_TIMEOUT_SECONDS)
+
+    assert len(_warnings(caplog)) == 2
+
+
 async def test_llama_cpp_successful_probe_after_failure_replaces_assumed_window() -> None:
     state = {"up": False}
 

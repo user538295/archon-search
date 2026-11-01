@@ -17,7 +17,6 @@ import pytest
 from archon_search.config import DescriptionConfig, load_config
 from archon_search.server import description_backfill, description_startup
 from archon_search.server.description_backfill import (
-    host_port,
     local_server_url,
     probe_description_reachability,
     static_provider_problem,
@@ -368,13 +367,6 @@ def test_static_problem_names_a_missing_key_without_a_remedy(monkeypatch: pytest
 @pytest.mark.parametrize("provider", ["llama_cpp", "claude_cli"])
 def test_static_problem_is_none_for_providers_that_need_no_package_or_key(provider: str) -> None:
     assert static_provider_problem(_enabled(provider=provider)) is None
-
-
-def test_host_port_names_host_and_port_only() -> None:
-    assert host_port("http://user:secret@gpu-box.internal:11434/api?token=x") == "gpu-box.internal:11434"
-    assert host_port("localhost:11434") == "localhost:11434"
-    assert host_port("http://[::1") == "the configured host"
-    assert host_port("") == "the configured host"
 
 
 def test_local_server_url_follows_the_provider() -> None:

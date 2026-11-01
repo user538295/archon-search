@@ -21,7 +21,7 @@ from archon_search.collection_meta import (
     CollectionMeta,
 )
 from archon_search.config import DescriptionConfig
-from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.constants import ASSUMED_CONTEXT_TOKENS, DEFAULT_NAMESPACE
 from archon_search.description_lifecycle import (
     GenerationKind,
     GenerationResult,
@@ -30,6 +30,7 @@ from archon_search.description_lifecycle import (
     RequestOutcome,
 )
 from archon_search.llm_client import once_per_process
+from archon_search.llm_client.llama_cpp_client import LlamaCppClient
 from archon_search.server import description_backfill
 from archon_search.server.description_backfill import (
     DESCRIPTION_UNREACHABLE_WARN_KEY,
@@ -300,6 +301,48 @@ async def test_probe_task_publishes_the_result_and_warns_once_when_unreachable(
     assert len(warnings) == 1
     assert "anthropic" in warnings[0].getMessage() and "ANTHROPIC_API_KEY" in warnings[0].getMessage()
     assert DESCRIPTION_UNREACHABLE_WARN_KEY in once_per_process._warned_keys
+
+
+@pytest.mark.parametrize("window_lookup_first", [True, False], ids=["window-first", "probe-first"])
+async def test_a_down_llama_server_found_by_the_probe_and_the_window_lookup_is_one_warning(
+    window_lookup_first: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """S8 + S34: both paths ask the same server the same question; whichever reports first, the operator reads one WARNING that
+    says the server is not reachable and the window is assumed."""
+    with unreachable_port() as port:
+        server = f"127.0.0.1:{port}"
+        url = f"http://{server}"
+        client = LlamaCppClient(model="m", base_url=url)
+        state = SimpleNamespace(description_reachability=None)
+        config = _description(provider="llama_cpp", llama_cpp_base_url=url)
+
+        with caplog.at_level(logging.WARNING):
+            if window_lookup_first:
+                await client.probe_context_window(_SHORT_PROBE_TIMEOUT_SECONDS)
+                await run_description_probe(state, config)
+            else:
+                await run_description_probe(state, config)
+                await client.probe_context_window(_SHORT_PROBE_TIMEOUT_SECONDS)
+
+    assert state.description_reachability.reachable is False
+    [warning] = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert server in warning
+    assert "not reachable" in warning
+    assert str(ASSUMED_CONTEXT_TOKENS) in warning
+    assert DESCRIPTION_UNREACHABLE_WARN_KEY not in once_per_process._warned_keys
+
+
+async def test_probe_of_a_down_llama_server_names_host_and_port_never_credentials(caplog: pytest.LogCaptureFixture) -> None:
+    state = SimpleNamespace(description_reachability=None)
+    config = _description(provider="llama_cpp", llama_cpp_base_url="http://user:secret@127.0.0.1:1/private/path?token=abc")
+
+    with caplog.at_level(logging.WARNING):
+        await run_description_probe(state, config)
+
+    [warning] = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert "127.0.0.1:1" in warning
+    for hidden in ("secret", "private", "abc", "user"):
+        assert hidden not in warning
 
 
 async def test_probe_task_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:

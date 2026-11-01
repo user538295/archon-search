@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — a down `llama_cpp` server is one WARNING per server and process: `llama_cpp: the server at <host:port> is not reachable (...)` replaces three differently worded lines (2026-11-01)
+
+**Surface**: the server log (and any alert or log filter that matches its text) when a `llama_cpp` server named in `[hyde]`, `[rag_fusion]`, `[graph]` or `[description]` does not answer at startup. `GET /status` (`description.reachable`, `llama_cpp_ok`, the context window and its source) and `/ready` are unchanged.
+
+**What changed:** one outage was logged by up to three startup paths that ask the same server the same question: the context-window lookup of each `llama_cpp` feature (`llama_cpp: cannot read the context window from host:port/props (...); assuming 4096 tokens`), the description reachability probe (`Collection descriptions: provider llama_cpp is not reachable (...); generations will fail until that is fixed`) and the model-validation probe (`llama-server unreachable at <base URL>: <error>`). All three now report through one text and one key per server (`host:port`, so every spelling of one URL is one server): `llama_cpp: the server at <host:port> is not reachable (<reason>); requests to it fail until it answers, and a context window of 4096 tokens is assumed until then`. Whichever path finds the outage first logs it; the others stay silent for that server, and a second `llama_cpp` server on another host or port gets its own line. A server that answers `GET /props` without a usable `n_ctx` is a different finding with its own line (`llama_cpp: the server at <host:port> answered /props without a usable context window (...); assuming 4096 tokens`). The old model-validation line printed the whole configured base URL; the new line names host and port only.
+
+**Migration**: a log filter or alert that matched `llama-server unreachable at`, `cannot read the context window` or `provider llama_cpp is not reachable` must match `is not reachable` (and the `llama_cpp:` prefix) instead; a monitor that counted these lines now sees one per server and run, not up to three.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — the `outputSchema` of the MCP tools `ingest_directory`, `list_collections`, `get_collections_meta` and `list_documents` is a union of the result list and the error object (2026-11-01)
 
 **Surface**: MCP `tools/list` on `/mcp`: the advertised `outputSchema` of exactly four tools, `ingest_directory`, `list_collections`, `get_collections_meta` and `list_documents` (the return annotations in `archon_search/server/mcp.py`); clients that generate types from, or validate `structuredContent` against, that schema. The tool arguments, the success results and the error results themselves are unchanged.
