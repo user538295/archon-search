@@ -6,11 +6,15 @@ quota for an answer nobody reads. :class:`CancelOnDisconnectMiddleware` runs the
 task; once the application has read the whole request body it also reads the connection, and a disconnect before the response
 is complete cancels the task and waits for its cleanup (the ``claude`` wrapper kills and reaps its child on cancellation).
 
-Pure ASGI and outermost on purpose: ``request.is_disconnected()`` inside a route never sees a disconnect behind Starlette's
-``BaseHTTPMiddleware`` (the authentication middleware is one), only the server's own ``receive`` does. The middleware reads
-nothing ahead of the application: the application's ``receive`` goes straight to the server, so the server's flow control and
-its ``100 Continue`` (sent on the first read, after the body-size middleware had its say) behave as without it. A route that
-never reads its body is never watched; ``POST /search`` and ``POST /explain`` declare body models, so FastAPI reads it first.
+Pure ASGI and the outermost middleware the application adds on purpose: ``request.is_disconnected()`` inside a route never sees a
+disconnect behind Starlette's ``BaseHTTPMiddleware`` (the authentication middleware is one), only the server's own ``receive``
+does. The middleware reads nothing ahead of the application: the application's ``receive`` goes straight to the server, so the
+server's flow control and its ``100 Continue`` (sent on the first read, after the body-size middleware had its say) behave as
+without it. A route that never reads its body is never watched; ``POST /search`` and ``POST /explain`` declare body models, so
+FastAPI reads it first. Limits: the paths match exactly (a trailing slash is FastAPI's redirect, and the application sets no
+``root_path``), and uvicorn marks only the newest of two pipelined requests on one connection as disconnected, so a client
+that pipelines a second request behind a search it then abandons is not detected for the first. The MCP tools are covered by
+:mod:`archon_search.server.mcp_disconnect`.
 """
 
 from __future__ import annotations
@@ -71,7 +75,7 @@ class CancelOnDisconnectMiddleware:
                 elif response_complete:
                     pass  # the server reports a disconnect once the response is out: the application is only finishing up
                 else:
-                    logger.debug("client disconnected from %s %s: cancelling the request", self._method, scope["path"])
+                    logger.info("client disconnected from %s %s: cancelling the request", self._method, scope["path"])
                     await _cancel_and_wait(app_task)
                     return
             await app_task

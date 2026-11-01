@@ -1086,8 +1086,25 @@ def test_create_app_hyde_disabled_anthropic_missing_ok(
     assert app is not None
 
 
-def test_create_app_installs_cancel_on_disconnect_outermost_for_search_and_explain(tmp_path: Path, job_store: JobStore) -> None:
-    """T-2: an aborted search must stop its HyDE call; the middleware has to see the server's own ``receive``."""
+def _post_paths_whose_body_takes(spec: dict, properties: set[str]) -> set[str]:
+    """The POST paths of an OpenAPI *spec* whose JSON request body declares any of *properties*."""
+    schemas = spec["components"]["schemas"]
+    paths: set[str] = set()
+    for path, operations in spec["paths"].items():
+        body = operations.get("post", {}).get("requestBody", {}).get("content", {}).get("application/json", {})
+        reference = body.get("schema", {}).get("$ref")
+        if reference is not None and properties & schemas[reference.rsplit("/", 1)[1]].get("properties", {}).keys():
+            paths.add(path)
+    return paths
+
+
+def test_create_app_installs_cancel_on_disconnect_outermost_for_every_route_that_can_call_a_provider(tmp_path: Path, job_store: JobStore) -> None:
+    """T-2: an aborted search must stop its HyDE call; the middleware has to see the server's own ``receive``.
+
+    The covered paths are derived from the published API: every POST route whose request body can switch HyDE or RAG Fusion
+    on is covered, so a new such route (or a renamed one) fails here instead of silently keeping its provider call after
+    an abort.
+    """
     from archon_search.server.disconnect import CancelOnDisconnectMiddleware
 
     cfg = SearchConfig()
@@ -1097,4 +1114,7 @@ def test_create_app_installs_cancel_on_disconnect_outermost_for_search_and_expla
 
     outermost = app.user_middleware[0]
     assert outermost.cls is CancelOnDisconnectMiddleware
-    assert outermost.kwargs == {"method": "POST", "paths": ("/search", "/explain")}
+    assert outermost.kwargs["method"] == "POST"
+    provider_routes = _post_paths_whose_body_takes(app.openapi(), {"hyde", "rag_fusion"})
+    assert provider_routes == {"/search", "/explain"}, "the routes that take a hyde or rag_fusion flag"
+    assert set(outermost.kwargs["paths"]) == provider_routes
