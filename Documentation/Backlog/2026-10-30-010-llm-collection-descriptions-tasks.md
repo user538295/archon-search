@@ -623,7 +623,7 @@ flowchart LR
         - #unit_test — `test_describe_all_fills_empty_or_failed_and_skips_manual_and_ok` — the skip rule and the printed list
         - #unit_test — `test_describe_all_stops_on_not_configured_409` — exit 1 after the first setup message
         - #unit_test — `test_describe_manual_409_prints_clear_first_and_exits_1` — the message says to clear it first
-- [ ] **T-10** — e2e: `describe` and `describe --all` through REST and the CLI bridge #tester-role
+- [x] **T-10** — e2e: `describe` and `describe --all` through REST and the CLI bridge #tester-role
     - — · 6.0h
     - needs BE-34, FE-11 · completes S29, S31, S32, S58, S59, S80, S87
     - Tests

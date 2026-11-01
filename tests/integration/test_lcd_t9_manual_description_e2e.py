@@ -6,8 +6,8 @@ read surfaces (REST detail, MCP ``get_collection_meta``, CLI ``collection info``
 
 Run with: ``uv run pytest tests/integration/test_lcd_t9_manual_description_e2e.py -m integration``.
 
-``collection describe`` does not exist yet (BE-34, FE-11): the refusal of ``describe`` for a foreign namespace (S27) is
-asserted by the describe tasks, not here (T-10's list does not name it: BE-34/T-10 must add it).
+``collection describe`` is covered by ``test_lcd_t10_describe_e2e.py``, including the refusal of ``describe`` for a foreign
+namespace (S27): this file asserts the set and clear routes only.
 """
 
 from __future__ import annotations
@@ -268,7 +268,7 @@ def test_e2e_namespace_key_sets_and_clears_on_meta_only_collection_over_rest_mcp
 
 def test_e2e_foreign_namespace_key_gets_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Set and clear for a collection of another namespace answer exactly like a collection that does not exist and leave
-    the owner's description alone. ``describe`` is not asserted here: it arrives with BE-34/FE-11 (see the module docstring)."""
+    the owner's description alone. ``describe`` is asserted by ``test_lcd_t10_describe_e2e.py``."""
     with _owner_app(tmp_path, monkeypatch) as (client, keys, cli):
         owner_session = _mcp_initialize(client, keys.owner)
         assert _set("rest", client, cli, keys.owner, owner_session, "Owner text.").status_code == 200

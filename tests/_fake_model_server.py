@@ -68,10 +68,12 @@ def is_fake_server_port(port: int) -> bool:
 
 @contextlib.contextmanager
 def unreachable_port() -> Iterator[int]:
-    """A loopback port that refuses every connection, for the test of a server that is down.
+    """A loopback port nothing answers on, for the test of a server that is down.
 
-    A bound socket that never listens refuses every connection, and keeps its port from being handed to another test. The
-    session guard counts the port as a fake server's, so an SDK client may be built for it.
+    A bound socket that never listens keeps its port from being handed to another test. On macOS a connection attempt to
+    it is dropped instead of refused (measured: the connect attempt ends after about 8 s), so a call to it ends at the
+    caller's own timeout or that connect timeout, whichever is first. The session guard counts the port as a fake
+    server's, so an SDK client may be built for it.
     """
     with socket.socket() as refusing:
         refusing.bind((_LOOPBACK, 0))
