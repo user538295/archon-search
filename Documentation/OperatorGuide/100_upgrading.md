@@ -196,7 +196,7 @@ Upgrading to the C2 release activates language tagging at ingest time when `mult
 1. `SearchResult.language` (and the same field on `ScoredSearchCandidate` / `ExplainResult` / `ExplainNearMiss`) now returns `""` instead of `None` for untagged chunks, and serializes as `""` (not `null`) over REST. Update any `is None` guards and client type stubs.
 2. The `language` filter, previously rejected with `422`, now accepts valid ISO codes and `"unknown"`.
 3. Existing collections have `language=""` on all chunks — `GET /status` warns per collection when `multilingual = true` and untagged chunks are present. Re-ingest to populate language tags.
-4. Enabling multilingual on an English-only install: run `archon-search install --multilingual` to download `lid.176.ftz`, set `multilingual = true`, and restart. Switching between an English profile and a multilingual profile still requires re-ingesting all data.
+4. Enabling multilingual on an English-only install: run `archon-search wizard --multilingual` to download `lid.176.ftz`, set `multilingual = true`, and restart. Switching between an English profile and a multilingual profile still requires re-ingesting all data.
 
 ### PyTorch runtime upgrade
 

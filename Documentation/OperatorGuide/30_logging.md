@@ -55,7 +55,7 @@ format = "json"
 backup_count = 14
 ```
 
-`archon-search config show` displays all four keys; `archon-search wizard` and `archon-search install --log-format {text,json} --log-level LEVEL` set them non-interactively.
+`archon-search config show` displays all four keys; `archon-search wizard --log-format {text,json} --log-level LEVEL` sets them non-interactively (`archon-search install` takes only `--dry-run` and `--config`).
 
 ## Enforced log level
 

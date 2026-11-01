@@ -176,7 +176,7 @@ Per-chunk ACL fails **closed**: an `_acl` or `<doc>.acl` that is declared but un
 
 ### 13. MCP is behind the same auth
 
-`/mcp` is mounted on the same server with its own `APIKeyMiddleware`, and its tools fail closed: a call with no authenticated request is refused (`unauthenticated`), not run as the default namespace. Nothing to configure; if you front the service with a proxy that serves `/mcp`, forward `Authorization` there too.
+`/mcp` is mounted on the same server with its own `APIKeyMiddleware`, and its tools fail closed: a call with no authenticated request is refused (`unauthenticated`), not run as the default namespace. Nothing to configure; if you front the service with a proxy that serves `/mcp`, forward `Authorization` there too. A session is bound to the key that opened it ([`02_authentication_and_keys.md`](./02_authentication_and_keys.md#mcp-sessions-are-bound-to-the-key-that-created-them)), so a gateway that sends a different credential partway through one session gets `404` "Session not found".
 
 **Backed by**: [`01_threat_model.md`](./01_threat_model.md) "Trust boundaries"; `archon_search/server/mcp.py`.
 

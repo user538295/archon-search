@@ -75,6 +75,26 @@ Every key is optional and sits in the section shown. Defaults mirror [`archon-se
 
 `[database].embedder_cache_size` (default `3`) no longer counts the default `embedding_model`, which is pinned. The keys and tokens that authenticate are not config values only: `ARCHON_SEARCH_API_KEY` and the key file must be lowercase hex of at least 32 characters, and a `[namespaces]` token printable ASCII of at least 32 characters, or the server refuses to start (`Error: …`, exit `1`).
 
+## Keys added by the 2026-11-01 description and shared-client batch
+
+Every key is optional. Defaults mirror `archon_search/config.py`; detail and migration: NR-54 … NR-58 in [`03_breaking_changes_index.md`](./03_breaking_changes_index.md) and [`/BREAKING.md`](../../BREAKING.md).
+
+| Section | Key | Type | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `[description]` | `enabled` | bool | `false` | Off by default: nothing is sent to any provider until it is `true`, whether or not `ANTHROPIC_API_KEY` is set. |
+| `[description]` | `provider` | string | `"anthropic"` | `anthropic`, `openai`, `ollama`, `llama_cpp` or `claude_cli`. |
+| `[description]` | `model` | string | `"claude-haiku-4-5-20251001"` | A non-empty string (a blank value is a `ConfigError`). For `claude_cli` the default value means Claude Code's own model (no `--model`); `openai`, `ollama` and `llama_cpp` need a model name, and the wizard leaves the feature disabled when none is given. |
+| `[description]` | `ollama_base_url`, `llama_cpp_base_url` | string | `"http://localhost:11434"`, `"http://localhost:8080"` | Read only by the matching provider. |
+| `[description]` | `ollama_context_tokens` | int | unset | `>= 1`; unset means 4096 assumed, no `num_ctx` sent and one startup WARNING. Same key, same rule in `[hyde]`, `[rag_fusion]` and `[graph]`. |
+| `[description]` | `backfill_on_startup` | bool | `false` | Describes collections that have documents and no description once after the startup sync. |
+| `[description]` | `timeout_seconds` | float | `30.0` | Per generation attempt. |
+| `[description]` | `max_sample_chunks` | int | `100` | `>= 1`; ceiling on the excerpts of one prompt, which a small window may shrink. |
+| `[description]` | `think` | bool or `"default"` | `"default"` | `true` or `false` is honoured by `ollama` and `llama_cpp` only (others log a WARNING); the text `default` sends no thinking control. A quoted `"true"` / `"false"` is a `ConfigError`. |
+| `[description]` | `include_restricted_chunks` | bool | `false` | Honoured by `ollama` and `llama_cpp` only; chunks with an ACL are otherwise never sampled. |
+| `[graph]` | `provider` | string | unset | `claude_cli` is a new value (rate limit `extraction_rate_limit_rpm` applies). |
+
+A missing `[description]` section is the same as `enabled = false`, except that a host with `ANTHROPIC_API_KEY` set logs one INFO about it; writing `[description]` with `enabled = false` silences the INFO.
+
 ## PyTorch runtime keys removed and added
 
 | Section | Key | Change |

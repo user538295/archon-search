@@ -49,7 +49,7 @@ When adding capability, prefer this order:
 
 1. Decide which surface(s) the capability belongs on. If a behaviour makes sense on both REST and MCP, expose it on both; if it is genuinely MCP-only or REST-only (as several existing endpoints are), say so in the PR description.
 2. Add the REST endpoint with a Pydantic response model, and/or add the MCP tool in `mcp.py` that wraps the same service call.
-3. Document both in `BREAKING.md` if either changes an existing surface.
+3. Document both in `BREAKING.md` if either changes an existing surface. Adding or renaming an MCP tool is recorded there too, because the tool list and count are part of the contract (the 11 → 13 and 16 → 18 entries).
 
 When a behaviour exists on both surfaces, divergence in shape between them is a contract bug. Example, currently logged in `BREAKING.md` under `[next release]` (unreleased at time of writing): the MCP `search` tool was changed from returning a bare list to returning `{"results": [...], "acl_filtered": bool}` so that the MCP response carries the same ACL-filter signal already available on REST.
 

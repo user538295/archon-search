@@ -7,19 +7,14 @@
 
 ## What export/import does
 
-`archon-search` can package a single collection — its chunks, vectors, per-chunk
-metadata, and ACLs — into one self-contained `.tar.gz` archive on the **server's local
-disk**, then unpack it back into the same instance or a different one. Both operations
-run as background jobs: the REST call returns `202` immediately with a `job_id`, and you
-track progress via the jobs surface (see [Tracking with `--wait` / `jobs status`](#tracking-a-job)).
+`archon-search` can package a single collection — its chunks, vectors, per-chunk metadata, and ACLs — into one self-contained `.tar.gz` archive on the **server's local disk**, then unpack it back into the same instance or a different one. Both operations run as background jobs: the REST call returns `202` immediately with a `job_id`, and you track progress via the jobs surface (see [Tracking with `--wait` / `jobs status`](#tracking-a-job)).
 
 Use it to:
 
 - **Migrate** a collection between environments (e.g. prod → dev, or laptop → server).
 - **Share a corpus** with another team by handing over one archive file.
 - **Seed a new instance** from a known-good collection instead of re-ingesting from source.
-- **Back up** an individual collection out-of-band from the server-wide backup loop
-  (for whole-instance disaster recovery, see the operator guide linked below).
+- **Back up** an individual collection out-of-band from the server-wide backup loop (for whole-instance disaster recovery, see the operator guide linked below).
 
 ### What's in the archive
 
@@ -34,35 +29,16 @@ The **centroid is not exported** — the import job recomputes the collection me
 
 ### Constraints to know before you start
 
-- **Archives live in per-namespace directories on the server.** Export writes to
-  `<data dir>/exports/<namespace>/` (`$ARCHON_SEARCH_DATA_DIR`, default
-  `~/.archon-search/`); you cannot choose the directory. Import reads an archive only
-  from the caller's **own** `exports/<namespace>/` or from its own scheduled-backup
-  directory `<[backup].output_dir>/<namespace>/` (default `<data dir>/backups/<namespace>/`),
-  so a scheduled-backup archive stays restorable. Any other path — including another
-  namespace's directory, and including the admin key's view of it — is rejected with
-  `400` `outside_allowed_dirs`, with the same answer whether or not a file exists there.
-  The manifest names the exporting namespace and an import by a different namespace is
-  refused (`422` `archive_namespace_mismatch`). The MCP `import_collection` tool applies
-  the same rule. There is no multipart upload — the operator running the server needs
-  disk access.
-- **Archives from before 2026-10-25.** They have no `namespace` in the manifest. They
-  restore only when the file sits in the caller's own `exports/<namespace>/` or backup
-  directory (the default namespace may also import a file directly in the old flat
-  `<data dir>/exports/` directory, non-recursively). Move such a file into
-  `exports/<namespace>/` first.
+- **Archives live in per-namespace directories on the server.** Export writes to `<data dir>/exports/<namespace>/` (`$ARCHON_SEARCH_DATA_DIR`, default `~/.archon-search/`); you cannot choose the directory. Import reads an archive only from the caller's **own** `exports/<namespace>/` or from its own scheduled-backup directory `<[backup].output_dir>/<namespace>/` (default `<data dir>/backups/<namespace>/`), so a scheduled-backup archive stays restorable. Any other path — including another namespace's directory, and including the admin key's view of it — is rejected with `400` `outside_allowed_dirs`, with the same answer whether or not a file exists there. The manifest names the exporting namespace and an import by a different namespace is refused (`422` `archive_namespace_mismatch`). The MCP `import_collection` tool applies the same rule. There is no multipart upload — the operator running the server needs disk access.
+- **Archives from before 2026-10-25.** They have no `namespace` in the manifest. They restore only when the file sits in the caller's own `exports/<namespace>/` or backup directory (the default namespace may also import a file directly in the old flat `<data dir>/exports/` directory, non-recursively). Move such a file into `exports/<namespace>/` first.
 - **One collection per job.** To move several collections, run several jobs.
-- **Embedding-model match is mandatory.** Import rejects with `422` if the archive's
-  `active_embedding_model` differs from the target server's configured model. This check
-  **cannot be bypassed** — vector spaces are not interchangeable.
+- **Embedding-model match is mandatory.** Import rejects with `422` if the archive's `active_embedding_model` differs from the target server's configured model. This check **cannot be bypassed** — vector spaces are not interchangeable.
 - **Schema-version match** is checked too (the current manifest version is `2`), but can be bypassed with
   `ignore_schema_version` when you accept the risk. Every archive made before version 2, backups of earlier releases included, is version `1` and needs `ignore_schema_version`; its description, if any, imports as `generated`. The flag skips only this version comparison.
 
 ## CLI
 
-Both commands are HTTP proxies to a running server, so `archon-search serve` (or `start`)
-must be up. They accept `--api-url` (default `http://localhost:8765`) and `--api-key`
-(falls back to `ARCHON_SEARCH_API_KEY` or the key file).
+Both commands are HTTP proxies to a running server, so `archon-search serve` (or `start`) must be up. They accept `--api-url` (default `http://localhost:8765`) and `--api-key` (falls back to `ARCHON_SEARCH_API_KEY` or the key file).
 
 ### Export
 
@@ -97,9 +73,7 @@ archon-search import COLLECTION PATH [--force-overwrite/--no-force-overwrite]
 | `--wait / --no-wait` | `--no-wait` | Poll until terminal and print progress + `imported/skipped/total`. |
 | `--timeout SECONDS` | `300` | Max seconds to wait (only with `--wait`). On timeout the CLI exits `0` and prints a recovery hint — the job keeps running on the server. |
 
-`PATH` is the absolute path to the `.tar.gz` **on the server**. These three flags are
-deliberately independent — `force_overwrite`, `ignore_schema_version`, and `on_error`
-are orthogonal safety decisions.
+`PATH` is the absolute path to the `.tar.gz` **on the server**. These three flags are deliberately independent — `force_overwrite`, `ignore_schema_version`, and `on_error` are orthogonal safety decisions.
 
 With `--wait`, the exit code reports the job's outcome, as for export: `0` when it ends `DONE` or the `--timeout` elapses; `2` when it ends `FAILED` or `FAILED_EXPIRED` (stderr: `Import FAILED: <error>`) or `CANCELLED` (stderr: `Import CANCELLED: the collection may be partially or fully imported; re-run the same import command with --force-overwrite to restore a complete copy.`); `1` on a connection, auth, or HTTP error while submitting or polling. A large archive can take longer than the default 300 s, so a script that must continue only once the import has finished passes a larger `--timeout`, or follows a timeout with `archon-search jobs status <job_id>` (the hint names it): exit `0` alone does not mean the import is done.
 
@@ -117,8 +91,7 @@ archon-search export handbook --wait \
 # Done. Archive: /data/exports/default/handbook-20260729T101500Z.tar.gz
 ```
 
-Copy the archive into the dev server's own export directory for the same namespace (e.g.
-`scp` into `/data/exports/default/`), then import it there:
+Copy the archive into the dev server's own export directory for the same namespace (e.g. `scp` into `/data/exports/default/`), then import it there:
 
 ```bash
 archon-search import handbook /data/exports/default/handbook-20260729T101500Z.tar.gz --wait \
@@ -132,10 +105,7 @@ archon-search import handbook /data/exports/default/handbook-20260729T101500Z.ta
 
 ## REST
 
-Both endpoints require a `Bearer` token and return `202` with a `JobResponse`
-(`status: QUEUED`). The archive path is not accepted from the caller on export — the
-server writes `<data dir>/exports/<namespace>/<collection>-<timestamp>.tar.gz` and the
-job's `output_path` field names the file.
+Both endpoints require a `Bearer` token and return `202` with a `JobResponse` (`status: QUEUED`). The archive path is not accepted from the caller on export — the server writes `<data dir>/exports/<namespace>/<collection>-<timestamp>.tar.gz` and the job's `output_path` field names the file.
 
 **Export** — `POST /collections/{name}/export`
 
@@ -145,8 +115,7 @@ curl -X POST https://host:8765/collections/handbook/export \
 # 202 {"job_id": "5f3c...", "status": "QUEUED", ...}
 ```
 
-The request body takes no fields: a client that still sends `output_path` gets `422`
-(the field was removed on 2026-10-25). An unknown collection returns `404`. A collection name that another namespace owns (admin key included) returns `409` with `{"error": "collection_unavailable", "detail": "collection name is not available to this namespace"}`; no job or archive is created.
+The request body takes no fields: a client that still sends `output_path` gets `422` (the field was removed on 2026-10-25). An unknown collection returns `404`. A collection name that another namespace owns (admin key included) returns `409` with `{"error": "collection_unavailable", "detail": "collection name is not available to this namespace"}`; no job or archive is created.
 
 **Import** — `POST /collections/{name}/import`
 
@@ -157,10 +126,7 @@ curl -X POST https://host:8765/collections/handbook/import \
        "force_overwrite": false, "ignore_schema_version": false, "on_error": "fail"}'
 ```
 
-Import status codes: `400` (path outside the caller's own export/backup directory),
-`409` (collection exists and `force_overwrite` is false, except a partial collection left by an import cancelled during `ingesting`), `422` (archive missing/corrupt,
-archive exported by another namespace, embedding-model mismatch, or schema-version
-mismatch). On success the job's `result` carries `{"imported", "skipped", "total_in_archive"}`.
+Import status codes: `400` (path outside the caller's own export/backup directory), `409` (collection exists and `force_overwrite` is false, except a partial collection left by an import cancelled during `ingesting`), `422` (archive missing/corrupt, archive exported by another namespace, embedding-model mismatch, or schema-version mismatch). On success the job's `result` carries `{"imported", "skipped", "total_in_archive"}`.
 
 An import with `force_overwrite` that finds another job still writing the collection (in any namespace) when it is about to drop it ends `FAILED` — the request itself was accepted with `202` — with `error` `force_overwrite refused: job <id> is in progress; retry after it completes` (`force_overwrite refused: a job is in progress on this collection; retry after it completes` when that job is another namespace's), or `force_overwrite refused: collection is busy with another write; retry after it completes` when another write held the collection too long. Nothing was dropped and the collection is untouched. Wait for the other job to finish (`GET /jobs/{id}`), then resume the failed import (`POST /jobs/{id}/resume`) or start it again. Two imports of the same collection running at once can refuse each other the same way: run them one after the other.
 
@@ -170,23 +136,16 @@ For the exhaustive request/response fields, `GET /openapi.json` is authoritative
 
 The MCP surface mirrors REST with two non-blocking tools that return the QUEUED job dict:
 
-- `export_collection(collection)` — the archive goes to the caller's own
-  `<data_dir>/exports/<namespace>/` directory; the job's `output_path` names the file.
+- `export_collection(collection)` — the archive goes to the caller's own `<data_dir>/exports/<namespace>/` directory; the job's `output_path` names the file.
 - `import_collection(collection, path, force_overwrite=False, ignore_schema_version=False, on_error="fail")`
 
-Both apply the same embedding-model and schema-version checks as REST and return a
-structured error (`code` = `path_unsafe`, `not_found`, `collection_unavailable` (export of a name another namespace owns; an import over one ends as a `FAILED` job with that text), `collection_exists`,
-`embedding_model_mismatch`, …) on rejection. Poll `GET /jobs/{job_id}` for progress.
+Both apply the same embedding-model and schema-version checks as REST and return a structured error (`code` = `path_unsafe`, `not_found`, `collection_unavailable` (export of a name another namespace owns; an import over one ends as a `FAILED` job with that text), `collection_exists`, `embedding_model_mismatch`, …) on rejection. Poll `GET /jobs/{job_id}` for progress.
 
-Path safety is the same as REST: `import_collection` accepts archives inside the caller's own
-`exports/<namespace>/` directory or its own `<[backup].output_dir>/<namespace>/` backup
-directory, and nothing else.
+Path safety is the same as REST: `import_collection` accepts archives inside the caller's own `exports/<namespace>/` directory or its own `<[backup].output_dir>/<namespace>/` backup directory, and nothing else.
 
 ## Tracking a job
 
-Export and import are **checkpointed, resumable jobs**. Progress is written to the job
-record as `{processed, total, phase}` every `[jobs].checkpoint_interval` documents
-(default 100). Phases are:
+Export and import are **checkpointed, resumable jobs**. Progress is written to the job record as `{processed, total, phase}` every `[jobs].checkpoint_interval` documents (default 100). Phases are:
 
 - **Export**: `reading` → `writing` → `packaging`
 - **Import**: `validating` → `ingesting` → `indexing`
@@ -201,8 +160,7 @@ Track a job without `--wait` using the CLI:
 archon-search jobs status <job_id>
 ```
 
-See [Jobs and async operations](100_jobs_and_async_operations.md) for the full job
-lifecycle, list/filter/resume semantics, and the `QUEUED` scheduler.
+See [Jobs and async operations](100_jobs_and_async_operations.md) for the full job lifecycle, list/filter/resume semantics, and the `QUEUED` scheduler.
 
 ### Resuming an import
 

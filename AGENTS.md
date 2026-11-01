@@ -70,7 +70,7 @@ The runtime is a layered pipeline; understanding the seam between these modules 
 - `torch_runtime.py`, `model_specs.py`, `model_store.py`, `reranker_loading.py`, `text_batching.py` are the PyTorch runtime (device resolution, `accelerator_lock`, `TRANSFORMERS_LOCK`, model download, batching). `warmup_coordinator.py` (`WarmupCoordinator`) single-flights model builds; `embedder_cache.py` is the per-collection embedder LRU (the default embedder is pinned); `model_validation.py` probes the pipeline's own embedder/reranker; `memory_budget.py` estimates model memory against the cgroup/RAM limit; `lance_session.py` creates LanceDB connections with capped caches.
 - `ingest_path_policy.py` + `_path_safety.py` decide which client-supplied ingest paths are readable (deny list, `[ingest].allowed_roots`, non-admin refusal when the list is empty); `_durable_io.py` owns private (0700/0600) atomic writes.
 - `config.py` + `constants.py` load `<data-dir>/archon-search.toml` (default `~/.archon-search/archon-search.toml`; `ARCHON_SEARCH_CONFIG` overrides) (see `archon-search.toml.example`).
-- `platform/` (`runtime.py`, `service.py`, `macos.py`, `linux.py`, `windows.py`) handles OS-specific service install/uninstall; `install.py` + `cli/install_cmd.py` wire it to the CLI.
+- `platform/` (`runtime.py`, `service.py`, `macos.py`, `linux.py`, `windows.py`) handles OS-specific service install/uninstall; the `install/` package (`installer.py`, `wizard.py`, `config_writer.py`, `extras.py`, ...) + `cli/install_cmd.py` wire it to the CLI.
 
 ### Server (`archon_search/server/`)
 

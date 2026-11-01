@@ -112,11 +112,11 @@ auto_reindex_on_chunk_size_change = true
 device = "auto"
 
 # Install profile ("minimal" | "balanced" | "max"; empty = legacy install).
-# Set by `archon-search install --profile <name>`; used by config.py to record which
+# Set by `archon-search wizard --profile <name>`; used by config.py to record which
 # profile was chosen at install time. Leave empty to preserve pre-C0 manual config.
 profile = ""
 # Use multilingual models (requires Jina CC-BY-NC-4.0 license acceptance for balanced/max).
-# Set to true by `archon-search install --multilingual`.
+# Set to true by `archon-search wizard --multilingual`.
 multilingual = false
 # Minimum fasttext confidence score [0.0 exclusive, 1.0 inclusive] for language detection.
 # Results below this threshold are stored as "unknown" instead of a language code.
@@ -323,7 +323,8 @@ model = "claude-haiku-4-5-20251001"
 # a value above the model's maximum is warned about. Must be >= 1.
 # ollama_context_tokens = 8192
 # Per-request timeout (seconds) for the LLM API call. On timeout, the server
-# falls back silently to the original query embedding (hyde_applied: false).
+# falls back to the original query embedding (hyde_applied: false; the first
+# failure per process logs one WARNING).
 timeout_seconds = 10.0
 # Per-process rate limit (requests per minute). Requests that exceed this limit
 # are answered with the fallback embedding (hyde_applied: false).
@@ -411,7 +412,8 @@ model = "claude-haiku-4-5-20251001"
 # a value above the model's maximum is warned about. Must be >= 1.
 # ollama_context_tokens = 8192
 # Per-request timeout (seconds) for the LLM API call. On timeout, the server
-# falls back silently to single-query search (rag_fusion_applied: false).
+# falls back to single-query search (rag_fusion_applied: false; the first
+# failure per process logs one WARNING).
 timeout_seconds = 10.0
 # Per-process rate limit (requests per minute). Requests that exceed this limit fall
 # back to single-query search (rag_fusion_applied: false).

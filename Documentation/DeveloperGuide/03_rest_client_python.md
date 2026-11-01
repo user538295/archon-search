@@ -156,7 +156,7 @@ r = client.post("/ingest", json={
 })
 ```
 
-`ingested_by` is taken from the `X-Ingested-By` header: the JSON body field is always overwritten by the header value, and a missing or unknown header records `"http"` (`routes_jobs.py:707-708`, `parse_ingested_by_header` in `server/_ingested_by.py`).
+`ingested_by` is taken from the `X-Ingested-By` header: the JSON body field is always overwritten by the header value, and a missing or unknown header records `"http"` (`routes_jobs.py`, `parse_ingested_by_header` in `server/_ingested_by.py`).
 
 ## Searching
 
@@ -186,7 +186,7 @@ for hit in payload["results"]:
 - Meta lookup failure → `503 {"detail": "service unavailable"}`.
 - Pipeline failure mid-search → HTTP 500 with a **plain-text** body `Internal Server Error` (Content-Type `text/plain`), produced by Starlette's `ServerErrorMiddleware` after the route bare-re-raises. Do NOT call `response.json()` on the 500 body — it is not JSON and `requests`/`httpx` will raise `JSONDecodeError`. Use `response.text` or branch on `response.status_code` before parsing. Pipeline timeout → HTTP 504 with `{"detail": "Search timed out"}` (JSON, safe to parse). HTTP 200 with `results=[]` means no matches found on a healthy pipeline.
 
-There is no REST `/search/with_context` endpoint. That capability is exposed only as the MCP tool `search_with_context` (`mcp.py:771`). If you need it from REST today, ingest the document and issue follow-up `/search` calls; or use the MCP transport.
+There is no REST `/search/with_context` endpoint. That capability is exposed only as the MCP tool `search_with_context` (`archon_search/server/mcp.py`). If you need it from REST today, ingest the document and issue follow-up `/search` calls; or use the MCP transport.
 
 ## Routing across collections
 

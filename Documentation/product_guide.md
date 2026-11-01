@@ -19,7 +19,7 @@ Imagine you have hundreds of notes, PDFs, manuals, and saved articles scattered 
 Two things make it different from regular search:
 
 1. **It understands meaning, not just words.** A search for *"cancel my plan"* will find a paragraph titled *"ending your subscription"*, even though none of the words match.
-2. **It runs on your computer.** Your documents never leave your machine. There is no cloud account and no upload.
+2. **It runs on your computer.** By default your documents never leave your machine: there is no cloud account and no upload. A few optional features hand text to an AI service you choose — see "Optional features that can send text away" below.
 
 You can use it yourself, or let an AI assistant (like Claude) use it on your behalf — so the assistant can answer questions based on *your* notes instead of guessing.
 
@@ -110,13 +110,25 @@ Used to manage dependencies and version numbers automatically. You don't see the
 
 Each piece reinforces the others:
 
-- **Local-first.** LanceDB stores everything on your disk; the AI models run on your own machine. Together they mean that, once the models are downloaded, archon-search works without internet and without sending your documents anywhere.
+- **Local-first.** LanceDB stores everything on your disk; the AI models run on your own machine. Together they mean that, once the models are downloaded, archon-search works without internet and without sending your documents anywhere (unless you turn on one of the optional features below with an online provider).
 - **Hybrid search in one place.** Because LanceDB does both meaning-search and keyword-search natively, archon-search doesn't have to stitch two databases together.
 - **Two-stage search.** The cheap first stage narrows millions of paragraphs to dozens; the careful second stage picks the winners. Fast *and* accurate.
 - **One server, two audiences.** The same content is reachable by humans (through the API and CLI) and AI assistants (through MCP), with the same security rules.
 - **Safe defaults.** Authentication is on by default. Telemetry (usage logging) is off by default. When you turn it on, it stays on your computer.
 
 The result is a system where each part is a sensible everyday choice, but together they cover a lot of ground.
+
+---
+
+## Optional features that can send text away
+
+Three optional features ask an AI language model for help, and all three are **off by default**:
+
+- **Query expansion** (called HyDE and RAG Fusion) rewrites your *question* before searching.
+- **Collection descriptions** write a one-line summary of each collection from short excerpts of your documents, which helps the router pick the right collection.
+- **Graph summaries** write short summaries of groups of related entities from passages of your documents.
+
+You choose which AI service answers: an online one (Anthropic, OpenAI, or Claude Code's own login) receives that text, while a model running on your own machine (Ollama or llama.cpp) keeps it local. If you never turn these on, nothing is sent anywhere. The setup wizard asks about each one; the details are in `Documentation/UserManual/20_wizard.md` and `Documentation/UserManual/30_configuration.md`.
 
 ---
 
@@ -145,7 +157,7 @@ It is **not** meant for searching the public internet, running across a cluster 
 If you'd like to try it:
 
 - **Five-minute setup:** `Documentation/quick_start.md`
-- **Install and configure:** `Documentation/UserManual/10_installation.md` → `02_configuration.md`
+- **Install and configure:** `Documentation/UserManual/10_installation.md` → `Documentation/UserManual/30_configuration.md`
 - **Add documents:** `Documentation/UserManual/50_ingestion_and_collections.md`
 - **Search your documents:** `Documentation/UserManual/60_searching.md`
 - **Connect an AI assistant:** `Documentation/DeveloperGuide/05_mcp_integration.md`

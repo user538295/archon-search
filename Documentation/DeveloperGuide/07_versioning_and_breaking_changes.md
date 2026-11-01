@@ -87,7 +87,8 @@ if running < REQUIRED_MIN:
 | Removing a field from a `response_model` | Yes |
 | Adding a required field to a request body | Yes |
 | Adding an optional field to a request body | No |
-| Adding a new REST endpoint or MCP tool | No |
+| Adding a new REST endpoint | No, unless it changes an existing contract (the `PUT /collections/{name}/description` entry also records the new CORS method) |
+| Adding a new MCP tool | Yes (the tool count and `tools/list` change; e.g. the 16 → 18 entry) |
 | Renaming an MCP tool | Yes |
 | Removing a CLI subcommand or flag | Yes |
 | Changing the on-disk layout under `~/.archon-search/` | Yes |

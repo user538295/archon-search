@@ -24,7 +24,7 @@ archon-search --version              # current installed version (see 01_version
 pip index versions archon-search     # available versions on PyPI
 ```
 
-Open [`/BREAKING.md`](../../BREAKING.md) and read every entry strictly between your current version and the target. If you are upgrading to a release that has just been tagged, also re-read the `[next release]` entries that were rolled into it. #Unverified (existence of `[next release]` section in `BREAKING.md` not confirmed against current source) See [`03_breaking_changes_index.md`](./03_breaking_changes_index.md) for a curated index.
+Open [`/BREAKING.md`](../../BREAKING.md) and read every entry strictly between your current version and the target. If you are upgrading to a release that has just been tagged, also re-read the `[next release]` entries that were rolled into it. See [`03_breaking_changes_index.md`](./03_breaking_changes_index.md) for a curated index.
 
 ## Step 2 — Back up `~/.archon-search/`
 
@@ -76,7 +76,7 @@ pip install archon-search==26.5.123
 After install:
 
 1. Diff your `<data-dir>/archon-search.toml` (default `~/.archon-search/archon-search.toml`) against the current template `archon-search.toml.example` at the repo root for the version you just installed. `load_config` in `archon_search/config.py` only reads an explicit allowlist of known keys per section, so unknown or stale keys are skipped (not raised) — but a renamed key silently reverts to its default. Three removed keys are the exception and are refused: `[database].providers`, `[database].reranker_providers` and `[graph].providers` make `serve`, `start` and `install` exit `1` (`archon-search wizard` drops them); see [`04_config_migration.md`](./04_config_migration.md). The one **explicit** silent coercion in the loader is `telemetry.export_enabled = true`, which is logged as a warning and forced back to `false` (reserved for a future release; see `config.py` around the `export_enabled` branch).
-2. If `BREAKING.md` for your range names any config key changes, apply them now. For the 2026-10-25 security and operations entries that means, at least: every API key at least 32 characters (`ARCHON_SEARCH_API_KEY` lowercase hex; `[namespaces]` tokens printable ASCII), `[ingest].allowed_roots` if non-admin keys send paths, and `[server].host` / `cors_origins` / `docs_enabled` if you relied on the old network defaults. A key shorter than 32 characters, or an invalid key file, stops the server at start with `Error: …` and exit `1`.
+2. If `BREAKING.md` for your range names any config key changes, apply them now. For the 2026-10-25 security and operations entries that means, at least: every API key at least 32 characters (`ARCHON_SEARCH_API_KEY` lowercase hex; `[namespaces]` tokens printable ASCII), `[ingest].allowed_roots` if non-admin keys send paths, and `[server].host` / `cors_origins` / `docs_enabled` if you relied on the old network defaults. For the 2026-11-01 entries: collection descriptions are off until `[description] enabled = true` (NR-54), `ollama_context_tokens` is worth setting in every section that uses `ollama` (NR-58), and a backup written before the upgrade imports only with `--ignore-schema-version` (NR-59). A key shorter than 32 characters, or an invalid key file, stops the server at start with `Error: …` and exit `1`.
 3. Admin-only routes (`/sync`, `/backup/trigger`, `/maintenance/trigger`, `/telemetry/*`, `/keys/rotate`, `POST /collections/`) now need the default key or an `admin: true` managed key; point cron jobs and CI at the right key.
 4. Coming from the fastembed / ONNX build: stop the service **before** installing (launchd or systemd would crash-loop on the old keys), then follow the PyTorch entry's Migration in `BREAKING.md` (remove the three keys, set `device`, `archon-search start`, check `/ready`, then free the orphaned ONNX files with `hf cache rm`, never `rm -rf` on `models--*`). Existing indexes need no re-index.
 
@@ -121,8 +121,11 @@ archon-search stop
 tar -czf ~/archon-search-failed-$(date -u +%Y%m%dT%H%M%SZ).tar.gz -C ~ .archon-search
 
 # 3. Restore state ONLY if the failed upgrade is known to have mutated on-disk data.
-#    Today no upgrade requires schema migration (see 05_data_migration.md, roadmap item D3 #Unverified),
-#    so this step is normally skipped — the existing state directory is reused.
+#    No upgrade requires a reindex or a migration run (see 05_data_migration.md),
+#    so this step is normally skipped — the existing state directory is reused. One exception: the first start of
+#    the release with NR-60 adds nullable columns to the collection metadata table, and rolling back over a store
+#    that has them is untested, so when rolling back across that release restore the pre-upgrade backup here.
+#    Archives written before NR-59 are version 1 and need --ignore-schema-version to import.
 tar -xzf ~/archon-search-backup-<timestamp>.tar.gz -C ~
 
 # 4. Pin to the previous version.
@@ -136,7 +139,7 @@ If the previous version had a different config schema and you applied schema-lev
 
 ## What this procedure does **not** cover
 
-- **Schema migrations of the LanceDB store.** There are no automated migrations today; this gap is tracked as roadmap item D3 in [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md). If a future release requires a reindex, its `BREAKING.md` entry will say so explicitly.
+- **Schema migrations of the LanceDB store.** The only automatic ones are the additive startup steps (nullable columns on the collection metadata table, NR-60); the migration tooling for the rest (roadmap item D3, shipped; `POST /collections/{name}/migrate`) is described in [`05_data_migration.md`](./05_data_migration.md) and [`OperatorGuide/100_upgrading.md`](../OperatorGuide/100_upgrading.md). If a future release requires a reindex, its `BREAKING.md` entry will say so explicitly.
 - **Service-manager-level changes.** If a release changes how `archon-search install` registers itself with launchd/systemd/Windows Services, the `BREAKING.md` entry will call that out and you may need to run `archon-search uninstall && archon-search install` as part of Step 4.
 - **External integrations.** Updating the REST/MCP clients in your own codebase is out of scope for this doc; see [`06_client_migration_examples.md`](./06_client_migration_examples.md) for diffs.
 

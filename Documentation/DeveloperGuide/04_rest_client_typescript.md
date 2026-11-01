@@ -130,18 +130,9 @@ export interface ErrorDetail {
 
 ## Scope of this client
 
-The `ArchonClient` below covers the integration surface most callers need:
-`/health`, `/search`, `/route`, `/ingest`, `/jobs/{id}`, and the
-`/collections/*` resources (list, get, add, remove, reindex). It deliberately
-omits the operator/observability endpoints — `GET /status`, `GET /state`, and
-`GET /telemetry/*` — which exist and are authenticated but are out of scope
-for application integration. Add wrappers as needed.
+The `ArchonClient` below covers the integration surface most callers need: `/health`, `/search`, `/route`, `/ingest`, `/jobs/{id}`, and the `/collections/*` resources (list, get, add, remove, reindex). It deliberately omits the operator/observability endpoints — `GET /status`, `GET /indexing-state`, and `GET /telemetry/*` — which exist and are authenticated but are out of scope for application integration. Add wrappers as needed.
 
-URL-shape note: the list/add handlers are mounted under `prefix="/collections"`
-at `"/"`, so the canonical paths are `GET /collections/` and `POST /collections/`
-(trailing slash). The per-name handlers `GET/DELETE /collections/{name}` and
-`POST /collections/{name}/reindex` have no trailing slash. Don't "normalise"
-the slashes — they're meaningful here.
+URL-shape note: the list/add handlers are mounted under `prefix="/collections"` at `"/"`, so the canonical paths are `GET /collections/` and `POST /collections/` (trailing slash). The per-name handlers `GET/DELETE /collections/{name}` and `POST /collections/{name}/reindex` have no trailing slash. Don't "normalise" the slashes — they're meaningful here.
 
 ## A minimal client
 

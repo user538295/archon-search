@@ -120,7 +120,7 @@ Set `stream: true` to receive Server-Sent Events. **Note: one SSE frame per retr
 
 ## Query expansion providers (G10 note)
 
-The shim runs the same retrieval pipeline as `POST /search`, so HyDE and RAG Fusion query expansion apply if they are enabled in config — but the shim request itself carries **no** `hyde`/`rag_fusion` toggle. Expansion is governed entirely by the `[hyde]` / `[rag_fusion]` config sections and their `provider` (`anthropic` | `openai` | `ollama` | `claude_cli`). See [Searching](60_searching.md) and [Configuration](30_configuration.md) for the provider matrix and required API keys.
+The shim runs the same retrieval pipeline as `POST /search`, so HyDE and RAG Fusion query expansion apply if they are enabled in config — but the shim request itself carries **no** `hyde`/`rag_fusion` toggle. Expansion is governed entirely by the `[hyde]` / `[rag_fusion]` config sections and their `provider` (`anthropic` | `openai` | `ollama` | `claude_cli` | `llama_cpp`). See [Searching](60_searching.md) and [Configuration](30_configuration.md) for the provider matrix and required API keys.
 
 ## Full field reference
 

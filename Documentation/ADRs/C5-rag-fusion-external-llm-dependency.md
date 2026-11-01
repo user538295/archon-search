@@ -1,7 +1,7 @@
 # ADR C5 — RAG Fusion: External LLM Dependency, Privacy, and HyDE Mutual Exclusion
 
 **Status**: Accepted
-**Superseded in part by**: [ADR 19](19_shared_llm_client_and_provider_based_collection_descriptions.md) — only the 2000-character query cut in the privacy statement below: the query is now sized to the model's window instead (whole for a cloud provider, the part that fits for `ollama` and `llama_cpp`).
+**Superseded in part by**: [ADR 19](19_shared_llm_client_and_provider_based_collection_descriptions.md) — only the `422` (`RAGFusionDependencyError`) for a missing `anthropic` package (the "Exception" bullet and Decision item 3): the package guard now runs at startup, and a package lost after boot is a failed call that falls back to the single query; and the 2000-character query cut in the privacy statement below: the query is now sized to the model's window instead (whole for a cloud provider, the part that fits for `ollama` and `llama_cpp`).
 
 ---
 

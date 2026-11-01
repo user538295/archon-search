@@ -11,7 +11,7 @@ All durable state for `archon-search` lives under `~/.archon-search/`. The serve
 ## Principles
 
 1. **One state directory per install.** Backup is `tar -czf` of `~/.archon-search/`; restore is the inverse.
-2. **No automated schema migrations today.** Every release reuses the existing LanceDB layout. Schema-migration tooling is roadmap item **D3** in [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) and is not yet implemented. The one exception is additive: every server start adds the nullable `default_ttl_seconds`, `description_source` and `description_status` columns to `_archon_collection_meta` (`STORE_SCHEMA_VERSION` stays `1`; see [`BREAKING.md`](../../BREAKING.md), startup migrations entry), so back up before upgrading if you may roll back.
+2. **Schema changes so far are additive.** Every release reuses the existing LanceDB layout. The schema-migration tooling (roadmap item **D3** in [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md), `POST /collections/{name}/migrate`, `archon-search collection migrate`; see [`OperatorGuide/100_upgrading.md`](../OperatorGuide/100_upgrading.md)) has shipped, and every catalogued migration is `in_place`. Every server start adds the nullable `default_ttl_seconds`, `description_source` and `description_status` columns to `_archon_collection_meta` (`STORE_SCHEMA_VERSION` stays `1`; see [`BREAKING.md`](../../BREAKING.md), startup migrations entry), so back up before upgrading if you may roll back.
 3. **Re-ingest is a fallback, not a routine step.** No release to date requires a full reindex. If one does, it will say so in its [`BREAKING.md`](../../BREAKING.md) entry.
 
 ## On-disk layout
@@ -45,11 +45,11 @@ The default expectation, for **every release shipped so far**:
 | --- | --- | --- |
 | `archon-search.toml` | Yes | Keys that no longer exist are silently ignored, except the removed `providers` / `reranker_providers` keys, which stop `serve` and `start` until they are deleted (see [`04_config_migration.md`](./04_config_migration.md)). New keys fall back to their defaults — which now include a stricter `[ingest].max_file_mb = 100` and loopback-only binding. |
 | `.search.env` (API key) | Yes, if valid | The key file is not rewritten on upgrade. A key that is not lowercase hex of at least 32 characters is refused at start (the file is left untouched; fix or delete it). `ARCHON_SEARCH_API_KEY` still overrides it and must meet the same rule. |
-| `search/` (LanceDB tables) | Yes | Vector + FTS indexes are read in place. No schema migration is performed, and moving from the fastembed / ONNX build to the PyTorch build needs no re-index (stored vectors are unchanged within ADR 18's thresholds). Collections that have rows but no collection-meta row are treated as owned by the `default` namespace and listed in one startup WARNING. Superseded Lance table versions are deleted by maintenance passes after `[maintenance].version_retention_hours` (24). The `.indexing_state.json` file inside `search/` (per-collection mtimes + indexed-model fingerprint, see `archon_search/progress.py`) also survives and is what lets the sync layer skip unchanged inputs. |
+| `search/` (LanceDB tables) | Yes | Vector + FTS indexes are read in place. No migration run is needed (the only change is additive: the startup steps add nullable columns to `_archon_collection_meta`, see principle 2), and moving from the fastembed / ONNX build to the PyTorch build needs no re-index (stored vectors are unchanged within ADR 18's thresholds). Collections that have rows but no collection-meta row are treated as owned by the `default` namespace and listed in one startup WARNING. Superseded Lance table versions are deleted by maintenance passes after `[maintenance].version_retention_hours` (24). The `.indexing_state.json` file inside `search/` (per-collection mtimes + indexed-model fingerprint, see `archon_search/progress.py`) also survives and is what lets the sync layer skip unchanged inputs. |
 | `logs/archon-search.log` | Yes | Rotated by a timed rotating handler (`[logging].backup_count`, default 7); the file and rotated copies are written `0600`. |
 | `search-logs/*.jsonl` | Yes | Subject to `[telemetry].retention_days` pruning by `pruner.py`. New files are written `0600` in a `0700` directory. |
 | `models/` | Partly | The PyTorch build downloads its own snapshots next to the old fastembed directories; the ONNX files are unused and can be removed with `hf cache rm` (see the PyTorch entry in [`/BREAKING.md`](../../BREAKING.md); `rm -rf` on `models--*` frees little because the blobs are shared). |
-| `exports/`, backups | Re-file | Archives are importable only from the caller's own `exports/<namespace>/` or `backups/<namespace>/` directory; see "Export archives and per-namespace restore" below. |
+| `exports/`, backups | Re-file | Archives are importable only from the caller's own `exports/<namespace>/` or `backups/<namespace>/` directory, and a version 1 archive (every one written before the description feature) needs `--ignore-schema-version`; see "Export archives and per-namespace restore" below. |
 
 If a future release **requires** any of these to change, the `BREAKING.md` entry for that release will spell it out and link a migration procedure. Until then, an upgrade is a wheel swap with no data touch.
 
@@ -62,7 +62,7 @@ There are two situations where reindexing is relevant:
 1. **You changed `[database].chunk_size`** in `archon-search.toml`. By default `auto_reindex_on_chunk_size_change = true`, so affected collections are reindexed automatically the next time `sync.py`'s `_sync_collection` runs for them — that includes server start, watcher-triggered re-syncs, and explicit `archon-search sync` invocations, not just process start. Set the flag to `false` if you want to defer and trigger reindex manually later.
 2. **You changed `[database].embedding_model`.** This is a model-identity change; existing vectors are no longer comparable to new queries. `sync.py` detects this automatically by comparing the configured embedding model against the per-collection indexed-model fingerprint and forces a full reindex unconditionally on the next sync pass — no manual action is required, and there is no opt-out flag. Changing `[database].reranker_model` does **not** require a reindex: the reranker operates on retrieved candidates at query time and is not persisted per-collection.
 
-The schema-migration gap is tracked as **D3** in [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md): a future release will introduce a migration job kind so model or schema changes do not require operators to wipe `search/` by hand. Until D3 ships, the manual reindex below is the only tool.
+A schema change that rewrites chunks would run as a `MigrationJob` (D3, see [`OperatorGuide/100_upgrading.md`](../OperatorGuide/100_upgrading.md)); no catalogued migration is of that kind today, so for a model or chunk-size change the reindex below is the tool.
 
 ## Manual reindex procedure
 
@@ -86,7 +86,7 @@ archon-search collection list | awk '{print $1}' | \
   while read -r c; do archon-search collection reindex "$c"; done
 ```
 
-All `collection` subcommands (`list`, `info`, `add`, `remove`, `reindex`, `reindex-metadata`) are HTTP proxies — they route through the running archon-search server. Ensure `archon-search serve` is running before invoking any collection command.
+All `collection` subcommands (`list`, `info`, `add`, `remove`, `reindex`, `reindex-metadata`, `migrate`, `set-description`, `clear-description`, `describe`) are HTTP proxies — they route through the running archon-search server. Ensure `archon-search serve` is running before invoking any collection command.
 
 ## Backup and restore
 
@@ -105,7 +105,7 @@ archon-search start
 
 After restore, verify that `~/.archon-search/.search.env` is mode `600` and that the directory is not group- or world-readable: `tar -x` recreates files with whatever your umask produces, and indexed text lives in `search/`. `key_manager.py` enforces `600` only when it writes the file.
 
-A live backup (without stopping the server) is **not** safe: LanceDB writes are not guaranteed atomic across the whole tree #Unverified — this is an upstream LanceDB property and was not verified against the pinned library version, and an in-flight ingest can leave the tar inconsistent. If you need online backup, that gap is tracked alongside D3 as **D2 (Export / import / backup / restore)** in [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md).
+A live backup (without stopping the server) is **not** safe: LanceDB writes are not guaranteed atomic across the whole tree #Unverified — this is an upstream LanceDB property and was not verified against the pinned library version, and an in-flight ingest can leave the tar inconsistent. For a backup that does not stop the server, use the per-collection `.tar.gz` backups (`archon-search backup --now`, or the scheduled loop; roadmap item **D2** in [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md)), which export a consistent view of each collection and cover collection data only, not keys or config; see [`OperatorGuide/40_backup_restore_disaster_recovery.md`](../OperatorGuide/40_backup_restore_disaster_recovery.md).
 
 ## Export archives and per-namespace restore
 

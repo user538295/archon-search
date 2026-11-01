@@ -25,6 +25,8 @@ Each pass runs the enabled policies below. Four run **per non-excluded collectio
 
 Maintenance is lower priority than all user work: it takes the same per-collection lock ingest uses (graph GC holds it across its snapshot, prune and orphan delete, so it cannot interleave with an ingest's graph write), and skips (until the next interval) any collection currently locked by a live ingest. Auxiliary graph writes never fail a pass — they log a WARNING and continue.
 
+With `[description]` enabled, a pass that removed documents of a collection (the orphan sweep, expired-chunk pruning) tells the pipeline (`finalize_after_removal`), which settles the collection row (stamp, and a forced centroid and count recompute after pruning) and requests a description without waiting for the model call; with descriptions off nothing runs. A failure of that step is logged as a WARNING (`Could not settle collection '<name>' after its documents changed; its counts or description may lag until the next change`) and never fails the pass. Chunks pruned out of a document that keeps other chunks do not trigger it.
+
 ## Orphan cleanup rules
 
 This is the authoritative statement of what the orphan sweep deletes (`MaintenanceLoop._run_orphan_cleanup`, `archon_search/jobs/maintenance_loop.py`); other documents summarize it and link here.

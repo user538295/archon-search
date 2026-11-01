@@ -291,7 +291,7 @@ rm -rf ~/.archon-search/
 
 | Path | Purpose |
 | --- | --- |
-| `~/.archon-search/archon-search.toml` | Server config (auto-created by `install` or `config set`). |
+| `~/.archon-search/archon-search.toml` | Server config (written by `wizard` or `config set`; `install` registers the service and writes no config). |
 | `~/.archon-search/.search.env` | API key, mode `600`. Auto-generated on first server start (see `archon_search/key_manager.py`). |
 | `~/.archon-search/search/` | LanceDB vector store and FTS index. |
 | `~/.archon-search/logs/archon-search.log` | Server log. |

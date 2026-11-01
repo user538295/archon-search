@@ -30,7 +30,7 @@ curl -X POST http://127.0.0.1:8765/search \
 }
 ```
 
-No cloud call happened to produce that by default — the index, the embeddings, and the reranker all run on the box you started `archon-search` on. (HyDE and RAG Fusion, both opt-in, are the exception: they call out to an LLM provider — see [Features](#features).)
+No cloud call happened to produce that by default — the index, the embeddings, and the reranker all run on the box you started `archon-search` on. (HyDE, RAG Fusion, LLM graph enrichment and collection descriptions, all opt-in, are the exception: each calls out to an LLM provider you choose — a local Ollama or llama.cpp server keeps the text on your machine — see [Features](#features).)
 
 ## What it's made of
 
@@ -47,8 +47,9 @@ It's one process. It persists everything under `~/.archon-search/`. There's no s
 
 **Search that gets smarter about the query, not just the index:**
 
-- **Vague or short queries under-retrieve with plain vector search.** `hyde=true` on `/search` generates a hypothetical answer and embeds *that* instead of the raw query — closes the gap between "what you typed" and "what the answer looks like." (`archon-search[hyde]`, needs an LLM provider: Anthropic — the default, included in the `hyde` extra — or Ollama (`archon-search[ollama]`, plus a running Ollama server), OpenAI (`archon-search[openai-provider]`), `claude_cli` — uses Claude Code's own login, no extra install and no API key — or `llama_cpp` — a local llama-server instance, no extra install and no API key; use a small, direct-response instruct model, not a reasoning model, or the entire token budget goes to hidden chain-of-thought and HyDE/RAG Fusion silently stay disabled)
+- **Vague or short queries under-retrieve with plain vector search.** `hyde=true` on `/search` generates a hypothetical answer and embeds *that* instead of the raw query — closes the gap between "what you typed" and "what the answer looks like." (`archon-search[hyde]`, needs an LLM provider: Anthropic — the default, included in the `hyde` extra — or Ollama (`archon-search[ollama]`, plus a running Ollama server), OpenAI (`archon-search[openai-provider]`), `claude_cli` — uses Claude Code's own login, no extra install and no API key — or `llama_cpp` — a local llama-server instance, no extra install and no API key; use a small, direct-response instruct model, not a reasoning model, or the entire token budget goes to hidden chain-of-thought and HyDE/RAG Fusion fall back to plain search, logging one WARNING per process)
 - **One query rarely covers what a broad question needs.** `rag_fusion=true` decomposes the query into sub-queries, searches all of them in parallel, and fuses the results with a second RRF pass. Mutually exclusive with HyDE — pick the one that fits the query shape. (`archon-search[rag_fusion]`, same provider options and extras as HyDE above)
+- **Centroids alone can't tell two similar collections apart.** With `[description].enabled = true` (off by default) an LLM writes a one-line description of each collection from sampled chunk excerpts — on every ingest that changes a collection enough, or on demand with `archon-search collection describe` — and `routing_strategy = "hybrid"` blends its embedding into routing. Set or clear one by hand with `collection set-description` / `clear-description`; a manual description is never overwritten. See [Collection descriptions](Documentation/UserManual/50_ingestion_and_collections.md#collection-descriptions).
 - **Non-English corpora get silently penalized by English-tuned defaults.** Per-chunk language is detected with fastText at ingest time, and `filters.language` lets you scope a query to it.
 - **Different collections need different embedding models** (code vs. prose, different languages) — `active_embedding_model` is set per collection and enforced through ingest, search, and sync; a mismatch raises loud, not silent.
 

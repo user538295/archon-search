@@ -5,14 +5,14 @@
 
 # Authentication
 
-`archon-search` uses a single auth scheme: `Authorization: Bearer <token>`. The same middleware (`archon_search/server/middleware_auth.py`) protects both the REST routes and the MCP endpoint at `/mcp`. #Unverified — MCP middleware wiring not directly confirmed in this review; would need inspection of `archon_search/server/app.py` and `archon_search/server/mcp.py`. Exemption is by path, not method: `_EXEMPT_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}`, and *any* HTTP method to these paths bypasses auth. `/docs`, `/openapi.json`, and `/redoc` are real, reachable FastAPI-mounted endpoints when docs are enabled (they are not listed in the `paths` of the OpenAPI document itself, but their handlers are served).
+`archon-search` uses a single auth scheme: `Authorization: Bearer <token>`. The same middleware (`archon_search/server/middleware_auth.py`) protects both the REST routes and the MCP endpoint at `/mcp` (`create_app` adds `APIKeyMiddleware` to the REST app, and `create_mcp_http_app` in `archon_search/server/mcp.py` adds it to the mounted MCP app). Exemption is by path, not method: `_EXEMPT_PATHS = frozenset({"/health", "/ready"})`, and *any* HTTP method to these paths bypasses auth. `create_app` adds `DOCS_PATHS` (`/docs`, `/redoc`, `/openapi.json`) to the exempt set only when `[server].docs_enabled = true`; otherwise those paths are not served unauthenticated (they are not listed in the `paths` of the OpenAPI document itself, but their handlers are served when docs are enabled).
 
 ## Principles
 
-1. **One header, every request.** Both REST and MCP read the same `Authorization: Bearer <token>` header. There is no cookie, no query-string fallback, no per-tool token.
-2. **Hex tokens only.** The key file and the env var must contain a lowercase hex string. The validator is `^[0-9a-f]+$` applied via `fullmatch` (`key_manager.py::_HEX_RE`, used by `_validate_key`). Anything else is logged and rejected.
+1. **One header, every request.** Both REST and MCP read the same `Authorization: Bearer <token>` header. There is no cookie and no per-tool token. The one query-string credential is the short-lived graph-viewer `view_token` (`VIEW_TOKEN_QUERY_PARAM`), accepted only on a `GET` of one collection's graph viewer page or its data when no `Authorization` header is sent; it is never an admin credential.
+2. **The default key is lowercase hex.** The key file and the env var must contain a lowercase hex string of at least `MIN_API_KEY_LENGTH` (32) characters. The validator is `^[0-9a-f]+$` applied via `fullmatch` (`key_manager.py::_HEX_RE`, used by `_validate_key`). Anything else is logged and rejected.
 3. **Constant-time comparison within the namespace map.** Tokens are compared with `secrets.compare_digest` against every entry in the namespace map without an early exit (`middleware_auth.py`, the loop intentionally omits `break` — see the `# no break` comment on the `resolved_namespace = ns` assignment). The fallback to the default key is then short-circuited via `and`, so the timing guarantee is uniform *across the namespace map* but is not strictly indistinguishable between "matched in map" and "fell through to default-key check".
-4. **The token resolves a namespace.** On success, the middleware writes the namespace name to `request.state.namespace`. Every handler filters by that value; cross-namespace access surfaces as `404`. #Unverified — the per-handler filtering and 404 behavior were not confirmed in this review (would require inspecting `routes_collections.py`, `routes_jobs.py`, `routes_search.py`, and the ACL module).
+4. **The token resolves a namespace.** On success, the middleware writes the namespace name to `request.state.namespace`. Every handler filters by that value; cross-namespace access surfaces as `404`. (`routes_collections.py`, `routes_jobs.py` and `routes_search.py` each look the resource up by the caller's namespace and answer `404` when it is not visible; `server/authz.py` adds the separate `admin` capability, which answers `403`).
 5. **Failures are uniform.** `401` with `WWW-Authenticate: Bearer` and no body — same response for missing header, wrong scheme, or unknown token.
 
 ## Where the default key lives
@@ -68,7 +68,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ## The Bearer header
 
-Every call except `GET /health` must include:
+Every call except those to the exempt paths (`/health`, `/ready`) must include:
 
 ```
 Authorization: Bearer <hex token>
@@ -93,13 +93,13 @@ There is no body and no `detail` field on `401` responses — that envelope is r
 "4f1b2d..." = "team-beta"
 ```
 
-Each entry maps a token (hex string) to a namespace name. The middleware iterates every entry in this map without an early `break`, keeping comparison time independent of which token matched *within the map*. It then falls back to the default key (this fallback is short-circuited via `and`, so timing is not strictly uniform between a map hit and a default-key check), which resolves to `DEFAULT_NAMESPACE = "default"` (`archon_search/constants.py:36`).
+Each entry maps a token (at least 32 characters of printable ASCII without whitespace, `key_manager.namespace_token_problem`; it need not be hex) to a namespace name. The middleware iterates every entry in this map without an early `break`, keeping comparison time independent of which token matched *within the map*. It then falls back to the default key (this fallback is short-circuited via `and`, so timing is not strictly uniform between a map hit and a default-key check), which resolves to `DEFAULT_NAMESPACE = "default"` (`archon_search/constants.py`).
 
 Consequences for clients:
 
 - **A client picks a namespace by picking a key.** There is no `?namespace=` parameter. The token *is* the tenant identity.
 - **Collections and jobs are namespace-scoped server-side.** `GET /collections/`, `GET /jobs/{id}`, and `POST /search` only see resources that belong to the caller's namespace. Cross-namespace access returns `404`.
-- **Namespace names are validated.** `_validate_namespace` (`constants.py:123`) restricts them to `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$` and additionally rejects the reserved name `"deny-all"`, a trailing `_` and `__` (`_validate_segment_safe`); an invalid `[namespaces]` value fails config load with `ConfigError` (`config.py:813–818`). Treat namespace names as opaque from the client side.
+- **Namespace names are validated.** `_validate_namespace` (`archon_search/constants.py`) restricts them to `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$` and additionally rejects the reserved name `"deny-all"`, a trailing `_` and `__` (`_validate_segment_safe`); an invalid `[namespaces]` value fails config load with `ConfigError` (`config.py`, the `[namespaces]` branch of `_apply_toml`). Treat namespace names as opaque from the client side.
 
 If you need to support multiple teams with one process, give each team a distinct token from the `[namespaces]` map. Do not share the default `~/.archon-search/.search.env` key between tenants — that key always resolves to `default`.
 

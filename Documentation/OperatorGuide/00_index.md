@@ -6,16 +6,7 @@
 
 # Operator Guide
 
-This guide is for operators running `archon-search` in production. `archon-search`
-is a single-process Python server — no clustering, no leader election, no native
-TLS — so operating it well means getting the fundamentals right: pin the bind
-address and supervise the process (deployment), watch a narrow signal surface
-(monitoring, logging), protect and recover the data directory (backup/DR), let the
-maintenance loop self-heal known degradation, run the graph subsystem, rotate API
-keys without downtime, size the single-host capacity envelope, triage the failures
-that actually occur, and upgrade safely across CalVer releases. Each page is
-task-oriented and cross-links to the Architecture, Security, and Migration guides
-rather than duplicating them.
+This guide is for operators running `archon-search` in production. `archon-search` is a single-process Python server — no clustering, no leader election, no native TLS — so operating it well means getting the fundamentals right: pin the bind address and supervise the process (deployment), watch a narrow signal surface (monitoring, logging), protect and recover the data directory (backup/DR), let the maintenance loop self-heal known degradation, run the graph subsystem, rotate API keys without downtime, size the single-host capacity envelope, triage the failures that actually occur, and upgrade safely across CalVer releases. Each page is task-oriented and cross-links to the Architecture, Security, and Migration guides rather than duplicating them.
 
 ## Documents
 

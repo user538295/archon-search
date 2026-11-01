@@ -117,6 +117,7 @@ Write operations from the CLI submit jobs to the running server. These commands 
 - `collection reindex <name>` — proxies `POST /collections/{name}/reindex`
 - `collection reindex-metadata <name>` — proxies `POST /collections/{name}/reindex-metadata`
 - `collection migrate <name>` — proxies `POST /collections/{name}/migrate`
+- `collection set-description <name> <text>`, `collection clear-description <name>` and `collection describe <name>` / `--all` — proxy `PUT` / `DELETE /collections/{name}/description` and `POST /collections/{name}/describe` (`describe --all` also reads `GET /status` and `GET /collections/`)
 - `ingest --path <path>` — proxies `POST /ingest`
 - `sync` — proxies `POST /sync`
 - `graph build-communities <collection>` — proxies `POST /graph/{collection}/rebuild-communities`

@@ -30,25 +30,25 @@ cd archon-search
 uv sync --dev
 ```
 
-`uv sync --dev` installs runtime dependencies plus the `dev` dependency group declared in `pyproject.toml` (currently `pytest`, `pytest-asyncio`, `pytest-cov` — consult `pyproject.toml` for the authoritative list).
+`uv sync --dev` installs runtime dependencies plus the `dev` dependency group declared in `pyproject.toml` (the test tooling — `pytest`, `pytest-asyncio`, `pytest-cov`, `pytest-xdist`, `hypothesis` and others — and the provider and feature extras, so no test skips; consult `pyproject.toml` for the authoritative list).
 
 ## 2. Run the Server
 
-`archon-search` (entry point `archon_search.cli.main:main`) is a Click **command group** with subcommands (`start`, `stop`, `status`, `install`, `uninstall`, `ingest`, `sync`, `collection`, `config`). Invoking `uv run archon-search` with no subcommand prints the Click help and exits — it does **not** start the server.
+`archon-search` (entry point `archon_search.cli.main:main`) is a Click **command group** with subcommands (`wizard`, `install`, `uninstall`, `start`, `stop`, `serve`, `status`, `ingest`, `sync`, `collection`, `config`, `key`, `graph`, `jobs`, `export`, `import`, `backup`, `maintenance`; `archon-search --help` lists them). Invoking `uv run archon-search` with no subcommand prints the Click help and exits — it does **not** start the server.
 
-For a foreground developer run, use the module entry point:
+For a foreground developer run, use `serve` (or the module entry point, `uv run python -m archon_search.server`):
 
 ```bash
-uv run python -m archon_search.server
+uv run archon-search serve
 ```
 
-This calls `run_server(load_config())` in `archon_search/server/__main__.py`, which boots `uvicorn` against the FastAPI app on the configured host/port (default `http://127.0.0.1:8765`).
+`serve` loads the config and runs `uvicorn` in the foreground against the FastAPI app on the configured host/port (default `http://127.0.0.1:8765`: `127.0.0.1` natively, `0.0.0.0` only inside the container image). The module entry point calls `run_server(load_config())` in `archon_search/server/__main__.py`.
 
-`uv run archon-search start` is **not** an in-process server boot: it loads/validates config, then delegates to the platform service manager (`launchctl start` on macOS, `systemctl --user start` on Linux) via `_get_service().start()`. It therefore requires a prior `uv run archon-search install` to register the service — otherwise it fails.
+`uv run archon-search start` is **not** an in-process server boot: it loads/validates config, then delegates to the platform service manager (`launchctl start` on macOS, `systemctl --user start` on Linux) via `_get_service().start()`. It therefore requires a prior `uv run archon-search wizard` (or `install`) to register the service — otherwise it fails.
 
 On first start the server:
 
-- creates `~/.archon-search/` if it does not exist (the key bootstrap creates it when generating a new key; if `ARCHON_SEARCH_API_KEY` is set, the directory is only created lazily by other components such as the telemetry writer); #Unverified
+- creates `~/.archon-search/` if it does not exist (the key bootstrap creates it when generating a new key; if `ARCHON_SEARCH_API_KEY` is set, opening the LanceDB store creates it, with its parents, as part of the database path);
 - generates an API key and writes it to `~/.archon-search/.search.env` with file mode `600` (POSIX);
 - opens the LanceDB store at `~/.archon-search/search/` (the default `db_path`).
 
@@ -78,10 +78,10 @@ Server configuration lives in `<data-dir>/archon-search.toml` — `~/.archon-sea
 
 A fully annotated reference is checked in at `../archon-search.toml.example`. Notable sections: `[server]`, `[database]`, `[routing]`, `[collections]`, `[logging]`, `[telemetry]`. Telemetry is **opt-in and off by default**; see `../README.md` "Telemetry (opt-in)" for the full surface.
 
-**Install profiles (C0):** `archon-search install` now selects a tiered model profile at install time (`minimal`, `balanced`, or `max`). The chosen profile sets `[database].profile`, `embedding_model`, `reranker_model`, and `multilingual` in the config. For a non-interactive developer install:
+**Install profiles (C0):** `archon-search wizard` selects a tiered model profile at install time (`minimal`, `balanced`, or `max`); `archon-search install` only registers and starts the service afterwards and has no `--profile` flag. The chosen profile sets `[database].profile`, `embedding_model`, `reranker_model`, and `multilingual` in the config. For a non-interactive developer install:
 
 ```bash
-uv run archon-search install --profile minimal --non-interactive --skip-preload
+uv run archon-search wizard --profile minimal --non-interactive --skip-preload
 ```
 
 ## 5. Verify the Server Is Up

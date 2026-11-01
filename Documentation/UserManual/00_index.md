@@ -5,17 +5,9 @@
 
 # archon-search User Manual
 
-`archon-search` is a standalone hybrid retrieval + routing server: a LanceDB vector
-store, PyTorch dense embeddings, a cross-encoder reranker, a multi-collection router,
-a FastAPI HTTP control plane, and an MCP endpoint that shares the same auth — all in one
-process, with runtime state under `~/.archon-search/`. This manual is written for a
-**medior-technical operator** running that one process on their own workstation or server:
-someone comfortable with a terminal, a TOML file, and `curl`, who wants to install it,
-point it at some documents, and search them — without needing to read the source.
+`archon-search` is a standalone hybrid retrieval + routing server: a LanceDB vector store, PyTorch dense embeddings, a cross-encoder reranker, a multi-collection router, a FastAPI HTTP control plane, and an MCP endpoint that shares the same auth — all in one process, with runtime state under `~/.archon-search/`. This manual is written for a **medior-technical operator** running that one process on their own workstation or server: someone comfortable with a terminal, a TOML file, and `curl`, who wants to install it, point it at some documents, and search them — without needing to read the source.
 
-Each guide is task-oriented: common workflows, the flags and config keys that matter, and
-worked `curl` / CLI / MCP examples. For the exhaustive request/response contract, the live
-`GET /openapi.json` is always authoritative.
+Each guide is task-oriented: common workflows, the flags and config keys that matter, and worked `curl` / CLI / MCP examples. For the exhaustive request/response contract, the live `GET /openapi.json` is always authoritative.
 
 ## Suggested reading order
 
@@ -27,8 +19,7 @@ If you are new, work top to bottom — each step builds on the previous one:
 4. **[Run the server](40_running_the_server.md)** — start, stop, and reach the endpoints.
 5. **[Ingest documents](50_ingestion_and_collections.md)** — build collections from your corpus.
 6. **[Search](60_searching.md)** — query the index over REST and MCP.
-7. **Go further** — graph search, code impact, explain/debug, the OpenAI shim, TTL, Docker,
-   and the operational guides below, in whatever order your use case needs.
+7. **Go further** — graph search, code impact, explain/debug, the OpenAI shim, TTL, Docker, and the operational guides below, in whatever order your use case needs.
 
 ## All guides
 
@@ -55,16 +46,10 @@ If you are new, work top to bottom — each step builds on the previous one:
 
 ## Where to go next
 
-This manual covers running archon-search for yourself. Sibling guides go deeper on
-specific concerns:
+This manual covers running archon-search for yourself. Sibling guides go deeper on specific concerns:
 
-- **Running it in production** — [../OperatorGuide/00_index.md](../OperatorGuide/00_index.md)
-  (deployment topologies, monitoring, backups, maintenance, capacity, incident runbooks).
-- **Calling the API from code** — [../DeveloperGuide/01_overview.md](../DeveloperGuide/01_overview.md)
-  (REST/MCP clients in Python and TypeScript, auth, error handling).
-- **Security & privacy** — [../SecurityGuide/01_threat_model.md](../SecurityGuide/01_threat_model.md)
-  (threat model, keys, ACL, network exposure, hardening).
-- **Upgrading & migrations** — [../MigrationGuide/01_versioning_and_release_model.md](../MigrationGuide/01_versioning_and_release_model.md)
-  (versioning, upgrade procedure, breaking changes, config/data migration).
-- **Everything, indexed** — [../Architecture/990_documentation_index_and_contribution_guide.md](../Architecture/990_documentation_index_and_contribution_guide.md)
-  (the full documentation index and contribution guide).
+- **Running it in production** — [../OperatorGuide/00_index.md](../OperatorGuide/00_index.md) (deployment topologies, monitoring, backups, maintenance, capacity, incident runbooks).
+- **Calling the API from code** — [../DeveloperGuide/01_overview.md](../DeveloperGuide/01_overview.md) (REST/MCP clients in Python and TypeScript, auth, error handling).
+- **Security & privacy** — [../SecurityGuide/01_threat_model.md](../SecurityGuide/01_threat_model.md) (threat model, keys, ACL, network exposure, hardening).
+- **Upgrading & migrations** — [../MigrationGuide/01_versioning_and_release_model.md](../MigrationGuide/01_versioning_and_release_model.md) (versioning, upgrade procedure, breaking changes, config/data migration).
+- **Everything, indexed** — [../Architecture/990_documentation_index_and_contribution_guide.md](../Architecture/990_documentation_index_and_contribution_guide.md) (the full documentation index and contribution guide).

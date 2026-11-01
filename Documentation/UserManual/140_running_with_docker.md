@@ -238,6 +238,8 @@ When `/pip-packages` is mounted (recommended), it holds the optional-extras inst
 
 No model weights live here. The graph extra installs the `gliner` library into `/pip-packages`; its checkpoint, if present at all, lives under the data directory at `/data/models/graph/` — see below.
 
+The image build fetches the 1.3 MB gpt2 tokenizer that sizes `ollama` prompts (HyDE, RAG Fusion, graph summaries, collection descriptions) into `/data/models/token-counter`, so a fresh data volume, seeded from the image, needs no network for it. A volume that already holds data and a host bind mount over `/data/models` (the `archon-dev` service) are not seeded: the tokenizer is downloaded on first use, or copy the host's `~/.archon-search/models/token-counter` along with the rest of `models/`. On a host with no network and no cached copy `ollama` sizing fails with `cannot size the prompt: the gpt2 token counter failed`.
+
 ## Graph extraction in a container
 
 `[graph].enabled` defaults to `false`. **A default container runs no graph extraction at all and emits no warning about it** — everything in this section applies only once you have turned the flag on.
