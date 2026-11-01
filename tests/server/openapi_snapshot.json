@@ -6534,7 +6534,7 @@
                 }
               }
             },
-            "description": "The job is a non-terminal sync, which cannot be cancelled (body {\"detail\": \"a sync cannot be cancelled\"})"
+            "description": "The job is a non-terminal sync, which cannot be cancelled (body {\"detail\": \"a sync cannot be cancelled\"}), or a non-terminal description job, which cannot be cancelled either (body {\"detail\": \"a description job cannot be cancelled\"})"
           },
           "422": {
             "content": {

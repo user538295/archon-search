@@ -15,6 +15,7 @@ from archon_search.paths import get_data_dir
 from archon_search.types import (
     CommunityRebuildJob,
     DeleteJob,
+    DescriptionJob,
     ExportJob,
     ImportJob,
     IngestJob,
@@ -55,6 +56,8 @@ def _job_type(job: IngestJob) -> str:
         return JobKind.sync.value
     if isinstance(job, MetadataReindexJob):
         return JobKind.metadata_reindex.value
+    if isinstance(job, DescriptionJob):
+        return "description"
     return "ingest"
 
 

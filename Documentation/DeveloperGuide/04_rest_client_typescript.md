@@ -232,7 +232,7 @@ export class ArchonClient {
   // cancellation has only been *requested*, not confirmed. Poll the job
   // via getJob() (or waitForJob()) until it reaches CANCELLED. A
   // non-terminal sync job (kind "sync") cannot be cancelled: the server
-  // answers 409 {"detail": "a sync cannot be cancelled"}, which request()
+  // answers 409 {"detail": "a sync cannot be cancelled"} (a description job: "a description job cannot be cancelled"), which request()
   // throws as an ArchonError — wait for the sync with waitForJob() instead
   // (a sync row an older server left QUEUED is marked FAILED when the
   // server starts, a legacy PENDING one by the next POST /sync).

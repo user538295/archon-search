@@ -596,7 +596,7 @@ flowchart LR
         - #e2e_test — `test_e2e_invalid_manual_text_rejected_on_every_surface` — 422 on REST, validation error on MCP and CLI
 
 ### Phase 8 · Describe a collection on demand as a job *(`collection describe` with `--wait` and `--all`)*
-- [ ] **BE-33** — `DescriptionJob(IngestJob)` with no extra fields: `_job_type`, job store load, dump and restart-recovery branches (a crash-left running job loads `FAILED` without arming the crash-loop guard), RUNNING creator, `NEVER_BLOCKING_JOB_KINDS`, `_KIND_TYPE_MAP`, and the `DELETE /jobs/{id}` 409 branch with its OpenAPI text #backend-role
+- [x] **BE-33** — `DescriptionJob(IngestJob)` with no extra fields: `_job_type`, job store load, dump and restart-recovery branches (a crash-left running job loads `FAILED` without arming the crash-loop guard), RUNNING creator, `NEVER_BLOCKING_JOB_KINDS`, `_KIND_TYPE_MAP`, and the `DELETE /jobs/{id}` 409 branch with its OpenAPI text #backend-role
     - Interface Adapters · 6.0h
     - needs BE-23 · completes C10, S81, S87
     - Tests

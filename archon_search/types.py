@@ -145,6 +145,15 @@ class CommunityRebuildJob(IngestJob):
     collection: str = ""
 
 
+@dataclass
+class DescriptionJob(IngestJob):
+    """An on-demand collection-description generation (``POST /collections/{name}/describe``).
+
+    Deliberately no field of its own: it persists only the base ``IngestJob`` fields, so an older server that finds
+    one in the jobs file loads it as a plain ingest job instead of failing the load (a persisted extra key would
+    raise there and reset every job)."""
+
+
 class JobKind(str, Enum):
     sync = "sync"
     metadata_reindex = "metadata_reindex"

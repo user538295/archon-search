@@ -56,6 +56,7 @@ from archon_search.server.schemas import (
 from archon_search.store import CollectionOwnershipError, SearchStore
 from archon_search.types import (
     DeleteJob,
+    DescriptionJob,
     ExportJob,
     ImportJob,
     IngestOptions,
@@ -80,6 +81,11 @@ _ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.PENDING}
 # so transitioning the row to CANCELLING would be silently ignored by the sync
 # itself, which would run on and overwrite the status when it ends.
 _SYNC_JOB_NOT_CANCELLABLE_DETAIL = "a sync cannot be cancelled"
+
+# Sanitized, wire-facing ``detail`` for DELETE /jobs/{id} on any non-terminal DescriptionJob. A generation is shared by
+# every caller of its collection (single-flight) and cannot be detached from them, so nothing would stop if the row
+# moved to CANCELLING — and CANCELLING is a crash status a restart would read as ``process_restart``.
+_DESCRIPTION_JOB_NOT_CANCELLABLE_DETAIL = "a description job cannot be cancelled"
 
 #: Wire-facing job ``error`` (served by GET /jobs) for an unexpected ingest / reindex failure; the
 #: exception text can embed server paths and library internals, so it is logged only.
@@ -959,6 +965,7 @@ _KIND_TYPE_MAP: dict[str, type] = {
     "import": ImportJob,
     "migration": MigrationJob,
     "sync": SyncJob,
+    "description": DescriptionJob,
 }
 
 # ``Query(...)`` in a default is flagged by B008, a module-level name is not. One instance per parameter: FastAPI binds a
@@ -1111,7 +1118,11 @@ async def resume_job(job_id: str, request: Request) -> JobResponse | JSONRespons
         404: {"model": ErrorDetail},
         409: {
             "model": ErrorDetail,
-            "description": f'The job is a non-terminal sync, which cannot be cancelled (body {{"detail": "{_SYNC_JOB_NOT_CANCELLABLE_DETAIL}"}})',
+            "description": (
+                f'The job is a non-terminal sync, which cannot be cancelled (body {{"detail": "{_SYNC_JOB_NOT_CANCELLABLE_DETAIL}"}}), '
+                "or a non-terminal description job, which cannot be cancelled either "
+                f'(body {{"detail": "{_DESCRIPTION_JOB_NOT_CANCELLABLE_DETAIL}"}})'
+            ),
         },
         500: {
             "model": ErrorDetail,
@@ -1133,6 +1144,8 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
         return JobResponse(**job_to_dict(job))
     if isinstance(job, SyncJob):
         return JSONResponse({"detail": _SYNC_JOB_NOT_CANCELLABLE_DETAIL}, status_code=409)
+    if isinstance(job, DescriptionJob):
+        return JSONResponse({"detail": _DESCRIPTION_JOB_NOT_CANCELLABLE_DETAIL}, status_code=409)
     if job.status in _ACTIVE_STATUSES:
         # Use transition() to avoid TOCTOU race: only updates if still active
         try:

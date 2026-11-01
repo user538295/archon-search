@@ -17,6 +17,7 @@ from archon_search.jobs.model import IngestJob, JobStatus, get_jobs_file
 from archon_search.types import (
     CommunityRebuildJob,
     DeleteJob,
+    DescriptionJob,
     ExportJob,
     ImportJob,
     IngestOptions,
@@ -36,6 +37,9 @@ _CRASH_STATUSES = {JobStatus.RUNNING, JobStatus.CANCELLING}
 # a server restart and will be re-dispatched by the scheduler on next tick.
 _INGEST_JOB_TYPE = "ingest"
 _REINDEX_JOB_TYPE = "reindex"
+#: Persisted ``job_type`` of a ``DescriptionJob``. Outside ``_INGEST_FAMILY_JOB_TYPES`` on purpose: a describe run
+#: killed mid-flight is a model call, not the ingest workload the crash-loop guard exists to break.
+_DESCRIPTION_JOB_TYPE = "description"
 # Job types whose crash marker means the corpus-scan-and-ingest workload the
 # startup sync itself performs is what killed the process: a plain ingest (the
 # original incident's shape — a client POST /ingest that OOM'd) or a sync (the
@@ -59,18 +63,22 @@ _INGEST_FAMILY_JOB_TYPES = {_INGEST_JOB_TYPE, JobKind.sync.value}
 #: workload that killed the process.
 PROCESS_RESTART_ERROR = "process_restart"
 #: Wire-facing ``error`` (served by GET /jobs) of a job loaded still ``PENDING`` (a base ingest or reindex job) or
-#: ``QUEUED`` (a community-rebuild, metadata-reindex or sync job): it never started, and nothing would ever run it —
-#: its task died with the previous process, or an older server's route died before claiming it (a PENDING reindex
-#: would also block DELETE /collections/{name} forever). Nothing ran, so unlike ``process_restart`` it does not arm the
-#: crash-loop guard; as a ``FAILED`` path ingest, ``MaintenanceLoop`` may retry an ingest job (never any other kind).
+#: ``QUEUED`` (a community-rebuild, metadata-reindex, sync or description job): it never started, and nothing would
+#: ever run it — its task died with the previous process, or an older server's route died before claiming it (a
+#: PENDING reindex would also block DELETE /collections/{name} forever). Nothing ran, so unlike ``process_restart`` it
+#: does not arm the crash-loop guard; as a ``FAILED`` path ingest, ``MaintenanceLoop`` may retry an ingest job (never
+#: any other kind).
 NOT_STARTED_BEFORE_RESTART_DETAIL = "never started; the server restarted before it ran"
 #: ``job_type`` values whose job loaded ``PENDING`` is rewritten FAILED with ``NOT_STARTED_BEFORE_RESTART_DETAIL``.
 _NOT_STARTED_ON_LOAD_JOB_TYPES = frozenset({_INGEST_JOB_TYPE, _REINDEX_JOB_TYPE})
-#: ``job_type`` values whose job loaded ``QUEUED`` is rewritten FAILED with ``NOT_STARTED_BEFORE_RESTART_DETAIL``. An
-#: older server created these kinds QUEUED and their route claimed them RUNNING itself; ``JobScheduler`` promotes
-#: export, import and migration jobs only (``list_queued_bulk``), so a row left QUEUED by a crash before the claim
-#: never runs, and — non-terminal — is never cancelled by DELETE /jobs/{id} nor evicted.
-_NEVER_SCHEDULED_ON_LOAD_JOB_TYPES = frozenset({"community_rebuild", JobKind.metadata_reindex.value, JobKind.sync.value})
+#: ``job_type`` values whose job loaded ``QUEUED`` is rewritten FAILED with ``NOT_STARTED_BEFORE_RESTART_DETAIL``. Their
+#: route runs them (an older server created most of these kinds QUEUED and claimed them RUNNING itself; a description
+#: job is created RUNNING, so only a stray row can be QUEUED); ``JobScheduler`` promotes export, import and migration
+#: jobs only (``list_queued_bulk``), so a QUEUED row never runs, and — non-terminal — is never cancelled by
+#: DELETE /jobs/{id} nor evicted.
+_NEVER_SCHEDULED_ON_LOAD_JOB_TYPES = frozenset(
+    {"community_rebuild", JobKind.metadata_reindex.value, JobKind.sync.value, _DESCRIPTION_JOB_TYPE}
+)
 #: Statuses of a base ingest job a ``MaintenanceLoop`` retry may still act on: FAILED (a retry candidate) and
 #: PENDING (a retry not yet claimed RUNNING). ``cancel_ingest_retries`` ends them.
 _RETRY_CANDIDATE_STATUSES = frozenset({JobStatus.FAILED, JobStatus.PENDING})
@@ -121,7 +129,10 @@ COLLECTION_WRITING_JOB_STATUSES: dict[type[IngestJob], frozenset[JobStatus]] = {
 #: - ``SyncJob``: names no collection (``collection`` is always ""), though a RUNNING sync writes (and may drop)
 #:   collections: it registers in ``SearchStore.collection_writer`` around each collection's write instead
 #:   (``SearchCollectionSync._write_collection``), and consults ``find_active_collection_job`` before it drops one.
-NEVER_BLOCKING_JOB_KINDS: frozenset[type[IngestJob]] = frozenset({ExportJob, DeleteJob, SyncJob})
+#: - ``DescriptionJob``: a describe run reads the table and settles through the guarded ``write_description`` (which
+#:   re-reads the row under the collection lock); a collection dropped meanwhile makes it settle ``collectionMissing``
+#:   and write nothing, so it must not hold DELETE /collections/{name} up (S87).
+NEVER_BLOCKING_JOB_KINDS: frozenset[type[IngestJob]] = frozenset({ExportJob, DeleteJob, SyncJob, DescriptionJob})
 
 
 def may_write_collection(job: IngestJob) -> bool:
@@ -519,6 +530,22 @@ class JobStore:
         )
         return self.create_job(job)
 
+    def create_description(self, collection: str, namespace: str = DEFAULT_NAMESPACE) -> DescriptionJob:
+        """Create a DescriptionJob directly RUNNING (one write) and persist it.
+
+        Its route runs the task itself and nothing schedules this kind, so a QUEUED one would never run.
+        """
+        now = _now_iso()
+        job = DescriptionJob(
+            job_id=str(uuid.uuid4()),
+            status=JobStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+            namespace=namespace,
+            collection=collection,
+        )
+        return self.create_job(job)
+
     def create_metadata_reindex(
         self,
         collection: str,
@@ -623,6 +650,8 @@ class JobStore:
                 elif job_type == JobKind.metadata_reindex.value:
                     item["kind"] = JobKind(item["kind"])
                     job = MetadataReindexJob(**item)
+                elif job_type == _DESCRIPTION_JOB_TYPE:
+                    job = DescriptionJob(**item)
                 else:
                     job = IngestJob(**item)
                 if job.status == JobStatus.CANCELLING and job.cancelled_before_start:
@@ -646,8 +675,9 @@ class JobStore:
                 ):
                     # Every base ingest and reindex job's task is spawned when the job is created (a shutdown cancels
                     # a reindex task while it loads its embedder, still PENDING), so one still PENDING lost its task
-                    # with the previous process; a community-rebuild, metadata-reindex or sync job is run by its
-                    # route, never the scheduler, so one still QUEUED lost its route; other kinds keep their status.
+                    # with the previous process; a community-rebuild, metadata-reindex, sync or description job is
+                    # run by its route, never the scheduler, so one still QUEUED lost its route; other kinds keep
+                    # their status.
                     job = dataclasses.replace(
                         job,
                         status=JobStatus.FAILED,
@@ -703,6 +733,8 @@ class JobStore:
                     item["job_type"] = JobKind.sync.value
                 elif isinstance(job, MetadataReindexJob):
                     item["job_type"] = JobKind.metadata_reindex.value
+                elif isinstance(job, DescriptionJob):
+                    item["job_type"] = _DESCRIPTION_JOB_TYPE
                 else:
                     item["job_type"] = _INGEST_JOB_TYPE
                 data.append(item)

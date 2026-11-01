@@ -254,6 +254,9 @@ def test_job_to_dict_includes_job_type_for_all_job_types(tmp_path):
     crj = store.create_community_rebuild(collection="c", namespace="default")
     assert job_to_dict(crj)["job_type"] == "community_rebuild"
 
+    desc = store.create_description(collection="c", namespace="default")
+    assert job_to_dict(desc)["job_type"] == "description"
+
     mig = store.create_migration(collection="c", kind=MigrationKind.IN_PLACE, backup_confirmed=None, namespace="default")
     assert job_to_dict(mig)["job_type"] == "migration"
 

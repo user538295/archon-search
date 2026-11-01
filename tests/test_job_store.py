@@ -16,6 +16,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.types import (
     CommunityRebuildJob,
     DeleteJob,
+    DescriptionJob,
     ExportJob,
     ImportJob,
     IngestOptions,
@@ -359,6 +360,7 @@ def test_write_atomic_failure_reraises(tmp_path: Path) -> None:
         pytest.param(lambda s: s.create_community_rebuild("c"), id="create_community_rebuild"),
         pytest.param(lambda s: s.create_sync(), id="create_sync"),
         pytest.param(lambda s: s.create_metadata_reindex("c"), id="create_metadata_reindex"),
+        pytest.param(lambda s: s.create_description("c"), id="create_description"),
     ],
 )
 def test_create_write_failure_leaves_no_ghost_job(tmp_path: Path, create_call) -> None:
@@ -537,6 +539,7 @@ _RUNNING_CREATES = [
     pytest.param(lambda s: s.create_community_rebuild("c"), id="create_community_rebuild"),
     pytest.param(lambda s: s.create_sync(), id="create_sync"),
     pytest.param(lambda s: s.create_metadata_reindex("c"), id="create_metadata_reindex"),
+    pytest.param(lambda s: s.create_description("c"), id="create_description"),
 ]
 
 
@@ -863,8 +866,9 @@ def test_load_recovers_pending_job_as_failed_not_started(tmp_path: Path, job_typ
     assert persisted_statuses(jobs_path)[job_id] == JobStatus.FAILED.value
 
 
-#: Kinds an older server created QUEUED and then claimed RUNNING itself, and which nothing schedules.
-_NEVER_SCHEDULED_KINDS = [CommunityRebuildJob, MetadataReindexJob, SyncJob]
+#: Kinds a route runs itself (older servers created most of them QUEUED first, then claimed them RUNNING), and which
+#: nothing schedules.
+_NEVER_SCHEDULED_KINDS = [CommunityRebuildJob, MetadataReindexJob, SyncJob, DescriptionJob]
 
 
 def _legacy_queued_file(jobs_path: Path, job_cls: type[IngestJob], *, age: timedelta = timedelta()) -> str:
@@ -878,7 +882,7 @@ def _legacy_queued_file(jobs_path: Path, job_cls: type[IngestJob], *, age: timed
 
 @pytest.mark.parametrize("job_cls", _NEVER_SCHEDULED_KINDS, ids=lambda cls: cls.__name__)
 def test_load_fails_queued_job_of_a_kind_nothing_schedules(tmp_path: Path, job_cls: type[IngestJob]) -> None:
-    """Only the route that created a community-rebuild, metadata-reindex or sync job ever ran it (``JobScheduler``
+    """Only the route that created a community-rebuild, metadata-reindex, sync or description job ever ran it (``JobScheduler``
     promotes export/import/migration jobs only), so one saved ``QUEUED`` by a server that died before its claim can
     never run: it is rewritten FAILED with the not-started text — without arming the crash-loop guard (nothing ran)
     — and, being terminal, DELETE /jobs/{id} answers it and eviction reclaims it."""
@@ -1068,6 +1072,7 @@ _EXPECTED_BLOCKING_STATUSES: dict[type[IngestJob], frozenset[JobStatus]] = {
     ExportJob: frozenset(),
     DeleteJob: frozenset(),
     SyncJob: frozenset(),
+    DescriptionJob: frozenset(),
 }
 
 

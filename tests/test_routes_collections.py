@@ -35,6 +35,7 @@ from archon_search.sync import path_to_collection_name
 from archon_search.types import (
     CommunityRebuildJob,
     DeleteJob,
+    DescriptionJob,
     ExportJob,
     ImportJob,
     IngestJob,
@@ -1622,6 +1623,8 @@ _COLLECTION_WRITING_KINDS = [
         # global (its collection is always ""), the legacy DeleteJob has no task, and an export only reads.
         pytest.param(_job_on(SyncJob, "running-sync", JobStatus.RUNNING), id="sync-running"),
         pytest.param(_job_on(DeleteJob, "running-delete", JobStatus.RUNNING), id="legacy-delete-running"),
+        # A describe run settles collectionMissing and writes nothing when its collection is gone (S87).
+        pytest.param(_job_on(DescriptionJob, "running-description", JobStatus.RUNNING), id="description-running"),
         # A reindex job saved by an older server names no collection (""), so it is never matched to this one.
         pytest.param(lambda name: ReindexJob(
             job_id="legacy-reindex", status=JobStatus.RUNNING, created_at=_INGEST_JOB_TIMESTAMP,
