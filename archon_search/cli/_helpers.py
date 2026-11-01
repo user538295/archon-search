@@ -78,9 +78,10 @@ def _clean(value: str) -> str:
 
     Applied to stdout; the ``err=True`` error paths are each followed by
     ``SystemExit(1)``, so no row can follow them, and an operator debugging a
-    failure wants the server's bytes verbatim. The exception is the error text of
-    ``collection set-description`` / ``clear-description``, which prints the
-    server's words (a 422 or 503 detail, an unexpected body) through it too.
+    failure wants the server's bytes verbatim. The exceptions are the error text of
+    ``collection set-description`` / ``clear-description`` / ``describe``, which prints the
+    server's words (a 422 or 503 detail, an unexpected body, a 409 message) through it too,
+    and the job-polling errors of ``_poll_job_to_end``.
     """
     return "".join(ch if ch.isprintable() else " " for ch in value)
 
@@ -165,17 +166,17 @@ def _jobs_status_hint(job_id: str) -> str:
     return f"Check status: 'archon-search jobs status {job_id}' with the same --api-url/--api-key"
 
 
-def _poll_job(
+def _poll_job_to_end(
     job_id: str,
     base_url: str,
     headers: dict,
     timeout_seconds: int | None = None,
 ) -> dict:
-    """Poll GET /jobs/{job_id} until terminal, printing progress.
+    """Poll GET /jobs/{job_id} until terminal, printing progress, and return the final job dict in any terminal status.
 
-    Returns the final job dict on DONE. Raises SystemExit(1) on FAILED/CANCELLED/FAILED_EXPIRED.
-    On KeyboardInterrupt prints 'Polling stopped — job continues on server' and returns {}.
-    On timeout (when timeout_seconds is set) prints a hint and returns {}.
+    Raises SystemExit(1) when the server cannot be reached or answers unexpectedly. On KeyboardInterrupt prints
+    'Polling stopped — job continues on server' and returns {}. On timeout (when timeout_seconds is set) prints a hint
+    and returns {}. The caller decides what a FAILED or CANCELLED job means.
     """
     url = f"{base_url}/jobs/{job_id}"
     max_polls = (max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)
@@ -205,7 +206,7 @@ def _poll_job(
 
             if resp.status_code != 200:
                 click.echo(
-                    f"Error polling job: server returned {resp.status_code}: {resp.text}",
+                    f"Error polling job: server returned {resp.status_code}: {_clean(resp.text)}",
                     err=True,
                 )
                 raise SystemExit(1)
@@ -218,7 +219,7 @@ def _poll_job(
             progress = job.get("progress")
 
             if progress:
-                phase = progress.get("phase", "")
+                phase = _clean(str(progress.get("phase", "")))
                 processed = progress.get("processed", 0)
                 total = progress.get("total", 0)
                 click.echo(f"{phase}: {processed}/{total}")
@@ -232,12 +233,27 @@ def _poll_job(
         click.echo("Polling stopped — job continues on server")
         return {}
 
-    if status == JobStatus.DONE:
-        return job
+    return job
 
-    error = job.get("error") or "unknown error"
-    click.echo(f"Job {status}: {error}", err=True)
-    raise SystemExit(1)
+
+def _poll_job(
+    job_id: str,
+    base_url: str,
+    headers: dict,
+    timeout_seconds: int | None = None,
+) -> dict:
+    """Poll GET /jobs/{job_id} until terminal, printing progress.
+
+    Returns the final job dict on DONE. Raises SystemExit(1) on FAILED/CANCELLED/FAILED_EXPIRED.
+    On KeyboardInterrupt prints 'Polling stopped — job continues on server' and returns {}.
+    On timeout (when timeout_seconds is set) prints a hint and returns {}.
+    """
+    job = _poll_job_to_end(job_id, base_url, headers, timeout_seconds)
+    if job and job.get("status") != JobStatus.DONE:
+        error = job.get("error") or "unknown error"
+        click.echo(f"Job {job.get('status')}: {error}", err=True)
+        raise SystemExit(1)
+    return job
 
 
 def _get_service() -> SearchServiceLifecycle:

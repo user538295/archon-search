@@ -615,7 +615,7 @@ flowchart LR
         - #integration_test — `test_describe_not_configured_returns_409_setup_message_and_creates_no_job` — `detail` carries the setup message
         - #integration_test — `test_describe_provider_down_settles_done_with_outcome_failed` — a down provider is not a 409
         - #integration_test — `test_collection_delete_not_blocked_by_running_describe_job` — the generation finds the collection gone and writes nothing
-- [ ] **FE-11** — CLI `describe <name> [--wait]` and `describe --all`: non-exiting job poll, outcome to exit code per C10, 409 manual and not-configured messages, `--all` fills empty or `failed` collections of the caller's namespace and lists the skipped ones, stops on the first not-configured 409; strip terminal control characters from printed text, and skip collections with no documents as S18 does for generation #frontend-role
+- [x] **FE-11** — CLI `describe <name> [--wait]` and `describe --all`: non-exiting job poll, outcome to exit code per C10, 409 manual and not-configured messages, `--all` fills empty or `failed` collections of the caller's namespace and lists the skipped ones, stops on the first not-configured 409; strip terminal control characters from printed text, and skip collections with no documents as S18 does for generation #frontend-role
     - Presentation · 6.0h
     - needs BE-34, FE-10 · completes S29, S31, S32, S58, S59
     - Tests

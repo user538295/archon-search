@@ -29,7 +29,7 @@ Operations that run as jobs:
 | Export a collection | `archon-search export` | `POST /collections/{name}/export` |
 | Import a collection | `archon-search import` | `POST /collections/{name}/import` |
 | Rebuild graph communities | `archon-search graph build-communities` | `POST /graph/{collection}/rebuild-communities` |
-| Generate a collection description now | (no CLI command yet) | `POST /collections/{name}/describe` |
+| Generate a collection description now | `archon-search collection describe` | `POST /collections/{name}/describe` |
 | Scheduled backups | (automatic) | `POST /backup/trigger` |
 
 See [Ingestion and collections](50_ingestion_and_collections.md) and [Export / import](90_export_import.md) for the operation-specific flags.
@@ -110,7 +110,7 @@ Exit codes: `0` for `DONE` and any in-progress state (`PENDING`/`QUEUED`/`RUNNIN
 
 ## The `--wait` flag
 
-The write commands that support `--wait` (`ingest`, `sync`, `collection add`, `collection reindex`) poll `GET /jobs/{id}` on a fixed interval via the shared `_poll_job` helper (`cli/_helpers.py`) until the job reaches a terminal status, printing `phase: processed/total` progress lines along the way. On `DONE` the command exits `0`; on `FAILED`/`FAILED_EXPIRED`/`CANCELLED` it prints `Job <STATUS>: <error>` and exits `1`. Ctrl-C prints `Polling stopped — job continues on server` and detaches — the job keeps running on the server.
+The write commands that support `--wait` (`ingest`, `sync`, `collection add`, `collection reindex`) poll `GET /jobs/{id}` on a fixed interval via the shared `_poll_job` helper (`cli/_helpers.py`; `collection describe --wait` has its own exit rules, see [Ingestion and collections](50_ingestion_and_collections.md)) until the job reaches a terminal status, printing `phase: processed/total` progress lines along the way. On `DONE` the command exits `0`; on `FAILED`/`FAILED_EXPIRED`/`CANCELLED` it prints `Job <STATUS>: <error>` and exits `1`. Ctrl-C prints `Polling stopped — job continues on server` and detaches — the job keeps running on the server.
 
 `export --wait`, `import --wait` and `backup --now --wait` share one contract instead (`cli/export_cmd.py` for export and import, `cli/backup_cmd.py` for backup): they take `--timeout SECONDS` (default `300`) and exit `0` on `DONE` or when that timeout elapses — the job keeps running on the server, and a recovery hint goes to stderr — and `2` when a job ends `FAILED`/`FAILED_EXPIRED`/`CANCELLED`. `export` and `import` print `[phase] processed/total` progress lines and `Export FAILED: <error>`, `Import FAILED: <error>` or `Import CANCELLED: ...` rather than `Job <STATUS>: <error>`. `backup --now --wait` still exits `2` on a timeout if any job already ended `FAILED`/`FAILED_EXPIRED`/`CANCELLED` (see [Export and import](90_export_import.md) and the [CLI reference](../Architecture/600_api_reference_or_public_interface.md)).
 

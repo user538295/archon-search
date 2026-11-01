@@ -1,9 +1,11 @@
-"""archon-search collection subcommands: list, add, remove, info, set-description, clear-description, reindex."""
+"""archon-search collection subcommands: list, add, remove, info, set-description, clear-description, describe, reindex."""
 from __future__ import annotations
 
 import logging
 import shlex
 from collections.abc import Callable
+from enum import StrEnum
+from typing import NamedTuple
 from urllib.parse import quote
 
 import click
@@ -14,12 +16,20 @@ from archon_search.cli._helpers import (
     _DESCRIPTION_SET_REQUEST_TIMEOUT_S,
     _LOCK_WAITING_REQUEST_TIMEOUT_S,
     _clean,
+    _jobs_status_hint,
     _poll_job,
+    _poll_job_to_end,
     _server_connect_fail_msg,
 )
+from archon_search.collection_meta import (
+    DESCRIPTION_SOURCE_MANUAL,
+    DESCRIPTION_STATUS_FAILED,
+)
+from archon_search.constants import DESCRIBE_MANUAL_DETAIL
 from archon_search.description_write import check_description_text
 from archon_search.key_manager import load_key
 from archon_search.paths import get_data_dir
+from archon_search.types import JobStatus
 
 _DEFAULT_API_URL = "http://localhost:8765"
 
@@ -291,11 +301,12 @@ def _description_error(name: str, resp: httpx.Response) -> str:
     server's words, not ours.
     """
     body = _json_body(resp)
+    shown = _clean(name)
     if resp.status_code == 404:
-        return f"Error: collection '{name}' not found."
+        return f"Error: collection '{shown}' not found."
     if resp.status_code == 503 and body.get("code") == _STORE_BUSY_CODE:
         return (
-            f"Cannot change the description of '{name}': the server has a write in progress on this collection."
+            f"Cannot change the description of '{shown}': the server has a write in progress on this collection."
             " Retry after the active job completes."
         )
     if resp.status_code in (422, 503):
@@ -313,30 +324,42 @@ def _server_message(detail: object, fallback: str) -> str:
     return text or _EMPTY_SERVER_MESSAGE
 
 
-def _call_description_route(
-    name: str, api_url: str, api_key: str | None, send: Callable[[str, dict[str, str]], httpx.Response]
-) -> httpx.Response:
-    """Call ``/collections/{name}/description`` through *send(url, headers)* and return the 200 response.
+def _collection_segment(name: str) -> str:
+    """The collection name as ONE URL path segment, or exit 1 for an empty name.
 
-    Exits 1 with the mapped message on a connect failure or any other answer. The name is one URL path segment: ``quote``
-    leaves ``.`` alone and httpx drops dot segments from the path, so the dots are encoded too, and a name holding
-    ``#``, ``?``, ``/`` or only dots can never reach another route (the clear is a DELETE).
+    ``quote`` leaves ``.`` alone and httpx drops dot segments from the path, so the dots are encoded too, and a name
+    holding ``#``, ``?``, ``/`` or only dots can never reach another route (the clear is a DELETE).
     """
     if not name:
         click.echo("Error: the collection name cannot be empty.", err=True)
         raise SystemExit(1)
-    headers = {"Authorization": f"Bearer {_resolve_api_key(api_key)}"}
-    base_url = api_url.rstrip("/")
-    segment = quote(name, safe="").replace(".", "%2E")
-    url = f"{base_url}/collections/{segment}/description"
+    return quote(name, safe="").replace(".", "%2E")
+
+
+def _send_or_exit(base_url: str, send: Callable[[], httpx.Response]) -> httpx.Response:
+    """Return ``send()``'s response; a connect failure or another transport error exits 1 with its message."""
     try:
-        resp = send(url, headers)
+        return send()
     except _CONNECT_FAIL:
         click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1)
+
+
+def _call_description_route(
+    name: str, api_url: str, api_key: str | None, send: Callable[[str, dict[str, str]], httpx.Response]
+) -> httpx.Response:
+    """Call ``/collections/{name}/description`` through *send(url, headers)* and return the 200 response.
+
+    Exits 1 with the mapped message on a connect failure or any other answer.
+    """
+    segment = _collection_segment(name)
+    headers = {"Authorization": f"Bearer {_resolve_api_key(api_key)}"}
+    base_url = api_url.rstrip("/")
+    url = f"{base_url}/collections/{segment}/description"
+    resp = _send_or_exit(base_url, lambda: send(url, headers))
     if resp.status_code != 200:
         click.echo(_description_error(name, resp), err=True)
         raise SystemExit(1)
@@ -412,6 +435,243 @@ def clear_description(name: str, api_url: str, api_key: str | None) -> None:
     shown = _clean(name)
     click.echo(f"Cleared the description of '{shown}'.")
     click.echo(f"Run `archon-search collection describe {shlex.quote(shown)}` to generate a new one.")
+
+
+_DESCRIBE_SUCCESS_OUTCOMES = frozenset({"generated", "alreadyRunning"})
+_OUTCOME_GENERATED = "generated"
+_NO_OUTCOME = "none"
+_NO_STATUS = "none"
+_REASON_NO_DOCUMENTS = "no documents"
+_REASON_MANUAL = "manual description"
+_REASON_DESCRIBED = "already described (status is not failed)"
+
+
+class _Settled(NamedTuple):
+    """How a describe job ended: whether that counts as success (C10) and the outcome word."""
+
+    ok: bool
+    outcome: str
+
+
+def _describe_post(name: str, base_url: str, headers: dict[str, str]) -> httpx.Response:
+    segment = _collection_segment(name)
+    url = f"{base_url}/collections/{segment}/describe"
+    return _send_or_exit(base_url, lambda: httpx.post(url, headers=headers))
+
+
+def _is_manual_conflict(resp: httpx.Response) -> bool:
+    """True for the 409 of a manual description; the other 409 is "descriptions not configured" (told apart by ``detail``)."""
+    return _json_body(resp).get("detail") == DESCRIBE_MANUAL_DETAIL
+
+
+def _manual_message(name: str) -> str:
+    shown = _clean(name)
+    return (
+        f"Error: '{shown}' has a manual description: clear it first with "
+        f"`archon-search collection clear-description {shlex.quote(shown)}`, then describe it."
+    )
+
+
+def _not_configured_message(resp: httpx.Response) -> str:
+    return f"Error: {_server_message(_json_body(resp).get('detail'), resp.text)}"
+
+
+def _started_job_id(resp: httpx.Response) -> str:
+    job_id = _json_body(resp).get("job_id")
+    if not isinstance(job_id, str) or not job_id:
+        click.echo("Error: the server accepted the request but returned no job id.", err=True)
+        raise SystemExit(1)
+    return job_id
+
+
+def _settle(name: str, job_id: str, base_url: str, headers: dict[str, str]) -> _Settled | None:
+    """Poll the describe job to its end and print the result; ``None`` when the wait was interrupted (C10 exit rules).
+
+    A ``DONE`` job succeeds on ``generated`` and ``alreadyRunning``; every other outcome, an unknown one and a job
+    without a result fail. A job that is not ``DONE`` (``FAILED``: the job broke or the server is shutting down) fails
+    with the job's error.
+    """
+    job = _poll_job_to_end(job_id, base_url, headers)
+    if not job:
+        return None
+    shown = _clean(name)
+    if job.get("status") != JobStatus.DONE:
+        error = _clean(str(job.get("error") or "unknown error"))
+        click.echo(f"Error: the describe job for '{shown}' ended {_clean(str(job.get('status')))}: {error}", err=True)
+        return _Settled(False, _NO_OUTCOME)
+    result = job.get("result")
+    result = result if isinstance(result, dict) else {}
+    outcome = _clean(str(result.get("outcome") or _NO_OUTCOME))
+    status = _clean(str(result.get("description_status") or _NO_STATUS))
+    ok = outcome in _DESCRIBE_SUCCESS_OUTCOMES
+    click.echo(
+        f"Describe '{shown}': outcome {outcome} (description_status: {status}).", err=not ok
+    )
+    return _Settled(ok, outcome)
+
+
+def _show_description(name: str, base_url: str, headers: dict[str, str]) -> None:
+    """Print the stored description and its source after a generation; a failed read prints nothing (it is only a courtesy)."""
+    url = f"{base_url}/collections/{_collection_segment(name)}"
+    try:
+        resp = httpx.get(url, headers=headers)
+    except httpx.HTTPError:
+        return
+    if resp.status_code != 200:
+        return
+    data = _json_body(resp)
+    for field in ("description", "description_source"):
+        click.echo(f"{field}: {_clean(str(data.get(field) or ''))}")
+
+
+def _fetch_namespace(base_url: str, headers: dict[str, str]) -> list[dict]:
+    resp = _send_or_exit(base_url, lambda: httpx.get(f"{base_url}/collections/", headers=headers))
+    if resp.status_code != 200:
+        click.echo(f"Error: server returned {resp.status_code}: {_clean(resp.text)}", err=True)
+        raise SystemExit(1)
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, list):
+        click.echo("Error: server returned an unexpected collection list.", err=True)
+        raise SystemExit(1)
+    return [entry for entry in body if isinstance(entry, dict) and isinstance(entry.get("name"), str)]
+
+
+def _skip_reason(entry: dict) -> str | None:
+    """Why ``describe --all`` leaves *entry* alone (C10): a manual description, no documents, or a description that is
+    there and whose status is not ``failed``. ``None`` means fill it (empty description or stored status ``failed``)."""
+    if entry.get("description_source") == DESCRIPTION_SOURCE_MANUAL:
+        return _REASON_MANUAL
+    if not entry.get("doc_count"):
+        return _REASON_NO_DOCUMENTS
+    if entry.get("description") and entry.get("description_status") != DESCRIPTION_STATUS_FAILED:
+        return _REASON_DESCRIBED
+    return None
+
+
+def _describe_single(name: str, wait_flag: bool, base_url: str, headers: dict[str, str]) -> None:
+    resp = _describe_post(name, base_url, headers)
+    if resp.status_code == 409:
+        click.echo(_manual_message(name) if _is_manual_conflict(resp) else _not_configured_message(resp), err=True)
+        raise SystemExit(1)
+    if resp.status_code != 202:
+        click.echo(_description_error(name, resp), err=True)
+        raise SystemExit(1)
+    job_id = _clean(_started_job_id(resp))
+    click.echo(f"Describe job started: {job_id}")
+    if not wait_flag:
+        click.echo(_jobs_status_hint(job_id))
+        return
+    settled = _settle(name, job_id, base_url, headers)
+    if settled is None or not settled.ok:  # an interrupted wait has no outcome: not a success
+        raise SystemExit(1)
+    if settled.outcome == _OUTCOME_GENERATED:
+        _show_description(name, base_url, headers)
+
+
+class _Fill(StrEnum):
+    """How one collection ended in ``describe --all``."""
+
+    FILLED = "filled"
+    RUNNING = "already running"
+    FAILED = "failed"
+    MANUAL = "manual"
+    INTERRUPTED = "interrupted"
+
+
+def _fill_one(name: str, base_url: str, headers: dict[str, str]) -> _Fill:
+    """Describe one collection of ``describe --all`` and wait for it. A "not configured" 409 ends the whole run (exit 1)."""
+    resp = _describe_post(name, base_url, headers)
+    if resp.status_code == 409:
+        if not _is_manual_conflict(resp):
+            click.echo(_not_configured_message(resp), err=True)
+            raise SystemExit(1)
+        return _Fill.MANUAL  # became manual after the listing
+    if resp.status_code != 202:
+        click.echo(_description_error(name, resp), err=True)
+        return _Fill.FAILED
+    job_id = _clean(_started_job_id(resp))
+    click.echo(f"Describing '{_clean(name)}' (job {job_id})")
+    settled = _settle(name, job_id, base_url, headers)
+    if settled is None:
+        return _Fill.INTERRUPTED
+    if not settled.ok:
+        return _Fill.FAILED
+    return _Fill.FILLED if settled.outcome == _OUTCOME_GENERATED else _Fill.RUNNING
+
+
+def _describe_all(base_url: str, headers: dict[str, str]) -> None:
+    entries = _fetch_namespace(base_url, headers)
+    if not entries:
+        click.echo("No collections found.")
+        return
+    ended: dict[_Fill, int] = dict.fromkeys(_Fill, 0)
+    skipped: list[tuple[str, str]] = []
+    not_started = 0
+    for position, entry in enumerate(entries):
+        name = entry["name"]
+        reason = _skip_reason(entry)
+        if reason is not None:
+            skipped.append((name, reason))
+            continue
+        result = _fill_one(name, base_url, headers)
+        if result is _Fill.MANUAL:
+            skipped.append((name, _REASON_MANUAL))
+        elif result is _Fill.INTERRUPTED:
+            not_started = sum(_skip_reason(rest) is None for rest in entries[position + 1 :])
+            ended[result] += 1
+            break
+        else:
+            ended[result] += 1
+    for name, reason in skipped:
+        click.echo(f"Skipped '{_clean(name)}': {reason}.")
+    click.echo(
+        f"Summary: filled {ended[_Fill.FILLED]}, already running {ended[_Fill.RUNNING]}, skipped {len(skipped)}, "
+        f"failed {ended[_Fill.FAILED]}."
+    )
+    if ended[_Fill.INTERRUPTED]:
+        click.echo(
+            f"Interrupted: the job of the last collection (see 'Describing' above) continues on the server; "
+            f"{not_started} more not started.",
+            err=True,
+        )
+    if ended[_Fill.FAILED] or ended[_Fill.INTERRUPTED]:
+        raise SystemExit(1)
+
+
+@collection.command("describe")
+@click.argument("name", required=False)
+@click.option("--all", "all_flag", is_flag=True, default=False, help="Describe every collection of your namespace that has no description or whose last attempt failed")
+@click.option("--wait", "wait_flag", is_flag=True, default=False, help="Poll until the describe job completes (--all always waits)")
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def describe(name: str | None, all_flag: bool, wait_flag: bool, api_url: str, api_key: str | None) -> None:
+    """Generate a description now (proxies POST /collections/{name}/describe; requires server running).
+
+    Give NAME to describe one collection (a fresh generation replaces a generated or failed description; a manual one
+    is refused: clear it first), or --all to describe each collection of your namespace that has documents and either
+    no description or a last attempt that failed. Without --wait the command prints the job id and returns. Exit 1
+    when a generation does not end as `generated` or `alreadyRunning`, or when descriptions are not configured.
+    """
+    if all_flag == (name is not None):
+        raise click.UsageError("give a collection NAME or --all, not both and not neither.")
+    headers = {"Authorization": f"Bearer {_resolve_api_key(api_key)}"}
+    base_url = api_url.rstrip("/")
+    if name is None:
+        _describe_all(base_url, headers)
+    else:
+        _describe_single(name, wait_flag, base_url, headers)
 
 
 @collection.command("reindex-metadata")

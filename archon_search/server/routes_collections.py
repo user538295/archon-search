@@ -25,7 +25,11 @@ from archon_search.collection_meta import (
     visible_description_status,
 )
 from archon_search.config import SearchConfig, resolve_active_model, save_config
-from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.constants import (
+    DEFAULT_NAMESPACE,
+    DESCRIBE_MANUAL_DETAIL,
+    DESCRIBE_NOT_CONFIGURED_DETAIL,
+)
 from archon_search.description_change import (
     DescriptionChangeStatus,
     apply_description_change,
@@ -1076,17 +1080,6 @@ async def clear_collection_description(name: str, request: Request) -> Collectio
     return await _apply_description_change(request, name, ClearChange())
 
 
-#: 409 ``detail`` of ``POST /collections/{name}/describe`` while descriptions are not configured: it says how to set one
-#: up, so a client prints it as it is (S32). No job exists then.
-DESCRIBE_NOT_CONFIGURED_DETAIL = (
-    "collection descriptions are not configured: set enabled = true and a provider in the [description] section of "
-    "the server config (`archon-search wizard` asks for it), then restart the server"
-)
-#: 409 ``detail`` for a collection whose description was set by hand (S59): generation never replaces it.
-DESCRIBE_MANUAL_DETAIL = (
-    "the collection has a manual description: clear it first "
-    "(`archon-search collection clear-description <name>` or DELETE /collections/<name>/description), then describe it"
-)
 #: ``error`` of a describe job that the shutdown ended (S85): the run was refused or its wait was cancelled; the
 #: generation itself is cancelled by the lifecycle's own drain, which runs after the other background tasks.
 DESCRIBE_SHUTTING_DOWN_DETAIL = "the server is shutting down"

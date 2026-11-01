@@ -17,11 +17,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from archon_search.server.routes_collections import (
+from archon_search.constants import (
     DESCRIBE_MANUAL_DETAIL,
     DESCRIBE_NOT_CONFIGURED_DETAIL,
-    DESCRIBE_SHUTTING_DOWN_DETAIL,
 )
+from archon_search.server.routes_collections import DESCRIBE_SHUTTING_DOWN_DETAIL
 from archon_search.server.routes_jobs import INTERNAL_ERROR_DETAIL
 from tests._fake_model_server import (
     FakeModelServer,

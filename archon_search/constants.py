@@ -69,6 +69,19 @@ MAX_QUEUED_GENERATIONS: Final[int] = 64
 # ``embedWaitSeconds``); equal to the embedder cache's waiter bound so one number serves both.
 EMBED_WAIT_SECONDS: Final[int] = 120
 
+# 409 ``detail`` of ``POST /collections/{name}/describe`` while descriptions are not configured: it says how to set one
+# up, so a client prints it as it is (S32). No job exists then. Shared by the route and the CLI, which tells the two
+# 409 bodies apart by comparing ``detail``.
+DESCRIBE_NOT_CONFIGURED_DETAIL: Final[str] = (
+    "collection descriptions are not configured: set enabled = true and a provider in the [description] section of "
+    "the server config (`archon-search wizard` asks for it), then restart the server"
+)
+# 409 ``detail`` for a collection whose description was set by hand (S59): generation never replaces it.
+DESCRIBE_MANUAL_DETAIL: Final[str] = (
+    "the collection has a manual description: clear it first "
+    "(`archon-search collection clear-description <name>` or DELETE /collections/<name>/description), then describe it"
+)
+
 # Default namespace used when no explicit namespace is specified.
 DEFAULT_NAMESPACE: str = "default"
 
