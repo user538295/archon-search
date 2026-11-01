@@ -4,7 +4,7 @@ One server answers the endpoints of both local providers, so a wrapper test talk
 real SDK or ``httpx`` instead of a mock:
 
 * Ollama (what the ``ollama`` SDK calls): ``POST /api/chat`` and ``POST /api/show``, and ``GET /api/tags`` (the model list the description reachability probe reads).
-* llama.cpp ``llama-server``: ``GET /props``, ``POST /tokenize`` and ``POST /v1/chat/completions``.
+* llama.cpp ``llama-server``: ``GET /props``, ``POST /tokenize``, ``POST /apply-template`` and ``POST /v1/chat/completions``.
 
 Every request is recorded (method, path, decoded JSON body) for assertions on what a wrapper sent. The server listens
 on ``127.0.0.1`` with an OS-chosen port and runs in a daemon thread; use it as a context manager::
@@ -38,6 +38,11 @@ if TYPE_CHECKING:
 
 _LOOPBACK = "127.0.0.1"
 _OK = 200
+
+# ``POST /apply-template`` wraps one user message as ``<open> <content> <close>``: two words the fake tokenizer counts.
+FAKE_CHAT_OPEN = "<|user|>"
+FAKE_CHAT_CLOSE = "<|assistant|>"
+FAKE_CHAT_FRAME_TOKENS = 2
 _BAD_REQUEST = 400
 _NOT_FOUND = 404
 
@@ -52,7 +57,7 @@ _MODEL_NAME = "fake-model"
 _POLL_INTERVAL_SECONDS = 0.01  # how soon ``shutdown`` is noticed; the default 0.5 s would slow every test
 
 # llama-server nests its errors as {"error": {"code", "message", "type"}}; Ollama answers {"error": "<text>"}.
-_LLAMA_PATHS = frozenset({"/props", "/tokenize", "/v1/chat/completions"})
+_LLAMA_PATHS = frozenset({"/props", "/tokenize", "/apply-template", "/v1/chat/completions"})
 _LLAMA_ERROR_TYPES = {400: "invalid_request_error", 404: "not_found_error", 503: "unavailable_error"}
 _LLAMA_OTHER_ERROR_TYPE = "server_error"
 
@@ -200,6 +205,8 @@ class FakeModelServer:
             return _OK, {"default_generation_settings": {"n_ctx": self._llama_n_ctx}, "total_slots": 1}
         if route == ("POST", "/tokenize"):
             return self._llama_tokenize(request.body)
+        if route == ("POST", "/apply-template"):
+            return self._llama_apply_template(request.body)
         if route == ("POST", "/v1/chat/completions"):
             return _OK, self._llama_chat()
         return self.error(request.path, _NOT_FOUND, f"no route for {request.method} {request.path}")
@@ -235,6 +242,12 @@ class FakeModelServer:
         if not isinstance(content, str):
             return self.error("/tokenize", _BAD_REQUEST, "`content` is required")
         return _OK, {"tokens": list(range(len(content.split())))}
+
+    def _llama_apply_template(self, body: dict[str, Any] | None) -> tuple[int, dict[str, Any]]:
+        messages = None if body is None else body.get("messages")
+        if not isinstance(messages, list) or not messages or not isinstance(messages[0], dict) or not isinstance(messages[0].get("content"), str):
+            return self.error("/apply-template", _BAD_REQUEST, "`messages` is required")
+        return _OK, {"prompt": f"{FAKE_CHAT_OPEN} {messages[0]['content']} {FAKE_CHAT_CLOSE}"}
 
     def _llama_chat(self) -> dict[str, Any]:
         return {

@@ -1,7 +1,7 @@
 """The loopback fake model server (collection-descriptions plan, BE-5; reused by BE-6 and the e2e tasks).
 
 It speaks the Ollama endpoints the ``ollama`` SDK calls (``/api/chat``, ``/api/show``) and the llama.cpp endpoints
-a ``httpx`` wrapper calls (``GET /props``, ``POST /tokenize``, ``POST /v1/chat/completions``), and records every
+a ``httpx`` wrapper calls (``GET /props``, ``POST /tokenize``, ``POST /apply-template``, ``POST /v1/chat/completions``), and records every
 request so a test can assert what the wrapper sent.
 """
 
@@ -15,7 +15,13 @@ from urllib.parse import urlsplit
 import httpx
 import pytest
 
-from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
+from tests._fake_model_server import (
+    FAKE_CHAT_CLOSE,
+    FAKE_CHAT_FRAME_TOKENS,
+    FAKE_CHAT_OPEN,
+    FakeModelServer,
+    keep_loopback_out_of_proxies,
+)
 
 _HELD_CHAT_PROBE_SECONDS = 0.3
 _POLL_SECONDS = 0.01
@@ -85,6 +91,23 @@ def test_llama_tokenize_counts_one_token_per_word(server: FakeModelServer) -> No
 
     assert len(response.json()["tokens"]) == _PROMPT_WORDS
     assert server.requests_to("/tokenize")[0].body == {"content": _PROMPT}
+
+
+def test_llama_apply_template_wraps_one_user_message(server: FakeModelServer) -> None:
+    body = {"messages": [{"role": "user", "content": _PROMPT}]}
+
+    response = httpx.post(f"{server.base_url}/apply-template", json=body)
+
+    assert response.json() == {"prompt": f"{FAKE_CHAT_OPEN} {_PROMPT} {FAKE_CHAT_CLOSE}"}
+    assert len(response.json()["prompt"].split()) == _PROMPT_WORDS + FAKE_CHAT_FRAME_TOKENS
+    assert server.requests_to("/apply-template")[0].body == body
+
+
+def test_apply_template_without_messages_is_400(server: FakeModelServer) -> None:
+    response = httpx.post(f"{server.base_url}/apply-template", json={})
+
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
 
 
 def test_llama_chat_completions_answer_in_the_openai_shape(server: FakeModelServer) -> None:

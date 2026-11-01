@@ -114,6 +114,8 @@ class _LlamaCppWire:
         body = json.loads(request.content)
         if request.url.path == "/tokenize":
             return httpx.Response(200, json={"tokens": list(range(len(body["content"].split())))})
+        if request.url.path == "/apply-template":
+            return httpx.Response(200, json={"prompt": body["messages"][0]["content"]})
         self.chat_bodies.append(body)
         return httpx.Response(200, json={"choices": [{"index": 0, "message": {"role": "assistant", "content": _REPLY}}]})
 

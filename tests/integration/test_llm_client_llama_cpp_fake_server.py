@@ -17,7 +17,13 @@ from archon_search.llm_client.protocol import (
     LlmCallTimeout,
     ThinkSetting,
 )
-from tests._fake_model_server import FakeModelServer, keep_loopback_out_of_proxies
+from tests._fake_model_server import (
+    FAKE_CHAT_CLOSE,
+    FAKE_CHAT_FRAME_TOKENS,
+    FAKE_CHAT_OPEN,
+    FakeModelServer,
+    keep_loopback_out_of_proxies,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -52,10 +58,15 @@ async def test_llama_cpp_wrapper_against_fake_server() -> None:
         result = await client.call(_request())
 
         assert window == ContextWindowTokens(size=_WINDOW, source=ContextWindowSource.PROBED)
-        assert budget == InputBudget(tokens=_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS)
+        assert budget == InputBudget(tokens=_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - FAKE_CHAT_FRAME_TOKENS)
         assert result.text == _REPLY
-        assert [request.path for request in server.requests] == ["/props", "/tokenize", "/v1/chat/completions"]
-        assert server.requests_to("/tokenize")[0].body == {"content": _TEMPLATE}
+        assert [request.path for request in server.requests] == [
+            "/props",
+            "/apply-template",
+            "/tokenize",
+            "/v1/chat/completions",
+        ]
+        assert server.requests_to("/tokenize")[0].body == {"content": f"{FAKE_CHAT_OPEN} {_TEMPLATE} {FAKE_CHAT_CLOSE}"}
         assert server.requests_to("/v1/chat/completions")[0].body == {
             "model": _MODEL,
             "max_tokens": ANSWER_RESERVE_TOKENS,

@@ -38,8 +38,13 @@ _SHORT_TIMEOUT_SECONDS = 0.05
 _NEVER_SECONDS = 60.0
 _TEMPLATE = "Describe the collection in one sentence."
 _TEMPLATE_TOKENS = 6
+_FRAME_TOKENS = 6  # the framing ``_applied`` adds, counted as words by the fake tokenizer: system block, markers
 _MAX_REASON_CHARS = 400
 _LOGGER_NAME = "archon_search.llm_client.llama_cpp_client"
+
+
+def _applied(content: str) -> str:
+    return f"<|system|> You are helpful. <|user|> {content} <|assistant|>"
 
 
 class _Server:
@@ -61,6 +66,8 @@ class _Server:
             return httpx.Response(status, json=body)
         if path == "/props":
             return httpx.Response(200, json=self._props)
+        if path == "/apply-template":
+            return httpx.Response(200, json={"prompt": _applied(json.loads(request.content)["messages"][0]["content"])})
         if path == "/tokenize":
             return httpx.Response(200, json={"tokens": list(range(len(json.loads(request.content)["content"].split())))})
         return httpx.Response(200, json={"choices": [{"index": 0, "message": {"role": "assistant", "content": _REPLY}}]})
@@ -245,15 +252,15 @@ async def test_llama_cpp_call_non_json_answer_raises_failure() -> None:
     assert "unexpected reply" in raised.value.reason
 
 
-async def test_llama_cpp_input_budget_uses_the_servers_exact_count() -> None:
+async def test_llama_cpp_input_budget_uses_the_servers_exact_count_of_the_framed_template() -> None:
     server = _Server()
     client = _client(server)
     await client.probe_context_window(_TIMEOUT_SECONDS)
 
     budget = await client.input_budget(_TEMPLATE)
 
-    assert budget == InputBudget(tokens=_PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS)
-    assert server.bodies("/tokenize") == [{"content": _TEMPLATE}]
+    assert budget == InputBudget(tokens=_PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS)
+    assert server.bodies("/tokenize") == [{"content": _applied(_TEMPLATE)}]
 
 
 async def test_llama_cpp_counts_tokens_with_the_servers_tokenizer_and_is_a_token_counting_client() -> None:
@@ -278,6 +285,36 @@ async def test_llama_cpp_input_budget_failure_raises_llm_call_failure() -> None:
 
 async def test_llama_cpp_input_budget_malformed_tokenize_answer_raises_failure() -> None:
     server = _Server(statuses={"/tokenize": (200, {"tokens": "many"})})
+
+    with pytest.raises(LlmCallFailure) as raised:
+        await _client(server).input_budget(_TEMPLATE)
+
+    assert "unexpected reply" in raised.value.reason
+
+
+async def test_llama_cpp_input_budget_asks_the_server_to_frame_the_template_as_one_user_message() -> None:
+    # T-2 item 1: a prompt of exactly the budget came back as 29 prompt tokens more than budget + template
+    # (llama-server wraps the user message in the model's chat template), which ate the reserved answer space.
+    server = _Server()
+
+    await _client(server).input_budget(_TEMPLATE)
+
+    assert [request.url.path for request in server.requests] == ["/apply-template", "/tokenize"]
+    assert server.bodies("/apply-template") == [{"messages": [{"role": "user", "content": _TEMPLATE}]}]
+
+
+async def test_llama_cpp_input_budget_apply_template_failure_raises_llm_call_failure() -> None:
+    server = _Server(statuses={"/apply-template": (404, {"error": {"message": "File Not Found"}})})
+
+    with pytest.raises(LlmCallFailure) as raised:
+        await _client(server).input_budget(_TEMPLATE)
+
+    assert "HTTP 404" in raised.value.reason
+    assert _TEMPLATE not in str(raised.value)
+
+
+async def test_llama_cpp_input_budget_malformed_apply_template_answer_raises_failure() -> None:
+    server = _Server(statuses={"/apply-template": (200, {"prompt": 7})})
 
     with pytest.raises(LlmCallFailure) as raised:
         await _client(server).input_budget(_TEMPLATE)

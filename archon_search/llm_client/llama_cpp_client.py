@@ -5,8 +5,9 @@ Thin wrapper over ``httpx`` (a core dependency) talking to a llama-server (llama
 * ``GET /props`` holds the window under ``default_generation_settings.n_ctx``; :meth:`LlamaCppClient.probe_context_window`
   reads it once at composition time (``context_window`` is synchronous). Until it succeeds, and when it fails, the
   window is ``ASSUMED_CONTEXT_TOKENS`` and one WARNING per host and process says so (S8).
-* ``POST /tokenize`` (``{"content": text}`` answers ``{"tokens": [...]}``) gives the exact count :meth:`input_budget`
-  sizes with (S11, ``llm_client.budget.exact_budget``).
+* ``POST /apply-template`` (``{"messages": [...]}`` answers ``{"prompt": "..."}``) renders a message through the model's
+  chat template and ``POST /tokenize`` (``{"content": text}`` answers ``{"tokens": [...]}``) counts it: the exact count
+  :meth:`input_budget` sizes with (S11, ``llm_client.budget.exact_budget``), chat framing included.
 * ``POST /v1/chat/completions`` carries every call: one fresh user message, nothing carried over (S6). llama-server
   rejects an oversized prompt with an error, which is raised as a failure.
 * ``think``: ``ON`` / ``OFF`` send ``chat_template_kwargs: {"enable_thinking": true / false}`` (the chat template decides
@@ -42,11 +43,12 @@ PROVIDER_NAME: Final = "llama_cpp"
 
 _logger = logging.getLogger(__name__)
 
-#: Longest wait for one ``/tokenize`` answer; ``input_budget`` takes no timeout of its own.
+#: Longest wait for one ``/tokenize`` or ``/apply-template`` answer; ``input_budget`` takes no timeout of its own.
 TOKENIZE_TIMEOUT_SECONDS: Final = 10.0
 
 _PROPS_PATH: Final = "/props"
 _TOKENIZE_PATH: Final = "/tokenize"
+_APPLY_TEMPLATE_PATH: Final = "/apply-template"
 _CHAT_PATH: Final = "/v1/chat/completions"
 
 #: The per-request thinking switch of llama-server: ``chat_template_kwargs: {"enable_thinking": <bool>}`` (llama.cpp
@@ -139,7 +141,22 @@ class LlamaCppClient:
         return self._window
 
     async def input_budget(self, template_text: str) -> InputBudget:
-        return await exact_budget(self._window, template_text, self.count_tokens)
+        return await exact_budget(self._window, template_text, self._count_framed_tokens)
+
+    async def _count_framed_tokens(self, text: str) -> int:
+        """Tokens of *text* as one user message after the server's chat template (system block, role markers, generation prompt).
+
+        The server cuts the reserved answer space by these tokens when it builds the prompt of a call, so the budget counts them
+        (T-2: with the plain count a prompt of exactly the budget overran ``n_ctx - ANSWER_RESERVE_TOKENS`` by 29 tokens on Qwen2.5).
+        """
+        body = await self._request("POST", _APPLY_TEMPLATE_PATH, TOKENIZE_TIMEOUT_SECONDS, {"messages": [{"role": "user", "content": text}]}, prompt=text)
+        try:
+            framed = body["prompt"]
+        except (KeyError, TypeError) as exc:
+            raise _unexpected_reply(exc) from exc
+        if not isinstance(framed, str):
+            raise _unexpected_reply(TypeError("prompt is not a string"))
+        return await self.count_tokens(framed)
 
     async def count_tokens(self, text: str) -> int:
         body = await self._request("POST", _TOKENIZE_PATH, TOKENIZE_TIMEOUT_SECONDS, {"content": text}, prompt=text)
