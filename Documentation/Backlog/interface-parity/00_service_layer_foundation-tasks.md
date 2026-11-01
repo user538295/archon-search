@@ -131,7 +131,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_request_hyde.py` and `test_validators.py` (moved, assertions unchanged) — HyDE outcome, suppression and scope validation unchanged, and the re-pointed patch still takes effect (it raises if the target is wrong)
         - #unit_test — `test_old_server_search_support_modules_do_not_import` — the old `server` budget, HyDE and validators modules raise on import
-- [ ] **BE-4** — Re-point `mcp.py` (keeping the `_check_scope_filter` alias and `_validate_scope_filter` wrapper), `routes_search.py` and `routes_explain.py` to `services.request_hyde` and `services.validators`; re-point the HyDE imports in `test_hyde.py`, `test_search_filtered_benchmark.py` and `eval/test_eval_suite.py`, and the docstrings in `tests/_hyde_stubs.py` and `test_s582_hyde_outside_search_budget.py` #backend-role
+- [x] **BE-4** — Re-point `mcp.py` (keeping the `_check_scope_filter` alias and `_validate_scope_filter` wrapper), `routes_search.py` and `routes_explain.py` to `services.request_hyde` and `services.validators`; re-point the HyDE imports in `test_hyde.py`, `test_search_filtered_benchmark.py` and `eval/test_eval_suite.py`, and the docstrings in `tests/_hyde_stubs.py` and `test_s582_hyde_outside_search_budget.py` #backend-role
     - Interface Adapter · 3.0h
     - needs BE-3 · completes S27
     - Tests

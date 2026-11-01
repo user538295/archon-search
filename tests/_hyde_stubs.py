@@ -1,6 +1,6 @@
 """HyDE stand-ins shared by the REST and MCP HyDE tests: an enabled ``[hyde]`` plus a stub generator.
 
-HyDE resolves through ``server/_hyde.RequestHyDE``, which skips a request with no generator
+HyDE resolves through ``services/request_hyde.RequestHyDE``, which skips a request with no generator
 or a disabled ``[hyde]`` before any LLM call — so a test that wants HyDE to run must supply
 both, and controls the outcome through the stub's ``generate``.
 
