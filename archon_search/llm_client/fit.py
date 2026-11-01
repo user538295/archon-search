@@ -68,7 +68,7 @@ _REGIONAL_INDICATORS: Final = ("\U0001f1e6", "\U0001f1ff")
 
 
 class NoRoomForInput(Exception):
-    """The window holds the template and the answer reserve but too little (or nothing) of the text.
+    """The window holds the template and the call's answer ceiling but too little (or nothing) of the text.
 
     Not a provider failure: nothing went wrong with a call, the feature just cannot be sized into this window.
     ``detail`` names the window and the room left and never holds the text.
@@ -86,7 +86,9 @@ def describe_window(window: ContextWindow) -> str:
     return str(window)
 
 
-async def fit_query_to_window(client: LlmClient, template_text: str, query: str, *, provider: str) -> str:
+async def fit_query_to_window(
+    client: LlmClient, template_text: str, query: str, *, provider: str, max_output_tokens: int
+) -> str:
     """The part of *query* that fits *client*'s window next to *template_text*: the query itself when it all fits.
 
     Args:
@@ -94,12 +96,14 @@ async def fit_query_to_window(client: LlmClient, template_text: str, query: str,
         template_text: the feature's prompt template with an empty query (the longest fixed part).
         query: the user's query.
         provider: the feature's provider, named by the failure of a client that has a budget but cannot count.
+        max_output_tokens: the answer ceiling of the call the query is for (the one it will send): the window holds exactly
+            this much back for the answer.
 
     Raises:
-        NoRoomForInput: the window leaves no room for the template and the reserve, or for even one word of the query.
+        NoRoomForInput: the window leaves no room for the template and the answer ceiling, or for even one word of the query.
         LlmCallFailure: the budget or a count failed, or the client has a budget but lacks ``count_tokens`` or ``token_ceiling``.
     """
-    budget = (await client.input_budget(template_text)).tokens
+    budget = (await client.input_budget(template_text, max_output_tokens=max_output_tokens)).tokens
     if not isinstance(budget, int):
         return query
     if budget > 0:
@@ -117,7 +121,7 @@ async def fit_query_to_window(client: LlmClient, template_text: str, query: str,
             return fitted
     raise NoRoomForInput(
         f"the model's context window ({describe_window(client.context_window())}) leaves {budget} input tokens after the "
-        "prompt and the answer reserve, too little for the query"
+        f"prompt and the {max_output_tokens}-token answer, too little for the query"
     )
 
 

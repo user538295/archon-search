@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search.config import GraphConfig
-from archon_search.constants import ANSWER_RESERVE_TOKENS
 from archon_search.graph_types import EntityType, GraphNode
 from archon_search.llm_client.budget import exact_budget
 from archon_search.llm_client.fit import MAX_CHARS_PER_TOKEN
@@ -103,6 +102,7 @@ class _GraphClient:
         self.budget = budget if budget is not None else InputBudget(UNBOUNDED)
         self.requests: list[LlmCallRequest] = []
         self.budget_templates: list[str] = []
+        self.budget_ceilings: list[int] = []
 
     async def call(self, request: LlmCallRequest) -> LlmCallResult:
         self.requests.append(request)
@@ -113,8 +113,11 @@ class _GraphClient:
     def context_window(self) -> ContextWindow:
         return UNBOUNDED
 
-    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+    async def input_budget(
+        self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+    ) -> InputBudget:
         self.budget_templates.append(template_text)
+        self.budget_ceilings.append(max_output_tokens)
         return self.budget
 
     async def count_tokens(self, text: str) -> int:
@@ -344,16 +347,22 @@ def _two_chunk_builder(client: _GraphClient, store_chunks: dict[str, list[dict]]
 
 
 @pytest.mark.asyncio
-async def test_community_chunks_sized_to_budget():
-    """S4/S9-S11: the chunks sent fit the window minus the answer reserve minus the template; passages from the first
+@pytest.mark.parametrize(("ceiling", "expected_chunks"), [(600, 5), (1024, 2), (1250, 1)])
+async def test_community_chunks_sized_to_budget(ceiling: int, expected_chunks: int):
+    """S4/S9-S11: the chunks sent fit the window minus the call's answer ceiling minus the template; passages from the first
     one that does not fit on are left out, and the template is the one the budget was asked about."""
     from archon_search.community_builder import CommunityBuilder
 
     class _WindowedClient(_GraphClient):
-        async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+        async def input_budget(
+            self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+        ) -> InputBudget:
             self.budget_templates.append(template_text)
             return await exact_budget(
-                ContextWindowTokens(_WINDOW_TOKENS, ContextWindowSource.CONFIGURED), template_text, self.count_tokens
+                ContextWindowTokens(_WINDOW_TOKENS, ContextWindowSource.CONFIGURED),
+                template_text,
+                self.count_tokens,
+                max_output_tokens=max_output_tokens,
             )
 
     client = _WindowedClient()
@@ -366,7 +375,9 @@ async def test_community_chunks_sized_to_budget():
         "e": [0.0, 0.0, 0.0, 0.0, 1.0],
     }
     search_store = make_search_store({f"doc-{name}": [_word_chunk(f"chunk-{name}", vectors[name])] for name in "abcde"})
-    config = GraphConfig(enabled=True, provider="ollama", extraction_model="m", community_summary_chunks=5)
+    config = GraphConfig(
+        enabled=True, provider="ollama", extraction_model="m", community_summary_chunks=5, extraction_token_budget=ceiling
+    )
     builder = CommunityBuilder(make_graph_store(nodes, []), config, search_store=search_store, graph_client=client)
 
     with patch(
@@ -376,9 +387,9 @@ async def test_community_chunks_sized_to_budget():
 
     (request,) = client.requests
     sent_chunks = [name for name in "abcde" if f"chunk-{name} " in request.prompt]
-    # The budget is 1500 - 1024 - the template's words (about 50): room for the five entity names and two 151-word passages.
-    assert len(sent_chunks) == 2, sent_chunks
-    assert await client.count_tokens(request.prompt) <= _WINDOW_TOKENS - ANSWER_RESERVE_TOKENS
+    # The budget is 1500 - ceiling - the template's words (about 50): the lower the ceiling, the more 151-word passages fit.
+    assert len(sent_chunks) == expected_chunks, sent_chunks
+    assert await client.count_tokens(request.prompt) + request.max_output_tokens <= _WINDOW_TOKENS
 
 
 @pytest.mark.asyncio
@@ -422,6 +433,7 @@ async def test_budget_too_small_for_the_entity_names_skips_the_call_with_one_war
     assert [c.summary_text for c in communities] == [None, None]
     warnings = _build_warnings(caplog)
     assert len(warnings) == 1 and "budget" in warnings[0]
+    assert "1024-token answer ceiling" in warnings[0] and "extraction_token_budget" in warnings[0]
     assert "text of c" not in caplog.text
 
 
@@ -634,26 +646,27 @@ async def test_a_budget_that_drops_passages_keeps_the_most_representative_first(
 
 
 @pytest.mark.asyncio
-async def test_an_answer_ceiling_above_the_reserve_comes_out_of_the_room_for_passages():
-    """The budget holds ``ANSWER_RESERVE_TOKENS`` back for the answer. A cloud client (no budget) gets the configured
-    ceiling and every passage; under a budget the ceiling is still the configured one, and what it takes beyond the
-    reserve is taken off the passages' room, so prompt and answer together still fit the window."""
-    extra = 100
-    ceiling = ANSWER_RESERVE_TOKENS + extra
+async def test_the_budget_is_sized_against_the_configured_ceiling_and_is_used_as_the_client_gave_it():
+    """The client is asked for the budget of the ceiling the call sends (``extraction_token_budget``) and the builder
+    takes that budget as it is: no compensation of its own, whatever the ceiling is relative to any default. A cloud
+    client (no budget) gets the configured ceiling and every passage."""
     room = _WORDS_PER_CHUNK + 10  # holds the entity names and one passage
-    results: list[tuple[int, bool]] = []
-    for budget in (InputBudget(UNBOUNDED), InputBudget(room), InputBudget(room + extra)):
-        client = _GraphClient(budget=budget)
-        builder = _two_chunk_builder(
-            client, {"doc-1": [_word_chunk("chunk-a", [1.0, 0.0])]}, summary_chunks=1, extraction_token_budget=ceiling
-        )
-        with patch("archon_search.community_builder._run_leiden_partition_sync", return_value=[["a", "b"]]):
-            await builder.build("test-col", ns="default")
-        (request,) = client.requests
-        results.append((request.max_output_tokens, "chunk-a " in request.prompt))
+    for ceiling in (200, 1024, 3000):
+        results: list[tuple[int, bool, list[int]]] = []
+        for budget in (InputBudget(UNBOUNDED), InputBudget(room), InputBudget(room - _WORDS_PER_CHUNK)):
+            client = _GraphClient(budget=budget)
+            builder = _two_chunk_builder(
+                client,
+                {"doc-1": [_word_chunk("chunk-a", [1.0, 0.0])]},
+                summary_chunks=1,
+                extraction_token_budget=ceiling,
+            )
+            with patch("archon_search.community_builder._run_leiden_partition_sync", return_value=[["a", "b"]]):
+                await builder.build("test-col", ns="default")
+            (request,) = client.requests
+            results.append((request.max_output_tokens, "chunk-a " in request.prompt, client.budget_ceilings))
 
-    # No budget: the passage goes. A budget of `room` less the extra 100 holds no passage; `room + extra` less it holds one.
-    assert results == [(ceiling, True), (ceiling, False), (ceiling, True)]
+        assert results == [(ceiling, True, [ceiling]), (ceiling, True, [ceiling]), (ceiling, False, [ceiling])]
 
 
 # ---------------------------------------------------------------------------

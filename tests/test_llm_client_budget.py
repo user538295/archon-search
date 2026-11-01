@@ -1,17 +1,19 @@
 """BE-4 (collection-descriptions plan, C1, S9, S11): sizing every prompt ahead of the call.
 
 ``llama_cpp`` counts exactly through its tokenize callback, ``ollama`` estimates with the token estimate (``TokenCounter.count``) plus
-``OLLAMA_ESTIMATE_MARGIN``, cloud is unbounded. The budget is the window minus the answer reserve minus the
-template (the longest form, retry reminder included); a window too small for reserve and template gives 0.
+``OLLAMA_ESTIMATE_MARGIN``, cloud is unbounded. The budget is the window minus the caller's own answer ceiling
+(``max_output_tokens``) minus the template (the longest form, retry reminder included); a window too small for ceiling and template gives 0.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 
 import pytest
 
-from archon_search.constants import ANSWER_RESERVE_TOKENS, ASSUMED_CONTEXT_TOKENS
+from archon_search.constants import ASSUMED_CONTEXT_TOKENS
+from archon_search.llm_client.anthropic_client import AnthropicClient
 from archon_search.llm_client.budget import (
     MAX_CACHED_TEMPLATES,
     AsyncTokenCount,
@@ -20,6 +22,11 @@ from archon_search.llm_client.budget import (
     estimated_budget,
     exact_budget,
 )
+from archon_search.llm_client.claude_cli_client import ClaudeCliClient
+from archon_search.llm_client.fit import fit_query_to_window
+from archon_search.llm_client.llama_cpp_client import LlamaCppClient
+from archon_search.llm_client.ollama_client import OllamaClient
+from archon_search.llm_client.openai_client import OpenAIClient
 from archon_search.llm_client.protocol import (
     UNBOUNDED,
     ContextWindowSource,
@@ -34,6 +41,7 @@ _RETRY_REMINDER_TOKENS = 12  # StubTokenizer: one token per whitespace-separated
 _TEMPLATE = "Describe this collection in one sentence based on the excerpts below."
 _TEMPLATE_TOKENS = 11
 _WINDOW = 8192
+_CEILING = 1024  # an answer ceiling the cases below size against (the graph default); the ceiling-specific cases vary it
 
 # The independent oracle for the margin: real tokens may be 6/5 of the token estimate, so the room in estimate tokens is
 # 5/6 of the real room. Written as integers here, apart from ``OLLAMA_ESTIMATE_MARGIN``, so the test does not mirror the code.
@@ -62,27 +70,27 @@ def test_cloud_budget_is_unbounded_and_51k_prompt_sent_whole() -> None:
     assert cloud_budget() == InputBudget(tokens=UNBOUNDED)
 
 
-async def test_ollama_budget_applies_20_percent_margin_and_reserve() -> None:
+async def test_ollama_budget_applies_20_percent_margin_and_the_callers_ceiling() -> None:
     stub = StubTokenizer()
     counter = TokenCounter(load_tokenizer=lambda: stub)
 
-    budget = await estimated_budget(_window(_WINDOW), _TEMPLATE, _estimate_with(counter))
+    budget = await estimated_budget(_window(_WINDOW), _TEMPLATE, _estimate_with(counter), max_output_tokens=_CEILING)
 
-    gpt2_room = (_WINDOW - ANSWER_RESERVE_TOKENS) * _MARGIN_ROOM_NUMERATOR // _MARGIN_ROOM_DENOMINATOR
+    gpt2_room = (_WINDOW - _CEILING) * _MARGIN_ROOM_NUMERATOR // _MARGIN_ROOM_DENOMINATOR
     assert budget == InputBudget(tokens=gpt2_room - _TEMPLATE_TOKENS)
     assert stub.calls == [_TEMPLATE]
-    # Worst case the real count is 20% over the estimate: template + input + reserve still fit the window.
+    # Worst case the real count is 20% over the estimate: template + input + the answer ceiling still fit the window.
     assert isinstance(budget.tokens, int)
-    assert (_TEMPLATE_TOKENS + budget.tokens) * _LARGEST_REAL_OVER_GPT2 + ANSWER_RESERVE_TOKENS <= _WINDOW
+    assert (_TEMPLATE_TOKENS + budget.tokens) * _LARGEST_REAL_OVER_GPT2 + _CEILING <= _WINDOW
 
 
 async def test_ollama_budget_of_assumed_window_loses_no_token_to_rounding() -> None:
     window = _window(ASSUMED_CONTEXT_TOKENS, ContextWindowSource.ASSUMED)
 
-    budget = await estimated_budget(window, _TEMPLATE, _stub_estimate())
+    budget = await estimated_budget(window, _TEMPLATE, _stub_estimate(), max_output_tokens=_CEILING)
 
     # (4096 - 1024) / 1.2 = 2560 exactly, minus the 11-word template.
-    assert ASSUMED_CONTEXT_TOKENS == 4096 and ANSWER_RESERVE_TOKENS == 1024
+    assert ASSUMED_CONTEXT_TOKENS == 4096
     assert budget == InputBudget(tokens=2549)
 
 
@@ -93,10 +101,54 @@ async def test_llama_cpp_budget_uses_exact_count() -> None:
         seen.append(text)
         return 100  # the server's exact count, unrelated to the word count
 
-    budget = await exact_budget(_window(_WINDOW, ContextWindowSource.PROBED), _TEMPLATE, tokenize_count)
+    budget = await exact_budget(
+        _window(_WINDOW, ContextWindowSource.PROBED), _TEMPLATE, tokenize_count, max_output_tokens=_CEILING
+    )
 
-    assert budget == InputBudget(tokens=_WINDOW - ANSWER_RESERVE_TOKENS - 100)  # no margin
+    assert budget == InputBudget(tokens=_WINDOW - _CEILING - 100)  # no margin
     assert seen == [_TEMPLATE]
+
+
+@pytest.mark.parametrize("ceiling", [1, 150, 200, 750, 1024, 4096])
+async def test_exact_budget_holds_back_exactly_the_callers_ceiling(ceiling: int) -> None:
+    async def tokenize_count(text: str) -> int:
+        return 100
+
+    budget = await exact_budget(_window(_WINDOW), _TEMPLATE, tokenize_count, max_output_tokens=ceiling)
+
+    assert budget == InputBudget(tokens=_WINDOW - ceiling - 100)
+    # The invariant: prompt tokens (template + a full budget of input) plus the call's answer ceiling are the window.
+    assert isinstance(budget.tokens, int)
+    assert 100 + budget.tokens + ceiling == _WINDOW
+
+
+async def test_a_smaller_ceiling_gives_a_larger_exact_budget_by_exactly_the_difference() -> None:
+    async def tokenize_count(text: str) -> int:
+        return 100
+
+    window = _window(_WINDOW)
+    hyde = await exact_budget(window, _TEMPLATE, tokenize_count, max_output_tokens=200)
+    graph = await exact_budget(window, _TEMPLATE, tokenize_count, max_output_tokens=1024)
+
+    assert isinstance(hyde.tokens, int) and isinstance(graph.tokens, int)
+    assert hyde.tokens - graph.tokens == 1024 - 200
+
+
+async def test_a_smaller_ceiling_gives_a_larger_estimated_budget_by_the_difference_over_1_2() -> None:
+    window = _window(_WINDOW)
+    hyde = await estimated_budget(window, _TEMPLATE, _stub_estimate(), max_output_tokens=200)
+    graph = await estimated_budget(window, _TEMPLATE, _stub_estimate(), max_output_tokens=1220)
+
+    assert isinstance(hyde.tokens, int) and isinstance(graph.tokens, int)
+    assert hyde.tokens - graph.tokens == (1220 - 200) * _MARGIN_ROOM_NUMERATOR // _MARGIN_ROOM_DENOMINATOR  # 850
+
+
+@pytest.mark.parametrize(("window_size", "hyde_room"), [(4096, 3246), (8192, 6660)])
+async def test_the_estimated_hyde_budget_at_the_common_windows(window_size: int, hyde_room: int) -> None:
+    """(window - 200) / 1.2 estimate tokens of room, before the template (the numbers the docs quote)."""
+    budget = await estimated_budget(_window(window_size), "", _stub_estimate(), max_output_tokens=200)
+
+    assert budget == InputBudget(tokens=hyde_room)
 
 
 async def test_budget_reserves_room_for_retry_reminder() -> None:
@@ -111,10 +163,10 @@ async def test_budget_reserves_room_for_retry_reminder() -> None:
     window = _window(_WINDOW, ContextWindowSource.PROBED)
     with_reminder = f"{_TEMPLATE}\n{_RETRY_REMINDER}"
 
-    plain = await exact_budget(window, _TEMPLATE, tokenize_count)
-    longest = await exact_budget(window, with_reminder, tokenize_count)
-    estimated_plain = await estimated_budget(window, _TEMPLATE, _stub_estimate())
-    estimated_longest = await estimated_budget(window, with_reminder, _stub_estimate())
+    plain = await exact_budget(window, _TEMPLATE, tokenize_count, max_output_tokens=_CEILING)
+    longest = await exact_budget(window, with_reminder, tokenize_count, max_output_tokens=_CEILING)
+    estimated_plain = await estimated_budget(window, _TEMPLATE, _stub_estimate(), max_output_tokens=_CEILING)
+    estimated_longest = await estimated_budget(window, with_reminder, _stub_estimate(), max_output_tokens=_CEILING)
 
     assert seen == [_TEMPLATE, with_reminder]
     assert isinstance(plain.tokens, int) and isinstance(longest.tokens, int)
@@ -124,25 +176,47 @@ async def test_budget_reserves_room_for_retry_reminder() -> None:
     assert estimated_plain.tokens - estimated_longest.tokens == _RETRY_REMINDER_TOKENS + 3
 
 
-async def test_window_too_small_for_reserve_and_template_gives_zero_budget() -> None:
+async def test_window_too_small_for_ceiling_and_template_gives_zero_budget() -> None:
     async def tokenize_count(text: str) -> int:
         return 5
 
-    reserve_only = _window(ANSWER_RESERVE_TOKENS)  # reserve alone fills it
-    template_overflows = _window(ANSWER_RESERVE_TOKENS + 4)  # positive room, smaller than the template
-    below_reserve = _window(1)
+    ceiling_only = _window(_CEILING)  # the ceiling alone fills it
+    template_overflows = _window(_CEILING + 4)  # positive room, smaller than the template
+    below_ceiling = _window(1)
 
-    for window in (reserve_only, template_overflows, below_reserve):
-        assert await estimated_budget(window, _TEMPLATE, _stub_estimate()) == InputBudget(tokens=0)
-        assert await exact_budget(window, _TEMPLATE, tokenize_count) == InputBudget(tokens=0)
+    for window in (ceiling_only, template_overflows, below_ceiling):
+        assert await estimated_budget(window, _TEMPLATE, _stub_estimate(), max_output_tokens=_CEILING) == InputBudget(tokens=0)
+        assert await exact_budget(window, _TEMPLATE, tokenize_count, max_output_tokens=_CEILING) == InputBudget(tokens=0)
+
+
+async def test_a_ceiling_larger_than_the_window_gives_zero_not_a_negative_budget() -> None:
+    async def tokenize_count(text: str) -> int:
+        return 5
+
+    window = _window(512)
+
+    assert await exact_budget(window, _TEMPLATE, tokenize_count, max_output_tokens=4096) == InputBudget(tokens=0)
+    assert await estimated_budget(window, _TEMPLATE, _stub_estimate(), max_output_tokens=4096) == InputBudget(tokens=0)
+
+
+async def test_the_same_window_gives_room_to_a_small_ceiling_and_none_to_a_large_one() -> None:
+    async def tokenize_count(text: str) -> int:
+        return 5
+
+    window = _window(300)
+
+    assert await exact_budget(window, _TEMPLATE, tokenize_count, max_output_tokens=200) == InputBudget(tokens=95)
+    assert await exact_budget(window, _TEMPLATE, tokenize_count, max_output_tokens=295) == InputBudget(tokens=0)
 
 
 async def test_budget_boundary_one_token_of_room() -> None:
     async def tokenize_count(text: str) -> int:
         return 5
 
-    assert await exact_budget(_window(ANSWER_RESERVE_TOKENS + 5), _TEMPLATE, tokenize_count) == InputBudget(tokens=0)
-    assert await exact_budget(_window(ANSWER_RESERVE_TOKENS + 6), _TEMPLATE, tokenize_count) == InputBudget(tokens=1)
+    window_for_zero = _window(_CEILING + 5)
+    window_for_one = _window(_CEILING + 6)
+    assert await exact_budget(window_for_zero, _TEMPLATE, tokenize_count, max_output_tokens=_CEILING) == InputBudget(tokens=0)
+    assert await exact_budget(window_for_one, _TEMPLATE, tokenize_count, max_output_tokens=_CEILING) == InputBudget(tokens=1)
 
 
 # --- the template cost is a fixed part: counted once ----------------------------------------------------------------
@@ -157,9 +231,31 @@ async def test_a_template_is_counted_once_however_often_the_budget_is_asked_for(
         return 100
 
     window = _window(_WINDOW, ContextWindowSource.PROBED)
-    budgets = [await exact_budget(window, _TEMPLATE, cache.memoize_async(tokenize_count)) for _ in range(5)]
+    budgets = [
+        await exact_budget(window, _TEMPLATE, cache.memoize_async(tokenize_count), max_output_tokens=_CEILING)
+        for _ in range(5)
+    ]
 
-    assert budgets == [InputBudget(tokens=_WINDOW - ANSWER_RESERVE_TOKENS - 100)] * 5
+    assert budgets == [InputBudget(tokens=_WINDOW - _CEILING - 100)] * 5
+    assert seen == [_TEMPLATE]
+
+
+async def test_the_cached_template_count_serves_every_ceiling() -> None:
+    """The cache holds counts only, so two features sizing the same template with different ceilings share one count."""
+    cache = TemplateCostCache()
+    seen: list[str] = []
+
+    async def tokenize_count(text: str) -> int:
+        seen.append(text)
+        return 100
+
+    count = cache.memoize_async(tokenize_count)
+    window = _window(_WINDOW)
+    small = await exact_budget(window, _TEMPLATE, count, max_output_tokens=200)
+    large = await exact_budget(window, _TEMPLATE, count, max_output_tokens=1024)
+
+    assert small == InputBudget(tokens=_WINDOW - 200 - 100)
+    assert large == InputBudget(tokens=_WINDOW - 1024 - 100)
     assert seen == [_TEMPLATE]
 
 
@@ -174,11 +270,15 @@ async def test_the_budget_follows_the_window_while_the_template_count_is_kept() 
         return 100
 
     count = cache.memoize_async(tokenize_count)
-    assumed = await exact_budget(_window(ASSUMED_CONTEXT_TOKENS, ContextWindowSource.ASSUMED), _TEMPLATE, count)
-    probed = await exact_budget(_window(_WINDOW, ContextWindowSource.PROBED), _TEMPLATE, count)
+    assumed = await exact_budget(
+        _window(ASSUMED_CONTEXT_TOKENS, ContextWindowSource.ASSUMED), _TEMPLATE, count, max_output_tokens=_CEILING
+    )
+    probed = await exact_budget(
+        _window(_WINDOW, ContextWindowSource.PROBED), _TEMPLATE, count, max_output_tokens=_CEILING
+    )
 
-    assert assumed == InputBudget(tokens=ASSUMED_CONTEXT_TOKENS - ANSWER_RESERVE_TOKENS - 100)
-    assert probed == InputBudget(tokens=_WINDOW - ANSWER_RESERVE_TOKENS - 100)
+    assert assumed == InputBudget(tokens=ASSUMED_CONTEXT_TOKENS - _CEILING - 100)
+    assert probed == InputBudget(tokens=_WINDOW - _CEILING - 100)
     assert seen == [_TEMPLATE]
 
 
@@ -309,3 +409,25 @@ async def test_remembering_a_template_that_is_already_kept_evicts_nothing() -> N
         await count(template)
 
     assert seen == []
+
+
+# --- the ceiling is required everywhere: no default can bring a global reserve back -------------------------------------
+
+_SIZING_ENTRY_POINTS = {
+    "exact_budget": exact_budget,
+    "estimated_budget": estimated_budget,
+    "fit_query_to_window": fit_query_to_window,
+    "AnthropicClient": AnthropicClient.input_budget,
+    "OpenAIClient": OpenAIClient.input_budget,
+    "ClaudeCliClient": ClaudeCliClient.input_budget,
+    "LlamaCppClient": LlamaCppClient.input_budget,
+    "OllamaClient": OllamaClient.input_budget,
+}
+
+
+@pytest.mark.parametrize("entry_point", _SIZING_ENTRY_POINTS.values(), ids=_SIZING_ENTRY_POINTS.keys())
+def test_every_sizing_entry_point_requires_the_answer_ceiling_as_a_keyword(entry_point: object) -> None:
+    parameter = inspect.signature(entry_point).parameters["max_output_tokens"]  # type: ignore[arg-type]
+
+    assert parameter.default is inspect.Parameter.empty
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY

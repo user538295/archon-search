@@ -28,7 +28,7 @@ trimmed to its last full sentence within the limit (``DescriptionGenerated.trimm
 its last word, or to the limit itself when it has no space. When both answers have nothing left after cleaning the
 outcome is ``unusableOutput`` with a WARNING that points to the ``think`` setting (a reasoning model's answer was eaten by
 its thinking); an empty retry after an over-long first answer trims that first answer instead. Each attempt has the
-configured timeout and an answer ceiling: ``ANSWER_RESERVE_TOKENS``, the room the input budget already reserves, plus
+configured timeout and an answer ceiling: ``ANSWER_RESERVE_TOKENS``, the base ceiling the input budget is sized against, plus
 ``DESCRIPTION_THINKING_HEADROOM_TOKENS`` unless ``think`` is false (a reasoning model's thinking counts against the
 ceiling and took 1.9k to 2.4k tokens on a real model). Under a token budget the sample gives up min(headroom, budget // 2)
 of it, so prompt plus answer still fit the window; when not even one excerpt then fits (a small window), the sample
@@ -294,7 +294,13 @@ class DescriptionGenerator:
         if not chunk_ids:
             raise _no_open_chunk("no unrestricted chunks to describe; set a description by hand")
         with _provider_step():
-            sizing = await self._client.input_budget(_sizing_template(collection), think=ThinkSetting.from_config(self._config.think))
+            # Sized against the base ceiling; the thinking headroom below comes out of this budget, so a call sending
+            # ``ANSWER_RESERVE_TOKENS + headroom`` still has prompt plus ceiling within the window.
+            sizing = await self._client.input_budget(
+                _sizing_template(collection),
+                max_output_tokens=ANSWER_RESERVE_TOKENS,
+                think=ThinkSetting.from_config(self._config.think),
+            )
             budget = sizing.tokens
         count = min(self._config.max_sample_chunks, len(chunk_ids))
         thinking_possible = self._config.think is not False

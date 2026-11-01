@@ -31,8 +31,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from archon_search.constants import ANSWER_RESERVE_TOKENS
-from archon_search.hyde import HYDE_PROMPT_TEMPLATE
+from archon_search.hyde import HYDE_MAX_OUTPUT_TOKENS, HYDE_PROMPT_TEMPLATE
 from archon_search.llm_client.fit import fit_query_to_window
 from archon_search.llm_client.llama_cpp_client import LlamaCppClient
 from archon_search.llm_client.ollama_client import OllamaClient
@@ -400,7 +399,7 @@ async def test_a_query_of_special_token_literals_is_cut_to_what_a_splitting_toke
     real_gpt2_counter: TokenCounter, pinned_tokenizer_file: Path
 ) -> None:
     """The sizing step end to end: the query head ``fit_query_to_window`` sends, read by a vocabulary that splits the
-    literal, plus the template and the answer reserve, stays inside the window (the 4096 an unset ``ollama_context_tokens``
+    literal, plus the template and the HyDE answer ceiling, stays inside the window (the 4096 an unset ``ollama_context_tokens``
     assumes)."""
     tokenizers = _import_tokenizers()
     data = json.loads(pinned_tokenizer_file.read_text(encoding="utf-8"))
@@ -410,11 +409,17 @@ async def test_a_query_of_special_token_literals_is_cut_to_what_a_splitting_toke
     window = client.context_window().size
     template = HYDE_PROMPT_TEMPLATE.format(query="")
 
-    sent = await fit_query_to_window(client, template, _SPECIAL_TOKEN_LITERAL * _OVERLONG_LITERAL_COUNT, provider="ollama")
+    sent = await fit_query_to_window(
+        client,
+        template,
+        _SPECIAL_TOKEN_LITERAL * _OVERLONG_LITERAL_COUNT,
+        provider="ollama",
+        max_output_tokens=HYDE_MAX_OUTPUT_TOKENS,
+    )
 
     prompt_tokens = len(splitting.encode(HYDE_PROMPT_TEMPLATE.format(query=sent), add_special_tokens=False).ids)
     assert sent, "the window has room for part of the query"
-    assert prompt_tokens + ANSWER_RESERVE_TOKENS <= window
+    assert prompt_tokens + HYDE_MAX_OUTPUT_TOKENS <= window
 
 
 # --- a special-token literal re-formed by removing another, and lone surrogates ------------------------------------------

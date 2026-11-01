@@ -46,7 +46,9 @@ class ScriptedLlmClient:
     def context_window(self) -> ContextWindow:
         return UNBOUNDED
 
-    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+    async def input_budget(
+        self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+    ) -> InputBudget:
         return InputBudget(UNBOUNDED)
 
 
@@ -72,13 +74,17 @@ class BudgetedLlmClient(ScriptedLlmClient):
         self.count_failure = count_failure
         self.tokens_per_word = tokens_per_word
         self.templates: list[str] = []
+        self.ceilings: list[int] = []  # the ``max_output_tokens`` each ``input_budget`` call named
         self.counted: list[str] = []
 
     def context_window(self) -> ContextWindow:
         return ContextWindowTokens(size=self.window_tokens, source=ContextWindowSource.CONFIGURED)
 
-    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+    async def input_budget(
+        self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+    ) -> InputBudget:
         self.templates.append(template_text)
+        self.ceilings.append(max_output_tokens)
         return InputBudget(self.budget)
 
     async def count_tokens(self, text: str) -> int:

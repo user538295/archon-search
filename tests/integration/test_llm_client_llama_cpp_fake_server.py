@@ -59,7 +59,7 @@ async def test_llama_cpp_wrapper_against_fake_server() -> None:
         client = LlamaCppClient(model=_MODEL, base_url=server.base_url)
 
         window = await client.probe_context_window(_TIMEOUT_SECONDS)
-        budget = await client.input_budget(_TEMPLATE)
+        budget = await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
         result = await client.call(_request())
 
         assert window == ContextWindowTokens(size=_WINDOW, source=ContextWindowSource.PROBED)
@@ -142,7 +142,7 @@ async def test_llama_cpp_sizing_against_a_server_without_apply_template_names_th
         client = LlamaCppClient(model=_MODEL, base_url=server.base_url)
 
         with pytest.raises(LlmCallFailure) as raised:
-            await client.input_budget(_TEMPLATE)
+            await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert raised.value.reason.startswith("POST /apply-template: HTTP 404: ")
     assert _TEMPLATE not in raised.value.reason
@@ -155,10 +155,10 @@ async def test_llama_cpp_sizing_is_bounded_as_a_whole_not_per_request(monkeypatc
         client = LlamaCppClient(model=_MODEL, base_url=slow.base_url)
 
         with pytest.raises(LlmCallTimeout) as raised:
-            await client.input_budget(_TEMPLATE)
+            await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
         monkeypatch.setattr(llama_cpp_client, "SIZING_DEADLINE_SECONDS", _GENEROUS_DEADLINE_SECONDS)
-        within = await client.input_budget(_TEMPLATE)
+        within = await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     # The first request answers in 0.4 s; the deadline (0.6 s) fires while the second, /tokenize, is waited on.
     assert raised.value.reason == f"POST /tokenize: sizing the template took longer than {_SIZING_DEADLINE_SECONDS:g}s"
@@ -174,7 +174,7 @@ async def test_llama_cpp_sizing_of_a_wedged_server_names_the_endpoint_it_waited_
         client = LlamaCppClient(model=_MODEL, base_url=wedged.base_url)
 
         with pytest.raises(LlmCallTimeout) as raised:
-            await client.input_budget(_TEMPLATE)
+            await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert raised.value.reason.startswith("POST /apply-template: ")
     assert _TEMPLATE not in raised.value.reason

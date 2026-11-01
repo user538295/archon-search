@@ -173,7 +173,7 @@ def test_context_window_is_unbounded(flavour: _Flavour) -> None:
 async def test_input_budget_is_unbounded_and_makes_no_call(flavour: _Flavour, think: ThinkSetting) -> None:
     fake = _FakeSdkClient(flavour)
 
-    budget = await _wrapper(flavour, fake).input_budget("a template that is never counted", think=think)
+    budget = await _wrapper(flavour, fake).input_budget("a template that is never counted", max_output_tokens=ANSWER_RESERVE_TOKENS, think=think)
 
     assert budget == InputBudget(tokens=UNBOUNDED)
     assert fake.create_calls == []

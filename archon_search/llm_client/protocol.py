@@ -62,8 +62,9 @@ class LlmCallRequest:
     """One stateless call: exactly one user message, no history, no session."""
 
     prompt: str
-    #: Callers pass ``constants.ANSWER_RESERVE_TOKENS`` so the answer space the budget reserves is the ceiling they send;
-    #: a description call that may think adds ``DESCRIPTION_THINKING_HEADROOM_TOKENS`` and shrinks its sample to pay for it.
+    #: The ceiling on the answer. A caller that sizes its input to ``LlmClient.input_budget`` passes this same number
+    #: there, so prompt and answer together fit the window; a description call that may think adds
+    #: ``DESCRIPTION_THINKING_HEADROOM_TOKENS`` and shrinks its sample to pay for it.
     max_output_tokens: int
     #: Per attempt.
     timeout_seconds: float
@@ -123,7 +124,7 @@ class ContextWindowSource(enum.StrEnum):
 class ContextWindowTokens:
     """A window the client enforces: ``size`` tokens, known from ``source``.
 
-    A window smaller than answer reserve plus template is representable (it yields ``InputBudget(0)``), so the
+    A window smaller than the caller's answer ceiling plus template is representable (it yields ``InputBudget(0)``), so the
     caller can fail naming the window; ``size`` is at least 1 where a configured value is validated."""
 
     size: int
@@ -138,10 +139,10 @@ ContextWindow = ContextWindowTokens | Unbounded
 class InputBudget:
     """How many input tokens a caller may send, or ``UNBOUNDED``.
 
-    The window minus the reserved answer space minus the prompt template, after the provider's
+    The window minus the caller's own answer ceiling minus the prompt template, after the provider's
     counting rule (exact for ``llama_cpp``, the token estimate plus ``OLLAMA_ESTIMATE_MARGIN`` for ``ollama``).
 
-    A window too small for reserve and template gives 0, never a negative number (``llm_client.budget``).
+    A window too small for ceiling and template gives 0, never a negative number (``llm_client.budget``).
     """
 
     tokens: int | Unbounded
@@ -165,13 +166,20 @@ class LlmClient(Protocol):
         """The window this client sizes to; fixed when the client is built."""
         ...
 
-    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+    async def input_budget(
+        self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+    ) -> InputBudget:
         """The budget callers size their input to.
 
         Args:
             template_text: the LONGEST form of the prompt template the caller will send: the
                 template WITH the retry reminder, so a retry of a full sample still fits a small
                 window and never needs a second sizing.
+            max_output_tokens: the answer ceiling of the calls the budget is for, i.e. the ``max_output_tokens`` they
+                send. The budget holds exactly this much of the window back, so prompt plus answer fit the window
+                (``llama_cpp``: up to the tokens where the template meets the query, which are counted apart; ``ollama``: within
+                ``OLLAMA_ESTIMATE_MARGIN``, which also has to cover the chat framing). A client with no
+                window (cloud, ``claude_cli``) ignores it. Required: there is no default answer size.
             think: the thinking setting of the calls the budget is for. A chat template can frame a prompt differently
                 per setting (Qwen3 appends an empty think block when thinking is off), so a client that counts the
                 framing renders it for this setting; ``DEFAULT`` is what a call sends when it sets nothing.

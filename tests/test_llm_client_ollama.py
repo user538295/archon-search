@@ -318,9 +318,18 @@ def test_wrapper_implements_the_shared_client_protocol() -> None:
 async def test_input_budget_is_the_gpt2_estimate_for_the_configured_window() -> None:
     wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW)
 
-    budget = await wrapper.input_budget(_TEMPLATE)
+    budget = await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert budget == InputBudget(tokens=_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)
+
+
+@pytest.mark.parametrize("ceiling", [1, 150, 200, 750, 1024])
+async def test_input_budget_holds_back_the_callers_own_answer_ceiling_before_the_margin(ceiling: int) -> None:
+    wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW)
+
+    budget = await wrapper.input_budget(_TEMPLATE, max_output_tokens=ceiling)
+
+    assert budget == InputBudget(tokens=(_CONFIGURED_WINDOW - ceiling) * 5 // 6 - _TEMPLATE_TOKENS)
 
 
 @pytest.mark.parametrize("think", list(ThinkSetting))
@@ -328,13 +337,13 @@ async def test_input_budget_does_not_depend_on_the_thinking_setting(think: Think
     """Ollama applies its own chat template and the estimate never counts it, so the setting changes nothing."""
     wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW)
 
-    assert await wrapper.input_budget(_TEMPLATE, think=think) == InputBudget(tokens=_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)
+    assert await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS, think=think) == InputBudget(tokens=_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)
 
 
 async def test_input_budget_uses_the_assumed_window_when_unset() -> None:
     wrapper = _wrapper(_Factory(), context_tokens=None)
 
-    budget = await wrapper.input_budget(_TEMPLATE)
+    budget = await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert budget == InputBudget(tokens=_ASSUMED_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)
 
@@ -346,7 +355,7 @@ async def test_failing_counter_raises_call_failure() -> None:
     wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW, counter=TokenCounter(load_tokenizer=broken_loader))
 
     with pytest.raises(LlmCallFailure) as raised:
-        await wrapper.input_budget(_TEMPLATE)
+        await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert raised.value.provider == "ollama"
 
@@ -356,7 +365,7 @@ async def test_input_budget_counts_a_template_once_per_cached_template() -> None
     stub = StubTokenizer()
     wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW, counter=TokenCounter(load_tokenizer=lambda: stub))
 
-    budgets = [await wrapper.input_budget(_TEMPLATE) for _ in range(4)]
+    budgets = [await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS) for _ in range(4)]
 
     assert budgets == [InputBudget(tokens=_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)] * 4
     assert stub.calls == [_TEMPLATE]
@@ -372,30 +381,30 @@ async def test_the_first_template_count_runs_off_the_event_loop_thread() -> None
 
     wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW, counter=TokenCounter(load_tokenizer=load))
 
-    await wrapper.input_budget(_TEMPLATE)
+    await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert threads and threads[0] != loop_thread
 
 
 async def test_a_cached_template_is_sized_without_a_hop_to_a_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW)
-    first = await wrapper.input_budget(_TEMPLATE)
+    first = await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     async def no_thread_expected(*_args: object, **_kwargs: object) -> int:
         raise AssertionError("a cache hit must not leave the event loop thread")
 
     monkeypatch.setattr(asyncio, "to_thread", no_thread_expected)
 
-    assert await wrapper.input_budget(_TEMPLATE) == first
+    assert await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS) == first
 
 
 async def test_input_budget_keeps_one_count_per_template_and_does_not_cache_query_counts() -> None:
     stub = StubTokenizer()
     wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW, counter=TokenCounter(load_tokenizer=lambda: stub))
 
-    await wrapper.input_budget(_TEMPLATE)
-    await wrapper.input_budget(_SECOND_PROMPT)
-    await wrapper.input_budget(_TEMPLATE)
+    await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
+    await wrapper.input_budget(_SECOND_PROMPT, max_output_tokens=ANSWER_RESERVE_TOKENS)
+    await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
     await wrapper.count_tokens(_PROMPT)
     await wrapper.count_tokens(_PROMPT)
 
@@ -413,9 +422,9 @@ async def test_a_failed_template_count_is_not_cached() -> None:
 
     wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW, counter=TokenCounter(load_tokenizer=flaky_loader))
     with pytest.raises(LlmCallFailure):
-        await wrapper.input_budget(_TEMPLATE)
+        await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
-    assert await wrapper.input_budget(_TEMPLATE) == InputBudget(tokens=_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)
+    assert await wrapper.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS) == InputBudget(tokens=_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)
 
 
 def test_token_ceiling_is_the_estimate_bound_of_the_counter() -> None:

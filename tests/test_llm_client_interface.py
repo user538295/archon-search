@@ -286,7 +286,9 @@ class _StubClient:
     def context_window(self) -> ContextWindow:
         return UNBOUNDED
 
-    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+    async def input_budget(
+        self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+    ) -> InputBudget:
         return InputBudget(tokens=UNBOUNDED)
 
 
@@ -295,6 +297,14 @@ def test_input_budget_takes_the_thinking_setting_of_the_calls_it_sizes_for() -> 
     parameter = inspect.signature(LlmClient.input_budget).parameters["think"]
 
     assert parameter.default is ThinkSetting.DEFAULT
+
+
+def test_input_budget_requires_the_answer_ceiling_of_the_calls_it_sizes_for() -> None:
+    """No default: a caller that forgets its ceiling fails loudly instead of silently holding back a global reserve."""
+    parameter = inspect.signature(LlmClient.input_budget).parameters["max_output_tokens"]
+
+    assert parameter.default is inspect.Parameter.empty
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def test_interface_is_structural_and_runtime_checkable() -> None:

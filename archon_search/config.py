@@ -235,7 +235,7 @@ class GraphConfig:
     """Per-minute rate limit for enrichment LLM calls. Applies to the anthropic and claude_cli
     providers (account quotas); the others are not throttled."""
     extraction_token_budget: int = 1024
-    """Max output tokens per enrichment LLM call; under a window, a value above 1024 comes out of the passages' room."""
+    """Max output tokens per enrichment LLM call; under a window it is held back from the prompt, so a higher value takes room from the passages."""
     backend_threshold_edges: int = _GRAPH_BACKEND_THRESHOLD_EDGES_DEFAULT
     # E1b community-detection fields
     leiden_resolution: float = _GRAPH_LEIDEN_RESOLUTION_DEFAULT

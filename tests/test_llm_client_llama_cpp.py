@@ -425,10 +425,20 @@ async def test_llama_cpp_input_budget_uses_the_servers_exact_count_of_the_framed
     client = _client(server)
     await client.probe_context_window(_TIMEOUT_SECONDS)
 
-    budget = await client.input_budget(_TEMPLATE)
+    budget = await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert budget == InputBudget(tokens=_PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS)
     assert server.bodies("/tokenize") == [{"content": _applied(_TEMPLATE)}]
+
+
+@pytest.mark.parametrize("ceiling", [1, 150, 200, 750, 1024])
+async def test_llama_cpp_input_budget_holds_back_the_callers_own_answer_ceiling(ceiling: int) -> None:
+    client = _client(_Server())
+    await client.probe_context_window(_TIMEOUT_SECONDS)
+
+    budget = await client.input_budget(_TEMPLATE, max_output_tokens=ceiling)
+
+    assert budget == InputBudget(tokens=_PROBED_WINDOW - ceiling - _TEMPLATE_TOKENS - _FRAME_TOKENS)
 
 
 async def test_llama_cpp_counts_tokens_with_the_servers_tokenizer_and_is_a_token_counting_client() -> None:
@@ -445,7 +455,7 @@ async def test_llama_cpp_input_budget_failure_raises_llm_call_failure() -> None:
     server = _Server(statuses={"/tokenize": (500, {"error": {"message": "tokenizer down"}})})
 
     with pytest.raises(LlmCallFailure) as raised:
-        await _client(server).input_budget(_TEMPLATE)
+        await _client(server).input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert raised.value.reason == "POST /tokenize: HTTP 500: tokenizer down"
 
@@ -454,7 +464,7 @@ async def test_llama_cpp_input_budget_malformed_tokenize_answer_raises_failure()
     server = _Server(statuses={"/tokenize": (200, {"tokens": "many"})})
 
     with pytest.raises(LlmCallFailure) as raised:
-        await _client(server).input_budget(_TEMPLATE)
+        await _client(server).input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert "unexpected reply" in raised.value.reason
 
@@ -464,7 +474,7 @@ async def test_llama_cpp_input_budget_asks_the_server_to_frame_the_template_as_o
     # (llama-server wraps the user message in the model's chat template), which ate the reserved answer space.
     server = _Server()
 
-    await _client(server).input_budget(_TEMPLATE)
+    await _client(server).input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert [request.url.path for request in server.requests] == ["/apply-template", "/tokenize"]
     assert server.bodies("/apply-template") == [{"messages": [{"role": "user", "content": _TEMPLATE}]}]
@@ -475,7 +485,7 @@ async def test_llama_cpp_input_budget_without_apply_template_endpoint_names_the_
     server = _Server(statuses={"/apply-template": (404, {"error": {"message": "File Not Found"}})})
 
     with pytest.raises(LlmCallFailure) as raised:
-        await _client(server).input_budget(_TEMPLATE)
+        await _client(server).input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert raised.value.reason == "POST /apply-template: HTTP 404: File Not Found"
     assert _paths(server) == ["/apply-template"]
@@ -485,7 +495,7 @@ async def test_llama_cpp_input_budget_names_the_endpoint_of_a_malformed_apply_te
     server = _Server(statuses={"/apply-template": (200, {"prompt": 7})})
 
     with pytest.raises(LlmCallFailure) as raised:
-        await _client(server).input_budget(_TEMPLATE)
+        await _client(server).input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert raised.value.reason.startswith("POST /apply-template: unexpected reply")
 
@@ -495,7 +505,7 @@ async def test_llama_cpp_sizing_timeout_keeps_its_type_and_names_the_endpoint() 
         raise httpx.ReadTimeout("slow", request=request)
 
     with pytest.raises(LlmCallTimeout) as raised:
-        await _client(server).input_budget(_TEMPLATE)
+        await _client(server).input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert raised.value.reason.startswith("POST /apply-template: no answer within ")
 
@@ -532,7 +542,7 @@ async def test_llama_cpp_a_wedged_server_fails_the_sizing_naming_the_endpoint_in
     monkeypatch.setattr(llama_cpp_client, "TOKENIZE_TIMEOUT_SECONDS", request_timeout_seconds)
 
     with pytest.raises(LlmCallTimeout) as raised:
-        await _client(_hanging_on(path)).input_budget(_TEMPLATE)
+        await _client(_hanging_on(path)).input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert raised.value.reason.startswith(f"POST {path}: ")
     assert _TEMPLATE not in raised.value.reason
@@ -543,7 +553,7 @@ async def test_llama_cpp_sizing_failure_masks_the_prompt_the_server_echoes(path:
     server = _Server(echoing={path: 400})
 
     with pytest.raises(LlmCallFailure) as raised:
-        await _client(server).input_budget(_TEMPLATE)
+        await _client(server).input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert raised.value.reason == f"POST {path}: HTTP 400: cannot process: [prompt]"
     assert _TEMPLATE not in str(raised.value)
@@ -573,7 +583,7 @@ async def test_llama_cpp_input_budget_malformed_apply_template_answer_raises_fai
     server = _Server(statuses={"/apply-template": (200, {"prompt": 7})})
 
     with pytest.raises(LlmCallFailure) as raised:
-        await _client(server).input_budget(_TEMPLATE)
+        await _client(server).input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert "unexpected reply" in raised.value.reason
 
@@ -593,9 +603,9 @@ async def test_llama_cpp_input_budget_counts_a_template_once_per_cached_template
     server = _Server()
     client = _client(server)
 
-    first = await client.input_budget(_TEMPLATE)
-    second = await client.input_budget(_TEMPLATE)
-    third = await client.input_budget(_TEMPLATE)
+    first = await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
+    second = await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
+    third = await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert first == second == third == InputBudget(tokens=_ASSUMED_BUDGET)
     assert _paths(server) == _TEMPLATE_REQUESTS
@@ -605,10 +615,10 @@ async def test_llama_cpp_input_budget_keeps_one_count_per_template() -> None:
     server = _Server()
     client = _client(server)
 
-    await client.input_budget(_TEMPLATE)
-    other = await client.input_budget(_OTHER_TEMPLATE)
-    await client.input_budget(_TEMPLATE)
-    await client.input_budget(_OTHER_TEMPLATE)
+    await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
+    other = await client.input_budget(_OTHER_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
+    await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
+    await client.input_budget(_OTHER_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert other == InputBudget(tokens=ASSUMED_CONTEXT_TOKENS - ANSWER_RESERVE_TOKENS - _OTHER_TEMPLATE_TOKENS - _FRAME_TOKENS)
     assert _paths(server) == _TEMPLATE_REQUESTS * 2
@@ -619,11 +629,11 @@ async def test_llama_cpp_cached_template_count_does_not_freeze_the_assumed_windo
     template is counted again because a server that answers may be another model than the one assumed."""
     server = _Server()
     client = _client(server)
-    assumed = await client.input_budget(_TEMPLATE)
+    assumed = await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     await client.probe_context_window(_TIMEOUT_SECONDS)
-    probed = await client.input_budget(_TEMPLATE)
-    await client.input_budget(_TEMPLATE)
+    probed = await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
+    await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert assumed == InputBudget(tokens=_ASSUMED_BUDGET)
     assert probed == InputBudget(tokens=_PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS)
@@ -633,10 +643,10 @@ async def test_llama_cpp_cached_template_count_does_not_freeze_the_assumed_windo
 async def test_llama_cpp_failed_probe_keeps_the_cached_template_count() -> None:
     server = _Server(failures={"/props": httpx.ConnectError("refused")})
     client = _client(server)
-    await client.input_budget(_TEMPLATE)
+    await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     await client.probe_context_window(_TIMEOUT_SECONDS)
-    await client.input_budget(_TEMPLATE)
+    await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert _paths(server) == [*_TEMPLATE_REQUESTS, "/props"]
 
@@ -651,10 +661,10 @@ async def test_llama_cpp_failed_template_count_is_not_cached() -> None:
 
     client = _client(server)
     with pytest.raises(LlmCallFailure):
-        await client.input_budget(_TEMPLATE)
+        await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
     state["up"] = True
 
-    assert await client.input_budget(_TEMPLATE) == InputBudget(tokens=_ASSUMED_BUDGET)
+    assert await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS) == InputBudget(tokens=_ASSUMED_BUDGET)
 
 
 async def test_llama_cpp_query_count_is_not_cached() -> None:
@@ -726,10 +736,10 @@ async def test_llama_cpp_successful_reprobe_with_an_unchanged_window_still_recou
     server = _Server()
     client = _client(server)
     await client.probe_context_window(_TIMEOUT_SECONDS)
-    await client.input_budget(_TEMPLATE)
+    await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     await client.probe_context_window(_TIMEOUT_SECONDS)
-    await client.input_budget(_TEMPLATE)
+    await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert _paths(server) == ["/props", *_TEMPLATE_REQUESTS, "/props", *_TEMPLATE_REQUESTS]
 
@@ -750,14 +760,14 @@ async def test_llama_cpp_template_count_in_flight_when_the_probe_succeeds_is_not
         return served(request)
 
     client = _client(server)
-    in_flight = asyncio.create_task(client.input_budget(_TEMPLATE))
+    in_flight = asyncio.create_task(client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS))
     await asyncio.wait_for(started.wait(), _TIMEOUT_SECONDS)
 
     await client.probe_context_window(_TIMEOUT_SECONDS)
     release.set()
     await in_flight
     served.requests.clear()
-    await client.input_budget(_TEMPLATE)
+    await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert _paths(served) == _TEMPLATE_REQUESTS
 
@@ -869,7 +879,7 @@ async def test_llama_cpp_input_budget_frames_the_template_with_the_thinking_swit
     server = _Server()
     client = _client(server)
 
-    await client.input_budget(_TEMPLATE, think=think)
+    await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS, think=think)
     await client.call(LlmCallRequest(prompt=_PROMPT, max_output_tokens=ANSWER_RESERVE_TOKENS, timeout_seconds=_TIMEOUT_SECONDS, think=think))
 
     [applied] = server.bodies("/apply-template")
@@ -883,9 +893,9 @@ async def test_llama_cpp_input_budget_counts_the_framing_the_thinking_switch_add
     await client.probe_context_window(_TIMEOUT_SECONDS)
     plain = _PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS
 
-    assert await client.input_budget(_TEMPLATE) == InputBudget(tokens=plain)
-    assert await client.input_budget(_TEMPLATE, think=ThinkSetting.ON) == InputBudget(tokens=plain)
-    assert await client.input_budget(_TEMPLATE, think=ThinkSetting.OFF) == InputBudget(tokens=plain - _THINK_OFF_FRAME_TOKENS)
+    assert await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS) == InputBudget(tokens=plain)
+    assert await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS, think=ThinkSetting.ON) == InputBudget(tokens=plain)
+    assert await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS, think=ThinkSetting.OFF) == InputBudget(tokens=plain - _THINK_OFF_FRAME_TOKENS)
 
 
 async def test_llama_cpp_input_budget_keeps_one_count_per_template_and_thinking_setting() -> None:
@@ -894,7 +904,7 @@ async def test_llama_cpp_input_budget_keeps_one_count_per_template_and_thinking_
 
     for _ in range(2):
         for think in ThinkSetting:
-            await client.input_budget(_TEMPLATE, think=think)
+            await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS, think=think)
 
     assert _paths(server) == _TEMPLATE_REQUESTS * len(ThinkSetting)
 
@@ -903,11 +913,11 @@ async def test_llama_cpp_successful_probe_drops_the_counts_of_every_thinking_set
     server = _Server()
     client = _client(server)
     for think in ThinkSetting:
-        await client.input_budget(_TEMPLATE, think=think)
+        await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS, think=think)
     server.requests.clear()
 
     await client.probe_context_window(_TIMEOUT_SECONDS)
     for think in ThinkSetting:
-        await client.input_budget(_TEMPLATE, think=think)
+        await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS, think=think)
 
     assert _paths(server) == ["/props", *_TEMPLATE_REQUESTS * len(ThinkSetting)]

@@ -81,7 +81,7 @@ class HyDEGenerator:
         wrong space (or the wrong dimension).
 
         The query is sized to the client's window first (``llm_client.fit``): a cloud client has no budget and gets it
-        whole; a local one gets the head that fits next to the template and the answer reserve, inside this call only —
+        whole; a local one gets the head that fits next to the template and its own answer ceiling (``HYDE_MAX_OUTPUT_TOKENS``), inside this call only —
         the caller keeps searching with the original query.
 
         Returns a vector (list of floats) on success, or ``None`` when the search must run on the plain query:
@@ -116,7 +116,11 @@ class HyDEGenerator:
         sent_query = query  # what reaches the provider: the part of the query that fits the window
         try:
             sent_query = await fit_query_to_window(
-                self._client, HYDE_PROMPT_TEMPLATE.format(query=""), query, provider=self._config.provider
+                self._client,
+                HYDE_PROMPT_TEMPLATE.format(query=""),
+                query,
+                provider=self._config.provider,
+                max_output_tokens=HYDE_MAX_OUTPUT_TOKENS,
             )
             request = LlmCallRequest(
                 prompt=HYDE_PROMPT_TEMPLATE.format(query=sent_query),

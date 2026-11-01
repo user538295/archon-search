@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.constants import ANSWER_RESERVE_TOKENS
 from archon_search.llm_client.fit import fit_text_to_budget
 from archon_search.llm_client.token_counter import TokenCounter
 from tests._fake_model_server import (
@@ -93,7 +92,7 @@ def test_e2e_llama_cpp_a_long_query_costs_exactly_the_counts_of_its_fit_and_the_
 ) -> None:
     query = f"{_SHORT_QUERY} {words(_LONG_QUERY_WORDS)}"
     template_words = len(feature.template.split())
-    budget = _LLAMA_CPP_WINDOW - ANSWER_RESERVE_TOKENS - FAKE_CHAT_FRAME_TOKENS - template_words  # the fake counts words
+    budget = _LLAMA_CPP_WINDOW - feature.max_output_tokens - FAKE_CHAT_FRAME_TOKENS - template_words  # the fake counts words
     reference_counts: list[str] = []
 
     async def reference_count(text: str) -> int:

@@ -53,9 +53,10 @@ LOCAL_SERVER_PROBE_TIMEOUT_SECONDS: Final[float] = 5.0
 # estimate only approximates the model's own tokenizer.
 OLLAMA_ESTIMATE_MARGIN: Final[float] = 0.20
 
-# Output tokens every sized prompt leaves free for the model's answer (C1 "reserved answer space"). A caller's
-# ``LlmCallRequest.max_output_tokens`` should equal it so the reserve covers what the model may produce; description
-# calls on a model that may think add ``DESCRIPTION_THINKING_HEADROOM_TOKENS`` and pay for it out of their sample.
+# Base answer ceiling of a description call (its ``LlmCallRequest.max_output_tokens`` and the ``max_output_tokens`` its
+# input budget is sized against). Not a global reserve: every other feature sizes against its OWN ceiling (HyDE 200,
+# RAG Fusion 150 per variant, graph ``extraction_token_budget``). A description call on a model that may think adds
+# ``DESCRIPTION_THINKING_HEADROOM_TOKENS`` and pays for it out of its sample.
 ANSWER_RESERVE_TOKENS: Final[int] = 1024
 
 # Extra answer tokens a description call asks for unless ``[description].think`` is false (S54): a reasoning model

@@ -104,14 +104,18 @@ class CountingClient(ScriptedLlmClient):
         self._budget_tokens = budget_tokens
         self._window = window
         self.sized_templates: list[str] = []
+        self.sized_ceilings: list[int] = []
         self.sized_thinks: list[ThinkSetting] = []
 
     def context_window(self) -> ContextWindow:
         return self._window
 
-    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+    async def input_budget(
+        self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+    ) -> InputBudget:
         self.sized_templates.append(template_text)
         self.sized_thinks.append(think)
+        self.sized_ceilings.append(max_output_tokens)
         return InputBudget(self._budget_tokens)
 
     async def count_tokens(self, text: str) -> int:
@@ -179,10 +183,12 @@ class _CharCountingClient(_SequenceClient):
     def context_window(self) -> ContextWindow:
         return ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
 
-    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+    async def input_budget(
+        self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+    ) -> InputBudget:
         window = self.context_window()
         assert isinstance(window, ContextWindowTokens)
-        return await exact_budget(window, template_text, self.count_tokens)
+        return await exact_budget(window, template_text, self.count_tokens, max_output_tokens=max_output_tokens)
 
     async def count_tokens(self, text: str) -> int:
         return len(text)
@@ -393,7 +399,9 @@ class TestWindowTooSmall:
         """A budget in tokens needs the client's own counter; without it the sample cannot be fitted."""
 
         class _NoCounter(ScriptedLlmClient):
-            async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+            async def input_budget(
+                self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+            ) -> InputBudget:
                 return InputBudget(_SMALL_WINDOW_BUDGET_TOKENS)
 
         client = _NoCounter()
@@ -509,7 +517,9 @@ class TestCall:
     @pytest.mark.asyncio
     async def test_failure_while_sizing_is_a_call_failed_value(self) -> None:
         class _BrokenSizing(ScriptedLlmClient):
-            async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+            async def input_budget(
+                self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+            ) -> InputBudget:
                 raise LlmCallFailure("ollama", "cannot size the prompt")
 
         client = _BrokenSizing()
@@ -604,6 +614,19 @@ class TestThinkingHeadroom:
 
         first, retry = client.requests
         assert first.max_output_tokens == retry.max_output_tokens == ANSWER_RESERVE_TOKENS
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("think", [None, True, False])
+    async def test_the_budget_is_sized_once_against_the_base_ceiling_whatever_the_thinking_setting(
+        self, think: bool | None
+    ) -> None:
+        """One sizing, against ``ANSWER_RESERVE_TOKENS``; the thinking headroom is then carved out of that budget (T-7),
+        so the ceiling the call sends (base plus headroom) is paid for by the sample, not added on top of the window."""
+        client = _small_window_client()
+
+        await _generator(client, FakeSampleStore(), think=think).generate(_COLLECTION, _NAMESPACE)
+
+        assert client.sized_ceilings == [ANSWER_RESERVE_TOKENS]
 
     @pytest.mark.asyncio
     async def test_think_false_keeps_the_plain_ceiling_and_the_whole_budget(self) -> None:
@@ -988,10 +1011,12 @@ class TestNeverRaises:
         self, broken: str, caplog: pytest.LogCaptureFixture
     ) -> None:
         class _Broken(CountingClient):
-            async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+            async def input_budget(
+                self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+            ) -> InputBudget:
                 if broken == "input_budget":
                     raise TypeError("secret tokenizer path")
-                return await super().input_budget(template_text, think)
+                return await super().input_budget(template_text, max_output_tokens=max_output_tokens, think=think)
 
             async def count_tokens(self, text: str) -> int:
                 raise TypeError("secret tokenizer path")

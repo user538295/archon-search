@@ -23,13 +23,13 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from archon_search.constants import ANSWER_RESERVE_TOKENS
 from archon_search.embedder import ModelEmbedder
-from archon_search.hyde import HYDE_PROMPT_TEMPLATE
+from archon_search.hyde import HYDE_MAX_OUTPUT_TOKENS, HYDE_PROMPT_TEMPLATE
 from archon_search.llm_client.token_counter import TokenCounter
 from archon_search.rag_fusion import (
     RAG_FUSION_MAX_VARIANT_CHARS,
     RAG_FUSION_PROMPT_TEMPLATE,
+    RAG_FUSION_TOKENS_PER_QUERY,
 )
 from archon_search.server.schemas import WarmupResult
 from tests._fake_model_server import (
@@ -54,7 +54,8 @@ _QUERY_MARKER = "zebra-quokka-7731"
 _NUM_QUERIES = 2
 _OLLAMA_WINDOW = 4096
 _LLAMA_CPP_WINDOW = 2048
-_NO_ROOM_WINDOW = ANSWER_RESERVE_TOKENS  # exactly the answer reserve: nothing is left for the template or the query
+_OLD_RESERVE_TOKENS = 1024  # the global answer reserve every sized prompt used to hold back, restated apart from the code
+_BETWEEN_OLD_AND_NEW_BUDGET_WORDS = 3500  # on a 4096 window: over the old budget (about 3040), inside the new one
 _CLOUD_QUERY_WORDS = 51_000  # S9: "a ~51k-token prompt"
 _REQUEST_LIMIT_MB = 1
 _REQUEST_TOO_LARGE = 413
@@ -78,6 +79,7 @@ class Feature:
     failure_warning: str | None  # ``expansion_warning`` of a fallback answer
     template: str  # the feature's prompt template with an empty query
     prompt_around_query: tuple[str, str]  # the fixed text before and after the query in every prompt
+    max_output_tokens: int  # the answer ceiling the feature sends, which the window holds back for the answer
 
     def toml(self, **provider_lines: str | int) -> str:
         lines = [f"[{self.section}]", "enabled = true", f'model = "{_MODEL}"', f"timeout_seconds = {_CALL_TIMEOUT_SECONDS}"]
@@ -117,6 +119,7 @@ HYDE = Feature(
     failure_warning="HyDE expansion failed",
     template=HYDE_PROMPT_TEMPLATE.format(query=""),
     prompt_around_query=_around(HYDE_PROMPT_TEMPLATE),
+    max_output_tokens=HYDE_MAX_OUTPUT_TOKENS,
 )
 RAG_FUSION = Feature(
     section="rag_fusion",
@@ -125,6 +128,7 @@ RAG_FUSION = Feature(
     failure_warning=None,
     template=RAG_FUSION_PROMPT_TEMPLATE.format(num_queries=_NUM_QUERIES, max_chars=RAG_FUSION_MAX_VARIANT_CHARS, query=""),
     prompt_around_query=_around(RAG_FUSION_PROMPT_TEMPLATE),
+    max_output_tokens=RAG_FUSION_TOKENS_PER_QUERY * _NUM_QUERIES,
 )
 FEATURES = pytest.mark.parametrize("feature", [HYDE, RAG_FUSION], ids=lambda feature: feature.section)
 
@@ -213,8 +217,8 @@ def test_e2e_ollama_4096_window_query_is_cut_to_fit(
     assert len(sent) < len(query)
     assert sent == sent.rstrip()
     assert query[len(sent)] == " ", "the cut falls on a word boundary"
-    assert (estimate(feature.template) + estimate(sent)) * LARGEST_REAL_OVER_ESTIMATE + ANSWER_RESERVE_TOKENS <= _OLLAMA_WINDOW
-    room = int((_OLLAMA_WINDOW - ANSWER_RESERVE_TOKENS) / LARGEST_REAL_OVER_ESTIMATE) - estimate(feature.template)
+    assert (estimate(feature.template) + estimate(sent)) * LARGEST_REAL_OVER_ESTIMATE + feature.max_output_tokens <= _OLLAMA_WINDOW
+    room = int((_OLLAMA_WINDOW - feature.max_output_tokens) / LARGEST_REAL_OVER_ESTIMATE) - estimate(feature.template)
     assert estimate(sent) >= room * ACCEPTED_FILL_PERCENT // 100, "the cut is not wasteful"
     # The original query still drives the search: RAG Fusion embeds it whole next to the variants; HyDE embeds the
     # hypothesis instead, and neither embeds the cut text.
@@ -242,9 +246,34 @@ def test_e2e_llama_cpp_probed_window_query_is_cut_by_the_servers_own_count(
     assert query.startswith(sent)
     assert len(sent) < len(query)
     template_words = len(feature.template.split())
-    room = _LLAMA_CPP_WINDOW - ANSWER_RESERVE_TOKENS - FAKE_CHAT_FRAME_TOKENS - template_words  # the fake counts words
+    room = _LLAMA_CPP_WINDOW - feature.max_output_tokens - FAKE_CHAT_FRAME_TOKENS - template_words  # the fake counts words
     sent_words = len(sent.split())
     assert room * ACCEPTED_FILL_PERCENT // 100 <= sent_words <= room
+
+
+@FEATURES
+def test_e2e_llama_cpp_a_query_between_the_old_and_the_new_budget_reaches_the_provider_untrimmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, feature: Feature
+) -> None:
+    """The window holds back the feature's own answer ceiling (HyDE 200), not a global 1024: on a probed 4096 window a
+    query the old budget would have cut is sent whole, and prompt plus ceiling still fit the window."""
+    window = 4096
+    query = f"{_QUERY_MARKER} {words(_BETWEEN_OLD_AND_NEW_BUDGET_WORDS)}"
+    template_words = len(feature.template.split())
+    old_budget = window - _OLD_RESERVE_TOKENS - FAKE_CHAT_FRAME_TOKENS - template_words  # the fake counts words
+    new_budget = window - feature.max_output_tokens - FAKE_CHAT_FRAME_TOKENS - template_words
+    assert old_budget < len(query.split()) <= new_budget
+    with FakeModelServer(reply_text=feature.reply, llama_n_ctx=window) as server:
+        toml = feature.toml(provider="llama_cpp", llama_cpp_base_url=server.base_url)
+        [data] = _run(tmp_path, monkeypatch, feature, toml, query, wait_for_windows=True)
+        [chat] = server.requests_to(_OPENAI_CHAT_PATH)
+
+    assert feature.applied(data)
+    assert chat.body is not None
+    assert feature.sent_query(chat.body["messages"][0]["content"]) == query
+    assert chat.body["max_tokens"] == feature.max_output_tokens
+    prompt_tokens = len(chat.body["messages"][0]["content"].split()) + FAKE_CHAT_FRAME_TOKENS
+    assert prompt_tokens + chat.body["max_tokens"] <= window
 
 
 # --- cloud: whole (S9) --------------------------------------------------------------------------------------------
@@ -276,7 +305,7 @@ def test_e2e_window_with_no_room_skips_the_feature_with_one_warning(
     caplog.set_level(logging.DEBUG)
     query = f"{_QUERY_MARKER} migration procedure"
     with FakeModelServer(reply_text=feature.reply) as server:
-        toml = feature.toml(provider="ollama", ollama_base_url=server.base_url, ollama_context_tokens=_NO_ROOM_WINDOW)
+        toml = feature.toml(provider="ollama", ollama_base_url=server.base_url, ollama_context_tokens=feature.max_output_tokens)
         responses = _run(tmp_path, monkeypatch, feature, toml, query, searches=_SEARCHES)
         chats = server.requests_to(_OLLAMA_CHAT_PATH)
 
@@ -288,7 +317,7 @@ def test_e2e_window_with_no_room_skips_the_feature_with_one_warning(
     assert chats == [], "no model call is made for a window with no room"
     skipped = [r for r in caplog.records if r.levelno >= logging.WARNING and "skipped" in r.getMessage()]
     [warning] = skipped
-    assert f"{_NO_ROOM_WINDOW} tokens" in warning.getMessage()
+    assert f"{feature.max_output_tokens} tokens" in warning.getMessage()
     for record in caplog.records:
         assert _QUERY_MARKER not in f"{record.getMessage()} {record.args} {record.exc_text}"
 

@@ -222,8 +222,10 @@ class LlamaCppClient:
     def context_window(self) -> ContextWindowTokens:
         return self._window
 
-    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
-        """Window minus answer reserve minus the template's framed count, for calls that send *think*.
+    async def input_budget(
+        self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+    ) -> InputBudget:
+        """Window minus *max_output_tokens* minus the template's framed count, for calls that send *think*.
 
         The count is asked of the server once per template and setting (``/apply-template``, then ``/tokenize``); the window
         is read live, so one resolved later is used. The whole sizing, both requests together, is bounded by
@@ -236,7 +238,7 @@ class LlamaCppClient:
         )
         try:
             async with asyncio.timeout(SIZING_DEADLINE_SECONDS):
-                return await exact_budget(self._window, template_text, count)
+                return await exact_budget(self._window, template_text, count, max_output_tokens=max_output_tokens)
         except TimeoutError as exc:
             waiting_on = f"POST {in_flight.path}: " if in_flight.path is not None else ""
             raise LlmCallTimeout(
@@ -255,8 +257,8 @@ class LlamaCppClient:
         """Tokens of *text* as one user message after the server's chat template (system block, role markers, generation
         prompt), rendered with the thinking switch a call of *think* sends.
 
-        The server cuts the reserved answer space by these tokens when it builds the prompt of a call, so the budget counts
-        them (T-2: with the plain count a prompt of exactly the budget overran ``n_ctx - ANSWER_RESERVE_TOKENS`` by 29
+        The server cuts the answer space a call asks for (``max_tokens``) by these tokens when it builds the prompt, so the
+        budget counts them (T-2: with the plain count a prompt of exactly the budget overran ``n_ctx - max_tokens`` by 29
         tokens on Qwen2.5). A template may frame differently per switch (Qwen3 appends an empty think block when
         ``enable_thinking`` is false), so the request carries the same ``chat_template_kwargs`` the call will. *in_flight*
         is told which of the two requests is being waited on.

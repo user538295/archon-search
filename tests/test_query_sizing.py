@@ -19,7 +19,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from archon_search.config import ConfigError, HyDEConfig, RAGFusionConfig, load_config
-from archon_search.constants import ANSWER_RESERVE_TOKENS
 from archon_search.hyde import (
     HYDE_MAX_OUTPUT_TOKENS,
     HYDE_PROMPT_TEMPLATE,
@@ -220,7 +219,7 @@ async def test_a_query_over_the_budget_is_cut_to_a_prefix_at_a_word_boundary(fea
     ],
     ids=["english", "cjk", "digits"],
 )
-async def test_a_long_query_on_a_4096_ollama_window_fits_template_query_and_reserve(
+async def test_a_long_query_on_a_4096_ollama_window_fits_template_query_and_its_own_answer_ceiling(
     feature: Feature, query: str, tokenizer: Callable[[], Any]
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -234,11 +233,11 @@ async def test_a_long_query_on_a_4096_ollama_window_fits_template_query_and_rese
     sent = feature.sent_query(call["messages"][0]["content"])
     # By the same estimator the budget uses, with the largest real-over-estimate ratio, the call fits the window.
     estimated = estimate(feature.template()) + estimate(sent)
-    assert estimated * LARGEST_REAL_OVER_ESTIMATE + ANSWER_RESERVE_TOKENS <= _WINDOW
+    assert estimated * LARGEST_REAL_OVER_ESTIMATE + _ceiling(feature) <= _WINDOW
     assert query.startswith(sent)
     assert len(sent) < len(query), "the query had to be trimmed"
     # ... and the cut is not wasteful: the query takes most of the room that is left.
-    room = int((_WINDOW - ANSWER_RESERVE_TOKENS) / LARGEST_REAL_OVER_ESTIMATE) - estimate(feature.template())
+    room = int((_WINDOW - _ceiling(feature)) / LARGEST_REAL_OVER_ESTIMATE) - estimate(feature.template())
     assert estimate(sent) >= room * ACCEPTED_FILL_PERCENT // 100
 
 
@@ -264,8 +263,8 @@ async def test_llama_cpp_counts_exactly_through_the_server_and_fits_the_window(
     prompt = chat.body["messages"][0]["content"]
     template_words = len(feature.template().split())
     prompt_tokens = len(prompt.split()) + FAKE_CHAT_FRAME_TOKENS
-    assert prompt_tokens + ANSWER_RESERVE_TOKENS <= window
-    room = window - ANSWER_RESERVE_TOKENS - FAKE_CHAT_FRAME_TOKENS - template_words
+    assert prompt_tokens + _ceiling(feature) <= window
+    room = window - _ceiling(feature) - FAKE_CHAT_FRAME_TOKENS - template_words
     sent_words = len(prompt.split()) - template_words
     assert room * ACCEPTED_FILL_PERCENT // 100 <= sent_words <= room
     assert prompt.endswith(f"{words(sent_words)}\n---")
@@ -362,23 +361,56 @@ async def test_a_failure_text_echoing_the_trimmed_query_is_masked(feature: Featu
     assert "word10" not in warning.getMessage()
 
 
-# --- the answer ceiling stays inside the reserve the budget holds back --------------------------------------------
+# --- the budget holds back the answer ceiling the feature itself sends ---------------------------------------------
 
 
-def test_the_largest_rag_fusion_answer_fits_the_reserve_the_budget_holds_back(tmp_path: Path) -> None:
-    """The budget leaves ``ANSWER_RESERVE_TOKENS`` for the answer; ``num_queries`` is capped so 150 per variant stays inside."""
+async def test_hyde_sizes_against_its_own_answer_ceiling_and_sends_the_same_one() -> None:
+    client = BudgetedLlmClient(window_tokens=_WINDOW, budget=500, reply=_success_reply(HYDE))
+
+    await HYDE.start(client, "ollama")("a short query")
+
+    assert client.ceilings == [HYDE_MAX_OUTPUT_TOKENS]
+    assert [request.max_output_tokens for request in client.requests] == [HYDE_MAX_OUTPUT_TOKENS]
+
+
+@pytest.mark.parametrize("num_queries", [1, 2, 5])
+async def test_rag_fusion_sizes_against_150_tokens_per_requested_variant_and_sends_the_same(num_queries: int) -> None:
+    client = BudgetedLlmClient(window_tokens=_WINDOW, budget=500, reply=_success_reply(RAG_FUSION))
+    generator = RAGFusionGenerator(
+        RAGFusionConfig(enabled=True, provider="ollama", timeout_seconds=5.0, num_queries=num_queries), client
+    )
+
+    await generator.generate_variants("a short query")
+
+    assert client.ceilings == [RAG_FUSION_TOKENS_PER_QUERY * num_queries]
+    assert [request.max_output_tokens for request in client.requests] == [RAG_FUSION_TOKENS_PER_QUERY * num_queries]
+
+
+@pytest.mark.parametrize("window", [2048, 4096])
+async def test_no_feature_starves_at_the_small_windows_even_with_the_largest_rag_fusion_answer(window: int) -> None:
+    """The widest ceiling (5 variants, 750 tokens) still leaves room for a query at the windows the docs recommend."""
+    calls: list[dict[str, Any]] = []
+    ollama = _ollama_client(HYDE, StubTokenizer, calls, window)
+    rag_template = RAG_FUSION_PROMPT_TEMPLATE.format(num_queries=5, max_chars=RAG_FUSION_MAX_VARIANT_CHARS, query="")
+
+    hyde = await ollama.input_budget(HYDE.template(), max_output_tokens=HYDE_MAX_OUTPUT_TOKENS)
+    rag = await ollama.input_budget(rag_template, max_output_tokens=RAG_FUSION_TOKENS_PER_QUERY * 5)
+
+    assert isinstance(hyde.tokens, int) and isinstance(rag.tokens, int)
+    assert hyde.tokens > 0
+    assert rag.tokens > 0
+    assert hyde.tokens > rag.tokens, "the smaller answer leaves the query more room"
+
+
+def test_the_rag_fusion_config_still_caps_num_queries_at_five(tmp_path: Path) -> None:
+    """The ceiling grows with ``num_queries`` (150 each), so the cap is what bounds the room taken from the query."""
     config_file = tmp_path / "archon-search.toml"
     config_file.write_text("[rag_fusion]\nnum_queries = 5\n")
-    largest = load_config(config_file).rag_fusion.num_queries
+    assert load_config(config_file).rag_fusion.num_queries == 5
     config_file.write_text("[rag_fusion]\nnum_queries = 6\n")
 
     with pytest.raises(ConfigError):
         load_config(config_file)
-    assert RAG_FUSION_TOKENS_PER_QUERY * largest <= ANSWER_RESERVE_TOKENS
-
-
-def test_the_hyde_answer_ceiling_fits_the_reserve_the_budget_holds_back() -> None:
-    assert HYDE_MAX_OUTPUT_TOKENS <= ANSWER_RESERVE_TOKENS
 
 
 async def test_hyde_and_rag_fusion_each_log_their_own_no_room_warning(caplog: pytest.LogCaptureFixture) -> None:
@@ -391,3 +423,44 @@ async def test_hyde_and_rag_fusion_each_log_their_own_no_room_warning(caplog: py
 
     assert len(_warnings(caplog, HYDE)) == 1
     assert len(_warnings(caplog, RAG_FUSION)) == 1
+
+
+# --- the budget holds back the feature's OWN answer ceiling, not a global reserve ---------------------------------
+
+_HYDE_OLD_TRIM_POINT_QUERY_WORDS = 3000  # est. tokens: the old 1024-based budget (about 2528) trimmed it, the real room did not
+
+
+def _ceiling(feature: Feature) -> int:
+    """The answer ceiling the feature sends (restated here, apart from the code under test)."""
+    return HYDE_MAX_OUTPUT_TOKENS if feature is HYDE else RAG_FUSION_TOKENS_PER_QUERY * _NUM_QUERIES
+
+
+@FEATURES
+async def test_a_query_between_the_old_and_the_new_budget_is_no_longer_trimmed(feature: Feature) -> None:
+    calls: list[dict[str, Any]] = []
+    client = _ollama_client(feature, StubTokenizer, calls)
+    estimate = TokenCounter(load_tokenizer=StubTokenizer).count
+    old_budget = int((_WINDOW - 1024) / LARGEST_REAL_OVER_ESTIMATE) - estimate(feature.template())
+    new_budget = int((_WINDOW - _ceiling(feature)) / LARGEST_REAL_OVER_ESTIMATE) - estimate(feature.template())
+    query = " ".join(["lorem"] * _HYDE_OLD_TRIM_POINT_QUERY_WORDS)  # no digits: the estimate is one token per word
+    assert old_budget < estimate(query) <= new_budget
+
+    result = await feature.start(client, "ollama")(query)
+
+    assert not feature.failed(result)
+    [call] = calls
+    assert feature.sent_query(call["messages"][0]["content"]) == query
+
+
+@FEATURES
+async def test_prompt_plus_the_features_own_answer_ceiling_fits_the_window(feature: Feature) -> None:
+    calls: list[dict[str, Any]] = []
+    client = _ollama_client(feature, StubTokenizer, calls)
+    estimate = TokenCounter(load_tokenizer=StubTokenizer).count
+
+    await feature.start(client, "ollama")(words(6000))
+
+    [call] = calls
+    sent = feature.sent_query(call["messages"][0]["content"])
+    assert len(sent) < len(words(6000))
+    assert (estimate(feature.template()) + estimate(sent)) * LARGEST_REAL_OVER_ESTIMATE + _ceiling(feature) <= _WINDOW

@@ -55,8 +55,8 @@ Output exactly {num_queries} queries, one per line.
 {query}
 ---"""
 
-#: Answer ceiling per requested variant: the call's ``max_output_tokens`` is this times ``num_queries``. The largest
-#: ``num_queries`` the config accepts (5) stays inside ``ANSWER_RESERVE_TOKENS``, the room the input budget holds back.
+#: Answer ceiling per requested variant: the call's ``max_output_tokens`` is this times ``num_queries``, and the input
+#: budget holds back exactly that much of the window (the larger ``num_queries``, the less room for the query).
 RAG_FUSION_TOKENS_PER_QUERY: Final = 150
 #: Longest variant (characters) kept; a longer line is dropped (the prompt asks for under this).
 RAG_FUSION_MAX_VARIANT_CHARS: Final = 500
@@ -135,7 +135,7 @@ class RAGFusionGenerator:
         """Generate up to ``config.num_queries`` validated semantic variant strings.
 
         The query is sized to the client's window first (``llm_client.fit``): a cloud client has no budget and gets it
-        whole; a local one gets the head that fits next to the template and the answer reserve, inside this call only.
+        whole; a local one gets the head that fits next to the template and its own answer ceiling (150 per variant), inside this call only.
 
         Returns an empty list — the pipeline then searches the single query — when the rate limit is exhausted
         (its own WARNING, at most once a minute), the window has no room for the query (one WARNING per process naming
@@ -167,14 +167,19 @@ class RAGFusionGenerator:
                 self._rpm_tokens -= 1
 
         num_queries = self._config.num_queries
+        answer_ceiling = RAG_FUSION_TOKENS_PER_QUERY * num_queries
         sent_query = query  # what reaches the provider: the part of the query that fits the window
         try:
             sent_query = await fit_query_to_window(
-                self._client, self._render_prompt(""), query, provider=self._config.provider
+                self._client,
+                self._render_prompt(""),
+                query,
+                provider=self._config.provider,
+                max_output_tokens=answer_ceiling,
             )
             request = LlmCallRequest(
                 prompt=self._render_prompt(sent_query),
-                max_output_tokens=RAG_FUSION_TOKENS_PER_QUERY * num_queries,
+                max_output_tokens=answer_ceiling,
                 timeout_seconds=self._config.timeout_seconds,
             )
             raw_text = (await self._client.call(request)).text

@@ -114,11 +114,15 @@ class OllamaClient:
     def context_window(self) -> ContextWindowTokens:
         return self._window
 
-    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+    async def input_budget(
+        self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+    ) -> InputBudget:
         # The estimate counts no chat template, so *think* changes nothing. The count of the fixed template is kept; only a
         # miss pays the worker thread (the first count may download the tokenizer).
         try:
-            return await estimated_budget(self._window, template_text, self._cached_template_count)
+            return await estimated_budget(
+                self._window, template_text, self._cached_template_count, max_output_tokens=max_output_tokens
+            )
         except Exception as exc:
             raise LlmCallFailure(PROVIDER_NAME, f"cannot size the prompt: the gpt2 token counter failed ({type(exc).__name__})") from exc
 

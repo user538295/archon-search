@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
-from archon_search.constants import ANSWER_RESERVE_TOKENS
 from archon_search.llm_client.fit import MAX_CHARS_PER_TOKEN, describe_window
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.protocol import (
@@ -491,26 +490,24 @@ class CommunityBuilder:
         ``summary_text=None`` (the client raises, callers decide the fallback).
 
         The names and passages are sized to the client's input budget first (C1): the budget is the window minus the answer
-        reserve minus the template. The entity names go first, in the order given (all of them when they fit the budget;
-        else the longest prefix that fits, held to ``NAMES_CUT_SHARE_PERCENT`` of the budget when passages follow: a
-        community can have hundreds of entities), then as many passages as fit in what is left. A cloud client has
-        no budget, so everything goes. The budget holds ``ANSWER_RESERVE_TOKENS`` back for the answer: an
-        ``extraction_token_budget`` above that comes out of the room for the names and passages, so the prompt and the
-        answer together still fit the window.
+        ceiling (``extraction_token_budget``, the ``max_output_tokens`` of the call) minus the template. The entity names go
+        first, in the order given (all of them when they fit the budget; else the longest prefix that fits, held to
+        ``NAMES_CUT_SHARE_PERCENT`` of the budget when passages follow: a community can have hundreds of entities), then as
+        many passages as fit in what is left. A cloud client has no budget, so everything goes.
         """
-        budget = (await client.input_budget(SUMMARIZE_PROMPT_TEMPLATE)).tokens
         max_output_tokens = self._config.extraction_token_budget
+        budget = (await client.input_budget(SUMMARIZE_PROMPT_TEMPLATE, max_output_tokens=max_output_tokens)).tokens
         if isinstance(budget, int):
-            budget = max(0, budget - max(0, max_output_tokens - ANSWER_RESERVE_TOKENS))
             fitted = await self._fit_to_budget(client, budget, entity_names, chunk_texts)
             if fitted is None:
                 warn_once(
                     _logger,
                     _SUMMARY_BUDGET_WARN_KEY,
-                    "community_builder: the model's input budget is %d tokens (context window: %s); not even the first entity "
-                    "name of a community fits, so communities are built without summaries (later skips in this process are not "
-                    "logged)",
+                    "community_builder: the model's input budget is %d tokens after the %d-token answer ceiling "
+                    "([graph].extraction_token_budget) (context window: %s); not even the first entity name of a community "
+                    "fits, so communities are built without summaries (later skips in this process are not logged)",
                     budget,
+                    max_output_tokens,
                     describe_window(client.context_window()),
                 )
                 return None

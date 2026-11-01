@@ -50,6 +50,7 @@ _LOW_SURROGATE = "\ude00"
 _MOST_COUNTS = 10
 _MOST_COUNTS_FOR_A_LINEAR_TEXT = 3
 _LOOKAHEAD_CHARS_PER_TOKEN = 16
+_MAX_OUTPUT_TOKENS = 200  # the answer ceiling the sized call sends
 
 TokenCost = Callable[[str], int]
 
@@ -310,13 +311,13 @@ async def test_an_unbounded_client_gets_the_query_whole() -> None:
     client = ScriptedLlmClient()  # no count_tokens at all: a cloud client never counts
     query = words(60_000)
 
-    assert await fit_query_to_window(client, "template", query, provider="openai") is query
+    assert await fit_query_to_window(client, "template", query, provider="openai", max_output_tokens=_MAX_OUTPUT_TOKENS) is query
 
 
 async def test_the_query_is_sized_against_the_clients_budget_for_the_template() -> None:
     client = BudgetedLlmClient(window_tokens=4096, budget=40)
 
-    fitted = await fit_query_to_window(client, "the template", words(500), provider="ollama")
+    fitted = await fit_query_to_window(client, "the template", words(500), provider="ollama", max_output_tokens=_MAX_OUTPUT_TOKENS)
 
     assert client.templates == ["the template"]
     assert len(fitted.split()) <= 40
@@ -325,14 +326,14 @@ async def test_the_query_is_sized_against_the_clients_budget_for_the_template() 
 async def test_an_empty_query_with_room_is_returned_as_it_is() -> None:
     client = BudgetedLlmClient(window_tokens=4096, budget=40)
 
-    assert await fit_query_to_window(client, "the template", "", provider="ollama") == ""
+    assert await fit_query_to_window(client, "the template", "", provider="ollama", max_output_tokens=_MAX_OUTPUT_TOKENS) == ""
 
 
 async def test_a_zero_budget_has_no_room_for_the_query_and_names_the_window_not_the_query() -> None:
     client = BudgetedLlmClient(window_tokens=1100, budget=0)
 
     with pytest.raises(NoRoomForInput) as raised:
-        await fit_query_to_window(client, "the template", "very-unique-secret-query", provider="ollama")
+        await fit_query_to_window(client, "the template", "very-unique-secret-query", provider="ollama", max_output_tokens=_MAX_OUTPUT_TOKENS)
 
     assert "1100 tokens" in raised.value.detail
     assert "very-unique-secret-query" not in raised.value.detail
@@ -341,27 +342,31 @@ async def test_a_zero_budget_has_no_room_for_the_query_and_names_the_window_not_
 
 async def test_a_zero_budget_is_no_room_even_for_a_client_that_cannot_count() -> None:
     class CannotCount(ScriptedLlmClient):
-        async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+        async def input_budget(
+            self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+        ) -> InputBudget:
             return InputBudget(0)
 
     with pytest.raises(NoRoomForInput):
-        await fit_query_to_window(CannotCount(), "the template", "a query", provider="llama_cpp")
+        await fit_query_to_window(CannotCount(), "the template", "a query", provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS)
 
 
 async def test_a_budget_too_small_for_even_one_word_has_no_room() -> None:
     client = BudgetedLlmClient(window_tokens=1100, budget=4, tokens_per_word=5)  # not one word fits a budget of 4
 
     with pytest.raises(NoRoomForInput):
-        await fit_query_to_window(client, "the template", words(50), provider="ollama")
+        await fit_query_to_window(client, "the template", words(50), provider="ollama", max_output_tokens=_MAX_OUTPUT_TOKENS)
 
 
 async def test_a_client_with_a_budget_that_cannot_count_is_a_failure() -> None:
     class CannotCount(ScriptedLlmClient):
-        async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+        async def input_budget(
+            self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+        ) -> InputBudget:
             return InputBudget(100)
 
     with pytest.raises(LlmCallFailure) as raised:
-        await fit_query_to_window(CannotCount(), "the template", "a query", provider="llama_cpp")
+        await fit_query_to_window(CannotCount(), "the template", "a query", provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS)
 
     assert raised.value.provider == "llama_cpp"
     assert "count_tokens" in raised.value.reason
@@ -372,7 +377,9 @@ async def test_a_client_that_supplies_its_counting_methods_through_getattr_is_na
     """``isinstance`` does not see a method supplied by ``__getattr__``, yet ``getattr`` finds it: the message still names a method."""
 
     class Dynamic(ScriptedLlmClient):
-        async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+        async def input_budget(
+            self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+        ) -> InputBudget:
             return InputBudget(100)
 
         def __getattr__(self, name: str) -> Callable[..., object]:
@@ -381,7 +388,7 @@ async def test_a_client_that_supplies_its_counting_methods_through_getattr_is_na
             raise AttributeError(name)
 
     with pytest.raises(LlmCallFailure) as raised:
-        await fit_query_to_window(Dynamic(), "the template", "a query", provider="llama_cpp")
+        await fit_query_to_window(Dynamic(), "the template", "a query", provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS)
 
     assert "no count_tokens and token_ceiling" in raised.value.reason
 
@@ -394,7 +401,7 @@ async def test_a_query_whose_ceiling_fits_the_budget_is_returned_untouched_witho
     client = BudgetedLlmClient(window_tokens=4096, budget=200)
     query = words(10)
 
-    assert await fit_query_to_window(client, "the template", query, provider="llama_cpp") is query
+    assert await fit_query_to_window(client, "the template", query, provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS) is query
     assert client.counted == []
     assert client.templates == ["the template"]
 
@@ -402,7 +409,7 @@ async def test_a_query_whose_ceiling_fits_the_budget_is_returned_untouched_witho
 async def test_an_empty_query_needs_no_count() -> None:
     client = BudgetedLlmClient(window_tokens=4096, budget=40)
 
-    assert await fit_query_to_window(client, "the template", "", provider="llama_cpp") == ""
+    assert await fit_query_to_window(client, "the template", "", provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS) == ""
     assert client.counted == []
 
 
@@ -410,18 +417,18 @@ async def test_a_query_exactly_at_the_ceiling_goes_untouched_and_one_byte_more_i
     at_the_ceiling = "x" * 40
     client = BudgetedLlmClient(window_tokens=4096, budget=40)
 
-    assert await fit_query_to_window(client, "the template", at_the_ceiling, provider="llama_cpp") is at_the_ceiling
+    assert await fit_query_to_window(client, "the template", at_the_ceiling, provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS) is at_the_ceiling
     assert client.counted == []
 
     over_by_one_byte = "x" * 41  # one long word: the count says one token, the byte bound cannot know that
-    assert await fit_query_to_window(client, "the template", over_by_one_byte, provider="llama_cpp") == over_by_one_byte
+    assert await fit_query_to_window(client, "the template", over_by_one_byte, provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS) == over_by_one_byte
     assert client.counted == [over_by_one_byte]
 
 
 async def test_a_query_over_the_ceiling_is_counted_and_cut_as_before() -> None:
     client = BudgetedLlmClient(window_tokens=4096, budget=40)
 
-    fitted = await fit_query_to_window(client, "the template", words(500), provider="llama_cpp")
+    fitted = await fit_query_to_window(client, "the template", words(500), provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS)
 
     assert client.counted, "only a text whose ceiling is above the budget goes through the counting loop"
     assert len(fitted.split()) <= 40
@@ -432,7 +439,7 @@ async def test_the_ceiling_counts_bytes_not_characters() -> None:
     client = BudgetedLlmClient(window_tokens=4096, budget=50)
     query = "検" * 30
 
-    assert await fit_query_to_window(client, "the template", query, provider="llama_cpp") == query
+    assert await fit_query_to_window(client, "the template", query, provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS) == query
     assert client.counted == [query], "counted once, and it fits (the stub counts the unspaced run as one word)"
 
 
@@ -448,7 +455,7 @@ async def test_a_query_longer_than_the_budget_in_characters_is_not_encoded_to_fi
 
     client = Spying(window_tokens=4096, budget=40)
 
-    await fit_query_to_window(client, "the template", words(500), provider="llama_cpp")
+    await fit_query_to_window(client, "the template", words(500), provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS)
 
     assert ceilings == []
 
@@ -458,7 +465,7 @@ async def test_a_ceiling_above_the_budget_is_not_a_verdict_the_count_decides() -
     client = BudgetedLlmClient(window_tokens=4096, budget=10)
     query = "a b c d e f g h"
 
-    assert await fit_query_to_window(client, "the template", query, provider="llama_cpp") == query
+    assert await fit_query_to_window(client, "the template", query, provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS) == query
     assert client.counted == [query]
 
 
@@ -478,7 +485,9 @@ class _RealLlamaClient(LlamaCppClient):
         self.requests.append(content)
         return httpx.Response(200, json={"tokens": list(range(len(content.encode("utf-8")) + 1))})
 
-    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+    async def input_budget(
+        self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+    ) -> InputBudget:
         return InputBudget(self._budget)
 
 
@@ -501,7 +510,9 @@ class _RealOllamaClient(OllamaClient):
         super().__init__(model="m", base_url="http://ollama.test:11434", context_tokens=8192, token_counter=TokenCounter(load_tokenizer=lambda: self.tokenizer))
         self._budget = budget
 
-    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+    async def input_budget(
+        self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+    ) -> InputBudget:
         return InputBudget(self._budget)
 
     @property
@@ -527,7 +538,7 @@ async def test_the_fast_path_returns_what_the_counting_path_would_and_counts_not
     fast = make_client(budget)
     slow = make_client(budget)
 
-    assert await fit_query_to_window(fast, "the template", text, provider="llama_cpp") == text
+    assert await fit_query_to_window(fast, "the template", text, provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS) == text
     assert _counts_requested(fast) == []
     assert await fit_text_to_budget(text, budget, slow.count_tokens) == text
     assert _counts_requested(slow) != []
@@ -537,14 +548,14 @@ async def test_a_llama_budget_equal_to_the_bytes_is_not_a_fast_path_because_of_t
     query = "ab cd ef"  # eight bytes: the server may spend nine tokens on them
     client = _RealLlamaClient(budget=8)
 
-    fitted = await fit_query_to_window(client, "the template", query, provider="llama_cpp")
+    fitted = await fit_query_to_window(client, "the template", query, provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS)
 
     assert client.requests != [], "the ceiling (bytes + 1) is above the budget: the server counts"
     assert fitted != query, "the server counted nine tokens, so the head is cut"
     assert query.startswith(fitted)
 
     at_the_ceiling = _RealLlamaClient(budget=9)
-    assert await fit_query_to_window(at_the_ceiling, "the template", query, provider="llama_cpp") is query
+    assert await fit_query_to_window(at_the_ceiling, "the template", query, provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS) is query
     assert at_the_ceiling.requests == []
 
 
@@ -552,30 +563,50 @@ async def test_an_ollama_budget_equal_to_the_bytes_is_not_a_fast_path_when_there
     query = "1 2 3"  # five bytes, three digit runs: a ceiling of eight
     client = _RealOllamaClient(budget=5)
 
-    fitted = await fit_query_to_window(client, "the template", query, provider="ollama")
+    fitted = await fit_query_to_window(client, "the template", query, provider="ollama", max_output_tokens=_MAX_OUTPUT_TOKENS)
 
     assert client.counts_requested != [], "the ceiling (bytes + digit runs) is above the budget: the estimate counts"
     assert fitted != query, "the estimate is eight tokens, so the head is cut"
 
     at_the_ceiling = _RealOllamaClient(budget=8)
-    assert await fit_query_to_window(at_the_ceiling, "the template", query, provider="ollama") is query
+    assert await fit_query_to_window(at_the_ceiling, "the template", query, provider="ollama", max_output_tokens=_MAX_OUTPUT_TOKENS) is query
     assert at_the_ceiling.counts_requested == []
 
 
 async def test_a_client_that_counts_but_has_no_ceiling_is_named_as_such_not_as_unable_to_count() -> None:
     class NoCeiling(ScriptedLlmClient):
-        async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+        async def input_budget(
+            self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
+        ) -> InputBudget:
             return InputBudget(100)
 
         async def count_tokens(self, text: str) -> int:
             return 1
 
     with pytest.raises(LlmCallFailure) as raised:
-        await fit_query_to_window(NoCeiling(), "the template", "a query", provider="llama_cpp")
+        await fit_query_to_window(NoCeiling(), "the template", "a query", provider="llama_cpp", max_output_tokens=_MAX_OUTPUT_TOKENS)
 
     assert "token_ceiling" in raised.value.reason
     assert "count_tokens" not in raised.value.reason
     assert raised.value.provider == "llama_cpp"
+
+
+@pytest.mark.parametrize("ceiling", [1, 200, 750])
+async def test_the_clients_budget_is_asked_for_the_callers_own_answer_ceiling(ceiling: int) -> None:
+    client = BudgetedLlmClient(window_tokens=4096, budget=500)
+
+    await fit_query_to_window(client, "the template", "a query", provider="llama_cpp", max_output_tokens=ceiling)
+
+    assert client.ceilings == [ceiling]
+
+
+async def test_no_room_names_the_answer_ceiling_the_window_had_to_hold_back() -> None:
+    client = BudgetedLlmClient(window_tokens=1100, budget=0)
+
+    with pytest.raises(NoRoomForInput) as raised:
+        await fit_query_to_window(client, "the template", "a query", provider="ollama", max_output_tokens=750)
+
+    assert "750-token answer" in raised.value.detail
 
 
 def test_describe_window_names_size_and_source_or_unbounded() -> None:

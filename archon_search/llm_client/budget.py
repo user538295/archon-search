@@ -1,8 +1,12 @@
 """Input budgets: how many tokens a caller may send, sized ahead of the call (contract C1, scenarios S9, S11).
 
-Budget = window - ``ANSWER_RESERVE_TOKENS`` - template, where the template is the LONGEST form the caller will
-send (retry reminder included), so a retry of a full sample still fits and never needs a second sizing.
-A window too small to hold reserve and template gives a budget of 0 (never negative), which a caller reads as
+Budget = window - the caller's own answer ceiling (the ``max_output_tokens`` its calls send) - template, where the
+template is the LONGEST form the caller will send (retry reminder included), so a retry of a full sample still fits and
+never needs a second sizing. Prompt tokens plus the call's ``max_output_tokens`` therefore stay within the window: for
+``llama_cpp`` up to the tokens where the template meets the query (they are counted apart; one token measured on
+Qwen2.5), for ``ollama`` within ``OLLAMA_ESTIMATE_MARGIN``, which must also cover the chat framing. The ceiling is an input of every sizing,
+never a constant: a HyDE call asks for 200 tokens and holds back 200, a graph summary holds back its own budget.
+A window too small to hold ceiling and template gives a budget of 0 (never negative), which a caller reads as
 "nothing fits" and reports with the window it holds. There is no check after the call.
 
 * ``llama_cpp``: :func:`exact_budget`; the count is the server's own, in the server's tokens, and it counts the template
@@ -28,7 +32,7 @@ from collections.abc import Awaitable, Callable
 from fractions import Fraction
 from typing import Final
 
-from archon_search.constants import ANSWER_RESERVE_TOKENS, OLLAMA_ESTIMATE_MARGIN
+from archon_search.constants import OLLAMA_ESTIMATE_MARGIN
 from archon_search.llm_client.protocol import (
     UNBOUNDED,
     ContextWindowTokens,
@@ -102,18 +106,24 @@ def cloud_budget() -> InputBudget:
     return InputBudget(tokens=UNBOUNDED)
 
 
-async def exact_budget(window: ContextWindowTokens, template_text: str, count_tokens: AsyncTokenCount) -> InputBudget:
-    """Budget for a provider that counts exactly (``llama_cpp``)."""
+async def exact_budget(
+    window: ContextWindowTokens, template_text: str, count_tokens: AsyncTokenCount, *, max_output_tokens: int
+) -> InputBudget:
+    """Budget for a provider that counts exactly (``llama_cpp``): window - *max_output_tokens* - template."""
     template_tokens = await count_tokens(template_text)
-    return InputBudget(tokens=max(0, window.size - ANSWER_RESERVE_TOKENS - template_tokens))
+    return InputBudget(tokens=max(0, window.size - max_output_tokens - template_tokens))
 
 
-async def estimated_budget(window: ContextWindowTokens, template_text: str, count_estimate: AsyncTokenCount) -> InputBudget:
+async def estimated_budget(
+    window: ContextWindowTokens, template_text: str, count_estimate: AsyncTokenCount, *, max_output_tokens: int
+) -> InputBudget:
     """Budget in estimate tokens (``TokenCounter.count``) for a provider whose tokenizer is unknown (``ollama``).
 
     *count_estimate* is async so that a client can keep the blocking count (its first use may download the tokenizer)
     in a worker thread and still skip that thread when the answer is cached (:class:`TemplateCostCache`).
+    The room left by the caller's answer ceiling (*max_output_tokens*) is divided by ``1 + margin`` before the
+    template is taken off.
     """
     template_tokens = await count_estimate(template_text)
-    room_in_estimate_tokens = (window.size - ANSWER_RESERVE_TOKENS) // (1 + _ESTIMATE_MARGIN)
+    room_in_estimate_tokens = (window.size - max_output_tokens) // (1 + _ESTIMATE_MARGIN)
     return InputBudget(tokens=max(0, room_in_estimate_tokens - template_tokens))
