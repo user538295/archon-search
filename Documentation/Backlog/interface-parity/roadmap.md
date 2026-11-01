@@ -26,6 +26,7 @@ The contract every slice follows is [Brief 00](./00_service_layer_foundation_bri
 - **OpenAI-compatible `/v1/chat/completions` and `/v1/models`**: protocol adapter. They exist only when `[openai_shim].enabled` is true. It still calls the same services (S1).
 - **Graph HTML viewer and view-token on MCP (S32)**: HTTP-specific browser credential. The CLI gets `graph view`.
 - **Key admin toggle**: not built. The `admin` flag is immutable (see D3).
+- **Rewrite a collection's description on MCP (`collection describe` on REST and CLI)** (agreed 2026-11-01): permanent waiver, agents keep the manual set and clear tools. A rewrite calls the language model, which costs money with a cloud provider and nothing with a local one, and no per-key limit exists (ADR 19, which lists a describe MCP tool as out of scope). See D9.
 
 ## Decisions log
 
@@ -37,6 +38,7 @@ The contract every slice follows is [Brief 00](./00_service_layer_foundation_bri
 - **D6** (2026-10-30): `ingest`'s `ingested_by` is supplied by the adapter (MCP becomes `"mcp"`, not `"http"`). Before S16, check that nothing keys on the old value.
 - **D7** (2026-10-30): One brief per slice, written just-in-time. Brief 00 is the contract; later briefs reference it.
 - **D8** (2026-10-30): Authorization is enforced once, inside the service. Adapters pass the caller identity.
+- **D9** (2026-11-01): Agents (MCP) get no tool to rewrite a collection's description; they can only set or clear one by hand. The description feature's own plan chose this (ADR 19 lists a describe MCP tool as out of scope). The parity registry carries a permanent waiver for it.
 
 ## Slices
 

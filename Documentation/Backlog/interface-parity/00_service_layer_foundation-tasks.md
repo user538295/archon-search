@@ -105,7 +105,7 @@ flowchart LR
     - — · 1.5h
     - completes C1, C2, C3, C4, C5
     - Tests
-- [ ] **K2** — Correct the plan and the brief where the code disagrees (see Plan corrections): eight allowlist entries instead of nine, the S29 and S30 allocation, the stale line references, and the S33 exemption list (add this tasks file and the interface-parity `.tsp` contracts); record the descriptions decision (see Decisions) in `roadmap.md` as a waiver line and a decisions-log entry #team
+- [x] **K2** — Correct the plan and the brief where the code disagrees (see Plan corrections): eight allowlist entries instead of nine, the S29 and S30 allocation, the stale line references, and the S33 exemption list (add this tasks file and the interface-parity `.tsp` contracts); record the descriptions decision (see Decisions) in `roadmap.md` as a waiver line and a decisions-log entry #team
     - — · 3.0h
     - needs K1 · completes C1
     - Tests
