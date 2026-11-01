@@ -6,7 +6,11 @@ import socket
 
 import pytest
 
-from archon_search.constants import ANSWER_RESERVE_TOKENS, ASSUMED_CONTEXT_TOKENS
+from archon_search.constants import (
+    ANSWER_RESERVE_TOKENS,
+    ASSUMED_CONTEXT_TOKENS,
+    LLAMA_CPP_JOIN_SLACK_TOKENS,
+)
 from archon_search.llm_client import llama_cpp_client
 from archon_search.llm_client.llama_cpp_client import LlamaCppClient
 from archon_search.llm_client.protocol import (
@@ -63,7 +67,9 @@ async def test_llama_cpp_wrapper_against_fake_server() -> None:
         result = await client.call(_request())
 
         assert window == ContextWindowTokens(size=_WINDOW, source=ContextWindowSource.PROBED)
-        assert budget == InputBudget(tokens=_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - FAKE_CHAT_FRAME_TOKENS)
+        assert budget == InputBudget(
+            tokens=_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - FAKE_CHAT_FRAME_TOKENS - LLAMA_CPP_JOIN_SLACK_TOKENS
+        )
         assert result.text == _REPLY
         assert [request.path for request in server.requests] == [
             "/props",

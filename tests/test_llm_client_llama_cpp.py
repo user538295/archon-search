@@ -43,6 +43,7 @@ _NEVER_SECONDS = 60.0
 _TEMPLATE = "Describe the collection in one sentence."
 _TEMPLATE_TOKENS = 6
 _FRAME_TOKENS = 6  # the framing ``_applied`` adds, counted as words by the fake tokenizer: system block, markers
+_JOIN_SLACK = 4  # tokens held back for the template/query join (``LLAMA_CPP_JOIN_SLACK_TOKENS``, pinned in test_llm_client_budget)
 _THINK_OFF_BLOCK = "<think> </think>"
 _THINK_OFF_FRAME_TOKENS = 2  # a Qwen3-style template adds this empty block to the generation prompt when thinking is off
 _MAX_REASON_CHARS = 400
@@ -427,7 +428,7 @@ async def test_llama_cpp_input_budget_uses_the_servers_exact_count_of_the_framed
 
     budget = await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
-    assert budget == InputBudget(tokens=_PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS)
+    assert budget == InputBudget(tokens=_PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS - _JOIN_SLACK)
     assert server.bodies("/tokenize") == [{"content": _applied(_TEMPLATE)}]
 
 
@@ -438,7 +439,7 @@ async def test_llama_cpp_input_budget_holds_back_the_callers_own_answer_ceiling(
 
     budget = await client.input_budget(_TEMPLATE, max_output_tokens=ceiling)
 
-    assert budget == InputBudget(tokens=_PROBED_WINDOW - ceiling - _TEMPLATE_TOKENS - _FRAME_TOKENS)
+    assert budget == InputBudget(tokens=_PROBED_WINDOW - ceiling - _TEMPLATE_TOKENS - _FRAME_TOKENS - _JOIN_SLACK)
 
 
 async def test_llama_cpp_counts_tokens_with_the_servers_tokenizer_and_is_a_token_counting_client() -> None:
@@ -588,7 +589,7 @@ async def test_llama_cpp_input_budget_malformed_apply_template_answer_raises_fai
     assert "unexpected reply" in raised.value.reason
 
 
-_ASSUMED_BUDGET = ASSUMED_CONTEXT_TOKENS - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS
+_ASSUMED_BUDGET = ASSUMED_CONTEXT_TOKENS - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS - _JOIN_SLACK
 _OTHER_TEMPLATE = "Summarise this other collection in one sentence."
 _OTHER_TEMPLATE_TOKENS = 7
 _TEMPLATE_REQUESTS = ["/apply-template", "/tokenize"]  # what sizing one template asks the server: render it, count it
@@ -620,7 +621,9 @@ async def test_llama_cpp_input_budget_keeps_one_count_per_template() -> None:
     await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
     await client.input_budget(_OTHER_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
-    assert other == InputBudget(tokens=ASSUMED_CONTEXT_TOKENS - ANSWER_RESERVE_TOKENS - _OTHER_TEMPLATE_TOKENS - _FRAME_TOKENS)
+    assert other == InputBudget(
+        tokens=ASSUMED_CONTEXT_TOKENS - ANSWER_RESERVE_TOKENS - _OTHER_TEMPLATE_TOKENS - _FRAME_TOKENS - _JOIN_SLACK
+    )
     assert _paths(server) == _TEMPLATE_REQUESTS * 2
 
 
@@ -636,7 +639,9 @@ async def test_llama_cpp_cached_template_count_does_not_freeze_the_assumed_windo
     await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS)
 
     assert assumed == InputBudget(tokens=_ASSUMED_BUDGET)
-    assert probed == InputBudget(tokens=_PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS)
+    assert probed == InputBudget(
+        tokens=_PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS - _JOIN_SLACK
+    )
     assert _paths(server) == [*_TEMPLATE_REQUESTS, "/props", *_TEMPLATE_REQUESTS]
 
 
@@ -891,7 +896,7 @@ async def test_llama_cpp_input_budget_frames_the_template_with_the_thinking_swit
 async def test_llama_cpp_input_budget_counts_the_framing_the_thinking_switch_adds() -> None:
     client = _client(_Server())
     await client.probe_context_window(_TIMEOUT_SECONDS)
-    plain = _PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS
+    plain = _PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS - _JOIN_SLACK
 
     assert await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS) == InputBudget(tokens=plain)
     assert await client.input_budget(_TEMPLATE, max_output_tokens=ANSWER_RESERVE_TOKENS, think=ThinkSetting.ON) == InputBudget(tokens=plain)

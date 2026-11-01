@@ -3,8 +3,9 @@
 Budget = window - the caller's own answer ceiling (the ``max_output_tokens`` its calls send) - template, where the
 template is the LONGEST form the caller will send (retry reminder included), so a retry of a full sample still fits and
 never needs a second sizing. Prompt tokens plus the call's ``max_output_tokens`` therefore stay within the window: for
-``llama_cpp`` up to the tokens where the template meets the query (they are counted apart; one token measured on
-Qwen2.5), for ``ollama`` within ``OLLAMA_ESTIMATE_MARGIN``, which must also cover the chat framing. The ceiling is an input of every sizing,
+``llama_cpp`` because the budget also holds back ``LLAMA_CPP_JOIN_SLACK_TOKENS`` for the tokens that span the join of
+template and query (counted apart; measured 2 on Qwen2.5), for ``ollama`` within ``OLLAMA_ESTIMATE_MARGIN`` after
+``OLLAMA_CHAT_FRAMING_TOKENS`` of chat framing. The ceiling is an input of every sizing,
 never a constant: a HyDE call asks for 200 tokens and holds back 200, a graph summary holds back its own budget.
 A window too small to hold ceiling and template gives a budget of 0 (never negative), which a caller reads as
 "nothing fits" and reports with the window it holds. There is no check after the call.
@@ -14,9 +15,9 @@ A window too small to hold ceiling and template gives a budget of 0 (never negat
 * ``ollama``: :func:`estimated_budget`; the count is the token estimate, ``TokenCounter.count`` (gpt2 tokens with every
   digit, every non-BMP character and the special-token literal counted pessimistically; see ``token_counter``), and
   callers measure their input in that unit too. The real tokenizer may count up to ``OLLAMA_ESTIMATE_MARGIN`` more, so
-  the budget divides the room by ``1 + margin``: an input at the budget still fits in real tokens. The chat template's
-  own tokens (role markers, a default system prompt: 9 to 33 on the models measured) are not counted, and the margin
-  must cover them.
+  the budget takes the chat template's own tokens (``OLLAMA_CHAT_FRAMING_TOKENS``: role markers, a default system
+  prompt, 8 to 33 on the models measured; real tokens) and the answer ceiling off the window, then divides the room by
+  ``1 + margin``: an input at the budget still fits in real tokens.
 * cloud: :func:`cloud_budget`; no limit, nothing is counted or trimmed.
 * :class:`TemplateCostCache`: a client memoizes the count of each template it sizes (counts only, bounded; ``llama_cpp``
   keeps one cache per thinking setting, since its template framing depends on the switch). Budgets are computed from the
@@ -32,7 +33,11 @@ from collections.abc import Awaitable, Callable
 from fractions import Fraction
 from typing import Final
 
-from archon_search.constants import OLLAMA_ESTIMATE_MARGIN
+from archon_search.constants import (
+    LLAMA_CPP_JOIN_SLACK_TOKENS,
+    OLLAMA_CHAT_FRAMING_TOKENS,
+    OLLAMA_ESTIMATE_MARGIN,
+)
 from archon_search.llm_client.protocol import (
     UNBOUNDED,
     ContextWindowTokens,
@@ -109,9 +114,13 @@ def cloud_budget() -> InputBudget:
 async def exact_budget(
     window: ContextWindowTokens, template_text: str, count_tokens: AsyncTokenCount, *, max_output_tokens: int
 ) -> InputBudget:
-    """Budget for a provider that counts exactly (``llama_cpp``): window - *max_output_tokens* - template."""
+    """Budget for a provider that counts exactly (``llama_cpp``): window - *max_output_tokens* - template - join slack.
+
+    The template and the query are counted apart but sent joined, and a token may span the join (``LLAMA_CPP_JOIN_SLACK_TOKENS``),
+    so the slack keeps prompt tokens + *max_output_tokens* within the window for a query of exactly the budget.
+    """
     template_tokens = await count_tokens(template_text)
-    return InputBudget(tokens=max(0, window.size - max_output_tokens - template_tokens))
+    return InputBudget(tokens=max(0, window.size - max_output_tokens - template_tokens - LLAMA_CPP_JOIN_SLACK_TOKENS))
 
 
 async def estimated_budget(
@@ -121,9 +130,9 @@ async def estimated_budget(
 
     *count_estimate* is async so that a client can keep the blocking count (its first use may download the tokenizer)
     in a worker thread and still skip that thread when the answer is cached (:class:`TemplateCostCache`).
-    The room left by the caller's answer ceiling (*max_output_tokens*) is divided by ``1 + margin`` before the
-    template is taken off.
+    The room left by the caller's answer ceiling (*max_output_tokens*) and by the chat framing Ollama adds around the
+    message (``OLLAMA_CHAT_FRAMING_TOKENS``, real tokens) is divided by ``1 + margin`` before the template is taken off.
     """
     template_tokens = await count_estimate(template_text)
-    room_in_estimate_tokens = (window.size - max_output_tokens) // (1 + _ESTIMATE_MARGIN)
+    room_in_estimate_tokens = (window.size - max_output_tokens - OLLAMA_CHAT_FRAMING_TOKENS) // (1 + _ESTIMATE_MARGIN)
     return InputBudget(tokens=max(0, room_in_estimate_tokens - template_tokens))

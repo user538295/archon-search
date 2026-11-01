@@ -12,7 +12,11 @@ import inspect
 
 import pytest
 
-from archon_search.constants import ASSUMED_CONTEXT_TOKENS
+from archon_search.constants import (
+    ASSUMED_CONTEXT_TOKENS,
+    LLAMA_CPP_JOIN_SLACK_TOKENS,
+    OLLAMA_CHAT_FRAMING_TOKENS,
+)
 from archon_search.llm_client.anthropic_client import AnthropicClient
 from archon_search.llm_client.budget import (
     MAX_CACHED_TEMPLATES,
@@ -42,6 +46,10 @@ _TEMPLATE = "Describe this collection in one sentence based on the excerpts belo
 _TEMPLATE_TOKENS = 11
 _WINDOW = 8192
 _CEILING = 1024  # an answer ceiling the cases below size against (the graph default); the ceiling-specific cases vary it
+# Pinned apart from the code's constants: changing either is a decision that must also change the numbers in Architecture 210,
+# ADR 19 and the T-2 checklist (measured: join boundary at most 2 tokens, chat framing 9 to 33 tokens).
+_JOIN_SLACK = 4
+_FRAMING = 64
 
 # The independent oracle for the margin: real tokens may be 6/5 of the token estimate, so the room in estimate tokens is
 # 5/6 of the real room. Written as integers here, apart from ``OLLAMA_ESTIMATE_MARGIN``, so the test does not mirror the code.
@@ -76,22 +84,26 @@ async def test_ollama_budget_applies_20_percent_margin_and_the_callers_ceiling()
 
     budget = await estimated_budget(_window(_WINDOW), _TEMPLATE, _estimate_with(counter), max_output_tokens=_CEILING)
 
-    gpt2_room = (_WINDOW - _CEILING) * _MARGIN_ROOM_NUMERATOR // _MARGIN_ROOM_DENOMINATOR
+    gpt2_room = (_WINDOW - _CEILING - _FRAMING) * _MARGIN_ROOM_NUMERATOR // _MARGIN_ROOM_DENOMINATOR
     assert budget == InputBudget(tokens=gpt2_room - _TEMPLATE_TOKENS)
     assert stub.calls == [_TEMPLATE]
-    # Worst case the real count is 20% over the estimate: template + input + the answer ceiling still fit the window.
+    # Worst case the real count is 20% over the estimate: template + input, the chat framing and the answer ceiling still fit the window.
     assert isinstance(budget.tokens, int)
-    assert (_TEMPLATE_TOKENS + budget.tokens) * _LARGEST_REAL_OVER_GPT2 + _CEILING <= _WINDOW
+    assert (_TEMPLATE_TOKENS + budget.tokens) * _LARGEST_REAL_OVER_GPT2 + _FRAMING + _CEILING <= _WINDOW
 
 
-async def test_ollama_budget_of_assumed_window_loses_no_token_to_rounding() -> None:
+async def test_ollama_budget_of_assumed_window_floors_the_room_and_never_rounds_up() -> None:
     window = _window(ASSUMED_CONTEXT_TOKENS, ContextWindowSource.ASSUMED)
 
     budget = await estimated_budget(window, _TEMPLATE, _stub_estimate(), max_output_tokens=_CEILING)
 
-    # (4096 - 1024) / 1.2 = 2560 exactly, minus the 11-word template.
+    # (4096 - 1024 - 64) / 1.2 = 2506.67, floored to 2506, minus the 11-word template.
     assert ASSUMED_CONTEXT_TOKENS == 4096
-    assert budget == InputBudget(tokens=2549)
+    assert budget == InputBudget(tokens=2495)
+
+
+def test_the_two_boundary_allowances_are_the_measured_values() -> None:
+    assert (LLAMA_CPP_JOIN_SLACK_TOKENS, OLLAMA_CHAT_FRAMING_TOKENS) == (_JOIN_SLACK, _FRAMING)
 
 
 async def test_llama_cpp_budget_uses_exact_count() -> None:
@@ -105,7 +117,7 @@ async def test_llama_cpp_budget_uses_exact_count() -> None:
         _window(_WINDOW, ContextWindowSource.PROBED), _TEMPLATE, tokenize_count, max_output_tokens=_CEILING
     )
 
-    assert budget == InputBudget(tokens=_WINDOW - _CEILING - 100)  # no margin
+    assert budget == InputBudget(tokens=_WINDOW - _CEILING - 100 - _JOIN_SLACK)  # no margin
     assert seen == [_TEMPLATE]
 
 
@@ -116,10 +128,10 @@ async def test_exact_budget_holds_back_exactly_the_callers_ceiling(ceiling: int)
 
     budget = await exact_budget(_window(_WINDOW), _TEMPLATE, tokenize_count, max_output_tokens=ceiling)
 
-    assert budget == InputBudget(tokens=_WINDOW - ceiling - 100)
-    # The invariant: prompt tokens (template + a full budget of input) plus the call's answer ceiling are the window.
+    assert budget == InputBudget(tokens=_WINDOW - ceiling - 100 - _JOIN_SLACK)
+    # The invariant: prompt tokens (template + a full budget of input) plus the call's answer ceiling plus the join slack are the window.
     assert isinstance(budget.tokens, int)
-    assert 100 + budget.tokens + ceiling == _WINDOW
+    assert 100 + budget.tokens + ceiling + _JOIN_SLACK == _WINDOW
 
 
 async def test_a_smaller_ceiling_gives_a_larger_exact_budget_by_exactly_the_difference() -> None:
@@ -143,9 +155,9 @@ async def test_a_smaller_ceiling_gives_a_larger_estimated_budget_by_the_differen
     assert hyde.tokens - graph.tokens == (1220 - 200) * _MARGIN_ROOM_NUMERATOR // _MARGIN_ROOM_DENOMINATOR  # 850
 
 
-@pytest.mark.parametrize(("window_size", "hyde_room"), [(4096, 3246), (8192, 6660)])
+@pytest.mark.parametrize(("window_size", "hyde_room"), [(2048, 1486), (4096, 3193), (8192, 6606)])
 async def test_the_estimated_hyde_budget_at_the_common_windows(window_size: int, hyde_room: int) -> None:
-    """(window - 200) / 1.2 estimate tokens of room, before the template (the numbers the docs quote)."""
+    """(window - 200 - 64) / 1.2 estimate tokens of room, floored, before the template (the numbers the docs quote)."""
     budget = await estimated_budget(_window(window_size), "", _stub_estimate(), max_output_tokens=200)
 
     assert budget == InputBudget(tokens=hyde_room)
@@ -205,7 +217,7 @@ async def test_the_same_window_gives_room_to_a_small_ceiling_and_none_to_a_large
 
     window = _window(300)
 
-    assert await exact_budget(window, _TEMPLATE, tokenize_count, max_output_tokens=200) == InputBudget(tokens=95)
+    assert await exact_budget(window, _TEMPLATE, tokenize_count, max_output_tokens=200) == InputBudget(tokens=91)
     assert await exact_budget(window, _TEMPLATE, tokenize_count, max_output_tokens=295) == InputBudget(tokens=0)
 
 
@@ -213,8 +225,8 @@ async def test_budget_boundary_one_token_of_room() -> None:
     async def tokenize_count(text: str) -> int:
         return 5
 
-    window_for_zero = _window(_CEILING + 5)
-    window_for_one = _window(_CEILING + 6)
+    window_for_zero = _window(_CEILING + 5 + _JOIN_SLACK)
+    window_for_one = _window(_CEILING + 6 + _JOIN_SLACK)
     assert await exact_budget(window_for_zero, _TEMPLATE, tokenize_count, max_output_tokens=_CEILING) == InputBudget(tokens=0)
     assert await exact_budget(window_for_one, _TEMPLATE, tokenize_count, max_output_tokens=_CEILING) == InputBudget(tokens=1)
 
@@ -236,7 +248,7 @@ async def test_a_template_is_counted_once_however_often_the_budget_is_asked_for(
         for _ in range(5)
     ]
 
-    assert budgets == [InputBudget(tokens=_WINDOW - _CEILING - 100)] * 5
+    assert budgets == [InputBudget(tokens=_WINDOW - _CEILING - 100 - _JOIN_SLACK)] * 5
     assert seen == [_TEMPLATE]
 
 
@@ -254,8 +266,8 @@ async def test_the_cached_template_count_serves_every_ceiling() -> None:
     small = await exact_budget(window, _TEMPLATE, count, max_output_tokens=200)
     large = await exact_budget(window, _TEMPLATE, count, max_output_tokens=1024)
 
-    assert small == InputBudget(tokens=_WINDOW - 200 - 100)
-    assert large == InputBudget(tokens=_WINDOW - 1024 - 100)
+    assert small == InputBudget(tokens=_WINDOW - 200 - 100 - _JOIN_SLACK)
+    assert large == InputBudget(tokens=_WINDOW - 1024 - 100 - _JOIN_SLACK)
     assert seen == [_TEMPLATE]
 
 
@@ -277,8 +289,8 @@ async def test_the_budget_follows_the_window_while_the_template_count_is_kept() 
         _window(_WINDOW, ContextWindowSource.PROBED), _TEMPLATE, count, max_output_tokens=_CEILING
     )
 
-    assert assumed == InputBudget(tokens=ASSUMED_CONTEXT_TOKENS - _CEILING - 100)
-    assert probed == InputBudget(tokens=_WINDOW - _CEILING - 100)
+    assert assumed == InputBudget(tokens=ASSUMED_CONTEXT_TOKENS - _CEILING - 100 - _JOIN_SLACK)
+    assert probed == InputBudget(tokens=_WINDOW - _CEILING - 100 - _JOIN_SLACK)
     assert seen == [_TEMPLATE]
 
 

@@ -47,13 +47,14 @@ _TIMEOUT_SECONDS = 5.0
 _SHORT_TIMEOUT_SECONDS = 0.05
 _MODEL_MAXIMUM = 131072
 _MAX_REASON_CHARS = 400  # the bounded server text (200) plus the provider prefix, with room to spare
-# (4096 - 1024) tokens of room divided by 1.2 and rounded down, for the assumed window.
-_ASSUMED_ROOM_IN_GPT2_TOKENS = 2560
+# (4096 - 1024 - 64 of chat framing) tokens of room divided by 1.2 and rounded down, for the assumed window.
+_ASSUMED_ROOM_IN_GPT2_TOKENS = 2506
 # StubTokenizer counts one token per whitespace-separated word.
 _TEMPLATE = "Describe the collection in one sentence."
 _TEMPLATE_TOKENS = 6
-# (8192 - 1024) tokens of room, divided by 1.2 (the estimate margin) and rounded down.
-_ROOM_IN_GPT2_TOKENS = 5973
+# (8192 - 1024 - 64 of chat framing) tokens of room, divided by 1.2 (the estimate margin) and rounded down.
+_ROOM_IN_GPT2_TOKENS = 5920
+_CHAT_FRAMING_TOKENS = 64  # real tokens Ollama's chat template adds; held back before the margin
 
 
 class _RecordingSdkClient:
@@ -329,7 +330,7 @@ async def test_input_budget_holds_back_the_callers_own_answer_ceiling_before_the
 
     budget = await wrapper.input_budget(_TEMPLATE, max_output_tokens=ceiling)
 
-    assert budget == InputBudget(tokens=(_CONFIGURED_WINDOW - ceiling) * 5 // 6 - _TEMPLATE_TOKENS)
+    assert budget == InputBudget(tokens=(_CONFIGURED_WINDOW - ceiling - _CHAT_FRAMING_TOKENS) * 5 // 6 - _TEMPLATE_TOKENS)
 
 
 @pytest.mark.parametrize("think", list(ThinkSetting))

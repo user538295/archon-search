@@ -53,6 +53,20 @@ LOCAL_SERVER_PROBE_TIMEOUT_SECONDS: Final[float] = 5.0
 # estimate only approximates the model's own tokenizer.
 OLLAMA_ESTIMATE_MARGIN: Final[float] = 0.20
 
+# Tokens of slack ``exact_budget`` (``llama_cpp``) holds back on top of window, answer ceiling and counted template. The
+# server counts the template alone and the query alone, but the prompt is the two joined, and a token may span the join:
+# the blank line of the empty HyDE template is ONE token ("\n\n"), the same two lines around a query are TWO ("\n", "\n").
+# Measured on a real llama-server 0.7.0 (Qwen2.5-0.5B), 1514 queries (every text class, every edge character at both
+# ends) over 9 template shapes: the assembled prompt had at most 2 tokens more than template + query counted apart (and
+# at most 2 fewer). 4 is twice the worst case, which also covers the two slots of the graph template.
+LLAMA_CPP_JOIN_SLACK_TOKENS: Final[int] = 4
+
+# REAL tokens an Ollama ``/api/chat`` call adds around the one user message (role markers, a default system prompt) and
+# the token estimate does not count. Measured as ``/api/chat`` minus raw ``prompt_eval_count`` of the same text:
+# 9 (llama3.1:8b), 29 (qwen2.5), 8 (gemma3:1b), 33 (tinyllama, T-2 run); 64 is about twice the worst. ``estimated_budget``
+# takes it off the window BEFORE dividing by ``1 + OLLAMA_ESTIMATE_MARGIN``, because it is real tokens, not estimate tokens.
+OLLAMA_CHAT_FRAMING_TOKENS: Final[int] = 64
+
 # Base answer ceiling of a description call (its ``LlmCallRequest.max_output_tokens`` and the ``max_output_tokens`` its
 # input budget is sized against). Not a global reserve: every other feature sizes against its OWN ceiling (HyDE 200,
 # RAG Fusion 150 per variant, graph ``extraction_token_budget``). A description call on a model that may think adds
