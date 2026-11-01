@@ -206,6 +206,15 @@ LLM-generated collection descriptions (used by the query router and shown by `co
 
 > **Privacy warning:** with `provider = "anthropic"`, `"openai"` or `"claude_cli"`, excerpts of your documents leave the machine. `ollama` and `llama_cpp` keep the text local only while their base URL points at this host. By default only chunks without an access list are sampled. A scripted `config set description.enabled true` does not install provider packages: add the extra (`hyde` for `anthropic`, `openai-provider`, `ollama`) yourself; `llama_cpp` and `claude_cli` need none.
 
+**Startup messages.** The server logs these once when it starts and never refuses to start because of them (nothing is logged while `[description]` is disabled, except the first and last):
+
+- **INFO, off-notice**: `ANTHROPIC_API_KEY` is set and the config file has no `[description]` section. Add `[description]` with `enabled = true` to turn descriptions on, or write `[description]` with `enabled = false` to silence the notice.
+- **WARNING, provider not reachable**: the API key of an `anthropic` or `openai` provider is not set, or its package (`anthropic`, `openai`, `ollama`) is not installed (the message gives the install command). A missing package does not stop the server: every generation then fails with `description_status = failed` and the startup backfill is skipped.
+- **WARNING, `think` ignored**: `think` is `true` or `false` with `anthropic`, `openai` or `claude_cli`, which have no thinking switch.
+- **WARNING, `include_restricted_chunks`**: ignored with `anthropic`, `openai` and `claude_cli`; with `ollama` or `llama_cpp` it names the provider and host and says that restricted text may appear in descriptions every reader of the collection can see, with a second WARNING when the host is not loopback.
+- **INFO, excerpts leave the machine**: for `anthropic`, `openai`, `claude_cli`, and for `ollama` or `llama_cpp` on a host that is not loopback (`localhost`, `127.x`, `::1` count as loopback; `0.0.0.0` and `host.docker.internal` do not). A retry sends the excerpts again.
+- **WARNING, hybrid routing without descriptions**: with `[routing] routing_strategy = "hybrid"` and collections that have no description, routing uses the centroid alone for them. This one is logged whether or not `[description]` is enabled.
+
 ### `[maintenance]`
 
 In-process maintenance passes (FTS optimize, orphan cleanup, failed-ingest retry, expired-chunk pruning, graph GC). **Disabled by default** (`interval_hours = 0`), but `POST /maintenance/trigger` always works.

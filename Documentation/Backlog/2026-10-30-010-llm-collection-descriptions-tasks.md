@@ -654,7 +654,7 @@ flowchart LR
         - #e2e_test — `test_e2e_shutdown_mid_backfill_cancels_and_kills_claude_child` — the lifespan cancel ends the run and the fake `claude` child is killed
 
 ### Phase 10 · Know why descriptions are not working *(startup validation, notices and the status block)*
-- [ ] **BE-36** — Startup validator that never blocks boot or raises and is silent when disabled: unusable provider WARNING, description package guard (C12: WARNING with hint, generation then fails visibly, backfill skipped), `think` ignored WARNING, restricted-chunk WARNINGs naming provider and host, privacy INFO, the off-notice when `ANTHROPIC_API_KEY` is set and `[description]` is absent, the hybrid-without-descriptions WARNING; one loopback function (`urlsplit`, `ipaddress`) with its table test #backend-role
+- [x] **BE-36** — Startup validator that never blocks boot or raises and is silent when disabled: unusable provider WARNING, description package guard (C12: WARNING with hint, generation then fails visibly, backfill skipped), `think` ignored WARNING, restricted-chunk WARNINGs naming provider and host, privacy INFO, the off-notice when `ANTHROPIC_API_KEY` is set and `[description]` is absent, the hybrid-without-descriptions WARNING; one loopback function (`urlsplit`, `ipaddress`) with its table test #backend-role
     - Frameworks & Drivers · 8.0h
     - needs BE-25, BE-35 · completes C5, C12, S36, S37, S38, S51, S54, S56, S75, S84
     - Tests

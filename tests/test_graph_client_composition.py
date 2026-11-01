@@ -20,6 +20,7 @@ from archon_search.llm_client.ollama_client import OllamaClient
 from archon_search.llm_client.openai_client import OpenAIClient
 from archon_search.llm_client.protocol import LlmClient
 from archon_search.server import app as app_module
+from archon_search.server import provider_dependency
 from archon_search.uv_tool import extra_install_hint
 
 _MODEL = "some-model"
@@ -113,8 +114,8 @@ def test_missing_package_composes_no_graph_client(provider: str, monkeypatch: py
 
 
 def _import_raising(error: BaseException) -> types.SimpleNamespace:
-    """A stand-in for the ``importlib`` the app module sees, whose ``import_module`` raises *error* (patched on the
-    module, not on the process-wide ``importlib``)."""
+    """A stand-in for the ``importlib`` the shared package guard sees, whose ``import_module`` raises *error* (patched on
+    the guard module, not on the process-wide ``importlib``)."""
 
     def _raise(name: str) -> None:
         raise error
@@ -136,7 +137,7 @@ def test_a_broken_install_is_reported_without_an_install_command(
 ) -> None:
     """Anything that is not "this package is absent" (a broken transitive import, an SDK that raises while importing)
     keeps the server booting, says so and offers no install command, which would not help."""
-    monkeypatch.setattr(app_module, "importlib", _import_raising(error))
+    monkeypatch.setattr(provider_dependency, "importlib", _import_raising(error))
     config = GraphConfig(enabled=True, provider="ollama", extraction_model=_MODEL)
     message = app_module._missing_graph_package(config)
     assert message is not None
@@ -157,3 +158,20 @@ def test_disabled_graph_is_never_reported(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setitem(sys.modules, "ollama", None)
     config = GraphConfig(enabled=False, provider="ollama", extraction_model=_MODEL)
     assert app_module._missing_graph_package(config) is None
+
+
+def test_graph_warning_texts_are_exact(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The texts the shared package guard produced for graph before it was shared (UserManual troubleshooting quotes them)."""
+    config = GraphConfig(enabled=True, provider="ollama", extraction_model=_MODEL)
+    monkeypatch.setitem(sys.modules, "ollama", None)
+    assert app_module._missing_graph_package(config) == (
+        "[graph] provider='ollama' but the 'ollama' package is not installed; graph enrichment stays off "
+        f"(communities are built without summaries); run: {extra_install_hint('ollama')}"
+    )
+
+    monkeypatch.undo()
+    monkeypatch.setattr(provider_dependency, "importlib", _import_raising(RuntimeError("boom")))
+    assert app_module._missing_graph_package(config) == (
+        "[graph] provider='ollama' but the 'ollama' package failed to import (RuntimeError); graph enrichment stays off "
+        "(communities are built without summaries)"
+    )

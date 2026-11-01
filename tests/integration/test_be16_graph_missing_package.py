@@ -170,7 +170,7 @@ def test_graph_install_command_is_logged_and_never_answered(
 ) -> None:
     """The install command can carry credentials in a uv tool environment: it reaches the server log, no response."""
     install_graph_engine_stub(monkeypatch)
-    patch_install_hint(monkeypatch, "archon_search.server.app")
+    patch_install_hint(monkeypatch, "archon_search.server.provider_dependency")
     monkeypatch.setitem(sys.modules, "openai", None)
     caplog.set_level(logging.WARNING)
 

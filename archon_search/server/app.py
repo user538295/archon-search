@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import importlib
 import logging
 import secrets
 from collections.abc import AsyncGenerator, Coroutine
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from starlette.datastructures import State
@@ -82,6 +81,14 @@ from archon_search.reranker import (
     RerankerBackend,
     UnsupportedModelReranker,
 )
+from archon_search.server.description_backfill import (
+    run_description_backfill,
+    run_description_probe,
+)
+from archon_search.server.description_startup import (
+    log_description_startup,
+    warn_hybrid_without_descriptions,
+)
 from archon_search.server.graph_view_token import GRAPH_VIEW_SECRET_BYTES
 from archon_search.server.llm_composition import (
     FeatureClient,
@@ -95,6 +102,7 @@ from archon_search.server.middleware_auth import (
 )
 from archon_search.server.middleware_body_limit import install_body_size_limit
 from archon_search.server.middleware_context import RequestContextMiddleware
+from archon_search.server.provider_dependency import check_provider_package
 from archon_search.server.schemas import StartupSyncResult, WarmupResult
 from archon_search.server.warmup import run_model_warmup, run_warmup_recovery
 from archon_search.store import SearchStore
@@ -490,16 +498,6 @@ def _check_graph_deps(config: SearchConfig) -> None:
     ensure_graph_engine_importable(config.graph)
 
 
-#: C12 — graph providers whose shared-client wrapper imports an optional package (named like the provider): provider ->
-#: install extra. ``llama_cpp`` needs none (httpx is core) and ``claude_cli`` needs the ``claude`` binary, which the
-#: startup probe checks.
-_GRAPH_PROVIDER_EXTRA: Final[dict[str, str]] = {
-    "anthropic": "hyde",
-    "openai": "openai-provider",
-    "ollama": "ollama",
-}
-
-
 def _missing_graph_package(graph: GraphConfig) -> str | None:
     """The WARNING text when the enabled graph's provider package cannot be imported, else ``None`` (C12, S16).
 
@@ -507,23 +505,12 @@ def _missing_graph_package(graph: GraphConfig) -> str | None:
     ``create_app`` logs this text, ``_build_graph_client`` composes no client (graph enrichment stays off: no community
     summary, no model call) and the server starts. A graph that is off needs no package, so it is never reported.
     """
-    if not graph.enabled or graph.provider not in _GRAPH_PROVIDER_EXTRA:
+    problem = check_provider_package(graph.provider) if graph.enabled else None
+    if problem is None:
         return None
-    package = graph.provider
-    try:
-        importlib.import_module(package)
-    except Exception as exc:  # noqa: BLE001 — an SDK that raises while importing must not stop the boot: graph stays off
-        if not (isinstance(exc, ModuleNotFoundError) and exc.name == package):
-            # A broken install, not a missing one: an install command would not help, so none is offered.
-            return (
-                f"[graph] provider={package!r} but the {package!r} package failed to import ({type(exc).__name__}); "
-                "graph enrichment stays off (communities are built without summaries)"
-            )
-        return (
-            f"[graph] provider={package!r} but the {package!r} package is not installed; graph enrichment stays off "
-            f"(communities are built without summaries); run: {extra_install_hint(_GRAPH_PROVIDER_EXTRA[package])}"
-        )
-    return None
+    prefix = f"[graph] provider={problem.package!r} but the {problem.package!r} package {problem.detail}"
+    consequence = "graph enrichment stays off (communities are built without summaries)"
+    return f"{prefix}; {consequence}" + (f"; run: {problem.install_hint}" if problem.install_hint else "")
 
 
 def _configure_openapi(app: FastAPI) -> None:
@@ -636,6 +623,14 @@ def _build_description_lifecycle(
     return DescriptionLifecycle(store, generator, writer)
 
 
+def _spawn_background(state: Any, coroutine: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
+    """Run *coroutine* as a task tracked in ``state._background_tasks``, so shutdown cancels and awaits it."""
+    task = asyncio.create_task(coroutine)
+    state._background_tasks.add(task)
+    task.add_done_callback(state._background_tasks.discard)
+    return task
+
+
 def _start_description_startup_tasks(app: FastAPI, description: DescriptionConfig) -> None:
     """Start the reachability probe and, with ``backfill_on_startup``, the backfill as background tasks (C5).
 
@@ -643,19 +638,8 @@ def _start_description_startup_tasks(app: FastAPI, description: DescriptionConfi
     lifecycle drains. With a suppressed startup sync and the backfill on, no probe starts: the backfill is skipped for
     the run and S86 says no provider is called then. The probe sends no prompt, so with the backfill off it still runs.
     """
-    # Imported here, not at module level, like the lifecycle above: only an enabled `[description]` needs them.
-    from archon_search.server.description_backfill import (
-        run_description_backfill,
-        run_description_probe,
-    )
-
     state = app.state
-
-    def track(coroutine: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
-        task = asyncio.create_task(coroutine)
-        state._background_tasks.add(task)
-        task.add_done_callback(state._background_tasks.discard)
-        return task
+    track = functools.partial(_spawn_background, state)
 
     backfill_skipped = description.backfill_on_startup and state.sync_result == StartupSyncResult.SUPPRESSED
     if not backfill_skipped:
@@ -682,6 +666,10 @@ def create_app(
     graph_package_warning = _missing_graph_package(config.graph)
     if graph_package_warning is not None:
         logger.warning("%s", graph_package_warning)
+
+    # C5: the description feature's startup findings (package, key, `think`, restricted chunks, privacy, off-notice);
+    # silent while `[description]` is disabled apart from the off-notice, never raises.
+    log_description_startup(config.description, section_present=config.description_section_present)
 
     api_key, key_source = load_or_generate_key()
     if api_key in config.namespaces:
@@ -1169,6 +1157,13 @@ def create_app(
                     app.state._background_tasks.add(sync_task)
                     sync_task.add_done_callback(app.state._background_tasks.discard)
 
+                # Startup: the hybrid-routing finding (S37). It reads every collection row, so it is a tracked
+                # background task: it never raises and never delays the socket.
+                app.state._description_hybrid_task = _spawn_background(
+                    app.state,
+                    warn_hybrid_without_descriptions(config.routing_strategy, app.state.search_store),
+                )
+
                 # Startup: the description feature's own tasks (C5), after the sync decision above so the backfill can
                 # wait for the sync and be skipped when it is suppressed. Neither blocks boot.
                 if config.description.enabled:
@@ -1331,6 +1326,9 @@ def create_app(
     # readable on every path.
     app.state._description_probe_task = None
     app.state._description_backfill_task = None
+    # Set to a Task by the lifespan: the hybrid-routing check of the startup validator (it reads every collection row, so
+    # it never delays the boot). Settles within moments; the None default keeps it readable before the lifespan has run.
+    app.state._description_hybrid_task = None
     # The description provider's reachability as of the startup probe (`DescriptionReachability`); None until probed
     # and never refreshed (C7).
     app.state.description_reachability = None

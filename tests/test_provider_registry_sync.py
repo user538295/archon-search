@@ -238,10 +238,11 @@ def test_provider_extra_is_strict_subset_of_registry() -> None:
 
 
 def test_graph_package_guard_table_matches_the_installer_extras() -> None:
-    """The server's graph package guard (C12) and the wizard's extras installer name the same extra per provider."""
-    from archon_search.server.app import _GRAPH_PROVIDER_EXTRA
+    """The shared package guard (C12: graph and description) and the wizard's extras installer name the same extra per
+    provider."""
+    from archon_search.server.provider_dependency import PROVIDER_PACKAGE_EXTRA
 
-    assert _GRAPH_PROVIDER_EXTRA == _PROVIDER_EXTRA
+    assert PROVIDER_PACKAGE_EXTRA == _PROVIDER_EXTRA
 
 
 def test_provider_registry_is_source_of_truth() -> None:

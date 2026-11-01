@@ -195,6 +195,17 @@ The server exits with a `ConfigError` naming `[hyde]` or `[rag_fusion]`, e.g. `[
 
 The server started, but the log holds a WARNING such as `[graph] provider='ollama' but the 'ollama' package is not installed; graph enrichment stays off (communities are built without summaries); run: pip install 'archon-search[ollama]'`. Unlike `[hyde]` and `[rag_fusion]`, a missing package for `[graph].provider` (`anthropic`, `openai` or `ollama`) does not stop the server: no graph client is built, so communities have no summary text until you fix it. Run the command after `run:` (extras `hyde`, `openai-provider`, `ollama`), then restart. In the Docker image add the extra to `ARCHON_EXTRAS`, because a package installed by hand does not survive a new container. A WARNING that says the package "failed to import" names a broken installation instead; reinstall it. `llama_cpp` and `claude_cli` need no package.
 
+## Symptom: descriptions are not generated — "Collection descriptions: provider ... is not reachable"
+
+The server started, but the log holds a WARNING such as `Collection descriptions: provider anthropic is not reachable (ANTHROPIC_API_KEY is not set); generations will fail until that is fixed`. The reason in brackets says what to fix:
+
+- `ANTHROPIC_API_KEY is not set` / `OPENAI_API_KEY is not set`: put the key in `<data-dir>/.secrets.env` (managed service) or the environment, then restart.
+- `the 'ollama' package is not installed; run: ...` (also `anthropic`, `openai`): run the command, then restart. Until then every generation ends with `description_status = failed` (one WARNING for the whole process) and the startup backfill is skipped. A message that says the package "failed to import" names a broken installation; reinstall it.
+- `no answer from <host:port>` or `<host:port> answered HTTP <status>`: the Ollama or llama.cpp server is down or the URL is wrong; this check runs in the background just after start.
+- `the 'claude' program was not found on PATH`: install Claude Code or switch the provider.
+
+Description health never enters `/ready`. After fixing it, restart and run `archon-search collection describe <name>`; the startup check is not repeated while the server runs.
+
 ## Symptom: `/ready` returns 503 (not ready)
 
 `GET /ready` returns **503** in four cases: the **storage** check fails (`store.ping()` — LanceDB unreachable / not initialised), the startup model warm-up (run on every start) or the background model validation (bounded as listed under [`validation_timeout_seconds`](30_configuration.md#database)) is still running (`checks.models: "pending"`; a failed warm-up reports `checks.models: "fail"` at once and ends the models gate even while validation runs), the server's own startup collection sync (run automatically at boot over all configured collections) has not finished yet, or (new on 2026-10-25) the warm-up failed and the **default embedder or a configured reranker is still not loaded** (`checks.models: "fail"`): a replica that cannot embed must not take traffic, and the server retries the load in the background (5 s, doubling to a 300 s cap), so `/ready` returns 200 by itself once the weights load — fix the cause (network, disk, wrong model name, `HF_HUB_OFFLINE`) and wait; no restart is needed. A `warn`/`fail` result that comes only from the validation probe is **informational** and does not flip `ready` to false. In the JSON body:

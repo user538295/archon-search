@@ -232,6 +232,8 @@ imported = [module.name for module in pkgutil.iter_modules(package.__path__, "ar
 for name in imported:
     importlib.import_module(name)
 import archon_search.server.llm_composition  # noqa: F401  (builds the clients of every provider)
+import archon_search.server.description_startup  # noqa: F401  (the startup validator checks provider packages by name)
+import archon_search.server.provider_dependency  # noqa: F401  (imports a provider package only inside a function)
 leaked = sorted(set({sdks!r}) & set(sys.modules))
 sys.stdout.write(",".join(leaked) + "|" + ",".join(imported))
 """

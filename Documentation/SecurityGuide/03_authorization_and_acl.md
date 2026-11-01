@@ -127,6 +127,8 @@ The ACL surface is narrower than its name suggests. It does **not**:
 
 These limits are the explicit scope of v1. Tighter per-collection policies and per-tool authorization are tracked as **E4** in [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md). The roadmap placed E4 after D7 (key rotation) since granular authorization without rotation is of limited value — D7 has now shipped, so E4 is the next logical step.
 
+**Descriptions and restricted chunks.** A generated collection description is readable by every caller who can see the collection, whatever the chunk ACLs say. So the sample draws only chunks without an ACL, and `[description].include_restricted_chunks = true` is honoured for `ollama` and `llama_cpp` only. With the switch on, the server logs a startup WARNING naming the provider and host, and a second WARNING when the host is not loopback (restricted text then also crosses the network); for `anthropic`, `openai` and `claude_cli` the switch is ignored with a WARNING. Whether a host is local is decided by its address, not the provider name: `localhost`, `127.x.x.x` and `::1` are loopback; `0.0.0.0`, `host.docker.internal` and any other name are not. For the same reason the startup INFO "excerpts leave the machine" is logged for the three cloud and CLI providers and for an `ollama` or `llama_cpp` host that is not loopback, and not for a loopback host.
+
 ## Operational guidance
 
 - **Treat namespace identifiers as labels in URLs**: choose names that you would be comfortable seeing in the application log. Names appear in warnings on ACL parse failures.

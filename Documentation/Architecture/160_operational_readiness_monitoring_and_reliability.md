@@ -264,6 +264,22 @@ On Linux, use `journalctl --user -u archon-search | grep 'centroid stale'`.
 
 `[description].backfill_on_startup = true` (default `false`) fills collections that have no description in a background task once the server is up; it never delays `/ready` and never enters it. The task waits for the startup sync and for the provider probe, then describes one collection at a time. It is skipped, with one INFO in the log, in two cases: the startup sync is `suppressed` (the previous run died mid-ingest, so the index may be stale: run `archon-search sync`, then restart) and the description provider is not reachable (the probe logs one WARNING naming the provider and the reason: a missing API key, a missing `claude` program, or no answer from the Ollama or llama.cpp host). A collection with no documents, a manual description, a description, or a failed last attempt (`description_status = failed`) is not touched by the backfill; use `archon-search collection describe <name>`. Stopping the server cancels a running backfill and its generation; no half-written description is stored.
 
+### Startup description findings (BE-36)
+
+`archon_search/server/description_startup.py` logs what an operator needs to know about collection descriptions. `create_app` calls `log_description_startup(config.description, section_present=config.description_section_present)` once (`description_section_present` is `True` when the config file has a `[description]` table, even one holding only `enabled = false`); the lifespan spawns `warn_hybrid_without_descriptions` as a tracked background task (`app.state._description_hybrid_task`) before `yield`, because it reads every collection row. Nothing raises (a failing check logs one WARNING naming the check and the error type, and the other checks still run) and nothing blocks the boot or enters `/ready`. While `[description]` is disabled nothing is logged except the off-notice and the hybrid WARNING.
+
+| Finding | Level | Condition |
+| --- | --- | --- |
+| Provider not reachable (API key missing, or provider package missing) | WARNING, once per process | enabled; the same `warn_once` key as the startup probe's local-server finding, so it is never logged twice; the install command is in this log line only, never in the probe's `reason` (which `/status` shows) |
+| `think` ignored | WARNING | enabled, `think` is `true` or `false`, provider is not `ollama` or `llama_cpp` |
+| `include_restricted_chunks` ignored | WARNING | enabled, switch on, provider is `anthropic`, `openai` or `claude_cli` |
+| Restricted chunks may be sampled | WARNING naming provider and host, plus a second WARNING when the host is not loopback | enabled, switch on, provider is `ollama` or `llama_cpp` |
+| Excerpts leave the machine (a retry sends them again) | INFO | enabled with `anthropic`, `openai`, `claude_cli`, or `ollama`/`llama_cpp` on a host that is not loopback |
+| Off-notice | INFO | `ANTHROPIC_API_KEY` set and no `[description]` section in the file (`enabled = false` written silences it) |
+| Hybrid routing without descriptions | WARNING naming the centroid fallback | `routing_strategy = "hybrid"` and at least one collection has no description (independent of `[description].enabled`, because a manual description counts) |
+
+A missing description provider package (`anthropic`, `openai` or `ollama`; C12) is a WARNING, not a refusal like HyDE and RAG Fusion: the server starts, every generation fails visibly (status `failed`, one WARNING per process), the startup probe reports the provider not reachable and the backfill is skipped. The package check is `server/provider_dependency.py`, shared with the graph guard. "Local" means a loopback host, decided by `is_loopback_host` (`urlsplit` and `ipaddress`; a scheme-less `host:port` is read, a trailing dot is dropped, an IPv4-mapped IPv6 address counts by its IPv4 form through `ipaddress.is_loopback` on Python 3.13 and later; `0.0.0.0`, `host.docker.internal` and an unparsable value are not loopback).
+
 ## Maintenance runbook (D5)
 
 `MaintenanceLoop` runs four configurable policies each pass: FTS optimize, orphan chunk cleanup, and expired-chunk pruning (**E2a**, `prune_expired_chunks`) are per-non-excluded-collection; failed-ingest retry is pass-level (runs once per maintenance pass, not per-collection). Disabled by default (`interval_hours = 0`).

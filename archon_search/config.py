@@ -398,6 +398,10 @@ class SearchConfig:
     rag_fusion: RAGFusionConfig = field(default_factory=RAGFusionConfig)
     # [description]
     description: DescriptionConfig = field(default_factory=DescriptionConfig)
+    # Not a dataclass field (no annotation): it is a fact about the file, not a setting, so it stays out of equality,
+    # ``asdict`` and the key-by-key config checks. ``True`` when the file has a ``[description]`` table, even one holding
+    # only ``enabled = false``: the startup off-notice (S36) shows for an installation that has none.
+    description_section_present = False
     # [jobs]
     jobs: JobsConfig = field(default_factory=JobsConfig)
     # [backup]
@@ -1160,6 +1164,7 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             description_cfg["include_restricted_chunks"], "[description].include_restricted_chunks"
         )
     config.description = description
+    config.description_section_present = "description" in doc
 
     jobs_cfg = doc.get("jobs", {})
     jobs = JobsConfig()

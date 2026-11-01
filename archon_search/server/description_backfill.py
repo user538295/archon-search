@@ -40,6 +40,7 @@ from archon_search.description_lifecycle import (
 from archon_search.llm_client.claude_cli_client import resolve_claude_binary
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.provider_key import provider_key_available
+from archon_search.server.provider_dependency import check_provider_package
 from archon_search.server.schemas import StartupSyncResult
 
 if TYPE_CHECKING:
@@ -79,7 +80,7 @@ class BackfillLifecycle(Protocol):
     async def request_generation(self, collection: str, namespace: str, kind: GenerationKind) -> GenerationTicket: ...
 
 
-def _host_port(base_url: str) -> str:
+def host_port(base_url: str) -> str:
     """``host:port`` of *base_url*: what a log line may name (no credentials, path or query)."""
     try:
         authority = urlsplit(base_url if "//" in base_url else f"//{base_url}").netloc.rpartition("@")[2]
@@ -88,8 +89,44 @@ def _host_port(base_url: str) -> str:
     return authority or _UNKNOWN_HOST
 
 
-def _local_server_url(description: DescriptionConfig) -> str:
+def local_server_url(description: DescriptionConfig) -> str:
+    """The configured server URL of a local (``ollama`` or ``llama_cpp``) description provider."""
     return description.ollama_base_url if description.provider == _OLLAMA else description.llama_cpp_base_url
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class StaticProblem:
+    """A reason the provider cannot be used. ``reason`` is operator-readable and free of credentials and paths (it reaches
+    ``/status``); ``remedy`` is the install command, which only the log line may carry."""
+
+    reason: str
+    remedy: str | None = None
+
+
+def static_provider_problem(description: DescriptionConfig) -> StaticProblem | None:
+    """Why the configured provider cannot be used, known without any network call or program lookup: its package is
+    missing (C12) or its API key is not set. The package is checked first. ``None`` when neither applies."""
+    problem = check_provider_package(description.provider)
+    if problem is not None:
+        return StaticProblem(problem.summary(), problem.install_hint)
+    if not provider_key_available(description.provider):
+        variable = _API_KEY_VARIABLES.get(description.provider, _API_KEY_VARIABLES["anthropic"])  # as provider_key_available
+        return StaticProblem(f"{variable} is not set")
+    return None
+
+
+def warn_description_unreachable(provider: str, reason: str | None, remedy: str | None = None) -> None:
+    """The one WARNING per process that the configured description provider cannot be used. The startup validator and the
+    probe both report through it, so the finding is logged once however many startup paths find it. *remedy* (an install
+    command) is appended to the reason in the log line only."""
+    shown = f"{reason}; run: {remedy}" if remedy else reason
+    warn_once(
+        logger,
+        DESCRIPTION_UNREACHABLE_WARN_KEY,
+        "Collection descriptions: provider %s is not reachable (%s); generations will fail until that is fixed",
+        provider,
+        shown,
+    )
 
 
 async def probe_description_reachability(
@@ -97,27 +134,27 @@ async def probe_description_reachability(
 ) -> DescriptionReachability:
     """Whether the configured description provider can be used, without sending a prompt. Never raises."""
     provider = description.provider
+    problem = static_provider_problem(description)
+    if problem is not None:
+        return DescriptionReachability(False, problem.reason)
     if provider == _CLAUDE_CLI:
         if resolve_claude_binary() is not None:
             return DescriptionReachability(True, None)
         return DescriptionReachability(False, "the 'claude' program was not found on PATH")
     if provider in _PROBE_PATHS:
-        return await _probe_local_server(provider, _local_server_url(description), timeout_seconds)
-    if provider_key_available(provider):
-        return DescriptionReachability(True, None)
-    variable = _API_KEY_VARIABLES.get(provider, "its API key")
-    return DescriptionReachability(False, f"{variable} is not set")
+        return await _probe_local_server(provider, local_server_url(description), timeout_seconds)
+    return DescriptionReachability(True, None)
 
 
 async def _probe_local_server(provider: str, base_url: str, timeout_seconds: float) -> DescriptionReachability:
     try:
-        host = _host_port(base_url)
+        host = host_port(base_url)
         url = _probe_url(provider, base_url)
         # httpx limits each phase, not the whole request: the outer bound keeps a trickling server from holding the probe.
         async with asyncio.timeout(timeout_seconds), httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.get(url)
     except Exception as failure:  # noqa: BLE001 — every failure reads as "not reachable"; the probe never raises
-        return DescriptionReachability(False, f"no answer from {_host_port(base_url)} ({type(failure).__name__})")
+        return DescriptionReachability(False, f"no answer from {host_port(base_url)} ({type(failure).__name__})")
     if not response.is_success:
         return DescriptionReachability(False, f"{host} answered HTTP {response.status_code}")
     return DescriptionReachability(True, None)
@@ -142,13 +179,7 @@ async def run_description_probe(state: State, description: DescriptionConfig) ->
         verdict = DescriptionReachability(False, f"the probe failed unexpectedly ({type(failure).__name__})")
     state.description_reachability = verdict
     if not verdict.reachable:
-        warn_once(
-            logger,
-            DESCRIPTION_UNREACHABLE_WARN_KEY,
-            "Collection descriptions: provider %s is not reachable (%s); generations will fail until that is fixed",
-            description.provider,
-            verdict.reason,
-        )
+        warn_description_unreachable(description.provider, verdict.reason)
 
 
 def backfill_candidates(metas: Iterable[CollectionMeta]) -> list[CollectionMeta]:
