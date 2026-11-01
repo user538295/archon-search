@@ -496,7 +496,9 @@ class DescriptionLifecycle:
                 return GenerationSettlement(GenerationResult.SUPERSEDED, detail="the collection no longer exists")
             if (refusal := _refusal(job.kind, meta)) is not None:
                 return GenerationSettlement(refusal)
-            expected = ExpectedState(meta.description, meta.description_source, meta.last_described)
+            expected = ExpectedState(
+                meta.description, meta.description_source, meta.last_described, meta.description_status
+            )
             return _Draft(await self._generate(job), expected, meta.doc_count)
         finally:
             self._slot.release(job.granted)

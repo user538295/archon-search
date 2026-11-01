@@ -99,7 +99,7 @@ async def test_manual_set_during_slow_step_survives_interleave(store: SearchStor
     row ends as one serial outcome: either the generation lands first (its baseline stays, because a set leaves the
     baseline alone) or it is refused whole (the baseline stays at the seeded value).
     """
-    expected = ExpectedState(description=_OLD_TEXT, source="generated", last_described=_STAMP)
+    expected = ExpectedState(description=_OLD_TEXT, source="generated", last_described=_STAMP, status="ok")
     lock = store.lock_for(_NAME)
     await lock.acquire()  # a third writer holds the collection while both queue behind it
     tasks: set[asyncio.Task[DescriptionWriteOutcome]] = set()
@@ -138,7 +138,7 @@ async def test_manual_set_during_slow_step_survives_interleave(store: SearchStor
 
 
 async def test_a_second_generation_that_finishes_first_makes_the_slower_one_stale(store: SearchStore) -> None:
-    expected = ExpectedState(description=_OLD_TEXT, source="generated", last_described=_STAMP)
+    expected = ExpectedState(description=_OLD_TEXT, source="generated", last_described=_STAMP, status="ok")
     lock = store.lock_for(_NAME)
     await lock.acquire()
     tasks = [

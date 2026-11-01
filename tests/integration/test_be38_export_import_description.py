@@ -288,7 +288,10 @@ async def test_a_restored_manual_description_stays_protected_from_generation(env
     assert (await _import(env, "restored", archive)).status == JobStatus.DONE
     restored = await _meta(env, "restored")
     expected = ExpectedState(
-        description=restored.description, source=restored.description_source, last_described=restored.last_described
+        description=restored.description,
+        source=restored.description_source,
+        last_described=restored.last_described,
+        status=restored.description_status,
     )
     writer = DescriptionWriter(env["store"], env["cache"], default_embedding_model=_MODEL)
     result = await writer.apply(

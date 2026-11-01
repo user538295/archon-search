@@ -41,7 +41,9 @@ _DEFAULT_MODEL = "model-default"
 _TEXT = "Notes about the gardening club and its seed library."
 _EMBEDDING = [0.25, 0.5, 0.75]
 _DOC_COUNT = 42
-_EXPECTED = ExpectedState(description="old text", source="generated", last_described=datetime(2026, 1, 1, tzinfo=UTC))
+_EXPECTED = ExpectedState(
+    description="old text", source="generated", last_described=datetime(2026, 1, 1, tzinfo=UTC), status="ok"
+)
 _SHORT_WAIT_S = 0.01
 _WRITER_LOGGER = "archon_search.description_writer"
 

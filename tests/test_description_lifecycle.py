@@ -656,7 +656,9 @@ async def test_a_generated_description_is_written_from_the_state_read_after_the_
     [(collection, namespace, change)] = rig.writer.applied
     assert (collection, namespace) == ("docs", _NAMESPACE)
     assert change == GeneratedChange(
-        text=_TEXT, doc_count_at_generation=7, expected=ExpectedState(description=None, source=None, last_described=None)
+        text=_TEXT,
+        doc_count_at_generation=7,
+        expected=ExpectedState(description=None, source=None, last_described=None, status=None),
     )
     assert rig.writer.failures == []
 
@@ -668,7 +670,9 @@ async def test_the_expected_state_carries_the_old_description_source_and_stamp(r
 
     [(_, _, change)] = rig.writer.applied
     assert isinstance(change, GeneratedChange)
-    assert change.expected == ExpectedState(description="older", source="generated", last_described=_STAMP)
+    assert change.expected == ExpectedState(
+        description="older", source="generated", last_described=_STAMP, status="ok"
+    )
 
 
 async def test_a_failed_generation_records_failure_under_the_expected_state_and_never_writes_text(rig: Rig) -> None:
@@ -684,9 +688,31 @@ async def test_a_failed_generation_records_failure_under_the_expected_state_and_
     assert settlement.reason is DescriptionFailureReason.NO_UNRESTRICTED_CHUNKS
     assert settlement.detail == "no unrestricted chunks to describe"
     assert rig.writer.failures == [
-        ("docs", _NAMESPACE, ExpectedState(description="older", source="generated", last_described=_STAMP))
+        ("docs", _NAMESPACE, ExpectedState(description="older", source="generated", last_described=_STAMP, status="ok"))
     ]
     assert rig.writer.applied == []
+
+
+async def test_the_snapshot_carries_the_stored_status_of_an_empty_failed_row(rig: Rig) -> None:
+    """S74: the guard baseline includes the stored status, so a clear that only resets it makes the write stale."""
+    rig.store.rows["docs"] = _row(description=None, source=None, status="failed", baseline=None)
+    rig.generator.outcomes["docs"] = DescriptionFailed(DescriptionFailureReason.CALL_FAILED, "provider down")
+
+    await (await rig.request("docs", GenerationKind.DESCRIBE)).settled
+
+    assert rig.writer.failures == [
+        ("docs", _NAMESPACE, ExpectedState(description=None, source=None, last_described=None, status="failed"))
+    ]
+
+
+async def test_a_refused_stale_failure_settles_superseded_not_failed_or_generated(rig: Rig) -> None:
+    rig.store.rows["docs"] = _row(description=None, source=None, status="failed", baseline=None)
+    rig.generator.outcomes["docs"] = DescriptionFailed(DescriptionFailureReason.CALL_FAILED, "provider down")
+    rig.writer.failure_outcome = DescriptionWriteOutcome.REFUSED_STALE
+
+    settlement = await (await rig.request("docs", GenerationKind.DESCRIBE)).settled
+
+    assert settlement.result is GenerationResult.SUPERSEDED
 
 
 @pytest.mark.parametrize(

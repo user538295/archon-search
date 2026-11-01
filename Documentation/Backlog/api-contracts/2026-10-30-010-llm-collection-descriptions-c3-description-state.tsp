@@ -149,6 +149,8 @@ model ExpectedState {
   description: string | null;
   source?: DescriptionSource;
   lastDescribed?: utcDateTime;
+  /// The STORED status (never the `pending` overlay); a change of status alone makes the write stale.
+  status?: DescriptionStoredStatus;
 }
 
 /// Compared inside the lock against the freshly read row.
@@ -156,8 +158,8 @@ union WriteGuard {
   /// Set, clear and import: the caller is the authority.
   unconditional: "unconditional",
   /// Generated write and recorded failure: refuse with `refusedManual` when the row's source is
-  /// `manual`, and with `refusedStale` when its description, source or last-described differ from
-  /// `expected`.
+  /// `manual`, and with `refusedStale` when its description, source, last-described or stored status
+  /// differ from `expected`.
   refuseIfChanged: ExpectedState,
 }
 

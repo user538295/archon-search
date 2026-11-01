@@ -14,7 +14,7 @@ caller's load, never the caller that is itself the loader.
 
 This module is the only writer of the description vector for a CHANGED description: the metadata recompute carries the
 stored vector and only fills in a legacy description that never had one (S88). Known limit (C11 guards the
-description, source and last-described, not the model): a reindex that promotes the collection to another model
+description, source, last-described and stored status, not the model): a reindex that promotes the collection to another model
 between the read of the model here and the guarded write leaves a vector of the old model until the text next changes.
 """
 from __future__ import annotations

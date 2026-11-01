@@ -40,7 +40,7 @@ class DescriptionWriteOutcome(StrEnum):
     COLLECTION_MISSING = "collectionMissing"
     #: The row's source is ``manual`` inside the lock.
     REFUSED_MANUAL = "refusedManual"
-    #: The row's description, source or last-described differ from the state the generation started from.
+    #: The row's description, source, last-described or stored status differ from the state the generation started from.
     REFUSED_STALE = "refusedStale"
 
 
@@ -230,14 +230,20 @@ class DescriptionFields:
 class ExpectedState:
     """The description state a generation started from, read before its slow step.
 
-    The guard compares exactly these three values (C3 ``WriteGuard``), not the stored status, so a row that was
-    changed and then returned to exactly this state while the generation ran (a clear of an empty row that holds a
-    ``failed`` status) is not detected as changed.
+    The guard compares exactly these four values (C3 ``WriteGuard``): description, source, last-described and the
+    STORED status (never the ``pending`` overlay, which is not stored). Status takes part so a row returned to the
+    same text and source by another change while the generation ran is still detected: a clear of an empty row
+    that holds ``failed`` changes its status to none, and a late ``failed`` or generated write is refused stale.
     """
 
     description: str | None
     source: DescriptionSource | None
     last_described: datetime | None
+    status: DescriptionStoredStatus | None
+
+    def __post_init__(self) -> None:
+        # ``pending`` is memory only and never stored: a snapshot of it could never match a row, so refuse it here.
+        check_stored_description_value("description_status", self.status, DESCRIPTION_STORED_STATUSES)
 
     def refusal(self, row: CollectionMeta) -> DescriptionWriteOutcome | None:
         """Why a guarded write over *row* (read inside the lock) must not happen, or ``None`` when it may.
@@ -251,6 +257,7 @@ class ExpectedState:
             (row.description or None) == (self.description or None)
             and row.description_source == self.source
             and row.last_described == self.last_described
+            and row.description_status == self.status
         )
         return None if unchanged else DescriptionWriteOutcome.REFUSED_STALE
 

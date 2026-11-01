@@ -14,7 +14,7 @@
 // between is overwritten. The write step therefore re-reads the row INSIDE the collection lock, checks
 // the guard (C3 `WriteGuard`: a generated change or a recorded failure is refused with
 // `refusedManual` when the row's source is `manual`, and with `refusedStale` when the row's
-// description, source or last-described differ from the state the generation started from), changes
+// description, source, last-described or stored status differ from the state the generation started from), changes
 // only the description fields (C3 `DescriptionStore.write`) and writes once. The model call and the
 // embedding run OUTSIDE the lock; only the read-check-write is inside it. The baseline is saved only
 // on a successful generated write; set leaves it untouched; clear resets it.

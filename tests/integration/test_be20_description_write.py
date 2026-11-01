@@ -249,7 +249,12 @@ async def test_recompute_does_not_clobber_a_description_written_during_its_scan(
 
 
 def _expected(row: CollectionMeta) -> ExpectedState:
-    return ExpectedState(description=row.description, source=row.description_source, last_described=row.last_described)
+    return ExpectedState(
+        description=row.description,
+        source=row.description_source,
+        last_described=row.last_described,
+        status=row.description_status,
+    )
 
 
 async def test_touch_last_indexed_keeps_the_text_its_vector_and_the_recompute_flag(store: SearchStore) -> None:

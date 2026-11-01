@@ -41,7 +41,9 @@ _OLD_STAMP = datetime(2026, 1, 3, 4, 5, 6, 789012, tzinfo=UTC)
 _NEW_STAMP = datetime(2026, 2, 3, 4, 5, 6, tzinfo=UTC)
 _OLD_BASELINE = 5
 _NEW_BASELINE = 9
-_EXPECTED_GENERATED = ExpectedState(description=_OLD_TEXT, source="generated", last_described=_OLD_STAMP)
+_EXPECTED_GENERATED = ExpectedState(
+    description=_OLD_TEXT, source="generated", last_described=_OLD_STAMP, status="ok"
+)
 _SHORT_LOCK_TIMEOUT_S = 0.05
 
 #: Every ``CollectionMeta`` field a description write owns.
@@ -147,7 +149,10 @@ def _failure_fields() -> DescriptionFields:
 
 def _expected_of(meta: CollectionMeta) -> ExpectedState:
     return ExpectedState(
-        description=meta.description, source=meta.description_source, last_described=meta.last_described
+        description=meta.description,
+        source=meta.description_source,
+        last_described=meta.last_described,
+        status=meta.description_status,
     )
 
 
@@ -369,6 +374,7 @@ async def test_manual_source_wins_even_when_the_expected_state_describes_it(stor
         pytest.param({"description": "a second generation finished"}, id="description"),
         pytest.param({"last_described": datetime(2026, 5, 5, tzinfo=UTC)}, id="last_described"),
         pytest.param({"last_described": None}, id="last_described_cleared"),
+        pytest.param({"description_status": "failed"}, id="status_failed_over_text"),
     ],
 )
 async def test_generated_write_is_refused_when_the_row_changed_since_the_generation_began(
@@ -412,13 +418,42 @@ async def test_generated_write_is_refused_when_only_the_source_differs(store: Se
     assert await _write(store, _generated_fields(), expected) is DescriptionWriteOutcome.REFUSED_STALE
 
 
+async def test_a_write_is_refused_when_only_the_stored_status_changed_by_a_clear(store: SearchStore) -> None:
+    """S74: an empty row holding ``failed`` is snapshotted; the clear resets the status only (text, source and stamp
+    stay none), so a late recorded failure or generated write over it is stale and the cleared row stays clean."""
+    empty_failed = _generated_row(
+        description=None, description_source=None, description_status="failed", last_described=None
+    )
+    await store.update_collection_meta(empty_failed)
+    expected = _expected_of(empty_failed)
+    assert expected.status == "failed"
+    assert await _write(store, _clear_fields()) is DescriptionWriteOutcome.WRITTEN
+    assert (await _stored(store)).description_status is None
+
+    assert await _write(store, _failure_fields(), expected) is DescriptionWriteOutcome.REFUSED_STALE
+    assert await _write(store, _generated_fields(), expected) is DescriptionWriteOutcome.REFUSED_STALE
+
+    stored = await _stored(store)
+    assert (stored.description, stored.description_source, stored.description_status) == (None, None, None)
+
+
+async def test_a_failure_is_recorded_when_the_stored_status_is_unchanged(store: SearchStore) -> None:
+    empty_failed = _generated_row(
+        description=None, description_source=None, description_status="failed", last_described=None
+    )
+    await store.update_collection_meta(empty_failed)
+
+    assert await _write(store, _failure_fields(), _expected_of(empty_failed)) is DescriptionWriteOutcome.WRITTEN
+    assert (await _stored(store)).description_status == "failed"
+
+
 async def test_an_empty_expected_description_matches_an_unset_one(store: SearchStore) -> None:
     """The store cannot tell an empty description from none, so a caller's ``""`` equals the stored ``None``."""
     empty = _generated_row(
         description=None, description_source=None, description_status=None, last_described=None
     )
     await store.update_collection_meta(empty)
-    expected = ExpectedState(description="", source=None, last_described=None)
+    expected = ExpectedState(description="", source=None, last_described=None, status=None)
 
     assert await _write(store, _generated_fields(), expected) is DescriptionWriteOutcome.WRITTEN
 
@@ -600,6 +635,12 @@ def test_a_source_or_status_outside_the_stored_contract_is_refused_on_constructi
     """``pending`` is memory only; a typo is no better. Refused before any lock is taken."""
     with pytest.raises(ValueError, match=field):
         _fields(**{field: FieldChange.set_to("pending")})
+
+
+def test_an_expected_state_holding_the_pending_overlay_is_refused_on_construction() -> None:
+    """The guard compares the STORED status; ``pending`` is never stored, so a snapshot of it is a caller bug."""
+    with pytest.raises(ValueError, match="description_status"):
+        ExpectedState(description=None, source=None, last_described=None, status="pending")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("text_change", [FieldChange.set_to(_NEW_TEXT), FieldChange.clear()], ids=["set", "clear"])

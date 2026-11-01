@@ -2050,7 +2050,7 @@ class SearchStore:
         Re-reads the row inside the lock, applies *guard*, changes only the fields *fields* states (each kept, set
         or cleared; every other field stays as just read, centroid fields and last-indexed included) and writes the
         row once. A generated write and a recorded failure carry ``ExpectedState`` and are refused when the row's
-        source is ``manual`` (``refusedManual``) or its description, source or last-described differ
+        source is ``manual`` (``refusedManual``) or its description, source, last-described or stored status differ
         (``refusedStale``); set, clear and import pass ``UNCONDITIONAL``. The text and the routing vector change
         together, because *fields* carries both.
 
