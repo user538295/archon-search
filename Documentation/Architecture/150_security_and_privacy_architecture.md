@@ -249,7 +249,7 @@ Note: archon-search does **not** explicitly set mode `0700` on `~/.archon-search
 
 **C4 introduces the first point in archon-search v1 where user data can leave the host by design. C5 introduces a second (see the RAG Fusion section below).**
 
-When `[hyde] enabled = true` in config *and* a request includes `hyde=true`, the user's raw query (up to 2000 characters) is sent to the LLM configured by `[hyde] provider` to generate a hypothetical answer passage. This is a deliberate operator opt-in, not a default behaviour. **Whether the query leaves the host depends on the provider:**
+When `[hyde] enabled = true` in config *and* a request includes `hyde=true`, the user's raw query is sent to the LLM configured by `[hyde] provider` to generate a hypothetical answer passage: the whole query to a cloud provider (the former 2000-character cut is gone; `[server].max_request_body_mb` bounds it), the part that fits the model's context window to `ollama` and `llama_cpp` (`llm_client.fit`; see [210](210_performance_and_scalability.md#sizing-a-model-prompt-to-the-window)). This is a deliberate operator opt-in, not a default behaviour. **Whether the query leaves the host depends on the provider:**
 
 | `provider` | Query text goes to | Leaves the host? |
 |---|---|---|
@@ -268,7 +268,7 @@ When `[hyde] enabled = true` in config *and* a request includes `hyde=true`, the
 - The hypothesis text returned by the provider is consumed only by the local embedder. It is **never logged, stored in LanceDB, or returned to the caller**.
 - Log messages in `archon_search/hyde.py` use `_query_fingerprint(query)` (SHA-256 truncated to 16 hex chars) — the raw query is never passed to any logging call. A CI guard (`tests/test_no_query_log_in_hyde.py`) enforces this structurally.
 - `TelemetryEntry` factories receive no query text — the HyDE path does not weaken the telemetry structural invariant.
-- Fallback is silent and transparent: a timeout, API error, missing key, model-not-loaded, or rate limit causes `hyde_applied: false` in the response, not an error. Availability is never degraded by the external dependency.
+- Fallback is silent and transparent: a timeout, API error, missing key, model-not-loaded, rate limit, or a model window with no room for the query causes `hyde_applied: false` in the response, not an error. Availability is never degraded by the external dependency.
 
 **Operator visibility:** when `enabled = true`, the server logs an INFO message at startup naming the provider and model. This makes the data-transmission fact visible in server logs without the operator needing to read config.
 
@@ -280,7 +280,7 @@ See `Documentation/ADRs/C4-hyde-external-llm-dependency.md` and `Documentation/A
 
 **C5 introduces a second point where user data can leave the host by design**, following the same opt-in pattern as HyDE (C4).
 
-When `[rag_fusion] enabled = true` in config *and* a request includes `rag_fusion=true`, the user's raw query (up to 2000 characters) is sent to the LLM configured by `[rag_fusion] provider` to generate semantic query variants. This is a deliberate operator opt-in, not default behaviour. The same provider-dependent transmission table as HyDE above applies (`anthropic`/`openai`/`claude_cli` leave the host; `ollama`/`llama_cpp` do not).
+When `[rag_fusion] enabled = true` in config *and* a request includes `rag_fusion=true`, the user's raw query is sent to the LLM configured by `[rag_fusion] provider` to generate semantic query variants: the whole query to a cloud provider, the part that fits the model's context window to `ollama` and `llama_cpp` (the same sizing as HyDE). This is a deliberate operator opt-in, not default behaviour. The same provider-dependent transmission table as HyDE above applies (`anthropic`/`openai`/`claude_cli` leave the host; `ollama`/`llama_cpp` do not).
 
 **Gating requirements** — RAG Fusion transmission occurs only when all three conditions are true simultaneously:
 

@@ -16,8 +16,8 @@ import pytest
 from archon_search.config import RAGFusionConfig
 from archon_search.llm_client.protocol import LlmCallFailure, LlmCallTimeout
 from archon_search.rag_fusion import (
-    RAG_FUSION_MAX_QUERY_CHARS,
     RAG_FUSION_MAX_VARIANT_CHARS,
+    RAG_FUSION_PROMPT_TEMPLATE,
     RAG_FUSION_TOKENS_PER_QUERY,
     RAGFusionGenerator,
 )
@@ -160,15 +160,17 @@ async def test_generate_variants_sends_one_request_with_template_ceiling_and_tim
 
 
 @pytest.mark.asyncio
-async def test_query_truncated_to_2000_chars() -> None:
-    """A query longer than the cut is truncated in the prompt sent to the client."""
+async def test_a_long_query_goes_to_a_client_without_a_limit_whole() -> None:
+    """S9: a client with no input budget (cloud) receives the whole query; there is no fixed character cut."""
     generator, client = _generator()
+    query = "x" * 3000
 
-    await generator.generate_variants("x" * (RAG_FUSION_MAX_QUERY_CHARS + 1000))
+    await generator.generate_variants(query)
 
     [request] = client.requests
-    assert "x" * RAG_FUSION_MAX_QUERY_CHARS in request.prompt
-    assert "x" * (RAG_FUSION_MAX_QUERY_CHARS + 1) not in request.prompt
+    assert request.prompt == RAG_FUSION_PROMPT_TEMPLATE.format(
+        num_queries=2, max_chars=RAG_FUSION_MAX_VARIANT_CHARS, query=query
+    )
 
 
 @pytest.mark.asyncio

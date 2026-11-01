@@ -6,6 +6,7 @@ both, and controls the outcome through the stub's ``generate``.
 
 ``ScriptedLlmClient`` is the stand-in for the shared LLM client the real ``HyDEGenerator``, ``RAGFusionGenerator`` and ``DescriptionGenerator`` call
 (``app.state.hyde_client``, ``app.state.rag_fusion_client``, the ``[description]`` client): it answers with a fixed text or raises a fixed failure and records every request.
+``BudgetedLlmClient`` is the same with a finite window and input budget and a word-count ``count_tokens``, for the query-sizing tests.
 """
 from __future__ import annotations
 
@@ -19,6 +20,8 @@ from archon_search.hyde import HyDEGenerator
 from archon_search.llm_client.protocol import (
     UNBOUNDED,
     ContextWindow,
+    ContextWindowSource,
+    ContextWindowTokens,
     InputBudget,
     LlmCallRequest,
     LlmCallResult,
@@ -44,6 +47,44 @@ class ScriptedLlmClient:
 
     async def input_budget(self, template_text: str) -> InputBudget:
         return InputBudget(UNBOUNDED)
+
+
+class BudgetedLlmClient(ScriptedLlmClient):
+    """A scripted client with a finite window and a fixed input budget; it counts ``tokens_per_word`` (1) tokens per whitespace-separated word.
+
+    Records every template ``input_budget`` was asked about and every text ``count_tokens`` counted. ``count_failure``
+    makes the count (not the call) raise, like an unreachable tokenize endpoint.
+    """
+
+    def __init__(
+        self,
+        *,
+        window_tokens: int,
+        budget: int,
+        reply: str = "a hypothetical passage",
+        count_failure: Exception | None = None,
+        tokens_per_word: int = 1,
+    ) -> None:
+        super().__init__(reply=reply)
+        self.window_tokens = window_tokens
+        self.budget = budget
+        self.count_failure = count_failure
+        self.tokens_per_word = tokens_per_word
+        self.templates: list[str] = []
+        self.counted: list[str] = []
+
+    def context_window(self) -> ContextWindow:
+        return ContextWindowTokens(size=self.window_tokens, source=ContextWindowSource.CONFIGURED)
+
+    async def input_budget(self, template_text: str) -> InputBudget:
+        self.templates.append(template_text)
+        return InputBudget(self.budget)
+
+    async def count_tokens(self, text: str) -> int:
+        self.counted.append(text)
+        if self.count_failure is not None:
+            raise self.count_failure
+        return self.tokens_per_word * len(text.split())
 
 
 def stub_hyde_generator(**generate: Any) -> MagicMock:

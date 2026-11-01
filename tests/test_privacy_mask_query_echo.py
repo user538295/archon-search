@@ -8,9 +8,10 @@ import json
 
 import pytest
 
-from archon_search._privacy import _MIN_CUT_ECHO_CHARS, mask_query_echo
+from archon_search._privacy import _MIN_CUT_ECHO_CHARS, _echo_forms, mask_query_echo
 
 _CUT = 2000
+_MAX_ECHO = 2000  # the most of a query a failure text is masked against (the clients cut a server text at 200)
 _QUERY = 'say "hello"\n  to   the café — a longish query'
 _CUT_MARKER = "..."
 _MIN_FRAGMENT = _MIN_CUT_ECHO_CHARS
@@ -90,6 +91,17 @@ def test_only_the_part_of_the_query_the_prompt_carries_can_come_back() -> None:
     query = "y" * 5_000_000
 
     assert mask_query_echo(f"echo: {query[:_CUT]}", query, cut_chars=_CUT) == "echo: [query]"
+
+
+def test_a_query_sent_whole_is_masked_from_a_bounded_prefix_whatever_its_length() -> None:
+    """A cloud provider is sent the whole of a query of many megabytes; masking its failure text must not scale with it."""
+    query = "confidential " * 400_000  # about 5 MB
+    largest_json_expansion = 6  # ``\uXXXX`` for one character
+
+    forms = _echo_forms(query, cut_chars=len(query))
+
+    assert max(len(form) for form in forms) <= _MAX_ECHO * largest_json_expansion
+    assert mask_query_echo(f"error: {query[:60]}{_CUT_MARKER}", query, cut_chars=len(query)) == f"error: [query]{_CUT_MARKER}"
 
 
 @pytest.mark.parametrize(("tail_chars", "masked"), [(_MIN_FRAGMENT - 1, False), (_MIN_FRAGMENT, True)])

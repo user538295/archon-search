@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from archon_search.config import HyDEConfig
-from archon_search.hyde import HyDEGenerator
+from archon_search.hyde import HYDE_PROMPT_TEMPLATE, HyDEGenerator
 from archon_search.llm_client.protocol import LlmCallFailure, LlmCallTimeout
 from tests._hyde_stubs import ScriptedLlmClient
 
@@ -108,15 +108,14 @@ async def test_generate_sends_one_templated_request_with_the_hyde_ceilings() -> 
 
 
 @pytest.mark.asyncio
-async def test_query_truncated_to_2000_chars() -> None:
-    """Queries longer than 2000 chars are truncated in the prompt sent to the LLM."""
+async def test_a_long_query_goes_to_a_client_without_a_limit_whole() -> None:
+    """S9: a client with no input budget (cloud) receives the whole query; there is no fixed character cut."""
     client = ScriptedLlmClient()
+    query = "x" * 3000
 
-    await HyDEGenerator(_make_config(), client).generate("x" * 3000, embedder=_make_embedder())
+    await HyDEGenerator(_make_config(), client).generate(query, embedder=_make_embedder())
 
-    prompt = client.requests[0].prompt
-    assert "x" * 2000 in prompt
-    assert "x" * 2001 not in prompt
+    assert HYDE_PROMPT_TEMPLATE.format(query=query) == client.requests[0].prompt
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +165,9 @@ async def test_hyde_failure_returns_no_document_and_flags_not_applied(failure: L
         ("very-unique-secret-query-97531", lambda q: q),
         ("very-unique  secret\nquery 97531", lambda q: " ".join(q.split())),  # clients collapse whitespace
         ('very-unique "secret" query\n97531', lambda q: json.dumps(q)[1:-1]),  # a JSON error body
-        ("very-unique-secret-query-" + "x" * 3000, lambda q: q[:2000]),  # the cut that went into the prompt
+        ("very-unique-secret-query-" + "x" * 3000, lambda q: q),  # a long query reaches the provider whole, so it can come back whole
     ],
-    ids=["verbatim", "whitespace-collapsed", "json-escaped", "prompt-cut"],
+    ids=["verbatim", "whitespace-collapsed", "json-escaped", "long-verbatim"],
 )
 @pytest.mark.asyncio
 async def test_hyde_failure_text_echoing_the_query_is_masked_in_the_warning(

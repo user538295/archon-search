@@ -29,7 +29,8 @@ Banned variable names checked (in addition to ``query``):
   - ``variants`` — the list of all generated variant strings
   - ``variant`` — a single variant string during iteration
   - ``all_queries`` — the combined [query] + variants list
-  - ``truncated_query`` — the 2000-char-truncated query fed to the LLM
+  - ``truncated_query`` — the 2000-char-truncated query fed to the LLM (the cut is gone; the name stays banned)
+  - ``sent_query`` — the query as it reaches the provider: the whole query for a cloud provider, the head that fits the window for a local one
   - ``prompt`` and ``raw_text`` — the prompt wrapping the query and the model's raw answer (BE-12)
   - ``failure`` — the provider's failure: its text may echo the query, so only the masked ``reason`` is logged
 
@@ -56,9 +57,9 @@ _LOG_PREFIX = r"(?:logging\.|_logger\.|(?<![_\w])logger\.)"
 # A logging call: a logger method, or ``warn_once(...)`` — RAG Fusion's once-per-process WARNING route (S15).
 _LOG_CALL = rf"(?:{_LOG_PREFIX}\w+|(?<![_\w])warn_once)"
 
-#: The log calls of rag_fusion.py: the rate-limit WARNING and the three ``warn_once`` calls (failure, no valid
-#: variant, variant shortfall).
-_EXPECTED_RAG_FUSION_LOG_CALLS = 4
+#: The log calls of rag_fusion.py: the rate-limit WARNING and the four ``warn_once`` calls (no room for the query,
+#: failure, no valid variant, variant shortfall).
+_EXPECTED_RAG_FUSION_LOG_CALLS = 5
 
 # ---------------------------------------------------------------------------
 # Banned variable names that must never appear as raw log arguments.
@@ -69,6 +70,7 @@ _BANNED_VAR_NAMES: tuple[str, ...] = (
     "variant",
     "all_queries",
     "truncated_query",
+    "sent_query",
     "prompt",
     "raw_text",
     "failure",
@@ -447,6 +449,22 @@ def test_guard_detects_bare_truncated_query_arg() -> None:
     content = '_logger.warning("prompt query: %s", truncated_query)\n'
     assert _bare_vars_in_log_violations(content, ["truncated_query"]), (
         "Guard failed to detect bare 'truncated_query' positional arg in a logging call"
+    )
+
+
+def test_guard_detects_fstring_sent_query_in_log() -> None:
+    """Guard must fire on a logger call that embeds {sent_query} (the query as it reaches the provider) in an f-string."""
+    content = '_logger.warning(f"sending {sent_query} to LLM")\n'
+    assert _FSTRING_PATTERNS["sent_query"].search(content), (
+        "Pattern failed to detect f-string with {sent_query} in a logging call"
+    )
+
+
+def test_guard_detects_bare_sent_query_arg_in_warn_once() -> None:
+    """Guard must fire on a ``warn_once(...)`` call that passes sent_query as a positional arg."""
+    content = 'warn_once(_logger, KEY, "RAG Fusion: %s", sent_query)\n'
+    assert _bare_vars_in_log_violations(content, ["sent_query"]), (
+        "Guard failed to detect bare 'sent_query' positional arg in a warn_once call"
     )
 
 

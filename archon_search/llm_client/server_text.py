@@ -13,7 +13,7 @@ def bounded_server_text(text: str, prompt: str) -> str:
     """Server error text as one short line with the prompt (raw, JSON-escaped or Python-repr-escaped) masked; best effort, the text is untrusted."""
     scrubbed = text
     if prompt:
-        for echo in (prompt, json.dumps(prompt)[1:-1], repr(prompt)[1:-1]):
+        for echo in (prompt, json.dumps(prompt)[1:-1], json.dumps(prompt, ensure_ascii=False)[1:-1], repr(prompt)[1:-1]):
             scrubbed = scrubbed.replace(echo, "[prompt]")
     one_line = " ".join(scrubbed.split())
     return one_line if len(one_line) <= MAX_SERVER_TEXT_CHARS else f"{one_line[:MAX_SERVER_TEXT_CHARS]}..."

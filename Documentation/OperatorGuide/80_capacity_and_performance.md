@@ -55,7 +55,7 @@ HyDE and RAG Fusion add a synchronous LLM call to the query path before retrieva
 | `timeout_seconds` | 10.0 | Per-call deadline; on timeout the query proceeds without the LLM augmentation. Accepted unclamped, so HyDE is additionally capped at ~30 s (S582) on every surface that runs it — REST `/search` and `/explain`, MCP `search`, `search_with_context` and `explain` — so a value above it cannot park the HyDE call. That cap is HyDE's own window, spent before the search budget starts: on REST `/search` and MCP `search` a `hyde=true` request can take ~60 s (≈30 s HyDE + 30 s search) before its `504`. |
 | `[rag_fusion] num_queries` | 2 | Query variants generated (1–5); each variant adds a fan-out leg. |
 
-Cost is one LLM round-trip per search (plus provider latency), gated by the rate limit. Provider is `anthropic` by default (also `ollama` / `openai` / `claude_cli`). See [`../UserManual/60_searching.md`](../UserManual/60_searching.md) for usage and provider setup.
+Cost is one LLM round-trip per search (plus provider latency), gated by the rate limit. On `ollama` the query is first counted against the model window (a gpt2 count in a worker thread) and on `llama_cpp` through llama-server's `/apply-template` and `/tokenize` (three to twelve local requests); a cloud provider pays nothing extra. See [Sizing a model prompt to the window](../Architecture/210_performance_and_scalability.md#sizing-a-model-prompt-to-the-window). Provider is `anthropic` by default (also `ollama` / `openai` / `claude_cli`). See [`../UserManual/60_searching.md`](../UserManual/60_searching.md) for usage and provider setup.
 
 ### Ingest (`POST /ingest`, `POST /collections`, `POST /collections/{name}/reindex`)
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from archon_search.llm_client.server_text import (
     MAX_SERVER_TEXT_CHARS,
     bounded_server_text,
@@ -36,3 +38,11 @@ def test_text_at_the_limit_is_kept_and_one_over_is_cut() -> None:
 def test_python_repr_prompt_echo_is_masked() -> None:
     """The Anthropic SDK builds its error message from the body's dict repr, which escapes quotes and newlines the Python way."""
     assert bounded_server_text(f"Error code: 400 - {{'message': {_PROMPT!r}}}", _PROMPT) == "Error code: 400 - {'message': '[prompt]'}"
+
+
+def test_unescaped_json_prompt_echo_is_masked() -> None:
+    """llama-server writes non-ASCII text as it is (not as \\uXXXX) inside a JSON string, quotes and newlines escaped."""
+    prompt = '検索 "拡張"\n生成'
+    echoed = json.dumps(prompt, ensure_ascii=False)[1:-1]
+
+    assert bounded_server_text(f'error: "{echoed}"', prompt) == 'error: "[prompt]"'

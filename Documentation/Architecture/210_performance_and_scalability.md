@@ -217,6 +217,19 @@ The code-lane eval gate (`tests/eval/test_e2e_graph_eval_gate_v2.py`) adds two n
 
 Latency p50/p95 for both code-lane collections are captured in `baselines/baseline.json` alongside the existing retrieval latency fields. No ceiling is enforced in v1.
 
+## Sizing a model prompt to the window
+
+Every prompt sent to a model is sized ahead of the call (S9, S11); nothing is checked after it. The client's `input_budget(template)` is the window minus the 1024-token answer reserve (`ANSWER_RESERVE_TOKENS`) minus the template's own count: exact for `llama_cpp` (the server's chat template and `/tokenize`), a gpt2 estimate plus a 20% margin for `ollama`, and unbounded for `anthropic`, `openai` and `claude_cli`, whose prompts therefore go whole (no setting, no trimming). A window with no room for template and reserve gives a budget of 0. What differs per feature is the variable part that is cut to the budget:
+
+| Feature | Fixed part (the template) | Variable part, and how it is cut | Window with no room |
+|---|---|---|---|
+| HyDE | `HYDE_PROMPT_TEMPLATE` with an empty query | the user's query: the head that fits, cut before a space or, without spaces, on a character-cluster boundary (`llm_client.fit`); the search keeps the original query | HyDE is skipped for that call (`hyde_applied: false`), one WARNING per process names the window |
+| RAG Fusion | `RAG_FUSION_PROMPT_TEMPLATE` for the configured `num_queries` | the same | single-query search (`rag_fusion_applied: false`), one WARNING per process names the window |
+| Graph community summaries | `SUMMARIZE_PROMPT_TEMPLATE`; the budget also gives up any `extraction_token_budget` above 1024 | the entity names, then as many representative passages as fit, in MMR order (`CommunityBuilder._passages_within`) | the community is built without a summary, one WARNING per process |
+| Collection descriptions | the description template with the retry reminder (its longest form) | evenly spaced chunk excerpts: the sample shrinks until it fits (`DescriptionGenerator._fit`) beside the thinking headroom (`min(3072, budget // 2)` unless `think` is false; the whole budget when no excerpt fits beside it) | the generation fails (`callFailed`) and names the window |
+
+**Cost of the query step.** A cloud provider pays nothing: no count, no extra request. For `ollama` it is one gpt2 count of the template and one of the query, each run in a worker thread (the tokenizer is fetched once; see the air-gapped note in the wizard manual). For `llama_cpp` it is two requests to the local server for the template (`/apply-template`, then `/tokenize`) and one `/tokenize` for the query. Further counts of the query come only when it has to be cut, for both providers: one or two for a text whose cost grows steadily with its length, at most 10 in all (`MAX_FIT_COUNTS`). The step runs before the provider call, outside the feature's `timeout_seconds`; the search budget that already caps HyDE (S582) bounds it (RAG Fusion has no cap of its own: it runs inside the route's search budget, whose expiry is a `504`), and a count already running in an `ollama` worker thread finishes unused if that cap fires. The head considered is never longer than 16 characters per budget token (`MAX_CHARS_PER_TOKEN`), so a query of many megabytes (the request-size limit `[server].max_request_body_mb`, 32 MiB by default, is the only other bound on it: `BodySizeLimitMiddleware` refuses a larger request body with 413, pinned by `tests/server/test_request_hardening.py` and, for a `/search` query, by `tests/integration/test_lcd_gap2_query_sizing_e2e.py`) is cut without being counted whole. A failed count (server down, tokenizer not fetchable) is an ordinary provider failure of that feature: one WARNING per process and the plain-query fallback.
+
 ## CLI startup latency
 
 **Goal (feature 190):** lightweight commands (`config show`, `config get`, `status`, `stop`, `key list`) start without loading the ML/agent stack.

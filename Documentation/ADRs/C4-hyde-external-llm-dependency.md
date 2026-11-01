@@ -4,7 +4,7 @@
 **Deciders**: archon-search contributors
 **Date**: 2026-06-07
 **Supersedes**: nothing
-**Superseded in part by**: [ADR 19 — One Shared LLM Client for Every LLM Feature, and Provider-Based Collection Descriptions](19_shared_llm_client_and_provider_based_collection_descriptions.md) — only Decision item 5's "clear 422" for a missing `anthropic` package (`:69`): the package guard now runs at startup, and a package lost after boot is a failed call that falls back (`hyde_applied: false`).
+**Superseded in part by**: [ADR 19 — One Shared LLM Client for Every LLM Feature, and Provider-Based Collection Descriptions](19_shared_llm_client_and_provider_based_collection_descriptions.md) — only Decision item 5's "clear 422" for a missing `anthropic` package (`:69`): the package guard now runs at startup, and a package lost after boot is a failed call that falls back (`hyde_applied: false`); and the 2000-character cut behind the privacy statement below: the query is now sized to the model's window instead (whole for a cloud provider, the part that fits for `ollama` and `llama_cpp`).
 
 ---
 
@@ -74,7 +74,7 @@ The external LLM dependency is acceptable because:
 
 When `[hyde] enabled = true` and a caller sends `hyde=true`:
 
-- The user's raw query (up to 2000 chars) is sent to Anthropic's API servers over HTTPS.
+- The user's raw query is sent to Anthropic's API servers over HTTPS: the whole query since [ADR 19](19_shared_llm_client_and_provider_based_collection_descriptions.md) (it was cut to 2000 characters before).
 - Anthropic's data-processing terms apply to that traffic.
 - The hypothesis text returned by the API is consumed only by the local embedder and is **never logged, stored, or returned to the caller**.
 - `doc_id`s, collection names, and result content are never sent.

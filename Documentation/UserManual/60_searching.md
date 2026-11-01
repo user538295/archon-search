@@ -217,7 +217,7 @@ curl -s -X POST http://127.0.0.1:8765/search \
 
 HyDE (Hypothetical Document Embeddings) improves recall for vocabulary-mismatch queries. When enabled, the server asks an LLM to write a short hypothetical answer passage, embeds that passage with the embedding model of the collection being searched (so HyDE also works on a collection pinned to its own model), and uses the resulting vector for ANN lookup instead of the raw query embedding.
 
-> **Privacy notice**: `hyde=true` sends the raw query to the configured LLM provider. With `provider = "anthropic"` (default), `"openai"`, or `"claude_cli"`, the query leaves the host (`claude_cli` goes to Anthropic via Claude Code's login) — do not enable in air-gapped deployments. With `provider = "ollama"` or `"llama_cpp"`, the query stays on-premise (zero-transmission). See `Documentation/ADRs/C4-hyde-external-llm-dependency.md`.
+> **Privacy notice**: `hyde=true` sends the raw query to the configured LLM provider (the whole of it to a cloud provider; a local model gets the part that fits its window, see [Long queries](#long-queries-and-the-model-window)). With `provider = "anthropic"` (default), `"openai"`, or `"claude_cli"`, the query leaves the host (`claude_cli` goes to Anthropic via Claude Code's login) — do not enable in air-gapped deployments. With `provider = "ollama"` or `"llama_cpp"`, the query stays on-premise (zero-transmission). See `Documentation/ADRs/C4-hyde-external-llm-dependency.md`.
 
 ### Installation
 
@@ -244,6 +244,10 @@ model = "claude-haiku-4-5-20251001"
 timeout_seconds = 10.0
 max_requests_per_minute = 60
 ```
+
+### Long queries and the model window
+
+HyDE puts your query into a short prompt, so a very long query has to fit the model. A cloud provider (`anthropic`, `openai`, `claude_cli`) receives the **whole** query, however long: nothing is counted or cut (only the server's request-size limit, `[server].max_request_body_mb`, bounds it). A local provider (`ollama`, `llama_cpp`) has a context window, so the server sizes the query ahead of the call: it keeps the head of the query, cut at a word boundary, that fits the window next to the prompt and a 1024-token answer reserve, and sends only that to the model. The search itself still uses your full query. For Ollama set `[hyde].ollama_context_tokens` (unset assumes 4096); the server reads llama-server's window itself. If the window leaves no room for any query text, HyDE is skipped for that call (`hyde_applied: false`, `expansion_warning: "HyDE expansion failed"`, like any other failure) and the server logs one WARNING per process that names the window. A cloud provider's own prompt limit is not checked ahead: a query beyond it is a failed call that falls back the same way (and a long prompt is billed).
 
 ### Provider matrix (G10 / LLCP)
 
@@ -277,13 +281,13 @@ The response sets `hyde_applied: true` when HyDE was used, or `false` on fallbac
 
 ### Fallback behaviour
 
-A provider-side HyDE failure never degrades availability. It falls back silently (`hyde_applied: false`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors (the server logs one WARNING per process, without the query or the hypothesis); or the per-process rate limit is exhausted. On every HyDE surface (REST `/search` and `/explain`, the MCP `search`, `search_with_context` and `explain` tools) the whole expansion is additionally capped at ~30 s (S582) — its own window, before the search budget starts, so a `/search` with `hyde=true` can take ~60 s before a `504` — and on `POST /search` and the MCP `search` tool it is skipped while the searched collection's embedding model is still loading, so a provider that accepts the connection but never answers can no longer hold the request open for the full `timeout_seconds` — it falls back the same way. Any `graph_mode` suppresses HyDE (no LLM call, `hyde_applied: false`, no warning): graph mode wins over HyDE, since most graph paths drop the hypothesis vector. The non-silent cases: `[hyde] enabled = true` with the provider package uninstalled makes the server refuse to start with a `ConfigError` naming the missing package (see `160_troubleshooting.md`); and an unexpected exception during HyDE generation outside the provider call (e.g. embedding the hypothesis) fails the request — REST `500` with `{"detail": "search failed"}` (`/explain`: `explain failed`), MCP `internal_error` with the same text (`search` / `search_with_context`: `search failed`, `explain`: `explain failed`) — with the cause in the server log. The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
+A provider-side HyDE failure never degrades availability. It falls back silently (`hyde_applied: false`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors (the server logs one WARNING per process, without the query or the hypothesis); the model's window has no room for the query (one WARNING per process, naming the window); or the per-process rate limit is exhausted. On every HyDE surface (REST `/search` and `/explain`, the MCP `search`, `search_with_context` and `explain` tools) the whole expansion is additionally capped at ~30 s (S582) — its own window, before the search budget starts, so a `/search` with `hyde=true` can take ~60 s before a `504` — and on `POST /search` and the MCP `search` tool it is skipped while the searched collection's embedding model is still loading, so a provider that accepts the connection but never answers can no longer hold the request open for the full `timeout_seconds` — it falls back the same way. Any `graph_mode` suppresses HyDE (no LLM call, `hyde_applied: false`, no warning): graph mode wins over HyDE, since most graph paths drop the hypothesis vector. The non-silent cases: `[hyde] enabled = true` with the provider package uninstalled makes the server refuse to start with a `ConfigError` naming the missing package (see `160_troubleshooting.md`); and an unexpected exception during HyDE generation outside the provider call (e.g. embedding the hypothesis) fails the request — REST `500` with `{"detail": "search failed"}` (`/explain`: `explain failed`), MCP `internal_error` with the same text (`search` / `search_with_context`: `search failed`, `explain`: `explain failed`) — with the cause in the server log. The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
 
 ## RAG Fusion multi-query recall (C5)
 
 RAG Fusion improves recall for multi-faceted queries. When enabled, the server asks an LLM to generate N semantic variants of the query, searches with all N+1 queries in parallel, and fuses the result sets with a second-pass Reciprocal Rank Fusion (RRF).
 
-> **Privacy notice**: `rag_fusion=true` sends the raw query to the configured LLM provider. Same provider trade-offs as HyDE above (`"ollama"` and `"llama_cpp"` stay on-premise; all others transmit externally). See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md`.
+> **Privacy notice**: `rag_fusion=true` sends the raw query to the configured LLM provider (the whole of it to a cloud provider). Same provider trade-offs as HyDE above (`"ollama"` and `"llama_cpp"` stay on-premise; all others transmit externally). See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md`.
 
 ### Configuration
 
@@ -301,6 +305,8 @@ num_queries = 2   # LLM-generated variants (1–5); total searches = num_queries
 
 Installation and the provider matrix are identical to HyDE — swap the extra for `rag_fusion`, e.g. `pip install 'archon-search[rag_fusion]'`.
 
+A long query is sized to the model's window the same way as for HyDE (see [Long queries and the model window](#long-queries-and-the-model-window)): a cloud provider gets the whole query, `ollama` and `llama_cpp` get the head that fits (the variants are generated from that head; the original query is still searched whole), and a window with no room for any query text skips RAG Fusion for that call (`rag_fusion_applied: false`, one WARNING per process).
+
 ### Usage
 
 Pass `rag_fusion: true` on any `/search` or `/explain` request. The response adds:
@@ -317,7 +323,7 @@ Pass `rag_fusion: true` on any `/search` or `/explain` request. The response add
 
 ### Fallback behaviour
 
-Same silent-fallback contract as HyDE (`rag_fusion_applied: false`), plus: `rag_fusion=true` is silently ignored for FTS-only collections (no vector index). When the generator returns no variants — the provider is down, a key or package is missing, the call times out, the answer holds no valid variant, or the per-process rate limit is exhausted — the original query is still searched normally. A failed call or an answer with no valid variant logs one WARNING per process (the query fingerprint and the failure, never the query); an exhausted rate limit logs its own WARNING at most once a minute. The `/explain` response additionally surfaces `rag_fusion_failure_reason` and a per-sub-query `rag_fusion_sub_queries` breakdown.
+Same silent-fallback contract as HyDE (`rag_fusion_applied: false`), plus: `rag_fusion=true` is silently ignored for FTS-only collections (no vector index). When the generator returns no variants — the provider is down, a key or package is missing, the call times out, the answer holds no valid variant, the model's window has no room for the query, or the per-process rate limit is exhausted — the original query is still searched normally. A failed call or an answer with no valid variant logs one WARNING per process (the query fingerprint and the failure, never the query); an exhausted rate limit logs its own WARNING at most once a minute. The `/explain` response additionally surfaces `rag_fusion_failure_reason` and a per-sub-query `rag_fusion_sub_queries` breakdown.
 
 ## Permission-aware snippets (`acl_context` → G15)
 

@@ -1,6 +1,7 @@
 # ADR C5 — RAG Fusion: External LLM Dependency, Privacy, and HyDE Mutual Exclusion
 
 **Status**: Accepted
+**Superseded in part by**: [ADR 19](19_shared_llm_client_and_provider_based_collection_descriptions.md) — only the 2000-character query cut in the privacy statement below: the query is now sized to the model's window instead (whole for a cloud provider, the part that fits for `ollama` and `llama_cpp`).
 
 ---
 
@@ -33,7 +34,7 @@ The cost of this quality is an external API call per request. The kill-switch (`
 
 ### (b) Privacy trade-off — query text leaves the machine
 
-When `[rag_fusion] enabled = true` in config *and* a caller includes `rag_fusion=true` in their request, the user's raw query (up to 2000 characters) is sent to Anthropic's API servers over HTTPS. This is a deliberate operator opt-in.
+When `[rag_fusion] enabled = true` in config *and* a caller includes `rag_fusion=true` in their request, the user's raw query (the whole query since ADR 19; it was cut to 2000 characters before) is sent to Anthropic's API servers over HTTPS. This is a deliberate operator opt-in.
 
 **Gating requirements** — RAG Fusion transmission occurs only when all three conditions hold simultaneously:
 

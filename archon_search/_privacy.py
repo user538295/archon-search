@@ -39,16 +39,21 @@ _QUERY_MASK: Final = "[query]"
 _CUT_MARKER: Final = "..."
 #: Shortest closing fragment of a cut-off echo that is masked: shorter ones would also hit ordinary words.
 _MIN_CUT_ECHO_CHARS: Final = 12
+#: Most characters of a query a failure text can echo (the clients cut it at 200, the escaped forms may be a few times longer).
+_MAX_ECHO_CHARS: Final = 2000
 
 
 def _echo_forms(query: str, cut_chars: int) -> list[str]:
     """Every form in which a server may echo *query* back, longest first.
 
     Only the first *cut_chars* characters of the query reach the provider (the prompt carries no more), so only
-    those can come back. Each form is the text itself or its JSON, Python ``repr`` or escape encoding, and each one
-    again whitespace-collapsed (the clients collapse a server's text after the server encoded it).
+    those can come back, and the clients bound a server's failure text to a few hundred characters
+    (``llm_client.server_text``), so no more than ``_MAX_ECHO_CHARS`` of them can: that bound keeps the cost of masking
+    a failure independent of the query's length (a cloud provider is sent the whole of a query of many megabytes).
+    Each form is the text itself or its JSON, Python ``repr`` or escape encoding, and each one again
+    whitespace-collapsed (the clients collapse a server's text after the server encoded it).
     """
-    sent = query[:cut_chars]
+    sent = query[: min(cut_chars, _MAX_ECHO_CHARS)]
     forms: set[str] = set()
     for base in (sent, " ".join(sent.split())):
         for encoded in (

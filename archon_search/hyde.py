@@ -5,7 +5,8 @@ and uses its embedding as the ANN lookup vector in place of the original query e
 
 The client raises on every failure (:class:`~archon_search.llm_client.protocol.LlmCallFailure`); this module
 turns a failure into "no hypothetical document" — the caller then reports ``hyde_applied: false`` and searches
-the plain query — and logs it once per process with the query fingerprint only.
+the plain query — and logs it once per process with the query fingerprint only. The query is sized to the
+client's window before the call (``llm_client.fit``); a window with no room for it is the same "no document".
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 
 from archon_search._privacy import _query_fingerprint, mask_query_echo
 from archon_search.config import HyDEConfig
+from archon_search.llm_client.fit import NoRoomForInput, fit_query_to_window
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.protocol import LlmCallFailure, LlmCallRequest
 from archon_search.llm_client.provider_key import provider_key_available
@@ -36,10 +38,10 @@ Output only the passage — no preamble, no explanation.
 
 #: Answer ceiling of the one HyDE call: a short passage, well inside an embedder's own token limit.
 HYDE_MAX_OUTPUT_TOKENS: Final = 200
-#: Longest query (characters) put into the prompt; the rest is cut.
-HYDE_MAX_QUERY_CHARS: Final = 2000
 #: ``warn_once`` key: one WARNING per process for every failed or empty HyDE generation.
 _HYDE_WARN_KEY: Final = "hyde_generation"
+#: ``warn_once`` key: one WARNING per process for every call whose window has no room for the query.
+_HYDE_NO_ROOM_WARN_KEY: Final = "hyde_no_room_for_query"
 _RATE_BUCKET_WINDOW_SECONDS: Final = 60.0
 #: Providers with no request cap of their own to protect: local or login-billed, so the bucket skips them.
 _UNTHROTTLED_PROVIDERS: Final = ("ollama", "claude_cli", "llama_cpp")
@@ -78,11 +80,16 @@ class HyDEGenerator:
         serving the searched collection — any other model yields a vector in the
         wrong space (or the wrong dimension).
 
+        The query is sized to the client's window first (``llm_client.fit``): a cloud client has no budget and gets it
+        whole; a local one gets the head that fits next to the template and the answer reserve, inside this call only —
+        the caller keeps searching with the original query.
+
         Returns a vector (list of floats) on success, or ``None`` when the search must run on the plain query:
-        rate limit exhausted (its own WARNING, at most once a minute), the client failed (unreachable, key
-        missing, timeout, provider error) or the hypothesis is empty. The first failure or empty hypothesis
-        per process logs one WARNING with the query fingerprint — never the query or the hypothesis; the
-        failure text goes through :func:`~archon_search._privacy.mask_query_echo` first.
+        rate limit exhausted (its own WARNING, at most once a minute), the window has no room for the query (one
+        WARNING per process naming the window), the client failed (unreachable, key missing, timeout, provider error,
+        a failed token count) or the hypothesis is empty. The first failure or empty hypothesis per process logs one
+        WARNING with the query fingerprint — never the query or the hypothesis; the failure text goes through
+        :func:`~archon_search._privacy.mask_query_echo` first.
         """
         # Ollama, claude_cli, and llama_cpp are local/free paths with no API cap —
         # skip rate limiting entirely.
@@ -106,16 +113,28 @@ class HyDEGenerator:
 
                 self._rpm_tokens -= 1
 
-        request = LlmCallRequest(
-            prompt=HYDE_PROMPT_TEMPLATE.format(query=query[:HYDE_MAX_QUERY_CHARS]),
-            max_output_tokens=HYDE_MAX_OUTPUT_TOKENS,
-            timeout_seconds=self._config.timeout_seconds,
-        )
+        sent_query = query  # what reaches the provider: the part of the query that fits the window
         try:
+            sent_query = await fit_query_to_window(
+                self._client, HYDE_PROMPT_TEMPLATE.format(query=""), query, provider=self._config.provider
+            )
+            request = LlmCallRequest(
+                prompt=HYDE_PROMPT_TEMPLATE.format(query=sent_query),
+                max_output_tokens=HYDE_MAX_OUTPUT_TOKENS,
+                timeout_seconds=self._config.timeout_seconds,
+            )
             hypothesis_text = (await self._client.call(request)).text.strip()
+        except NoRoomForInput as no_room:
+            warn_once(
+                _logger,
+                _HYDE_NO_ROOM_WARN_KEY,
+                "HyDE skipped: %s; searching without it (later cases in this process are not logged)",
+                no_room.detail,
+            )
+            return None
         except LlmCallFailure as failure:
             # C1: the failure text never holds the prompt, but a server may echo part of it back; mask the query.
-            reason = mask_query_echo(str(failure), query, cut_chars=HYDE_MAX_QUERY_CHARS)
+            reason = mask_query_echo(str(failure), query, cut_chars=len(sent_query))
             warn_once(
                 _logger,
                 _HYDE_WARN_KEY,

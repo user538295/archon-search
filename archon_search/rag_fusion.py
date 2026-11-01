@@ -5,7 +5,10 @@ Decomposes a user query into N semantic variants through the shared LLM client
 
 The client raises on every failure (:class:`~archon_search.llm_client.protocol.LlmCallFailure`); this module
 turns a failure into "no variants" — the pipeline then searches the single query and reports
-``rag_fusion_applied: false`` — and logs it once per process with the query fingerprint only.
+``rag_fusion_applied: false`` — and logs it once per process with the query fingerprint only. The query is
+sized to the client's window before the call (``llm_client.fit``): a cloud client gets it whole, a local one the
+head that fits, inside this call only (the original query still drives the search); a window with no room for
+it is the same "no variants".
 
 Privacy note: ``generate_variants`` sends the raw query text to the configured
 LLM provider.  Operators who cannot allow this must keep
@@ -25,6 +28,7 @@ if TYPE_CHECKING:
 
 from archon_search._privacy import _query_fingerprint, mask_query_echo
 from archon_search.config import RAGFusionConfig
+from archon_search.llm_client.fit import NoRoomForInput, fit_query_to_window
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.protocol import LlmCallFailure, LlmCallRequest
 from archon_search.llm_client.provider_key import provider_key_available
@@ -51,14 +55,15 @@ Output exactly {num_queries} queries, one per line.
 {query}
 ---"""
 
-#: Answer ceiling per requested variant: the call's ``max_output_tokens`` is this times ``num_queries``.
+#: Answer ceiling per requested variant: the call's ``max_output_tokens`` is this times ``num_queries``. The largest
+#: ``num_queries`` the config accepts (5) stays inside ``ANSWER_RESERVE_TOKENS``, the room the input budget holds back.
 RAG_FUSION_TOKENS_PER_QUERY: Final = 150
-#: Longest query (characters) put into the prompt; the rest is cut.
-RAG_FUSION_MAX_QUERY_CHARS: Final = 2000
 #: Longest variant (characters) kept; a longer line is dropped (the prompt asks for under this).
 RAG_FUSION_MAX_VARIANT_CHARS: Final = 500
 #: ``warn_once`` key: one WARNING per process for every failed or empty RAG Fusion generation.
 _RAG_FUSION_WARN_KEY: Final = "rag_fusion_generation"
+#: ``warn_once`` key: one WARNING per process for every call whose window has no room for the query.
+_RAG_FUSION_NO_ROOM_WARN_KEY: Final = "rag_fusion_no_room_for_query"
 #: ``warn_once`` key: one WARNING per process for every generation that returned fewer valid variants than asked for.
 _RAG_FUSION_SHORTFALL_WARN_KEY: Final = "rag_fusion_variant_shortfall"
 _RATE_BUCKET_WINDOW_SECONDS: Final = 60.0
@@ -109,6 +114,12 @@ class RAGFusionGenerator:
             return None
         return stripped
 
+    def _render_prompt(self, query: str) -> str:
+        """The decomposition template around *query* (an empty one gives the template alone, the fixed part of every prompt)."""
+        return RAG_FUSION_PROMPT_TEMPLATE.format(
+            num_queries=self._config.num_queries, max_chars=RAG_FUSION_MAX_VARIANT_CHARS, query=query
+        )
+
     def _parse_variants(self, raw_text: str) -> list[str]:
         """The valid lines of the model's answer, in order, cut to ``num_queries``."""
         variants: list[str] = []
@@ -123,11 +134,15 @@ class RAGFusionGenerator:
     async def generate_variants(self, query: str) -> list[str]:
         """Generate up to ``config.num_queries`` validated semantic variant strings.
 
+        The query is sized to the client's window first (``llm_client.fit``): a cloud client has no budget and gets it
+        whole; a local one gets the head that fits next to the template and the answer reserve, inside this call only.
+
         Returns an empty list — the pipeline then searches the single query — when the rate limit is exhausted
-        (its own WARNING, at most once a minute), the client failed (unreachable, key missing, package missing,
-        timeout, provider error) or the answer holds no valid variant. The first failure or empty answer per
-        process logs one WARNING with the query fingerprint — never the query or a variant; the failure text goes
-        through :func:`~archon_search._privacy.mask_query_echo` first.
+        (its own WARNING, at most once a minute), the window has no room for the query (one WARNING per process naming
+        the window), the client failed (unreachable, key missing, package missing, timeout, provider error, a failed
+        token count) or the answer holds no valid variant. The first failure or empty answer per process logs one
+        WARNING with the query fingerprint — never the query or a variant; the failure text goes through
+        :func:`~archon_search._privacy.mask_query_echo` first.
         """
         # Ollama, claude_cli, and llama_cpp are local/free paths with no API cap —
         # skip rate limiting entirely.
@@ -152,20 +167,28 @@ class RAGFusionGenerator:
                 self._rpm_tokens -= 1
 
         num_queries = self._config.num_queries
-        request = LlmCallRequest(
-            prompt=RAG_FUSION_PROMPT_TEMPLATE.format(
-                num_queries=num_queries,
-                max_chars=RAG_FUSION_MAX_VARIANT_CHARS,
-                query=query[:RAG_FUSION_MAX_QUERY_CHARS],
-            ),
-            max_output_tokens=RAG_FUSION_TOKENS_PER_QUERY * num_queries,
-            timeout_seconds=self._config.timeout_seconds,
-        )
+        sent_query = query  # what reaches the provider: the part of the query that fits the window
         try:
+            sent_query = await fit_query_to_window(
+                self._client, self._render_prompt(""), query, provider=self._config.provider
+            )
+            request = LlmCallRequest(
+                prompt=self._render_prompt(sent_query),
+                max_output_tokens=RAG_FUSION_TOKENS_PER_QUERY * num_queries,
+                timeout_seconds=self._config.timeout_seconds,
+            )
             raw_text = (await self._client.call(request)).text
+        except NoRoomForInput as no_room:
+            warn_once(
+                _logger,
+                _RAG_FUSION_NO_ROOM_WARN_KEY,
+                "RAG Fusion skipped: %s; searching the single query (later cases in this process are not logged)",
+                no_room.detail,
+            )
+            return []
         except LlmCallFailure as failure:
             # C1: the failure text never holds the prompt, but a server may echo part of it back; mask the query.
-            reason = mask_query_echo(str(failure), query, cut_chars=RAG_FUSION_MAX_QUERY_CHARS)
+            reason = mask_query_echo(str(failure), query, cut_chars=len(sent_query))
             warn_once(
                 _logger,
                 _RAG_FUSION_WARN_KEY,

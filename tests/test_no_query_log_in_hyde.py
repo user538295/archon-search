@@ -44,9 +44,15 @@ _LOG_CALL = rf"(?:{_LOG_PREFIX}\w+|(?<![_\w])warn_once)"
 # The lookahead (?![_\w(]) after query ensures {query} is a bare expression,
 # not part of a longer name or a function call like {query_fingerprint(...)}.
 _FSTRING_QUERY_IN_LOG = re.compile(
-    _LOG_CALL + r"""\s*\([^)]*f['"][^'"]*\{query(?![_\w(])""",
+    _LOG_CALL + r"""\s*\([^)]*f['"][^'"]*\{(?:query|sent_query)(?![_\w(])""",
     re.DOTALL,
 )
+
+
+def test_guard_detects_fstring_sent_query_in_log() -> None:
+    """The f-string guard covers ``sent_query`` too (the query as it reaches the provider)."""
+    assert _FSTRING_QUERY_IN_LOG.search('_logger.warning(f"sending {sent_query}")\n')
+    assert not _FSTRING_QUERY_IN_LOG.search('_logger.warning(f"fp={_query_fingerprint(query)}")\n')
 
 # ---------------------------------------------------------------------------
 # Pattern 2 — bare ``query`` positional arg in a logging call (full-file scan)
@@ -73,11 +79,13 @@ _STRING_LITERAL = re.compile(
     r'"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\'',
     re.DOTALL,
 )
-# The query, and the other texts a HyDE log line must never hold: the hypothesis and the prompt that wraps the query.
-_BARE_SECRET_TOKEN = re.compile(r"(?<!\w)(?:query|hypothesis_text|hypothesis|request\.prompt|prompt)(?!\w)")
+# The query (and the part of it that reaches the provider, ``sent_query``), and the other texts a HyDE log line must
+# never hold: the hypothesis and the prompt that wraps the query.
+_BARE_SECRET_TOKEN = re.compile(r"(?<!\w)(?:query|sent_query|hypothesis_text|hypothesis|request\.prompt|prompt)(?!\w)")
 
-#: The log calls of hyde.py: the rate-limit WARNING and the two ``warn_once`` calls (failure, empty hypothesis).
-_EXPECTED_HYDE_LOG_CALLS = 3
+#: The log calls of hyde.py: the rate-limit WARNING and the three ``warn_once`` calls (no room for the query, failure,
+#: empty hypothesis).
+_EXPECTED_HYDE_LOG_CALLS = 4
 
 
 def _extract_call_args(source: str, open_paren_pos: int) -> str:
@@ -175,6 +183,14 @@ def test_guard_detects_bare_query_arg_in_warn_once() -> None:
     content = 'warn_once(_logger, "hyde", "raw query: %s", query)\n'
     assert _bare_query_in_log_violations(content), (
         "Guard failed to detect bare 'query' positional arg in a warn_once call"
+    )
+
+
+def test_guard_detects_sent_query_in_warn_once() -> None:
+    """Guard must fire on a ``warn_once(...)`` call that passes the query as it reaches the provider (``sent_query``)."""
+    content = 'warn_once(_logger, "hyde", "raw query: %s", sent_query)\n'
+    assert _bare_query_in_log_violations(content), (
+        "Guard failed to detect bare 'sent_query' positional arg in a warn_once call"
     )
 
 
