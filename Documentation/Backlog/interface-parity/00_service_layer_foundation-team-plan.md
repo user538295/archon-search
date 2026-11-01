@@ -553,3 +553,4 @@ No open questions block S0.
 ## References
 
 - **Brief:** [00_service_layer_foundation_brief.md](./00_service_layer_foundation_brief.md)
+- **Tasks:** [00_service_layer_foundation-tasks.md](./00_service_layer_foundation-tasks.md)
