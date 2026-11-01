@@ -644,7 +644,7 @@ flowchart LR
         - #integration_test — `test_backfill_cancelled_cleanly_at_shutdown` — a mid-run cancel leaves no half-written description
         - #integration_test — `test_provider_down_boots_and_skips_backfill` — the server boots, a WARNING is logged, backfill never starts
         - #unit_test — `test_claude_cli_reachability_is_presence_check_without_model_call` — no model call, and no check when description does not use `claude_cli`
-- [ ] **T-11** — e2e: backfill across namespaces, provider down, suppressed sync and shutdown mid-backfill #tester-role
+- [x] **T-11** — e2e: backfill across namespaces, provider down, suppressed sync and shutdown mid-backfill #tester-role
     - — · 5.0h
     - needs BE-35 · completes S33, S34, S35, S86
     - Tests
