@@ -7,7 +7,7 @@
 
 ## Principles
 
-1. **Hybrid search by default.** Every `/search` query runs dense vector + FTS retrieval, then a cross-encoder reranker (`archon_search/pipeline.py:SearchPipeline.search`). Three exceptions: the reranker is skipped when `[database].reranker_model` is empty, or when the cross-encoder is still cold after the request's bounded warm-up wait; the vector leg is dropped when the query embedder is still cold (both cold cases: `server/_search_budget.py:warmup_for_search`).
+1. **Hybrid search by default.** Every `/search` query runs dense vector + FTS retrieval, then a cross-encoder reranker (`archon_search/pipeline.py:SearchPipeline.search`). Three exceptions: the reranker is skipped when `[database].reranker_model` is empty, or when the cross-encoder is still cold after the request's bounded warm-up wait; the vector leg is dropped when the query embedder is still cold (both cold cases: `services/search_budget.py:warmup_for_search`).
 2. **The collection is part of the request.** `POST /search` requires either a `collection` or a `collections[]` list — the server does not auto-pick. Use `POST /route` to discover which collections to query.
 3. **Result count is server-configured.** Per-request `top_k` is validated (`1..[search].top_k_max`) but does not set the returned count — the pipeline returns `[database].top_k_return` results. See [`/BREAKING.md`](../../BREAKING.md).
 4. **REST and MCP share one pipeline.** The MCP tools wrap the same pipeline calls, but the surfaces differ in places — see [Difference vs REST](../DeveloperGuide/05_mcp_integration.md#difference-vs-rest). Choose REST for HTTP clients, MCP for MCP-native clients.

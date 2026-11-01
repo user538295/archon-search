@@ -164,7 +164,7 @@ curl -s -X POST http://localhost:8765/search \
 
 ### Invalid `scope_filter` patterns → 400
 
-The validator (`server/_validators.py`) rejects these with HTTP 400 (`code: invalid_scope_filter`):
+The validator (`services/validators.py`) rejects these with HTTP 400 (`code: invalid_scope_filter`):
 
 | Pattern | Why it fails |
 |---|---|

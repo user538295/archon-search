@@ -51,7 +51,7 @@ CLI: `archon-search search "<query>" --collection docs [--collection other] ...`
 - `search_with_context` (S2), `explain` (S3) and `route` (S4). They reuse the pieces this slice extracts.
 - Changes to retrieval algorithms, reranking, fusion or the graph expansion. The only core change allowed is per-request `top_k` if Decision Q1 is accepted.
 - The shim's streaming format and its OpenAI envelope; they remain adapter rendering.
-- Making `SEARCH_TIMEOUT_SECONDS` configurable (existing `TODO` in `_search_budget.py`).
+- Making `SEARCH_TIMEOUT_SECONDS` configurable (existing `TODO` in `services/search_budget.py`).
 - `MultiCollectionRouter`: no search surface uses it today (only `route`, `explain`).
 
 ## Key Decisions
@@ -132,6 +132,6 @@ Build it, with Q1 and Q2 answered first, because both change the public contract
 ## References
 
 - Roadmap: [roadmap.md](./roadmap.md); contract: [00_service_layer_foundation_brief.md](./00_service_layer_foundation_brief.md)
-- `archon_search/server/routes_search.py`, `server/mcp.py`, `server/routes_openai_shim.py`, `server/_search_budget.py`, `server/_hyde.py`, `server/_validators.py`
+- `archon_search/server/routes_search.py`, `server/mcp.py`, `server/routes_openai_shim.py`, `services/search_budget.py`, `services/request_hyde.py`, `services/validators.py`
 - `archon_search/pipeline.py` (`search`, `search_many`, `SearchPipelineResult`), `archon_search/config.py` (`top_k_max`, `max_fanout`, `top_k_return`), `archon_search/constants.py`
 - Tests named in the sections above

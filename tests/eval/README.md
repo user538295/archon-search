@@ -362,7 +362,7 @@ Adding routing queries or corpus files changes `eval_hash` and `thresholds_hash`
   of the HyDE plumbing path — it does **not** measure recall *improvement*.
 
 - **`test_eval_hyde_false_fast_path_no_overhead`** (`@pytest.mark.eval`) — asserts
-  that `RequestHyDE(requested=False, ...).resolve(...)` (`archon_search/server/_hyde.py`,
+  that `RequestHyDE(requested=False, ...).resolve(...)` (`archon_search/services/request_hyde.py`,
   the path every route handler takes) returns no vector and `applied=False` without
   calling the generator, confirming the fast-path adds zero overhead.
 

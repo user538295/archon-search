@@ -138,7 +138,7 @@ flowchart LR
         - #unit_test — `test_search_request_scope_filter_bare_wildcard_400` — existing REST test; the validator reached through the new path still gives the same 400 (with `test_mcp_search_scope_filter_bare_wildcard_returns_error` for MCP)
         - #integration_test — `test_eval_suite_gated_smoke` — the retrieval regression gate meets its thresholds unchanged (also `test_eval_hyde_regression_scenario` and `test_eval_hyde_false_fast_path_no_overhead`, whose function-local imports are re-pointed here)
         - #integration_test — `test_search_hyde_llama_cpp_unresponsive_server_stays_within_search_budget` — HyDE still runs outside the search budget through the adapters
-- [ ] **BE-13** — Re-point the path references to the moved search-support modules in the live docs: 120 (`:69`), 140 (`:105`, `:133`, `:135`), 600 (`:176`, `:197`), UserManual 60 (`:10`) and 130 (`:167`), `tests/eval/README.md` (`:365`) and `01_search_brief.md` (`:54`, `:135`); leave the historical records (`BREAKING.md`, `CHANGELOG.md`, `Documentation/Completed/`, doc 530's resolved item, `learnings-archive.md`) alone #backend-role
+- [x] **BE-13** — Re-point the path references to the moved search-support modules in the live docs: 120 (`:69`), 140 (`:105`, `:133`, `:135`), 600 (`:176`, `:197`), UserManual 60 (`:10`) and 130 (`:167`), `tests/eval/README.md` (`:365`) and `01_search_brief.md` (`:54`, `:135`); leave the historical records (`BREAKING.md`, `CHANGELOG.md`, `Documentation/Completed/`, doc 530's resolved item, `learnings-archive.md`) alone #backend-role
     - — · 1.5h
     - needs BE-4 · completes S24
     - Tests
