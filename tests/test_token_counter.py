@@ -89,6 +89,45 @@ def test_counter_counts_an_empty_text_as_zero() -> None:
     assert TokenCounter(load_tokenizer=StubTokenizer).count("") == 0
 
 
+def test_counter_counts_every_digit_as_a_token_whatever_the_tokenizer_merges() -> None:
+    # Per-digit tokenizers (qwen, gemma, llama 2) cost up to 1.68x the gpt2 count on digit tables, 1.9x on single digits
+    # separated by spaces and 2.8x on two-digit numbers (T-2 item 2): a run costs its length plus the placeholder.
+    stub = StubTokenizer()
+
+    assert TokenCounter(load_tokenizer=lambda: stub).count("batch 20260501 done") == 3 + 8
+    assert stub.calls == ["batch 0 done"], "a digit run is tokenized as one placeholder digit, all its digits added"
+
+
+def test_counter_adds_each_digit_run_separately() -> None:
+    assert TokenCounter(load_tokenizer=StubTokenizer).count("a 12 b 345 c 6") == 6 + 2 + 3 + 1
+
+
+def test_counter_leaves_non_ascii_digits_to_the_tokenizer() -> None:
+    # Fullwidth and Arabic-Indic digits are several UTF-8 bytes each; collapsing them to one ASCII digit would
+    # estimate below the plain gpt2 count.
+    stub = StubTokenizer()
+
+    TokenCounter(load_tokenizer=lambda: stub).count("year \uff12\uff10\uff12\uff13 and \u0662\u0660\u0662\u0663")
+
+    assert stub.calls == ["year \uff12\uff10\uff12\uff13 and \u0662\u0660\u0662\u0663"]
+
+
+def test_counter_counts_a_character_outside_the_bmp_as_its_four_utf8_bytes() -> None:
+    # Byte-fallback tokenizers (llama2 sentencepiece) cost up to 1.55x the gpt2 count on emoji (T-2 item 2).
+    stub = StubTokenizer()
+
+    assert TokenCounter(load_tokenizer=lambda: stub).count("ship \U0001f680\U0001f680 now") == 2 + 8
+    assert stub.calls == ["ship  now"]
+
+
+def test_counter_leaves_text_without_digits_or_astral_characters_untouched() -> None:
+    stub = StubTokenizer()
+
+    TokenCounter(load_tokenizer=lambda: stub).count("plain text, ünï and 日本語.")
+
+    assert stub.calls == ["plain text, ünï and 日本語."]
+
+
 def test_counter_not_imported_at_cli_start() -> None:
     """Importing the client package and its counter module loads neither the tokenizer library nor the hub client."""
     result = subprocess.run(

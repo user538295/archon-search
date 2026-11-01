@@ -1,7 +1,16 @@
-"""gpt2-based token counter that sizes ``ollama`` prompts ahead of the call (contract C1, scenario S11).
+"""Token counter that sizes ``ollama`` prompts ahead of the call (contract C1, scenario S11).
 
-The count is an estimate: Ollama's real tokenizer is the model's own, so the caller adds
-``OLLAMA_ESTIMATE_MARGIN`` on top. The tokenizer is the pinned ``tokenizer.json`` of
+The count is a conservative estimate built on the gpt2 vocabulary: Ollama's real tokenizer is the model's own, so
+the caller adds ``OLLAMA_ESTIMATE_MARGIN`` on top. Plain gpt2 counts stay inside that margin on prose, code and
+non-Latin scripts, but two kinds of text break it (T-2 manual run on four real Ollama models of four tokenizer
+families: llama3.1 8b, qwen2.5, gemma3, tinyllama): digits (per-digit tokenizers cost up to 1.68x the gpt2 count on
+digit tables, 1.9x on single digits separated by spaces, 2.8x on two-digit numbers) and characters outside the Basic
+Multilingual Plane such as emoji (byte-fallback tokenizers cost up to 1.55x). :meth:`TokenCounter.count` therefore
+counts every ASCII digit as one token (plus one per digit run) and every such character as its four UTF-8 bytes; the
+rest of the text is counted by gpt2. The real count of every measured text class then stays within 1.2x this
+estimate (worst measured: 1.15, digit-free English prose on tinyllama, a Llama 2 sentencepiece model).
+
+The tokenizer is the pinned ``tokenizer.json`` of
 ``paths.TOKEN_COUNTER_MODEL_NAME`` at ``TOKEN_COUNTER_MODEL_REVISION``, fetched through
 ``model_store.ensure_pinned_snapshot`` (``install/prewarm.py`` and the image build fetch it ahead of time).
 
@@ -12,6 +21,7 @@ neither the import nor a download.
 
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Callable, Sequence
 from typing import Protocol
@@ -23,6 +33,17 @@ from archon_search.paths import (
     TOKEN_COUNTER_TOKENIZER_FILE,
     get_token_counter_models_dir,
 )
+
+# Every ASCII digit costs one token on a per-digit tokenizer (qwen, gemma, llama 2), and a digit run is separated from the
+# space before it (gpt2 merges " 7" into one token, they spend two). A digit run is therefore collapsed to one placeholder
+# digit for gpt2 and all its digits are added: the run costs its length plus one, the most such a tokenizer spends.
+# Non-ASCII digits stay in the gpt2 text (they are several UTF-8 bytes each, which gpt2 already counts).
+_DIGIT_RUN = re.compile(r"[0-9]+")
+
+# Characters outside the Basic Multilingual Plane (emoji and rare symbols) are removed from the gpt2 text and
+# counted as their four UTF-8 bytes, the most a byte-fallback tokenizer spends on one.
+_ASTRAL_CHARACTER = re.compile("[\U00010000-\U0010ffff]")
+_ASTRAL_CHARACTER_TOKENS = 4
 
 
 class _Encoding(Protocol):
@@ -56,7 +77,7 @@ def load_gpt2_tokenizer() -> Tokenizer:
 
 
 class TokenCounter:
-    """Counts gpt2 tokens in a text; the tokenizer loads once, on first use, and is shared across threads.
+    """Estimates the tokens in a text; the tokenizer loads once, on first use, and is shared across threads.
 
     ``load_tokenizer`` defaults to :func:`load_gpt2_tokenizer`, looked up when the counter is built (so a test
     can replace it). The first ``count`` may download the tokenizer and block for that time: callers on an event
@@ -69,7 +90,12 @@ class TokenCounter:
         self._lock = threading.Lock()
 
     def count(self, text: str) -> int:
-        return len(self._get_tokenizer().encode(text, add_special_tokens=False).ids)
+        """Conservative token estimate of *text* (see the module docstring): gpt2 plus digit and astral-plane surcharges."""
+        digits = sum(len(run) for run in _DIGIT_RUN.findall(text))
+        astral_characters = len(_ASTRAL_CHARACTER.findall(text))
+        gpt2_text = _ASTRAL_CHARACTER.sub("", _DIGIT_RUN.sub("0", text))
+        gpt2_tokens = len(self._get_tokenizer().encode(gpt2_text, add_special_tokens=False).ids)
+        return gpt2_tokens + digits + _ASTRAL_CHARACTER_TOKENS * astral_characters
 
     def _get_tokenizer(self) -> Tokenizer:
         with self._lock:

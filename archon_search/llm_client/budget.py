@@ -6,14 +6,16 @@ A window too small to hold reserve and template gives a budget of 0 (never negat
 "nothing fits" and reports with the window it holds. There is no check after the call.
 
 * ``llama_cpp``: :func:`exact_budget`; the count is the server's own, in the server's tokens.
-* ``ollama``: :func:`estimated_budget`; the count is gpt2 tokens, and callers measure their input in gpt2 tokens
+* ``ollama``: :func:`estimated_budget`; the count is ``TokenCounter.count`` (gpt2 tokens, every digit and every
+  non-BMP character counted pessimistically; see ``token_counter``), and callers measure their input in that unit
   too. The real tokenizer may count up to ``OLLAMA_ESTIMATE_MARGIN`` more, so the budget divides the room by
   ``1 + margin``: an input at the budget still fits in real tokens.
 * cloud: :func:`cloud_budget`; no limit, nothing is counted or trimmed.
 
 A failing count (an unreachable tokenize endpoint, a tokenizer that cannot be downloaded) propagates; the wrapper
-that calls these functions turns it into ``LlmCallFailure``. The chat template's own tokens (role markers) are not
-counted: a few tokens the reserve does not guarantee when a model fills its whole answer space.
+that calls these functions turns it into ``LlmCallFailure``. ``llama_cpp`` counts the template as the server's chat template frames it; for ``ollama`` the chat template's own
+tokens (role markers, a default system prompt: 9 to 33 on the models measured) are not counted, and the margin must
+cover them.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from archon_search.llm_client.protocol import (
 #: Exact token count of a text, as a wrapper obtains it from its server (``llama_cpp`` tokenize endpoint).
 AsyncTokenCount = Callable[[str], Awaitable[int]]
 
-#: Blocking gpt2 token count of a text (``TokenCounter.count``).
+#: Blocking token estimate of a text (``TokenCounter.count``: gpt2 plus the digit and astral-plane surcharges).
 TokenCount = Callable[[str], int]
 
 # ``Fraction`` of the decimal text keeps 0.20 as exactly 1/5, so the floor division below is exact.
@@ -51,7 +53,7 @@ async def exact_budget(window: ContextWindowTokens, template_text: str, count_to
 
 
 async def estimated_budget(window: ContextWindowTokens, template_text: str, count_gpt2_tokens: TokenCount) -> InputBudget:
-    """Budget in gpt2 tokens for a provider whose tokenizer is unknown (``ollama``).
+    """Budget in estimate tokens (``TokenCounter.count``) for a provider whose tokenizer is unknown (``ollama``).
 
     The count runs in a thread: the counter's first use may download its tokenizer.
     """

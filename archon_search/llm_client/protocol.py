@@ -180,7 +180,7 @@ class LlmClient(Protocol):
 class TokenCountingClient(Protocol):
     """A client that counts tokens itself, in the unit its :meth:`LlmClient.input_budget` is measured in (``llama_cpp``,
     through the server's own tokenizer). A caller that sizes passages to the budget counts with this when the client has
-    it, and with the gpt2 counter otherwise (``ollama``, whose budget is in gpt2 tokens)."""
+    it, and with the gpt2 counter otherwise (a client without ``count_tokens``; ``ollama`` has one, in estimate tokens)."""
 
     async def count_tokens(self, text: str) -> int:
         """The number of tokens of *text*.

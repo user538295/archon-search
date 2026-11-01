@@ -104,7 +104,8 @@ async def test_budget_reserves_room_for_retry_reminder() -> None:
     assert isinstance(plain.tokens, int) and isinstance(longest.tokens, int)
     assert plain.tokens - longest.tokens == _RETRY_REMINDER_TOKENS
     assert isinstance(estimated_plain.tokens, int) and isinstance(estimated_longest.tokens, int)
-    assert estimated_plain.tokens - estimated_longest.tokens == _RETRY_REMINDER_TOKENS
+    # The estimate also counts the three digits of "600" (every digit is a token, the placeholder is one of the words).
+    assert estimated_plain.tokens - estimated_longest.tokens == _RETRY_REMINDER_TOKENS + 3
 
 
 async def test_window_too_small_for_reserve_and_template_gives_zero_budget() -> None:
