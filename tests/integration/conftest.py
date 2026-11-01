@@ -98,52 +98,28 @@ def _stub_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "anthropic", stub)
 
 
-@contextmanager
-def make_real_app(
+def _assemble_real_app(
     tmp_path,
     monkeypatch,
     *,
-    backup_enabled: bool = False,
-    maintenance_enabled: bool = False,
-    mcp_enabled: bool = False,
-    telemetry_enabled: bool = False,
-    hash_doc_ids_enabled: bool = False,
-    namespaces: dict[str, str] | None = None,
-    hyde_enabled: bool = False,
-    rag_fusion_enabled: bool = False,
-    max_fanout: int | None = None,
-    top_k_max: int | None = None,
-    toml_content: str | None = None,
-    graph_enabled: bool = False,
-    openai_shim_enabled: bool = False,
-    raise_server_exceptions: bool = True,
-) -> Iterator[tuple[TestClient, Any, str]]:
-    """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
+    backup_enabled: bool,
+    maintenance_enabled: bool,
+    mcp_enabled: bool,
+    telemetry_enabled: bool,
+    hash_doc_ids_enabled: bool,
+    namespaces: dict[str, str] | None,
+    hyde_enabled: bool,
+    rag_fusion_enabled: bool,
+    max_fanout: int | None,
+    top_k_max: int | None,
+    toml_content: str | None,
+    graph_enabled: bool,
+    openai_shim_enabled: bool,
+) -> tuple[Any, Any, str]:
+    """Build the real app over real stores in ``tmp_path`` and return ``(app, config, api_key)``, not yet started.
 
-    Uses ``monkeypatch.setenv`` for env vars so they auto-revert after each test.
-    Pass ``backup_enabled=True`` only in Task 2.2 backup tests.
-    Pass ``maintenance_enabled=True`` to enable the MaintenanceLoop with interval_hours=1.
-    Pass ``telemetry_enabled=True`` to enable the TelemetryWriter (writes JSONL to
-    ``tmp_path/search-logs/``).  The log_dir is always set to ``tmp_path/search-logs``
-    so any accidental write in a disabled-telemetry test is caught in the temp dir.
-    Pass ``hash_doc_ids_enabled=True`` to enable HMAC hashing of result_doc_ids in telemetry
-    (D8 / BE-4). Requires ``telemetry_enabled=True`` to produce JSONL output.
-    Pass ``namespaces={'key_hex': 'ns-name', ...}`` for multi-namespace tests.
-    Pass ``hyde_enabled=True`` to enable HyDE in config (E0b / BE-8, T-3).
-    Pass ``rag_fusion_enabled=True`` to enable RAG Fusion in config (E0b / BE-8, T-3).
-    Pass ``toml_content='[section]\\nkey = value\\n'`` to exercise the full TOML loading path
-    (write TOML → load_config(path) → create_app).  Env vars are set before load_config so
-    ARCHON_SEARCH_API_KEY is picked up by _apply_env_overrides.  Note: db_path and
-    telemetry.log_dir are always force-overridden after load_config by this helper so
-    test isolation is guaranteed regardless of what TOML specifies.
-    Cannot be combined with ``max_fanout`` / ``top_k_max`` kwargs; pass those values via
-    the TOML string instead.
-    Pass ``graph_enabled=True`` to enable the graph feature (``config.graph.enabled=True``).
-    Callers must patch gliner in sys.modules BEFORE entering the context manager (create_app
-    calls _check_graph_deps which imports gliner synchronously).
-    Pass ``raise_server_exceptions=False`` to receive an unhandled route exception as a 500
-    response instead of having the TestClient re-raise it.
-    The TestClient lifespan (startup + shutdown) is managed by the context block.
+    The shared half of ``make_real_app`` (in-process ``TestClient``) and ``serve_real_app`` (a real uvicorn socket); see
+    ``make_real_app`` for what each option does.
     """
     import secrets
 
@@ -226,10 +202,115 @@ def make_real_app(
         dispatch_fn=lambda job: None,  # replaced in lifespan startup
     )
 
-    app = create_app(cfg, job_store, scheduler=scheduler)
+    return create_app(cfg, job_store, scheduler=scheduler), cfg, api_key
+
+
+@contextmanager
+def make_real_app(
+    tmp_path,
+    monkeypatch,
+    *,
+    backup_enabled: bool = False,
+    maintenance_enabled: bool = False,
+    mcp_enabled: bool = False,
+    telemetry_enabled: bool = False,
+    hash_doc_ids_enabled: bool = False,
+    namespaces: dict[str, str] | None = None,
+    hyde_enabled: bool = False,
+    rag_fusion_enabled: bool = False,
+    max_fanout: int | None = None,
+    top_k_max: int | None = None,
+    toml_content: str | None = None,
+    graph_enabled: bool = False,
+    openai_shim_enabled: bool = False,
+    raise_server_exceptions: bool = True,
+) -> Iterator[tuple[TestClient, Any, str]]:
+    """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
+
+    Uses ``monkeypatch.setenv`` for env vars so they auto-revert after each test.
+    Pass ``backup_enabled=True`` only in Task 2.2 backup tests.
+    Pass ``maintenance_enabled=True`` to enable the MaintenanceLoop with interval_hours=1.
+    Pass ``telemetry_enabled=True`` to enable the TelemetryWriter (writes JSONL to
+    ``tmp_path/search-logs/``).  The log_dir is always set to ``tmp_path/search-logs``
+    so any accidental write in a disabled-telemetry test is caught in the temp dir.
+    Pass ``hash_doc_ids_enabled=True`` to enable HMAC hashing of result_doc_ids in telemetry
+    (D8 / BE-4). Requires ``telemetry_enabled=True`` to produce JSONL output.
+    Pass ``namespaces={'key_hex': 'ns-name', ...}`` for multi-namespace tests.
+    Pass ``hyde_enabled=True`` to enable HyDE in config (E0b / BE-8, T-3).
+    Pass ``rag_fusion_enabled=True`` to enable RAG Fusion in config (E0b / BE-8, T-3).
+    Pass ``toml_content='[section]\\nkey = value\\n'`` to exercise the full TOML loading path
+    (write TOML → load_config(path) → create_app).  Env vars are set before load_config so
+    ARCHON_SEARCH_API_KEY is picked up by _apply_env_overrides.  Note: db_path and
+    telemetry.log_dir are always force-overridden after load_config by this helper so
+    test isolation is guaranteed regardless of what TOML specifies.
+    Cannot be combined with ``max_fanout`` / ``top_k_max`` kwargs; pass those values via
+    the TOML string instead.
+    Pass ``graph_enabled=True`` to enable the graph feature (``config.graph.enabled=True``).
+    Callers must patch gliner in sys.modules BEFORE entering the context manager (create_app
+    calls _check_graph_deps which imports gliner synchronously).
+    Pass ``raise_server_exceptions=False`` to receive an unhandled route exception as a 500
+    response instead of having the TestClient re-raise it.
+    The TestClient lifespan (startup + shutdown) is managed by the context block.
+    """
+    app, cfg, api_key = _assemble_real_app(
+        tmp_path,
+        monkeypatch,
+        backup_enabled=backup_enabled,
+        maintenance_enabled=maintenance_enabled,
+        mcp_enabled=mcp_enabled,
+        telemetry_enabled=telemetry_enabled,
+        hash_doc_ids_enabled=hash_doc_ids_enabled,
+        namespaces=namespaces,
+        hyde_enabled=hyde_enabled,
+        rag_fusion_enabled=rag_fusion_enabled,
+        max_fanout=max_fanout,
+        top_k_max=top_k_max,
+        toml_content=toml_content,
+        graph_enabled=graph_enabled,
+        openai_shim_enabled=openai_shim_enabled,
+    )
     with TestClient(app, raise_server_exceptions=raise_server_exceptions) as client:
         _await_startup_sync(app)
         yield client, cfg, api_key
+
+
+@contextmanager
+def serve_real_app(
+    tmp_path,
+    monkeypatch,
+    *,
+    toml_content: str | None = None,
+    mcp_enabled: bool = False,
+) -> Iterator[tuple[str, Any, str]]:
+    """Context manager yielding ``(base_url, config, api_key)`` of the real app on a real uvicorn socket.
+
+    The same real store+pipeline as ``make_real_app``, but behind ``tests/_uvicorn_server.py``: a test can close a real
+    connection mid-request, which an in-process ``TestClient`` cannot. Talk to it with ``httpx`` (loopback only; the
+    session guard refuses anything else) or a raw socket. ``toml_content`` and ``mcp_enabled`` mean what they do for
+    ``make_real_app``.
+    """
+    from tests._uvicorn_server import LOOPBACK, serving
+
+    app, cfg, api_key = _assemble_real_app(
+        tmp_path,
+        monkeypatch,
+        backup_enabled=False,
+        maintenance_enabled=False,
+        mcp_enabled=mcp_enabled,
+        telemetry_enabled=False,
+        hash_doc_ids_enabled=False,
+        namespaces=None,
+        hyde_enabled=False,
+        rag_fusion_enabled=False,
+        max_fanout=None,
+        top_k_max=None,
+        toml_content=toml_content,
+        graph_enabled=False,
+        openai_shim_enabled=False,
+    )
+    with serving(app) as port:
+        _await_startup_sync(app)
+        yield f"http://{LOOPBACK}:{port}", cfg, api_key
 
 
 def _await_startup_sync(app, timeout_s: float = 30.0) -> None:

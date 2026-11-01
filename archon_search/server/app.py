@@ -1299,9 +1299,10 @@ def create_app(
         RequestContextMiddleware,
         header_name=config.observability.request_id_header,
     )
-    # Outermost of all: a client that aborts a search or an explain stops the work it started (S12: a ``claude`` child must
-    # not outlive it). It has to read the server's own ``receive``; behind ``BaseHTTPMiddleware`` a disconnect is never seen.
-    # The MCP tools (``/mcp``) run the same HyDE call but are not covered: they are not plain request/response routes.
+    # The outermost middleware of the application: a client that aborts a search or an explain stops the work it started
+    # (S12: a ``claude`` child must not outlive it). It has to read the server's own ``receive``; behind
+    # ``BaseHTTPMiddleware`` a disconnect is never seen. The MCP tools (``/mcp``) are covered by their own middleware inside
+    # the mounted MCP app (``mcp_disconnect``): they are not plain request/response routes.
     app.add_middleware(CancelOnDisconnectMiddleware, method="POST", paths=("/search", "/explain"))
     logger.info("API key authentication enabled (source: %s)", key_source)
     app.state.key_store = key_store

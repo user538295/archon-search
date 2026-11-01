@@ -8,7 +8,7 @@ from collections.abc import Callable
 from contextlib import AsyncExitStack, ExitStack
 from datetime import UTC
 from time import monotonic
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypedDict
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
@@ -124,6 +124,7 @@ from archon_search.server.authz import (
     identity_of,
     require_admin,
 )
+from archon_search.server.mcp_disconnect import CancelMcpToolOnDisconnectMiddleware
 from archon_search.server.mcp_schemas import (
     CollectionDetailSchema,
     CollectionListItemSchema,
@@ -170,6 +171,10 @@ if TYPE_CHECKING:
     from archon_search.rag_fusion import RAGFusionGenerator
 
 logger = logging.getLogger(__name__)
+
+#: The read-only search tools: a client that closes its stream mid-call stops them (``CancelMcpToolOnDisconnectMiddleware``).
+#: A tool that writes is never cancelled by a disconnect.
+SEARCH_TOOL_NAMES: Final = frozenset({"search", "search_with_context", "explain"})
 
 # Language filter parameter for the ``search`` tool.
 # Defined at module level so FastMCP can resolve the Annotated type inside closures.
@@ -2629,6 +2634,9 @@ def create_mcp_http_app(
     # exposes the JSON-RPC endpoint at the sub-app root so it is reachable at the
     # ``/mcp`` mount point without an extra suffix (see ADR 09, K-1 spike).
     starlette_app: Starlette = fastmcp_app.http_app(path="/")
+    # Innermost of the three layers below: it needs the transport's own view of the connection, which the authentication
+    # and request-context layers (they wrap the request before this one sees it) have already vouched for.
+    starlette_app.add_middleware(CancelMcpToolOnDisconnectMiddleware, tools=SEARCH_TOOL_NAMES)
     starlette_app.add_middleware(
         APIKeyMiddleware,
         api_key=api_key_state.api_key,
