@@ -296,6 +296,41 @@ def test_failing_unlocked_lane_bails_before_tagging(tmp_path):
     assert log.stdout == "initial commit\n", f"release.sh committed past the red lane: {log.stdout}"
 
 
+def test_tokenizer_prefetch_runs_before_the_default_suite_lane(tmp_path):
+    """The local gate fetches the pinned gpt2 tokenizer before lane 1, as the CI `test` job does before its default suite.
+
+    Lane 1 runs tests/test_llm_client_token_ceiling.py, whose real-gpt2 tests skip locally (CI unset) unless
+    the tokenizer is cached: without the prefetch the local gate skips what the publish gate fails on.
+    """
+    worker = _setup_repo(tmp_path, unlocked_lane_exit=1)
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir()
+    _make_stub_git_cliff(stub_bin, "git-cliff 2.4.0")
+    _add_uv_pytest_stub(stub_bin)
+    uv_log = tmp_path / "uv_calls.log"
+    uv_stub = stub_bin / "uv"
+    uv_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f"echo \"$*\" >> '{uv_log}'\n"
+        "printf '====== 1 passed in 0.01s ======\\n'\n"
+        "exit 0\n"
+    )
+
+    original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    _run_release_sh(
+        ["-y"],
+        env_overrides={"PATH": f"{stub_bin}:{original_path}", "RELEASE_SH_TEST_MODE": ""},
+        repo_path=worker,
+    )
+
+    calls = uv_log.read_text().splitlines()
+    prefetch = [i for i, call in enumerate(calls) if call.endswith("python scripts/prefetch-token-counter.py")]
+    default_suite = [i for i, call in enumerate(calls) if "pytest" in call and "--cov-append" in call]
+    assert prefetch, f"release.sh never runs scripts/prefetch-token-counter.py through uv:\n{calls}"
+    assert default_suite, f"release.sh never ran the default suite:\n{calls}"
+    assert prefetch[0] < default_suite[0], f"the tokenizer prefetch must precede lane 1:\n{calls}"
+
+
 class TestProvisionalTag:
     def test_provisional_tag_is_count_plus_one(self, tmp_path):
         """--dry-run output must contain a tag with count+1, not count."""

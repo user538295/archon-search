@@ -135,6 +135,18 @@ if [ -z "${RELEASE_SH_TEST_MODE:-}" ]; then
     _suite_start=$SECONDS
     rm -f .coverage
 
+    # The CI `test` job prefetches the pinned gpt2 tokenizer before its default suite, whose real-gpt2
+    # ceiling tests (tests/test_llm_client_token_ceiling.py) fail on CI without it and skip locally (CI
+    # unset): fetching it here makes lane 1 run what the publish gate runs.
+    echo "[prefetch] Pinned gpt2 tokenizer for the default suite..."
+    _tokenizer_ok=false
+    for attempt in 1 2 3; do
+        uv run python scripts/prefetch-token-counter.py && { _tokenizer_ok=true; break; }
+        echo "Attempt $attempt failed; retrying in $((attempt * 5))s..."
+        sleep $((attempt * 5))
+    done
+    [ "$_tokenizer_ok" = true ] || bail "gpt2 tokenizer prefetch failed after 3 attempts"
+
     echo "[1/12] Default suite (coverage, no fail-under yet)..."
     uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append -n0 \
         -m "not live and not eval and not benchmark and not integration and not live_eval and not docling and not graph_real_artifact" \

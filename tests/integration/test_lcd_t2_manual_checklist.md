@@ -33,7 +33,7 @@ async def main() -> None:
     window = await client.probe_context_window(5.0)
     print("window:", window.size, window.source.value)
     template = "The quick brown fox jumps over the lazy dog."  # stands in for the longest template form, retry reminder included
-    budget = await client.input_budget(template)
+    budget = await client.input_budget(template)  # `input_budget(template, think)`: think defaults to ThinkSetting.DEFAULT
     print("budget:", budget.tokens)
 
 asyncio.run(main())
@@ -61,7 +61,7 @@ llama_cpp_base_url = "http://localhost:8080"
 
 ## 2 — Estimate margin on real text (S11)
 
-**Why manual:** needs a real Ollama tokenizer. The unit tests stub the gpt2 counter and the fake Ollama server reports no token counts at all, so only a real model shows whether the 20% margin covers the difference between the gpt2 estimate and what Ollama actually counts.
+**Why manual:** needs a real Ollama tokenizer. The unit tests stub the gpt2 counter and the fake Ollama server reports no token counts at all, so only a real model shows whether the 20% margin covers the difference between the token estimate and what Ollama actually counts.
 
 **Rule under test:** for an `ollama` feature the budget is `(window - 1024) // 1.2 - estimate_of_template` in estimate tokens (`OLLAMA_ESTIMATE_MARGIN = 0.20` in `archon_search/constants.py`, `estimated_budget` in `archon_search/llm_client/budget.py`, the estimate is `TokenCounter.count`). The margin is sufficient when the real count of any input is at most 1.2 times its estimate; the template is counted once with the same estimate and must satisfy the same bound.
 
@@ -93,7 +93,7 @@ from archon_search.llm_client.token_counter import TokenCounter, load_gpt2_token
 
 MODEL, WINDOW = "llama3.1:8b", 4096
 client = OllamaClient(model=MODEL, base_url="http://localhost:11434", context_tokens=WINDOW)
-budget = asyncio.run(client.input_budget(HYDE_PROMPT_TEMPLATE)).tokens
+budget = asyncio.run(client.input_budget(HYDE_PROMPT_TEMPLATE)).tokens  # `input_budget(template, think)`: default think (the estimate ignores think)
 counter, tokenizer = TokenCounter(), load_gpt2_tokenizer()
 ids = tokenizer.encode(open(f"/tmp/lcd-t2/{sys.argv[1]}.txt", encoding="utf-8").read(), add_special_tokens=False).ids
 lo, hi = 0, len(ids)  # the longest gpt2-token prefix whose estimate is within the budget (callers measure with the estimate)
@@ -200,12 +200,12 @@ The server booted in every arm and `/ready` was true. Result: PASS for the failu
 
 ### Item 1 success arm, re-run on the current sizing code (thinking switch, one deadline, named failures)
 
-Run on 2026-11-01 (macOS arm64, llama-server 0.7.0 build 11669 commit 620d2225c, working tree after the Verify2 fixes). The Qwen2.5-0.5B GGUF of the first run is no longer on disk: `find / -iname '*.gguf'` found only test fixtures under pytest temp directories, and the two Ollama blobs are the only real models (`qwen3.6:35b-a3b-128k`, whose blob llama-server 0.7.0 cannot load: `error loading model hyperparameters: key qwen35moe.rope.dimension_sections has wrong array length; expected 4, got 3`, and `llama3.1:8b`, 4.9 GB, `sha256-667b0c1932bc6ffc593ed1d03f895bf2dc8dc6df21db3042284a6f4416b06a29`). So the check ran on Llama 3.1 8B. Scratch dir `/tmp/lcd-manual/verify2`, port 18741. The script (`exact_budget.py`, scratch, not kept) builds `LlamaCppClient`, probes the window, asks `input_budget(template, think=...)` for each `ThinkSetting`, then for the exactly-at-budget prompt (the template plus the first `budget` tokens of a long text, tokenized with `/tokenize` and turned back with `/detokenize`) sends `POST /v1/chat/completions` with `max_tokens` 1024 and the call's own `chat_template_kwargs`, and prints `usage.prompt_tokens + 1024` against `n_ctx`.
+Run on 2026-11-01 (macOS arm64, llama-server 0.7.0 build 11669 commit 620d2225c, the tree of commit `dd9f6117`). The Qwen2.5-0.5B GGUF of the first run is no longer on disk: `find / -iname '*.gguf'` found only test fixtures under pytest temp directories, and the two Ollama blobs are the only real models (`qwen3.6:35b-a3b-128k`, whose blob llama-server 0.7.0 cannot load: `error loading model hyperparameters: key qwen35moe.rope.dimension_sections has wrong array length; expected 4, got 3`, and `llama3.1:8b`, 4.9 GB, `sha256-667b0c1932bc6ffc593ed1d03f895bf2dc8dc6df21db3042284a6f4416b06a29`). So the check ran on Llama 3.1 8B, llama-server port 18741. The script (`exact_budget.py`, scratch, not kept) builds `LlamaCppClient`, probes the window, asks `input_budget(template, think=...)` for each `ThinkSetting`, then for the exactly-at-budget prompt (the template plus the first `budget` tokens of a long text, tokenized with `/tokenize` and turned back with `/detokenize`) sends `POST /v1/chat/completions` with `max_tokens` 1024 and the call's own `chat_template_kwargs`, and prints `usage.prompt_tokens + 1024` against `n_ctx`.
 
 | Arm | Server command | Budgets (DEFAULT / ON / OFF) | Calls at exactly the budget (`usage.prompt_tokens`, plus 1024) | Result |
 |-----|----------------|------------------------------|---------------------------------------------------------------|--------|
 | Native Llama 3.1 template | `llama-server -m <llama3.1:8b blob> -c 4096 -np 1 --port 18741 --host 127.0.0.1 --jinja -ngl 99` | 3031 / 3031 / 3031 | DEFAULT sized for DEFAULT: 3072, 4096 ≤ 4096; OFF sized for OFF: 3072, 4096 ≤ 4096; OFF sized for DEFAULT: 3072, 4096 ≤ 4096 (this template ignores the switch) | PASS: the prompt fills `n_ctx` minus the reserve to the token; difference to `budget + framed template tokens` 0 |
-| Qwen3 template on the same model (`--chat-template-file` of llama.cpp `models/templates/Qwen-Qwen3-0.6B.jinja`, an unusual pairing: a Llama vocabulary, a template with no BOS) | the command above plus `--chat-template-file /tmp/lcd-manual/verify2/qwen3.jinja` | 3044 / 3044 / 3038 | DEFAULT sized for DEFAULT: 3073, 4097; OFF sized for OFF: 3073, 4097; OFF sized for DEFAULT (the sizing before `think` was forwarded): 3079, 4103 | The empty think block of `enable_thinking: false` is 6 tokens here (`/apply-template` then `/tokenize`: 28 for DEFAULT and ON, 34 for OFF) and is now counted; the residual 1 token (4097) is the BOS the chat call adds to a template that has none (the native Llama 3.1 template emits its own BOS, so the first arm does not show it) |
+| Qwen3 template on the same model (`--chat-template-file` of the Qwen3 chat template that ships in the llama.cpp repository (ggml-org/llama.cpp) as `models/templates/Qwen-Qwen3-0.6B.jinja`, downloaded from its `raw.githubusercontent.com` URL; an unusual pairing: a Llama vocabulary, a template with no BOS) | the command above plus `--chat-template-file <path of that downloaded file>` | 3044 / 3044 / 3038 | DEFAULT sized for DEFAULT: 3073, 4097; OFF sized for OFF: 3073, 4097; OFF sized for DEFAULT (the sizing before `think` was forwarded): 3079, 4103 | The empty think block of `enable_thinking: false` is 6 tokens here (`/apply-template` then `/tokenize`: 28 for DEFAULT and ON, 34 for OFF) and is now counted; the residual 1 token (4097) is the BOS the chat call adds to a template that has none (the native Llama 3.1 template emits its own BOS, so the first arm does not show it) |
 
 The named failure on a real server (`LlamaCppClient(base_url="http://127.0.0.1:18741/nope").input_budget(...)`, so the real server answers its own 404 body for `/nope/apply-template`): `llama_cpp: POST /apply-template: HTTP 404: File Not Found`.
 

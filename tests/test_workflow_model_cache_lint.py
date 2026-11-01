@@ -41,8 +41,8 @@ TOKENIZER_PREFETCH_COMMANDS = ("scripts/prefetch-token-counter.py", PREFETCH_COM
 PYTEST_INVOCATION = re.compile(r"(?:uv run |python -m )pytest\b")
 MARKER_EXPRESSION = re.compile(r"""(?<!\S)-m\s+(?:"([^"]*)"|(\S+))""")
 UNLOCKED_DEPS_DEFAULT_SUITE = re.compile(r"test-unlocked-deps\.sh\s+(?:suite|all)\b")
-UNLOCKED_DEPS_SUITE_FUNCTION = re.compile(r"^suite\(\) \{\n(?P<body>.*?)^\}$", re.DOTALL | re.MULTILINE)
 UNLOCKED_DEPS_PREFETCH_FUNCTION = "prefetch_token_counter"
+UNLOCKED_DEPS_PREFETCH_COMMAND = '"$PY" scripts/prefetch-token-counter.py'
 
 
 def _steps(workflow: Path) -> list[dict]:
@@ -123,14 +123,30 @@ def _runs_the_default_suite(run: str) -> bool:
     return all(term.startswith("not ") for term in terms)
 
 
+def _shell_function_code(script: str, name: str) -> list[str] | None:
+    """The non-comment, non-blank lines of shell function *name* (stripped), or ``None`` when it is not defined."""
+    match = re.search(rf"^{name}\(\) \{{\n(?P<body>.*?)^\}}$", script, re.DOTALL | re.MULTILINE)
+    if match is None:
+        return None
+    lines = (line.strip() for line in match.group("body").splitlines())
+    return [line for line in lines if line and not line.startswith("#")]
+
+
 def _unlocked_deps_suite_prefetches_first(script: str) -> bool:
-    """True when ``suite()`` of the unlocked-deps script calls the tokenizer prefetch before its pytest run."""
-    suite = UNLOCKED_DEPS_SUITE_FUNCTION.search(script)
+    """True when ``suite()`` calls ``prefetch_token_counter`` before pytest and that function really runs the prefetch.
+
+    Comments never count, and the command must sit inside the function ``suite()`` calls, in the venv under test.
+    """
+    suite = _shell_function_code(script, "suite")
     assert suite is not None, "scripts/test-unlocked-deps.sh has no suite() function"
-    body = suite.group("body")
-    prefetch_call = body.find(UNLOCKED_DEPS_PREFETCH_FUNCTION)
-    return 0 <= prefetch_call < body.find("-m pytest") and any(
-        command in script for command in TOKENIZER_PREFETCH_COMMANDS
+    prefetch = _shell_function_code(script, UNLOCKED_DEPS_PREFETCH_FUNCTION)
+    if prefetch is None or UNLOCKED_DEPS_PREFETCH_FUNCTION not in suite:
+        return False
+    pytest_run = next((i for i, line in enumerate(suite) if "-m pytest" in line), None)
+    return (
+        pytest_run is not None
+        and suite.index(UNLOCKED_DEPS_PREFETCH_FUNCTION) < pytest_run
+        and any(line.startswith(UNLOCKED_DEPS_PREFETCH_COMMAND) for line in prefetch)
     )
 
 
@@ -245,8 +261,57 @@ def test_the_scan_delegates_an_unlocked_deps_suite_step_to_the_script(tmp_path: 
 def test_the_unlocked_deps_suite_prefetches_the_tokenizer_inside_the_venv_before_pytest() -> None:
     script = UNLOCKED_DEPS_SCRIPT.read_text()
 
-    assert _unlocked_deps_suite_prefetches_first(script)
-    assert '"$PY" scripts/prefetch-token-counter.py' in script, "the prefetch must use the venv under test, not uv's"
+    assert _unlocked_deps_suite_prefetches_first(script), "suite() must call prefetch_token_counter, which runs the venv under test's python"
+
+
+_PREFETCH_COMMAND_LINE = '    "$PY" scripts/prefetch-token-counter.py && return 0\n'
+_SUITE_WITH_CALL = '    prefetch_token_counter\n    "$PY" -m pytest tests/\n'
+
+
+def _unlocked_deps_script(
+    *, prefetch_body: str = _PREFETCH_COMMAND_LINE, suite_body: str = _SUITE_WITH_CALL, elsewhere: str = ""
+) -> str:
+    return f"{elsewhere}prefetch_token_counter() {{\n{prefetch_body}}}\n\nsuite() {{\n{suite_body}}}\n"
+
+
+@pytest.mark.parametrize(
+    ("script", "expected"),
+    [
+        pytest.param(_unlocked_deps_script(), True, id="real call in the function, function called before pytest"),
+        pytest.param(
+            _unlocked_deps_script(prefetch_body="    # runs: \"$PY\" scripts/prefetch-token-counter.py\n    return 0\n"),
+            False,
+            id="command only in a comment inside the function",
+        ),
+        pytest.param(
+            _unlocked_deps_script(
+                prefetch_body="    return 0\n",
+                elsewhere='lane() {\n    "$PY" scripts/prefetch-token-counter.py\n}\n\n',
+            ),
+            False,
+            id="command in another function, not in the one suite() calls",
+        ),
+        pytest.param(
+            _unlocked_deps_script(suite_body='    # prefetch_token_counter\n    "$PY" -m pytest tests/\n'),
+            False,
+            id="the function is only named in a comment of suite()",
+        ),
+        pytest.param(
+            _unlocked_deps_script(suite_body='    "$PY" -m pytest tests/\n    prefetch_token_counter\n'),
+            False,
+            id="the function is called after pytest",
+        ),
+        pytest.param(
+            _unlocked_deps_script(prefetch_body="    uv run python scripts/prefetch-token-counter.py\n"),
+            False,
+            id="uv's python, not the venv under test",
+        ),
+    ],
+)
+def test_the_unlocked_deps_scan_wants_a_real_prefetch_call_inside_the_function_suite_calls(
+    script: str, expected: bool
+) -> None:
+    assert _unlocked_deps_suite_prefetches_first(script) is expected
 
 
 def test_prefetch_downloads_the_token_counter_tokenizer(monkeypatch: pytest.MonkeyPatch) -> None:

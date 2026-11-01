@@ -106,6 +106,19 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 
 **Escalation**: if 500s or 504s persist after a restart, file an issue with the full ERROR record, the `GET /status` snapshot, and `archon-search --version`.
 
+### Searches stop with `client disconnected from ...: cancelling ...`
+
+**Symptoms**: the log holds INFO lines `client disconnected from POST /search: cancelling the request` (or `POST /explain`) or `client disconnected from the MCP search call: cancelling it` (`search`, `search_with_context` or `explain`), and the caller received no answer.
+
+**Diagnosis** (verified against `server/disconnect.py` and `server/mcp_disconnect.py`):
+
+- **Not a server fault.** The client closed the connection before the response was complete (its own timeout, an abort, a crash, a lost network), and the server stopped the abandoned search so a HyDE, RAG Fusion or graph call, or a `claude` child, stops spending quota for an answer nobody can read. The lines carry the method, the path or the tool name and nothing else (no query text, no URL parameters).
+- Many such lines at once point at a client timeout shorter than the search takes (HyDE can add about 30 s, see the 504 entry above): raise the client timeout or look at why searches are slow.
+- The WARNING `request work raised <ExceptionType> while it was cancelled` (REST) means the abandoned search raised that exception type while it was being stopped; the cancellation still completed and the server keeps serving. `could not deliver the cancel of an abandoned MCP call (<ExceptionType>)` (MCP) means the session refused or could no longer take the cancel (for instance it had ended), so that tool call may have run on to its end.
+- Only the read-only search tools are cancelled; a client that drops the stream of an ingest, delete or description call still gets the whole operation. A request pipelined behind another on one connection, a REST path with a trailing slash, an MCP body over 1 MiB and an MCP call without a session id are not detected; on MCP protocol `2026-07-28` the library cancels on disconnect itself and the MCP line does not appear for it. Details and the MCP specification departure: [BREAKING.md](../../BREAKING.md) (the `an abandoned search is cancelled` entry).
+
+**Triage**: nothing to restart. Confirm with the client's own log that it gave up, and raise its timeout if the searches were legitimate.
+
 ### Provider / model validation failing (`/ready`, `/status`)
 
 **Symptoms**: `GET /ready` reports `checks.models: "fail"` or `"warn"`; `GET /status.model_validation` shows `embedder_ok: false` or `reranker_ok: false`, or a populated `provider_warnings` list.
