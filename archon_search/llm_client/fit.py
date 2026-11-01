@@ -11,8 +11,10 @@ joiner sequence, a skin tone or a flag), and
 * ``ollama``: the count is the gpt2 estimate (``OllamaClient.count_tokens``); the 20% margin already sits in the budget.
 
 A text is fitted with a bounded number of counts (``MAX_FIT_COUNTS``, each one a request to the server for
-``llama_cpp``) and the text returned is one the count has itself seen fit, never an extrapolation. The first
-estimate scales the cut by the measured tokens per character, the next ones close in on the budget from both sides.
+``llama_cpp``) and the text returned is one the count has itself seen fit, never an extrapolation. The one exception
+is the ceiling bypass of :func:`fit_query_to_window`: a query whose request-free ``token_ceiling`` is within the budget
+is returned without any count. The first estimate scales the cut by the measured tokens per character, the next ones
+close in on the budget from both sides.
 The head is also never longer than ``MAX_CHARS_PER_TOKEN`` characters per budget token: the server's request-size
 limit lets megabytes through, and counting them only to cut them would stall the search (no real text spends 16
 characters per token on average).
@@ -32,10 +34,12 @@ from archon_search.llm_client.protocol import (
     ContextWindowTokens,
     LlmCallFailure,
     LlmClient,
-    TokenCountingClient,
+    TokenBoundingClient,
     Unbounded,
 )
 
+#: The two methods of ``TokenBoundingClient`` a sized query needs, named by the failure of a client that lacks one.
+_COUNTING_METHODS: Final = ("count_tokens", "token_ceiling")
 #: Most counts :func:`fit_text_to_budget` asks for, the first one (the whole head) included.
 MAX_FIT_COUNTS: Final = 10
 #: Characters per budget token beyond which the rest of a text is cut without being counted.
@@ -93,17 +97,18 @@ async def fit_query_to_window(client: LlmClient, template_text: str, query: str,
 
     Raises:
         NoRoomForInput: the window leaves no room for the template and the reserve, or for even one word of the query.
-        LlmCallFailure: the budget or a count failed, or the client has a budget but cannot count tokens.
+        LlmCallFailure: the budget or a count failed, or the client has a budget but lacks ``count_tokens`` or ``token_ceiling``.
     """
     budget = (await client.input_budget(template_text)).tokens
     if not isinstance(budget, int):
         return query
     if budget > 0:
-        if not isinstance(client, TokenCountingClient):
-            raise LlmCallFailure(provider, "the client sizes its input to a budget but cannot count tokens")
+        if not isinstance(client, TokenBoundingClient):
+            missing = " and ".join(method for method in _COUNTING_METHODS if not callable(getattr(client, method, None)))
+            raise LlmCallFailure(provider, f"the client sizes its input to a budget but has no {missing}")
         if len(query) <= budget and client.token_ceiling(query) <= budget:
             # Fast path: a token covers at least one byte, so a text whose request-free ceiling (its UTF-8 length plus the
-            # client's own surcharge, see ``TokenCountingClient.token_ceiling``) is within the budget cannot exceed it. A
+            # client's own surcharge, see ``TokenBoundingClient.token_ceiling``) is within the budget cannot exceed it. A
             # text with more characters than the budget has more bytes too, so its ceiling is not even computed.
             return query
         fitted = await fit_text_to_budget(query, budget, client.count_tokens)

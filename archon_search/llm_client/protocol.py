@@ -179,8 +179,8 @@ class LlmClient(Protocol):
 @runtime_checkable
 class TokenCountingClient(Protocol):
     """A client that counts tokens itself, in the unit its :meth:`LlmClient.input_budget` is measured in (``llama_cpp``,
-    through the server's own tokenizer). A caller that sizes passages to the budget counts with this when the client has
-    it, and with the gpt2 counter otherwise (a client without ``count_tokens``; ``ollama`` has one, in estimate tokens)."""
+    through the server's own tokenizer, and ``ollama``, in estimate tokens). Every caller that sizes input to a budget
+    needs it and fails for a client with a budget that cannot count."""
 
     async def count_tokens(self, text: str) -> int:
         """The number of tokens of *text*.
@@ -189,6 +189,13 @@ class TokenCountingClient(Protocol):
             LlmCallFailure: the count failed (an unreachable tokenize endpoint).
         """
         ...
+
+
+@runtime_checkable
+class TokenBoundingClient(TokenCountingClient, Protocol):
+    """A counting client that also bounds its count without a request (:meth:`token_ceiling`), so a caller whose text is
+    surely within its budget skips the count (``fit_query_to_window``); the community builder and the description
+    generator count every time and need only :class:`TokenCountingClient`."""
 
     def token_ceiling(self, text: str) -> int:
         """An upper bound of ``count_tokens(text)`` that needs no request and no tokenizer, in the same unit.

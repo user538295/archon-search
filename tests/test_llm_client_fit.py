@@ -7,9 +7,11 @@ the text untouched without counting.
 
 from __future__ import annotations
 
+import json
 import unicodedata
 from collections.abc import Callable
 
+import httpx
 import pytest
 
 from archon_search.llm_client import fit as fit_module
@@ -19,6 +21,8 @@ from archon_search.llm_client.fit import (
     fit_query_to_window,
     fit_text_to_budget,
 )
+from archon_search.llm_client.llama_cpp_client import LlamaCppClient
+from archon_search.llm_client.ollama_client import OllamaClient
 from archon_search.llm_client.protocol import (
     UNBOUNDED,
     ContextWindowSource,
@@ -29,7 +33,7 @@ from archon_search.llm_client.protocol import (
 from archon_search.llm_client.token_counter import TokenCounter
 from tests._hyde_stubs import BudgetedLlmClient, ScriptedLlmClient
 from tests._query_sizing_helpers import ACCEPTED_FILL_PERCENT, per_character_cost, words
-from tests._token_counter_stub import StubTokenizer
+from tests._token_counter_stub import StubEncoding, StubTokenizer
 
 _ZWJ = "\u200d"
 _ZWNJ = "\u200c"
@@ -355,10 +359,12 @@ async def test_a_client_with_a_budget_that_cannot_count_is_a_failure() -> None:
         async def input_budget(self, template_text: str) -> InputBudget:
             return InputBudget(100)
 
-    with pytest.raises(LlmCallFailure, match="cannot count tokens") as raised:
+    with pytest.raises(LlmCallFailure) as raised:
         await fit_query_to_window(CannotCount(), "the template", "a query", provider="llama_cpp")
 
     assert raised.value.provider == "llama_cpp"
+    assert "count_tokens" in raised.value.reason
+    assert "token_ceiling" in raised.value.reason
 
 
 # --- the byte-bound fast path -------------------------------------------------------------------------------------
@@ -398,7 +404,7 @@ async def test_a_query_over_the_ceiling_is_counted_and_cut_as_before() -> None:
 
     fitted = await fit_query_to_window(client, "the template", words(500), provider="llama_cpp")
 
-    assert client.counted, "only a text longer than the budget in bytes goes through the counting loop"
+    assert client.counted, "only a text whose ceiling is above the budget goes through the counting loop"
     assert len(fitted.split()) <= 40
 
 
@@ -437,13 +443,120 @@ async def test_a_ceiling_above_the_budget_is_not_a_verdict_the_count_decides() -
     assert client.counted == [query]
 
 
-@pytest.mark.parametrize("text", ["plain words in a short query", "検索拡張生成", "🙂 emoji 👍🏽", "1 2 3 4", ""])
-async def test_the_fast_path_returns_what_the_counting_path_would(text: str) -> None:
-    """With the worst-case count (a token per byte), a text the ceiling lets through is also one the count says fits whole."""
-    budget = len(text.encode("utf-8")) + 1
-    counter = _Counter(lambda candidate: len(candidate.encode("utf-8")))
+class _RealLlamaClient(LlamaCppClient):
+    """The real llama_cpp ``token_ceiling`` and ``count_tokens`` (a SentencePiece worst case server) with a fixed budget.
 
-    assert await fit_text_to_budget(text, budget, counter) == text
+    ``requests`` records every request that reached the server: the count of a fast path is none.
+    """
+
+    def __init__(self, budget: int) -> None:
+        self.requests: list[str] = []
+        super().__init__(model="m", base_url="http://llama.test:8080", transport=httpx.MockTransport(self._serve))
+        self._budget = budget
+
+    def _serve(self, request: httpx.Request) -> httpx.Response:
+        content = json.loads(request.content)["content"]
+        self.requests.append(content)
+        return httpx.Response(200, json={"tokens": list(range(len(content.encode("utf-8")) + 1))})
+
+    async def input_budget(self, template_text: str) -> InputBudget:
+        return InputBudget(self._budget)
+
+
+class _PerByteTokenizer:
+    """The worst case of a byte-level tokenizer under the real Ollama estimate: a token per byte; records every encode."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def encode(self, text: str, add_special_tokens: bool = True) -> StubEncoding:
+        self.calls.append(text)
+        return StubEncoding(ids=list(range(len(text.encode("utf-8")))))
+
+
+class _RealOllamaClient(OllamaClient):
+    """The real ollama ``token_ceiling`` and ``count_tokens`` (the gpt2 estimate over a token-per-byte tokenizer)."""
+
+    def __init__(self, budget: int) -> None:
+        self.tokenizer = _PerByteTokenizer()
+        super().__init__(model="m", base_url="http://ollama.test:11434", context_tokens=8192, token_counter=TokenCounter(load_tokenizer=lambda: self.tokenizer))
+        self._budget = budget
+
+    async def input_budget(self, template_text: str) -> InputBudget:
+        return InputBudget(self._budget)
+
+    @property
+    def counts_requested(self) -> list[str]:
+        return self.tokenizer.calls
+
+
+def _counts_requested(client: _RealLlamaClient | _RealOllamaClient) -> list[str]:
+    return client.requests if isinstance(client, _RealLlamaClient) else client.counts_requested
+
+
+_FAST_PATH_TEXTS = ["plain words in a short query", "検索拡張生成", "🙂 emoji 👍🏽", "1 2 3 4", "a1b22c333", "<s>a<s>a", "x"]
+
+
+@pytest.mark.parametrize("make_client", [_RealLlamaClient, _RealOllamaClient], ids=["llama_cpp", "ollama"])
+@pytest.mark.parametrize("text", _FAST_PATH_TEXTS)
+async def test_the_fast_path_returns_what_the_counting_path_would_and_counts_nothing(
+    make_client: Callable[[int], _RealLlamaClient | _RealOllamaClient], text: str
+) -> None:
+    """At a budget equal to the real ceiling the query skips the count; the counting path (run on a second client of the
+    same kind) puts the same text within the budget, so the shortcut changes nothing but the requests."""
+    budget = make_client(0).token_ceiling(text)
+    fast = make_client(budget)
+    slow = make_client(budget)
+
+    assert await fit_query_to_window(fast, "the template", text, provider="llama_cpp") == text
+    assert _counts_requested(fast) == []
+    assert await fit_text_to_budget(text, budget, slow.count_tokens) == text
+    assert _counts_requested(slow) != []
+
+
+async def test_a_llama_budget_equal_to_the_bytes_is_not_a_fast_path_because_of_the_prefix_token() -> None:
+    query = "ab cd ef"  # eight bytes: the server may spend nine tokens on them
+    client = _RealLlamaClient(budget=8)
+
+    fitted = await fit_query_to_window(client, "the template", query, provider="llama_cpp")
+
+    assert client.requests != [], "the ceiling (bytes + 1) is above the budget: the server counts"
+    assert fitted != query, "the server counted nine tokens, so the head is cut"
+    assert query.startswith(fitted)
+
+    at_the_ceiling = _RealLlamaClient(budget=9)
+    assert await fit_query_to_window(at_the_ceiling, "the template", query, provider="llama_cpp") is query
+    assert at_the_ceiling.requests == []
+
+
+async def test_an_ollama_budget_equal_to_the_bytes_is_not_a_fast_path_when_there_are_digit_runs() -> None:
+    query = "1 2 3"  # five bytes, three digit runs: a ceiling of eight
+    client = _RealOllamaClient(budget=5)
+
+    fitted = await fit_query_to_window(client, "the template", query, provider="ollama")
+
+    assert client.counts_requested != [], "the ceiling (bytes + digit runs) is above the budget: the estimate counts"
+    assert fitted != query, "the estimate is eight tokens, so the head is cut"
+
+    at_the_ceiling = _RealOllamaClient(budget=8)
+    assert await fit_query_to_window(at_the_ceiling, "the template", query, provider="ollama") is query
+    assert at_the_ceiling.counts_requested == []
+
+
+async def test_a_client_that_counts_but_has_no_ceiling_is_named_as_such_not_as_unable_to_count() -> None:
+    class NoCeiling(ScriptedLlmClient):
+        async def input_budget(self, template_text: str) -> InputBudget:
+            return InputBudget(100)
+
+        async def count_tokens(self, text: str) -> int:
+            return 1
+
+    with pytest.raises(LlmCallFailure) as raised:
+        await fit_query_to_window(NoCeiling(), "the template", "a query", provider="llama_cpp")
+
+    assert "token_ceiling" in raised.value.reason
+    assert "count_tokens" not in raised.value.reason
+    assert raised.value.provider == "llama_cpp"
 
 
 def test_describe_window_names_size_and_source_or_unbounded() -> None:

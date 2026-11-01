@@ -117,9 +117,6 @@ class _GraphClient:
     async def count_tokens(self, text: str) -> int:
         return len(text.split())
 
-    def token_ceiling(self, text: str) -> int:
-        return len(text.encode("utf-8"))
-
 
 class _NonCountingClient(_GraphClient):
     """A client with a bounded budget that cannot count tokens (it breaks the sizing contract)."""

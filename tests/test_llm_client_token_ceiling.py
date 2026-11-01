@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from collections.abc import Callable
 
 import httpx
 import pytest
@@ -25,12 +27,22 @@ from hypothesis import strategies as st
 
 from archon_search.llm_client.llama_cpp_client import LlamaCppClient
 from archon_search.llm_client.ollama_client import OllamaClient
-from archon_search.llm_client.protocol import TokenCountingClient
+from archon_search.llm_client.protocol import TokenBoundingClient
 from archon_search.llm_client.token_counter import TokenCounter
+from archon_search.paths import (
+    TOKEN_COUNTER_MODEL_NAME,
+    TOKEN_COUNTER_MODEL_REVISION,
+    TOKEN_COUNTER_TOKENIZER_FILE,
+    get_token_counter_models_dir,
+)
 from tests._token_counter_stub import StubEncoding
 
 _SPM_DUMMY_PREFIX_TOKENS = 1
-_SURROGATE_PAIR_TEXT = "\ud83d"  # a lone surrogate: a str that cannot be encoded as UTF-8 strictly
+_SPM_SPECIAL_TOKENS = ("<s>", "</s>", "<unk>")
+_SPM_SPECIAL_SPLIT = re.compile("(" + "|".join(re.escape(token) for token in _SPM_SPECIAL_TOKENS) + ")")
+_LONE_SURROGATE = "\ud83d"  # a str that cannot be encoded as UTF-8 strictly
+# ``1`` next to an astral character, fullwidth and Arabic-Indic digits (not ASCII digit runs), and spaces.
+_ADJACENCY_ALPHABET = "1🙂１２٣٠ "
 _EXAMPLES = [
     "",
     "plain english query about the migration rollout",
@@ -56,17 +68,39 @@ class _OneTokenPerByte:
         return StubEncoding(ids=list(range(_utf8_length(text))))
 
 
+def _spm_token_count(text: str) -> int:
+    """The worst case of a SentencePiece vocabulary with special tokens.
+
+    The text is split on the special-token strings; every non-empty piece costs the dummy-prefix token plus at most one
+    token per byte, and every special token costs one token. Assumption: a special token's text is at least two bytes
+    (``<s>``, ``</s>``, ``<unk>``, ``<0x0A>``, ...), so it pays for the prefix its neighbour adds.
+    """
+    cost = 0
+    for piece in _SPM_SPECIAL_SPLIT.split(text):
+        if piece in _SPM_SPECIAL_TOKENS:
+            cost += 1
+        elif piece:
+            cost += _SPM_DUMMY_PREFIX_TOKENS + _utf8_length(piece)
+    return cost
+
+
 def _per_byte_llama_server(request: httpx.Request) -> httpx.Response:
     """A llama-server whose tokenizer spends one token per byte and one dummy-prefix token (the SentencePiece worst case)."""
     content = json.loads(request.content)["content"]
     return httpx.Response(200, json={"tokens": list(range(_utf8_length(content) + _SPM_DUMMY_PREFIX_TOKENS))})
 
 
-def _llama_client() -> LlamaCppClient:
-    return LlamaCppClient(model="m", base_url="http://llama.test:8080", transport=httpx.MockTransport(_per_byte_llama_server))
+def _spm_server(request: httpx.Request) -> httpx.Response:
+    """A llama-server whose tokenizer is the :func:`_spm_token_count` model."""
+    content = json.loads(request.content)["content"]
+    return httpx.Response(200, json={"tokens": list(range(_spm_token_count(content)))})
 
 
-def _counted(client: TokenCountingClient, text: str) -> int:
+def _llama_client(handler: Callable[[httpx.Request], httpx.Response] = _per_byte_llama_server) -> LlamaCppClient:
+    return LlamaCppClient(model="m", base_url="http://llama.test:8080", transport=httpx.MockTransport(handler))
+
+
+def _counted(client: TokenBoundingClient, text: str) -> int:
     """The client's own count; hypothesis drives plain functions, so each property runs its coroutine to the end."""
     return asyncio.run(client.count_tokens(text))
 
@@ -78,7 +112,7 @@ def _ollama_client() -> OllamaClient:
 @pytest.mark.parametrize("text", _EXAMPLES)
 def test_no_tokenizer_of_the_two_local_clients_exceeds_its_ceiling_on_the_examples(text: str) -> None:
     for client in (_llama_client(), _ollama_client()):
-        assert isinstance(client, TokenCountingClient)
+        assert isinstance(client, TokenBoundingClient)
         assert _counted(client, text) <= client.token_ceiling(text), (type(client).__name__, text)
 
 
@@ -129,6 +163,123 @@ def test_the_ollama_ceiling_adds_one_per_digit_run() -> None:
     assert TokenCounter.ceiling("🙂") == 4
 
 
-@pytest.mark.parametrize("client", [_llama_client(), _ollama_client()], ids=["llama_cpp", "ollama"])
-def test_a_text_that_cannot_be_encoded_as_utf8_still_has_a_ceiling(client: TokenCountingClient) -> None:
-    assert client.token_ceiling(_SURROGATE_PAIR_TEXT) >= 1
+@pytest.mark.parametrize("lone_surrogates", [1, 2, 5])
+def test_a_text_that_cannot_be_encoded_as_utf8_has_a_ceiling_of_three_bytes_per_lone_surrogate(lone_surrogates: int) -> None:
+    """``surrogatepass`` encodes a lone surrogate as the three bytes of its (invalid) UTF-8 form."""
+    text = _LONE_SURROGATE * lone_surrogates
+
+    assert _llama_client().token_ceiling(text) == 3 * lone_surrogates + _SPM_DUMMY_PREFIX_TOKENS
+    assert TokenCounter.ceiling(text) == 3 * lone_surrogates
+    # llama_cpp is asked for its ceiling only: a lone surrogate cannot be JSON-encoded onto the wire to be counted.
+    assert _counted(_ollama_client(), text) == 3 * lone_surrogates
+
+
+# --- the ceiling is exact where the worst case is reached: it cannot be lowered ---------------------------------------
+
+
+@pytest.mark.parametrize("text", [text for text in _EXAMPLES if text])
+def test_the_ceilings_are_reached_by_a_worst_case_tokenizer_so_neither_can_be_lowered(text: str) -> None:
+    assert _spm_token_count(text) == _llama_client().token_ceiling(text)  # no special-token string in the examples
+    assert _counted(_ollama_client(), text) == TokenCounter.ceiling(text)
+
+
+def test_the_llama_ceiling_is_reached_by_a_text_without_a_special_token_and_is_not_by_the_empty_text() -> None:
+    client = _llama_client(_spm_server)
+
+    assert _counted(client, "a") == 2 == client.token_ceiling("a")
+    assert _counted(client, "") == 0 < client.token_ceiling("")
+
+
+# --- the SentencePiece model: special-token strings split a text, each piece pays its own dummy prefix -------------------
+
+
+@pytest.mark.parametrize("text", ["<s>a<s>a", "a<s>a", "<s>", "<s><s>", "a</s>b<unk>c", "<s>🙂<s>€<s>", "x<s>", "<s>x"])
+def test_the_llama_ceiling_holds_when_special_tokens_split_a_text_into_pieces_that_each_pay_a_prefix(text: str) -> None:
+    assert _counted(_llama_client(_spm_server), text) <= _llama_client().token_ceiling(text)
+
+
+def test_the_simulator_pays_a_prefix_per_piece_and_one_token_per_special_token() -> None:
+    assert _spm_token_count("a<s>a") == (1 + 1) + 1 + (1 + 1)
+    assert _spm_token_count("<s>") == 1
+    assert _spm_token_count("<s>a<s>a") == 1 + 2 + 1 + 2
+
+
+@settings(max_examples=300, deadline=None)
+@given(st.lists(st.sampled_from([*_SPM_SPECIAL_TOKENS, "a", "ab", " ", "é", "🙂", "\u20ac", "1"]), max_size=30).map("".join))
+def test_the_llama_ceiling_holds_for_texts_built_from_special_tokens_and_fragments(text: str) -> None:
+    assert _counted(_llama_client(_spm_server), text) <= _llama_client().token_ceiling(text)
+
+
+@settings(max_examples=200, deadline=None)
+@given(st.text())
+def test_the_llama_ceiling_holds_for_any_text_under_the_sentencepiece_model(text: str) -> None:
+    assert _counted(_llama_client(_spm_server), text) <= _llama_client().token_ceiling(text)
+
+
+# --- adjacency and non-ASCII digits ------------------------------------------------------------------------------------
+
+
+@settings(max_examples=300, deadline=None)
+@given(st.text(alphabet=_ADJACENCY_ALPHABET, max_size=40))
+def test_the_ceiling_holds_for_digits_next_to_astral_characters_and_non_ascii_digits(text: str) -> None:
+    for client in (_llama_client(), _llama_client(_spm_server), _ollama_client()):
+        assert _counted(client, text) <= client.token_ceiling(text)
+
+
+@pytest.mark.parametrize("text", ["1🙂2", "🙂1🙂", "１２３ 123", "١٢٣4٥", "1 🙂 2 ３"])
+def test_the_ollama_ceiling_charges_only_ascii_digit_runs(text: str) -> None:
+    ascii_runs = len(re.findall(r"[0-9]+", text))
+
+    assert TokenCounter.ceiling(text) == _utf8_length(text) + ascii_runs
+    assert _counted(_ollama_client(), text) <= TokenCounter.ceiling(text)
+
+
+# --- the real pinned gpt2 vocabulary (never downloaded: the test is skipped when it is not cached) ------------------------
+
+_REAL_GPT2_EXAMPLES = [
+    *_EXAMPLES,
+    "<|endoftext|>",
+    "a<|endoftext|>b<|endoftext|><|endoftext|>",
+    "1🙂2 ١٢٣ １２３",
+    "e\u0301\u0301\u0301 a\u0308 \u0915\u094d\u0937",
+    "ǆ ﬃ ß İ ½ ² ① 𝟏𝟐𝟑",
+    "x" * 500,
+    "9" * 200,
+    "\u202e rtl \u200f mark \ufeff bom \x00 nul \x1b esc",
+]
+
+
+@pytest.fixture(scope="module")
+def real_gpt2_counter() -> TokenCounter:
+    """A counter over the real pinned gpt2 ``tokenizer.json``, loaded straight from the model cache.
+
+    The autouse fixtures stub ``load_gpt2_tokenizer`` and block the network, so the file is read with
+    ``tokenizers.Tokenizer.from_file`` and a missing cache skips the test: the suite never downloads it. A module-scoped
+    fixture runs before the per-test data-dir redirection, so the cache is the operator's own.
+    """
+    snapshot = get_token_counter_models_dir() / f"models--{TOKEN_COUNTER_MODEL_NAME.replace('/', '--')}" / "snapshots" / TOKEN_COUNTER_MODEL_REVISION
+    tokenizer_file = snapshot / TOKEN_COUNTER_TOKENIZER_FILE
+    if not tokenizer_file.is_file():
+        pytest.skip(f"the pinned gpt2 tokenizer is not cached at {tokenizer_file} (run `archon-search prewarm`)")
+    tokenizers = pytest.importorskip("tokenizers")
+    tokenizer = tokenizers.Tokenizer.from_file(str(tokenizer_file))
+    return TokenCounter(load_tokenizer=lambda: tokenizer)
+
+
+@pytest.mark.parametrize("text", _REAL_GPT2_EXAMPLES)
+def test_the_ollama_ceiling_holds_on_the_real_gpt2_vocabulary_for_the_examples(real_gpt2_counter: TokenCounter, text: str) -> None:
+    assert real_gpt2_counter.count(text) <= TokenCounter.ceiling(text)
+
+
+@settings(max_examples=300, deadline=None)
+@given(st.text(alphabet=st.characters(codec="utf-8")))  # a lone surrogate makes the real ``encode`` raise
+def test_the_ollama_ceiling_holds_on_the_real_gpt2_vocabulary_for_any_text(real_gpt2_counter: TokenCounter, text: str) -> None:
+    assert real_gpt2_counter.count(text) <= TokenCounter.ceiling(text)
+
+
+@settings(max_examples=300, deadline=None)
+@given(st.lists(st.sampled_from(["<|endoftext|>", "1", "🙂", "١", "１", " ", "é", "e\u0301", "中", "a", "99", "\u200d"]), max_size=40).map("".join))
+def test_the_ollama_ceiling_holds_on_the_real_gpt2_vocabulary_for_adjacent_digits_emoji_and_special_tokens(
+    real_gpt2_counter: TokenCounter, text: str
+) -> None:
+    assert real_gpt2_counter.count(text) <= TokenCounter.ceiling(text)
