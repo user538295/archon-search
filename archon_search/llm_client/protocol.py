@@ -177,8 +177,9 @@ class LlmClient(Protocol):
                 window and never needs a second sizing.
             max_output_tokens: the answer ceiling of the calls the budget is for, i.e. the ``max_output_tokens`` they
                 send. The budget holds exactly this much of the window back, so prompt plus answer fit the window
-                (``llama_cpp``: up to the tokens where the template meets the query, which are counted apart; ``ollama``: within
-                ``OLLAMA_ESTIMATE_MARGIN``, which also has to cover the chat framing). A client with no
+                (``llama_cpp``: with ``LLAMA_CPP_JOIN_SLACK_TOKENS`` held back for the tokens where the template meets the
+                query, which are counted apart; ``ollama``: within ``OLLAMA_ESTIMATE_MARGIN``, after ``OLLAMA_CHAT_FRAMING_TOKENS``
+                of chat framing are taken off the window). A client with no
                 window (cloud, ``claude_cli``) ignores it. Required: there is no default answer size.
             think: the thinking setting of the calls the budget is for. A chat template can frame a prompt differently
                 per setting (Qwen3 appends an empty think block when thinking is off), so a client that counts the

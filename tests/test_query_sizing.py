@@ -54,6 +54,7 @@ from tests._token_counter_stub import StubTokenizer
 
 _NUM_QUERIES = 2
 _WINDOW = 4096
+_CHAT_FRAMING_TOKENS = 64  # real tokens Ollama's chat template adds; held back before the margin (OLLAMA_CHAT_FRAMING_TOKENS)
 _SECRET_QUERY_MARKER = "very-unique-secret-query"
 _CLOUD_QUERY_TOKENS = 51_000  # S9: "a ~51k-token prompt"
 
@@ -233,11 +234,11 @@ async def test_a_long_query_on_a_4096_ollama_window_fits_template_query_and_its_
     sent = feature.sent_query(call["messages"][0]["content"])
     # By the same estimator the budget uses, with the largest real-over-estimate ratio, the call fits the window.
     estimated = estimate(feature.template()) + estimate(sent)
-    assert estimated * LARGEST_REAL_OVER_ESTIMATE + _ceiling(feature) <= _WINDOW
+    assert estimated * LARGEST_REAL_OVER_ESTIMATE + _CHAT_FRAMING_TOKENS + _ceiling(feature) <= _WINDOW
     assert query.startswith(sent)
     assert len(sent) < len(query), "the query had to be trimmed"
     # ... and the cut is not wasteful: the query takes most of the room that is left.
-    room = int((_WINDOW - _ceiling(feature)) / LARGEST_REAL_OVER_ESTIMATE) - estimate(feature.template())
+    room = int((_WINDOW - _ceiling(feature) - _CHAT_FRAMING_TOKENS) / LARGEST_REAL_OVER_ESTIMATE) - estimate(feature.template())
     assert estimate(sent) >= room * ACCEPTED_FILL_PERCENT // 100
 
 
@@ -441,7 +442,7 @@ async def test_a_query_between_the_old_and_the_new_budget_is_no_longer_trimmed(f
     client = _ollama_client(feature, StubTokenizer, calls)
     estimate = TokenCounter(load_tokenizer=StubTokenizer).count
     old_budget = int((_WINDOW - 1024) / LARGEST_REAL_OVER_ESTIMATE) - estimate(feature.template())
-    new_budget = int((_WINDOW - _ceiling(feature)) / LARGEST_REAL_OVER_ESTIMATE) - estimate(feature.template())
+    new_budget = int((_WINDOW - _ceiling(feature) - _CHAT_FRAMING_TOKENS) / LARGEST_REAL_OVER_ESTIMATE) - estimate(feature.template())
     query = " ".join(["lorem"] * _HYDE_OLD_TRIM_POINT_QUERY_WORDS)  # no digits: the estimate is one token per word
     assert old_budget < estimate(query) <= new_budget
 
@@ -463,4 +464,4 @@ async def test_prompt_plus_the_features_own_answer_ceiling_fits_the_window(featu
     [call] = calls
     sent = feature.sent_query(call["messages"][0]["content"])
     assert len(sent) < len(words(6000))
-    assert (estimate(feature.template()) + estimate(sent)) * LARGEST_REAL_OVER_ESTIMATE + _ceiling(feature) <= _WINDOW
+    assert (estimate(feature.template()) + estimate(sent)) * LARGEST_REAL_OVER_ESTIMATE + _CHAT_FRAMING_TOKENS + _ceiling(feature) <= _WINDOW

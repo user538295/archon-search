@@ -7,7 +7,8 @@ OpenAI-compatible endpoint has no such field.
 * Context (S7): a configured ``context_tokens`` is sent as ``options.num_ctx`` and is the window the prompt is sized
   to; unset, the window is ``ASSUMED_CONTEXT_TOKENS``, assumed and NOT sent, so the server's own window applies.
 * Sizing (S11): :meth:`OllamaClient.input_budget` counts the token estimate (gpt2 tokens plus the digit, astral-plane and
-  special-token surcharges, ``llm_client.token_counter``) plus ``OLLAMA_ESTIMATE_MARGIN`` (``llm_client.budget``).
+  special-token surcharges, ``llm_client.token_counter``) against the window less the call's answer ceiling and
+  ``OLLAMA_CHAT_FRAMING_TOKENS``, divided by ``1 + OLLAMA_ESTIMATE_MARGIN`` (``llm_client.budget``).
 * ``think``: ``DEFAULT`` sends no thinking control; ``ON`` and ``OFF`` send the SDK's ``think=True`` / ``think=False``.
 * Every failure is raised as ``LlmCallFailure`` (a timeout as ``LlmCallTimeout``, ``think = true`` on a model without a
   thinking mode as ``LlmThinkingNotSupported``). The reason carries the provider's own

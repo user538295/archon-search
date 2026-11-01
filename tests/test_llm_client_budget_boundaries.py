@@ -75,10 +75,11 @@ def _llama_server(window: int, tokens_of: Callable[[str], list[int]]) -> Callabl
     return answer
 
 
-def _newline_runs_are_one_token(text: str, extra_join_tokens: int = 0) -> list[int]:
-    """Tokens of *text*; a framed prompt that holds a query costs *extra_join_tokens* more (a wider join than the newline's)."""
+def _newline_runs_are_one_token(text: str, extra_join_tokens: int = 0, templates: frozenset[str] = frozenset()) -> list[int]:
+    """Tokens of *text*. A framed prompt that holds a query costs *extra_join_tokens* more (a wider join than the newline's);
+    the framed empty *templates* do not: their count is the one the budget is made from, the join exists only once a query is in."""
     tokens = len(_TOKEN.findall(text))
-    if text.startswith("<|user|>") and len(text) > len(_framed("")):
+    if text.startswith("<|user|>") and text not in templates:
         tokens += extra_join_tokens
     return list(range(tokens))
 
@@ -138,13 +139,32 @@ async def test_llama_cpp_query_of_exactly_the_budget_fits_with_the_widest_join_t
 ) -> None:
     """The measured worst surplus is 2 tokens (the join of the graph template); the allowance is 4, twice that."""
     window = 4096
-    client = await _llama(window, lambda text: _newline_runs_are_one_token(text, extra_join_tokens))
+    client = await _llama(window, _wide_join(render, extra_join_tokens))
     budget = (await client.input_budget(render(""), max_output_tokens=ceiling)).tokens
     assert isinstance(budget, int)
 
     fitted = await fit_query_to_window(client, render(""), _words(budget), provider="llama_cpp", max_output_tokens=ceiling)
 
+    # The newline's own token plus *extra_join_tokens* are the surplus: 2 and 4, and at 4 the window is filled exactly.
     assert await _prompt_tokens(client, render(fitted)) + ceiling <= window
+
+
+@pytest.mark.parametrize(("render", "ceiling"), FEATURES)
+async def test_a_join_wider_than_the_slack_is_the_limit_the_slack_does_not_cover(render: Render, ceiling: int) -> None:
+    """Pins the tightness: a join of 5 tokens (4 extra beside the newline's own) overruns by one, so 4 is no more than needed."""
+    window = 4096
+    client = await _llama(window, _wide_join(render, 4))
+    budget = (await client.input_budget(render(""), max_output_tokens=ceiling)).tokens
+    assert isinstance(budget, int)
+
+    fitted = await fit_query_to_window(client, render(""), _words(budget), provider="llama_cpp", max_output_tokens=ceiling)
+
+    assert await _prompt_tokens(client, render(fitted)) + ceiling == window + 1
+
+
+def _wide_join(render: Render, extra_join_tokens: int) -> Callable[[str], list[int]]:
+    templates = frozenset({_framed(render(""))})
+    return lambda text: _newline_runs_are_one_token(text, extra_join_tokens, templates)
 
 
 async def test_the_join_boundary_really_costs_a_token_on_this_fake() -> None:

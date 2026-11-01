@@ -225,7 +225,7 @@ class LlamaCppClient:
     async def input_budget(
         self, template_text: str, *, max_output_tokens: int, think: ThinkSetting = ThinkSetting.DEFAULT
     ) -> InputBudget:
-        """Window minus *max_output_tokens* minus the template's framed count, for calls that send *think*.
+        """Window minus *max_output_tokens*, the template's framed count and ``LLAMA_CPP_JOIN_SLACK_TOKENS``, for calls that send *think*.
 
         The count is asked of the server once per template and setting (``/apply-template``, then ``/tokenize``); the window
         is read live, so one resolved later is used. The whole sizing, both requests together, is bounded by
