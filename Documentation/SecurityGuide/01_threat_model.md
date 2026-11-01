@@ -105,6 +105,10 @@ Description generation is **off by default** (`[description].enabled = false`). 
 
 The generated text is untrusted: a document can be written to steer the model that summarises it. The text reaches three places verbatim or near-verbatim: the multi-collection router prompt (whitespace collapsed, `<` and `>` escaped), REST responses (`GET /collections`, `GET /collections/{name}`, `PATCH`) and the MCP collection tools. Every reader who can see the collection sees the same text. The operator can replace a description with `PUT /collections/{name}/description` (CLI `collection set-description`, MCP `set_collection_description`), which marks it `manual` so regeneration never overwrites it.
 
+## Query text sent to HyDE and RAG Fusion providers
+
+With `hyde=true` or `rag_fusion=true` on a request (and the feature enabled in `[hyde]` / `[rag_fusion]`), the query text is sent to the configured provider: the whole query to `anthropic`, `openai` or `claude_cli` (the local `claude` program, which talks to Anthropic), and to `ollama` or `llama_cpp` the part of it that fits the model's window, which stays on this host only while the provider's base URL points at it. The search itself always uses the full query. Telemetry never records the query text (see [`04_telemetry_privacy.md`](./04_telemetry_privacy.md)).
+
 ## Related documents
 
 - [`02_authentication_and_keys.md`](./02_authentication_and_keys.md) — key bootstrap and bearer enforcement.

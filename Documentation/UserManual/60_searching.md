@@ -217,7 +217,7 @@ curl -s -X POST http://127.0.0.1:8765/search \
 
 HyDE (Hypothetical Document Embeddings) improves recall for vocabulary-mismatch queries. When enabled, the server asks an LLM to write a short hypothetical answer passage, embeds that passage with the embedding model of the collection being searched (so HyDE also works on a collection pinned to its own model), and uses the resulting vector for ANN lookup instead of the raw query embedding.
 
-> **Privacy notice**: `hyde=true` sends the raw query to the configured LLM provider (the whole of it to a cloud provider; a local model gets the part that fits its window, see [Long queries](#long-queries-and-the-model-window)). With `provider = "anthropic"` (default), `"openai"`, or `"claude_cli"`, the query leaves the host (`claude_cli` goes to Anthropic via Claude Code's login) — do not enable in air-gapped deployments. With `provider = "ollama"` or `"llama_cpp"`, the query stays on-premise (zero-transmission). See `Documentation/ADRs/C4-hyde-external-llm-dependency.md`.
+> **Privacy notice**: `hyde=true` sends the raw query to the configured LLM provider (the whole of it to a cloud provider; a local model gets the part that fits its window, see [Long queries](#long-queries-and-the-model-window)). With `provider = "anthropic"` (default), `"openai"`, or `"claude_cli"`, the query leaves the host (`claude_cli` goes to Anthropic via Claude Code's login) — do not enable in air-gapped deployments. With `provider = "ollama"` or `"llama_cpp"`, the query stays on this host only while the provider's base URL (`ollama_base_url` / `llama_cpp_base_url`) points at it; a URL naming another host sends the query over the network. See `Documentation/ADRs/C4-hyde-external-llm-dependency.md`.
 
 ### Installation
 
@@ -247,7 +247,7 @@ max_requests_per_minute = 60
 
 ### Long queries and the model window
 
-HyDE puts your query into a short prompt, so a very long query has to fit the model. A cloud provider (`anthropic`, `openai`, `claude_cli`) receives the **whole** query, however long: nothing is counted or cut (only the server's request-size limit, `[server].max_request_body_mb`, bounds it). A local provider (`ollama`, `llama_cpp`) has a context window, so the server sizes the query ahead of the call: it keeps the head of the query, cut at a word boundary, that fits the window next to the prompt and a 1024-token answer reserve, and sends only that to the model. The search itself still uses your full query. For Ollama set `[hyde].ollama_context_tokens` (unset assumes 4096); the server reads llama-server's window itself. If the window leaves no room for any query text, HyDE is skipped for that call (`hyde_applied: false`, `expansion_warning: "HyDE expansion failed"`, like any other failure) and the server logs one WARNING per process that names the window. A cloud provider's own prompt limit is not checked ahead: a query beyond it is a failed call that falls back the same way (and a long prompt is billed).
+HyDE puts your query into a short prompt, so a very long query has to fit the model. A cloud provider (`anthropic`, `openai`, `claude_cli`) receives the **whole** query, however long: nothing is counted or cut (only the server's request-size limit, `[server].max_request_body_mb`, bounds it). A local provider (`ollama`, `llama_cpp`) has a context window, so the server sizes the query ahead of the call: it keeps the head of the query, cut at a word boundary, that fits the window next to the prompt and a 1024-token answer reserve, and sends only that to the model. The search itself still uses your full query. For Ollama set `[hyde].ollama_context_tokens` (unset assumes 4096); the server reads llama-server's window itself and counts the prompt exactly through llama-server (`/apply-template` for the chat framing and the `think` setting, then `/tokenize`). If the window leaves no room for any query text, HyDE is skipped for that call (`hyde_applied: false`, `expansion_warning: "HyDE expansion failed"`, like any other failure) and the server logs one WARNING per process that names the window. A cloud provider's own prompt limit is not checked ahead: a query beyond it is a failed call that falls back the same way (and a long prompt is billed).
 
 ### Provider matrix (G10 / LLCP)
 
@@ -287,7 +287,7 @@ A provider-side HyDE failure never degrades availability. It falls back silently
 
 RAG Fusion improves recall for multi-faceted queries. When enabled, the server asks an LLM to generate N semantic variants of the query, searches with all N+1 queries in parallel, and fuses the result sets with a second-pass Reciprocal Rank Fusion (RRF).
 
-> **Privacy notice**: `rag_fusion=true` sends the raw query to the configured LLM provider (the whole of it to a cloud provider). Same provider trade-offs as HyDE above (`"ollama"` and `"llama_cpp"` stay on-premise; all others transmit externally). See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md`.
+> **Privacy notice**: `rag_fusion=true` sends the raw query to the configured LLM provider (the whole of it to a cloud provider). Same provider trade-offs as HyDE above (`"ollama"` and `"llama_cpp"` stay on this host only while their base URL points at it; all others transmit externally). See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md`.
 
 ### Configuration
 

@@ -230,6 +230,8 @@ Your MCP client gets the same server your HTTP client does — same auth, same d
 - `graph_impact` — blast-radius caller/callee analysis for a code symbol
 - `create_key` / `list_keys` / `revoke_key` / `rotate_key` — API key lifecycle, mirroring the REST `/keys` endpoints (always registered on the shipped server)
 
+A session (`Mcp-Session-Id`) is bound to the credential that created it: another key, the admin key or a rotated key gets `404` for it. `ingest_directory`, `list_collections`, `get_collections_meta` and `list_documents` return a list on success and an `{"error", "code"}` object on failure, and their advertised `outputSchema` says so (a union of the two; see [`BREAKING.md`](BREAKING.md)). A client that drops a `search`, `search_with_context` or `explain` call cancels the provider call behind it.
+
 ## Telemetry (opt-in)
 
 Off by default (`enabled = false`), and it stays off until you flip it. Flip it, and every `search`, `search_with_context`, `search_multi`, `POST /route`, and `/explain` call appends one JSONL line to a daily file under `~/.archon-search/search-logs/`. It never leaves the machine — no export, no phone-home, no exceptions.

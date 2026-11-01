@@ -11,7 +11,7 @@ All durable state for `archon-search` lives under `~/.archon-search/`. The serve
 ## Principles
 
 1. **One state directory per install.** Backup is `tar -czf` of `~/.archon-search/`; restore is the inverse.
-2. **No automated schema migrations today.** Every release reuses the existing LanceDB layout. Schema-migration tooling is roadmap item **D3** in [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) and is not yet implemented.
+2. **No automated schema migrations today.** Every release reuses the existing LanceDB layout. Schema-migration tooling is roadmap item **D3** in [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) and is not yet implemented. The one exception is additive: every server start adds the nullable `default_ttl_seconds`, `description_source` and `description_status` columns to `_archon_collection_meta` (`STORE_SCHEMA_VERSION` stays `1`; see [`BREAKING.md`](../../BREAKING.md), startup migrations entry), so back up before upgrading if you may roll back.
 3. **Re-ingest is a fallback, not a routine step.** No release to date requires a full reindex. If one does, it will say so in its [`BREAKING.md`](../../BREAKING.md) entry.
 
 ## On-disk layout
@@ -119,6 +119,8 @@ cp /path/to/old-archive.tar.gz ~/.archon-search/exports/<ns>/
 # run with an API key of namespace <ns>; the collection name is the one to create
 archon-search import <collection> ~/.archon-search/exports/<ns>/old-archive.tar.gz --wait
 ```
+
+Archives and backups written before the description feature are version 1 archives (`EXPORT_SCHEMA_VERSION` is now `2`): importing one answers `422` `schema_version_mismatch` unless you pass `--ignore-schema-version` (REST `ignore_schema_version: true`, MCP `ignore_schema_version=true`); such a restore imports the description as `generated`.
 
 The `default` namespace may also import an old file that sits directly in `<data-dir>/exports/` (not in a subdirectory). Importing needs the collection name to be free or owned by the caller's namespace; another namespace's collection is refused with `collection name is not available to this namespace`, even with `force_overwrite`.
 

@@ -1,18 +1,13 @@
 # CLAUDE.md
 
-Guidance for Claude Code in this repository. **Deliberately thin** — it carries only what you cannot
-grep for. Module inventories, API surfaces, and signatures live in the source (single source of truth)
-and in `Documentation/`; see the map at the bottom. Testing rules live in `tests/CLAUDE.md`.
+Guidance for Claude Code in this repository. **Deliberately thin** — it carries only what you cannot grep for. Module inventories, API surfaces, and signatures live in the source (single source of truth) and in `Documentation/`; see the map at the bottom. Testing rules live in `tests/CLAUDE.md`.
 
 ## Project
 
-`archon-search` is a standalone hybrid retrieval + routing server: LanceDB vector store, PyTorch dense
-embeddings, a cross-encoder reranker, a multi-collection router, FastAPI HTTP control plane, and an MCP
-endpoint sharing the same auth. Runtime state lives under `~/.archon-search/`.
+`archon-search` is a standalone hybrid retrieval + routing server: LanceDB vector store, PyTorch dense embeddings, a cross-encoder reranker, a multi-collection router, FastAPI HTTP control plane, and an MCP endpoint sharing the same auth. Runtime state lives under `~/.archon-search/`.
 
 - Python `>=3.13`, managed with `uv`.
-- Package directory `archon_search/` (underscore), distribution `archon-search` (hyphen).
-  `pyproject.toml` `[tool.hatch.build.targets.wheel].packages` is explicit about this — don't "fix" it.
+- Package directory `archon_search/` (underscore), distribution `archon-search` (hyphen). `pyproject.toml` `[tool.hatch.build.targets.wheel].packages` is explicit about this — don't "fix" it.
 - Version comes from git tags via `hatch-vcs` (CalVer `YY.M.<rev-count>`); never hardcode versions.
 
 ## Common commands
@@ -28,19 +23,11 @@ bash release.sh                # tag + push; CI runs eval + publishes to PyPI vi
                                # `-y` non-interactive, `--dry-run` preview
 ```
 
-Plain pushes to `main` do **not** publish — only a tag push triggers `archon-search-release.yml`.
-`git-cliff >= 2.4` is a release-only prerequisite: `brew install git-cliff`, or
-`cargo install git-cliff --version '>=2.4'`.
+Plain pushes to `main` do **not** publish — only a tag push triggers `archon-search-release.yml`. `git-cliff >= 2.4` is a release-only prerequisite: `brew install git-cliff`, or `cargo install git-cliff --version '>=2.4'`.
 
 ## Architecture at a glance
 
-Layered pipeline: `parser.py` → `chunker.py` → `embedder.py` → `store.py` (LanceDB vector + FTS) →
-`reranker.py` → `pipeline.py` (`SearchPipeline` orchestrates ingest, search, context retrieval).
-`router.py` does centroid pre-ranking across collections; `watcher.py` + `sync.py` keep on-disk corpora
-and the index in sync. `server/` splits routes per resource (`routes_*.py`) behind `app.py`; MCP mounts at
-`/mcp` and the optional OpenAI shim at `/v1`, both on the REST port. `jobs/` holds the async job store plus
-the `BackupLoop` / `MaintenanceLoop`. `install/` is the OS-service installer package. Graph, telemetry, and
-eval subsystems are documented in the map below.
+Layered pipeline: `parser.py` → `chunker.py` → `embedder.py` → `store.py` (LanceDB vector + FTS) → `reranker.py` → `pipeline.py` (`SearchPipeline` orchestrates ingest, search, context retrieval). `router.py` does centroid pre-ranking across collections; `watcher.py` + `sync.py` keep on-disk corpora and the index in sync. `server/` splits routes per resource (`routes_*.py`) behind `app.py`; MCP mounts at `/mcp` and the optional OpenAI shim at `/v1`, both on the REST port. `jobs/` holds the async job store plus the `BackupLoop` / `MaintenanceLoop`. `install/` is the OS-service installer package. `llm_client/` is the shared LLM client behind HyDE, RAG Fusion, graph community summaries and collection descriptions. Graph, telemetry, and eval subsystems are documented in the map below.
 
 Per-module detail: `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md`.
 
@@ -48,58 +35,27 @@ Per-module detail: `Documentation/Architecture/110_component_catalog_and_layer_b
 
 These are the rules that are not discoverable by reading one file. Everything else: read the source.
 
-- **`GET /openapi.json` is the authoritative HTTP contract.** Keep it in sync; record breaking REST/MCP
-  changes in `BREAKING.md`.
-- **`paths.py` `get_data_dir()`** (env `ARCHON_SEARCH_DATA_DIR`, default `~/.archon-search/`) is the single
-  source every path accessor derives from — one env var relocates the whole runtime tree, including model
-  weights (`get_models_dir()` = `<data>/models`, Hugging Face hub layout; no separate cache env var).
-- **Lifespan startup never awaits slow work.** uvicorn binds the listening socket only after lifespan
-  startup returns, so anything awaited there keeps the port closed (clients get `ConnectError`, not a
-  served 503). Spawn with `asyncio.create_task` and track in `app.state._background_tasks`.
-- **Auxiliary writes never fail their primary operation.** Post-ingest graph extraction, mention cleanup on
-  delete, and the synonym-enrichment callback are all wrapped in `try/except` that logs WARNING and
-  returns — a bad graph write must never fail an ingest or delete.
-- **Never put `str(exc)` in a wire-facing `detail` or job `error` field** for a caught exception whose
-  message embeds internals. Define one sanitized `DETAIL`/`CODE` constant pair next to the exception.
-- **`store.py` SQL predicates go through `_where_eq` / `_where_in`** (which quote via `_sql_quote_str` in
-  `store_filters.py`), never f-strings. `tests/test_no_fstring_sql.py` fails the build otherwise.
-- **`STORE_SCHEMA_VERSION` bump policy:** increment it in `store.py` whenever a structural change to the
-  shared `_schema()` (chunk table) or `_meta_schema()` (collection metadata) requires migrating existing
-  rows, and add the matching `MigrationSpec` to `SearchStore._all_migrations()`. **Exceptions:**
-  per-collection chunk-table-only changes (e.g. `migrate_acl`) and nullable columns added to
-  `_archon_collection_meta` by a startup migration in `_run_startup_migrations()` (`community_rebuild_job_id`,
-  `metadata_reindex_job_id`, `description_source`, `description_status`) do NOT bump it. Current value: `1` —
-  version 1's `migrate_expires_at_and_scopes` is NOT applied at startup (operators run
-  `POST /collections/{name}/migrate`); `migrate_default_ttl_seconds` is also a startup step, so for it the route is a no-op.
-- **Collection/namespace names** may not contain `__` or lead/trail with `_` (`_validate_collection` /
-  `_validate_namespace`) — this guards the `_archon_graph_{ns}__{col}_*` graph table names.
+- **`GET /openapi.json` is the authoritative HTTP contract.** Keep it in sync; record breaking REST/MCP changes in `BREAKING.md`.
+- **`paths.py` `get_data_dir()`** (env `ARCHON_SEARCH_DATA_DIR`, default `~/.archon-search/`) is the single source every path accessor derives from — one env var relocates the whole runtime tree, including model weights (`get_models_dir()` = `<data>/models`, Hugging Face hub layout; no separate cache env var).
+- **Lifespan startup never awaits slow work.** uvicorn binds the listening socket only after lifespan startup returns, so anything awaited there keeps the port closed (clients get `ConnectError`, not a served 503). Spawn with `asyncio.create_task` and track in `app.state._background_tasks`.
+- **Auxiliary writes never fail their primary operation.** Post-ingest graph extraction, mention cleanup on delete, and the synonym-enrichment callback are all wrapped in `try/except` that logs WARNING and returns — a bad graph write must never fail an ingest or delete.
+- **Never put `str(exc)` in a wire-facing `detail` or job `error` field** for a caught exception whose message embeds internals. Define one sanitized `DETAIL`/`CODE` constant pair next to the exception.
+- **`store.py` SQL predicates go through `_where_eq` / `_where_in`** (which quote via `_sql_quote_str` in `store_filters.py`), never f-strings. `tests/test_no_fstring_sql.py` fails the build otherwise.
+- **`STORE_SCHEMA_VERSION` bump policy:** increment it in `store.py` whenever a structural change to the shared `_schema()` (chunk table) or `_meta_schema()` (collection metadata) requires migrating existing rows, and add the matching `MigrationSpec` to `SearchStore._all_migrations()`. **Exceptions:** per-collection chunk-table-only changes (e.g. `migrate_acl`) and nullable columns added to `_archon_collection_meta` by a startup migration in `_run_startup_migrations()` (`community_rebuild_job_id`, `metadata_reindex_job_id`, `description_source`, `description_status`) do NOT bump it. Current value: `1` — version 1's `migrate_expires_at_and_scopes` is NOT applied at startup (operators run `POST /collections/{name}/migrate`); `migrate_default_ttl_seconds` is also a startup step, so for it the route is a no-op.
+- **Collection/namespace names** may not contain `__` or lead/trail with `_` (`_validate_collection` / `_validate_namespace`) — this guards the `_archon_graph_{ns}__{col}_*` graph table names.
 - **All `GraphStore` public methods take `ns` as the LAST parameter.**
-- **Telemetry never sees a raw query.** Factory methods in `telemetry/entry.py` must not accept a `query`
-  parameter — the guarantee is structural, not a policy check.
-- **`search_with_context` rejects any non-null `graph_mode`** — permanent design decision, not deferred
-  work. Use `search` instead.
+- **Telemetry never sees a raw query.** Factory methods in `telemetry/entry.py` must not accept a `query` parameter — the guarantee is structural, not a policy check.
+- **`search_with_context` rejects any non-null `graph_mode`** — permanent design decision, not deferred work. Use `search` instead.
 - Every new `Path.home()` callsite needs a `tests/path_home_allowlist.txt` entry (file, lineno, sha).
-- **Authorization is enforced on the server, in one place each.** Admin-only routes and MCP tools go through
-  `server/authz.py` (only a default-namespace key with `admin` is admin; TOML namespace tokens never are).
-  Collection ownership is checked by `SearchStore` (`CollectionOwnershipError`, fixed wire text) and at the entry
-  of `SearchPipeline.ingest_*`. Client-supplied ingest paths go through `ingest_path_policy.py` / `_path_safety.py`
-  (deny list always, `[ingest].allowed_roots` for non-admin callers). Archive import/export is confined to
-  `<data>/exports/<ns>/` and `<backup>/<ns>/`. ACL sidecar problems fail closed.
-- **Model loads and accelerator work are serialized.** `torch_runtime.accelerator_lock` (every load and batch
-  forward on `mps`) and `TRANSFORMERS_LOCK` (every `transformers` import and `from_pretrained`; order: accelerator
-  lock, then this one). Warm-up goes through `warmup_coordinator.py`; validation probes the pipeline's own
-  embedder/reranker, never fresh copies. LanceDB connections go through `lance_session.py` (capped caches).
+- **Authorization is enforced on the server, in one place each.** Admin-only routes and MCP tools go through `server/authz.py` (only a default-namespace key with `admin` is admin; TOML namespace tokens never are). Collection ownership is checked by `SearchStore` (`CollectionOwnershipError`, fixed wire text) and at the entry of `SearchPipeline.ingest_*`. Client-supplied ingest paths go through `ingest_path_policy.py` / `_path_safety.py` (deny list always, `[ingest].allowed_roots` for non-admin callers). Archive import/export is confined to `<data>/exports/<ns>/` and `<backup>/<ns>/`. ACL sidecar problems fail closed.
+- **Model loads and accelerator work are serialized.** `torch_runtime.accelerator_lock` (every load and batch forward on `mps`) and `TRANSFORMERS_LOCK` (every `transformers` import and `from_pretrained`; order: accelerator lock, then this one). Warm-up goes through `warmup_coordinator.py`; validation probes the pipeline's own embedder/reranker, never fresh copies. LanceDB connections go through `lance_session.py` (capped caches).
+- **Every model call goes through `llm_client/`, and every consumer catches `LlmCallFailure` and falls back.** Every path that changes a collection's documents requests its description through the one routine `SearchPipeline.finalize_collection_change` (removals: `finalize_after_removal`); import and eval do not.
 
 ## Documentation map
 
-Full documentation lives under `Documentation/`. Treat the **source as the single source of truth** — when
-a doc and the code disagree, fix the doc. When you change behavior a doc describes, update it in the same
-PR. ADRs are append-only: supersede with a new ADR, never edit an accepted one.
+Full documentation lives under `Documentation/`. Treat the **source as the single source of truth** — when a doc and the code disagree, fix the doc. When you change behavior a doc describes, update it in the same PR. ADRs are append-only: supersede with a new ADR, never edit an accepted one.
 
-Start here: `Architecture/990_documentation_index_and_contribution_guide.md` (index of every doc),
-`Architecture/100_system_architecture_overview.md` (C4 + pipeline),
-`Architecture/110_component_catalog_and_layer_breakdown.md` (every module → layer → public symbols),
-`Architecture/600_api_reference_or_public_interface.md` (REST + MCP + CLI surface).
+Start here: `Architecture/990_documentation_index_and_contribution_guide.md` (index of every doc), `Architecture/100_system_architecture_overview.md` (C4 + pipeline), `Architecture/110_component_catalog_and_layer_breakdown.md` (every module → layer → public symbols), `Architecture/600_api_reference_or_public_interface.md` (REST + MCP + CLI surface).
 
 | Topic | Doc |
 |---|---|
@@ -118,6 +74,7 @@ Start here: `Architecture/990_documentation_index_and_contribution_guide.md` (in
 | OpenAPI as authoritative, MCP/REST relationship | `Architecture/520_api_design_and_contracts.md` |
 | Tech-debt register | `Architecture/530_technical_debt_refactoring_roadmap.md` |
 | MCP mount + namespace propagation | `ADRs/09_mcp_http_mount_and_namespace_propagation.md` (see `ADRs/` for LanceDB, embedder, reranker, router, telemetry) |
+| Shared LLM client, collection descriptions | `ADRs/19_shared_llm_client_and_provider_based_collection_descriptions.md` |
 | Graph operations, community rebuilds | `OperatorGuide/60_graph_operations.md`, `UserManual/65_graph_search.md` |
 | Config reference | `UserManual/30_configuration.md`, `archon-search.toml.example` |
 | Roadmap, planned work | `Documentation/Backlog/03_world_class_roadmap.md`, `Documentation/Backlog/` |
@@ -128,23 +85,12 @@ Start here: `Architecture/990_documentation_index_and_contribution_guide.md` (in
 
 ## TypeSpec contracts
 
-`tsp_contract/` holds all `.tsp` contract files and their generated `openapi.yaml`. When designing a new
-API surface or integration seam, save the `.tsp` there, and the compiled output (`tsp compile .`) beside
-it. Related planning docs (brief, tasks, team-plan) live alongside.
+`tsp_contract/` holds all `.tsp` contract files and their generated `openapi.yaml`. When designing a new API surface or integration seam, save the `.tsp` there, and the compiled output (`tsp compile .`) beside it. Related planning docs (brief, tasks, team-plan) live alongside.
 
 ## Memory and learning
 
-**Before any task:** read `learnings.md` in full and apply it — the "What Has Worked" patterns, and the
-"What Has Failed" ones to avoid. Note which entries you act on.
+**Before any task:** read `learnings.md` in full and apply it — the "What Has Worked" patterns, and the "What Has Failed" ones to avoid. Note which entries you act on.
 
-**After any task:** update `learnings.md`. Increment `(×N)` and refresh the date on every entry you acted
-on. New entries start at `(×1)`, format `**[Date] (×N) — [Task type]**`, action-first and project-specific
-("Avoid relative imports in /utils — the build step resolves them incorrectly", not "be careful with
-imports"). Skip adding if nothing new arose, but still increment what you used. Never add general best
-practices or restatements of existing entries.
+**After any task:** update `learnings.md`. Increment `(×N)` and refresh the date on every entry you acted on. New entries start at `(×1)`, format `**[Date] (×N) — [Task type]**`, action-first and project-specific ("Avoid relative imports in /utils — the build step resolves them incorrectly", not "be careful with imports"). Skip adding if nothing new arose, but still increment what you used. Never add general best practices or restatements of existing entries.
 
-**Hard caps, non-negotiable: under 30 lines AND under 256 chars per line.** Compact before adding if
-either is breached: merge same-theme entries, compress to a single bullet, delete what is stale or now
-enforced by a code guard, a test, or this file. Only evict when compression is not enough — lowest `N`
-first, ties broken by oldest date. Full detail for compacted entries lives in `learnings-archive.md`
-(grep it, never read it whole).
+**Hard caps, non-negotiable: under 30 lines AND under 256 chars per line.** Compact before adding if either is breached: merge same-theme entries, compress to a single bullet, delete what is stale or now enforced by a code guard, a test, or this file. Only evict when compression is not enough — lowest `N` first, ties broken by oldest date. Full detail for compacted entries lives in `learnings-archive.md` (grep it, never read it whole).
