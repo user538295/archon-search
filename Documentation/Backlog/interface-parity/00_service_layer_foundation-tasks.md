@@ -200,7 +200,7 @@ flowchart LR
         - #e2e_test — `test_status_with_server_shows_http_telemetry` — docker module (`-o addopts=`): `status` live against a server (and `test_maintenance_run_exits_0` for `maintenance run`)
 
 ### Phase 5 · Fail the build on a layer-contract violation
-- [ ] **BE-7** — Add `archon_search/services` to the guarded directories of `tests/test_no_wire_str_exc.py` (now that the directory exists) and add a check that every guarded directory exists and yields Python files, because a missing or misspelled entry otherwise scans nothing and passes #backend-role
+- [x] **BE-7** — Add `archon_search/services` to the guarded directories of `tests/test_no_wire_str_exc.py` (now that the directory exists) and add a check that every guarded directory exists and yields Python files, because a missing or misspelled entry otherwise scans nothing and passes #backend-role
     - — · 1.0h
     - needs BE-3, BE-5, BE-6 · completes S10
     - Tests

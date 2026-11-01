@@ -1,4 +1,4 @@
-"""CI guard: no new ``str(exc)`` of a caught exception in ``server/``, ``jobs/`` or a wire-feeding module.
+"""CI guard: no new ``str(exc)`` of a caught exception in ``server/``, ``jobs/``, ``services/`` or a wire-feeding module.
 
 CLAUDE.md hard invariant: never put ``str(exc)`` in a wire-facing ``detail`` or job
 ``error`` field for a caught exception whose message embeds internals. Inside an
@@ -8,7 +8,7 @@ CLAUDE.md hard invariant: never put ``str(exc)`` in a wire-facing ``detail`` or 
 ``JSONResponse`` detail, a job ``error=``, or a local / helper that later reaches one.
 In every guarded module the log is the only sanctioned destination for raw exception text.
 
-:data:`_GUARDED_FILES` extends the scan to the modules outside ``server/`` and ``jobs/``
+:data:`_GUARDED_FILES` extends the scan to the modules outside ``server/``, ``jobs/`` and ``services/``
 whose text is copied verbatim onto the wire: ``sync.py`` (``SyncResult.errors`` -> ``POST /sync``
 job result; ``CollectionProgress.error`` -> ``GET /status`` / ``GET /indexing-state``),
 ``pipeline.py`` and ``parser.py`` (``IngestResult.error``, built from ``ParseError.detail`` ->
@@ -48,7 +48,7 @@ from typing import NamedTuple
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_GUARDED_DIRS = ("archon_search/server", "archon_search/jobs")
+_GUARDED_DIRS = ("archon_search/server", "archon_search/jobs", "archon_search/services")
 _GUARDED_FILES = (
     "archon_search/sync.py",
     "archon_search/pipeline.py",
@@ -268,6 +268,13 @@ def test_no_new_str_exc_of_a_caught_exception() -> None:
 def test_every_allowlist_entry_still_matches() -> None:
     stale = _ALLOWLIST - {f.key for f in _scan_guarded()}
     assert not stale, f"allowlist entries no longer match any site — remove them: {sorted(stale)}"
+
+
+def test_every_guarded_directory_exists_and_holds_python_files() -> None:
+    """Positive control: a missing or misspelled entry would scan nothing and pass silently."""
+    empty = [d for d in _GUARDED_DIRS if not any((_REPO_ROOT / d).rglob("*.py"))]
+    assert not empty, f"guarded directories that do not exist or hold no Python files: {empty}"
+    assert any(p.parent.name == "services" for p in _guarded_paths()), "services/ files must feed the scan"
 
 
 # ---------------------------------------------------------------------------
