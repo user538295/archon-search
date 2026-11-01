@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from archon_search.collection_meta import (
     CollectionMeta,
     DescriptionStatus,
+    DescriptionStoredStatus,
     visible_description_status,
 )
 from archon_search.config import SearchConfig
@@ -55,8 +56,8 @@ class _FakeOverlay:
     def __init__(self, in_flight: set[str]) -> None:
         self._in_flight = in_flight
 
-    def overlay_status(self, meta: CollectionMeta) -> DescriptionStatus | None:
-        return "pending" if meta.name in self._in_flight else meta.description_status
+    def overlay_status(self, collection: str, stored: DescriptionStoredStatus | None) -> DescriptionStatus | None:
+        return "pending" if collection in self._in_flight else stored
 
 
 def _meta(name: str = "docs", *, source: str | None = "generated", status: str | None = "ok") -> CollectionMeta:

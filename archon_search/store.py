@@ -593,6 +593,10 @@ class SearchStore:
         # Collections an MCP ingest or a sync (startup, POST /sync, watcher) is writing, with the number of writers each
         # (``collection_writer``).
         self._active_writers: dict[str, int] = {}
+        # How often the description state of a collection changed in this process (``description_version``): bumped by
+        # every guarded description write that lands and by a drop or a meta-row delete, never reset, so a memory taken
+        # at one version cannot match again later. A name enters the map the first time one of those happens.
+        self._description_versions: dict[str, int] = {}
         self._ping_cache: tuple[float, bool] | None = None
         from archon_search.config import SearchConfig as _SearchConfig
         self._config: _SearchConfig = config if config is not None else _SearchConfig()
@@ -604,6 +608,18 @@ class SearchStore:
             lock = asyncio.Lock()
             self._collection_locks[collection] = lock
         return lock
+
+    def description_version(self, collection: str) -> int:
+        """How many times the description state of *collection* changed in this process: a guarded description write
+        landed (set, clear, import, generated or recorded failure), or the collection was dropped or lost its meta row.
+
+        Zero until the first change; it only grows, so a reader that remembered a version knows the row moved on when the
+        number differs. In memory only (a restart starts from zero, as does everything that remembers a version).
+        """
+        return self._description_versions.get(collection, 0)
+
+    def _bump_description_version(self, collection: str) -> None:
+        self._description_versions[collection] = self.description_version(collection) + 1
 
     def discard_lock(self, collection: str) -> None:
         """Forget *collection*'s lock entry (no leak for a dropped collection); never one still in use.
@@ -962,6 +978,7 @@ class SearchStore:
             if name not in names:
                 raise KeyError(name)
             await db.drop_table(name)
+            self._bump_description_version(name)
         finally:
             if lock is not None:
                 lock.release()
@@ -1164,6 +1181,7 @@ class SearchStore:
         table = await db.open_table(_META_TABLE)
         # name validated by _COLLECTION_RE, namespace by _validate_namespace; _where_eq is defense-in-depth
         await table.delete(_where_eq("name", name) + " AND " + _where_eq("namespace", namespace))
+        self._bump_description_version(name)
 
     async def get_all_collections_meta(self) -> list[CollectionMeta]:
         """Return every collection's metadata row across all namespaces.
@@ -2086,6 +2104,7 @@ class SearchStore:
                 if refusal is not None:
                     return refusal
             await self._do_write_meta_unlocked(db, collection, fields.apply_to(row))
+            self._bump_description_version(collection)
             return DescriptionWriteOutcome.WRITTEN
         finally:
             lock.release()

@@ -5,9 +5,10 @@ store; only the model host is faked (``tests/_fake_model_server.py``). The colle
 loop (``client.portal``) past the shortened ``INGEST_LOCK_TIMEOUT_S``, exactly as a long ingest or reindex holds it, so the
 generation's model call finishes, its guarded write times out, and so does the recording of the failure, which needs the
 same lock. What a consumer reads is asserted, not the lifecycle's internals: the status is ``failed`` through REST, MCP and
-``collection info`` while the store holds the old row, the earlier description is kept, the log holds one WARNING and no
-description text, nothing stays ``pending``, and the next ingest or describe regenerates once the lock is free. The set
-route answers 503 ``store_busy`` and leaves the stored description alone.
+``collection info`` while the store holds the old row, the earlier description is kept, the lifecycle logs one WARNING (the
+store adds one lock-timeout line for each of the two refused writes) and no description text, nothing stays ``pending``,
+and the next ingest or describe regenerates once the lock is free. A manual set and a clear in between end the memory of
+the failure for good. The set route answers 503 ``store_busy`` and leaves the stored description alone.
 
 Run with:
     uv run pytest tests/integration/test_lcd_gap6_lock_timeout_e2e.py --no-cov -q
@@ -67,6 +68,8 @@ _MANUAL_TEXT = "Hand written note set while the collection was busy."
 _LIFECYCLE_LOGGER = "archon_search.description_lifecycle"
 _SERVER_LOGGER_PREFIX = "archon_search."
 _DESCRIBE_JOB_TYPE = "description"
+_STORE_LOGGER = "archon_search.store"
+_REFUSED_WRITES = 2  # the generated text, then the record of the failure: each waits out the lock and times out
 _OUTCOME_FAILED = "failed"
 _OUTCOME_GENERATED = "generated"
 _ACTIVE_JOB_STATUSES = frozenset({JobStatus.PENDING.value, JobStatus.QUEUED.value, JobStatus.RUNNING.value})
@@ -208,6 +211,26 @@ def _lifecycle_warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRec
     return [record for record in caplog.records if record.levelno >= logging.WARNING and record.name == _LIFECYCLE_LOGGER]
 
 
+def _store_lock_warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.WARNING and record.name == _STORE_LOGGER and "lock timeout" in record.getMessage()
+    ]
+
+
+def _description_fields(row: Any) -> tuple[Any, ...]:
+    """Every stored field a description write may change."""
+    return (
+        row.description,
+        row.description_source,
+        row.description_status,
+        row.last_described,
+        row.described_at_doc_count,
+        row.description_embedding,
+    )
+
+
 def _logged_by_the_server(caplog: pytest.LogCaptureFixture) -> str:
     """Everything the server's own loggers wrote (the MCP library's DEBUG dump of a tool answer is not the server's)."""
     return " ".join(
@@ -260,6 +283,7 @@ def test_e2e_generation_that_meets_a_busy_collection_reads_failed_and_the_next_i
         _ingest(client, key, corpus)
         _wait_for(lambda: len(server.requests_to(_CHAT_PATH)) >= 2, "the second model call")
         assert _state(client, key)[2] == _PENDING
+        before = _description_fields(_stored_row(client))
 
         with _collection_busy(client, monkeypatch):
             server.release()
@@ -270,8 +294,7 @@ def test_e2e_generation_that_meets_a_busy_collection_reads_failed_and_the_next_i
             assert _mcp_status(client, key) == DESCRIPTION_STATUS_FAILED
             assert _cli_status(cli) == DESCRIPTION_STATUS_FAILED
 
-        stored = _stored_row(client)  # the write was refused, so the store holds the row it held before the run
-        assert (stored.description, stored.description_source) == (_FIRST_REPLY, DESCRIPTION_SOURCE_GENERATED)
+        assert _description_fields(_stored_row(client)) == before  # the write was refused: the store holds what it held
         assert _state(client, key) == (_FIRST_REPLY, DESCRIPTION_SOURCE_GENERATED, DESCRIPTION_STATUS_FAILED)
 
         server.reply_text = _THIRD_REPLY
@@ -284,9 +307,44 @@ def test_e2e_generation_that_meets_a_busy_collection_reads_failed_and_the_next_i
 
     [warning] = _lifecycle_warnings(caplog)
     assert _COLLECTION in warning.getMessage()
+    assert len(_store_lock_warnings(caplog)) == _REFUSED_WRITES  # the generated text, then the failure record
     logged = _logged_by_the_server(caplog)
     for text in (_SECOND_REPLY, _FIRST_REPLY, _THIRD_REPLY):
         assert text not in logged, "no description text reaches the log"
+
+
+def test_e2e_a_manual_set_and_a_clear_after_an_unrecorded_failure_leave_no_failed_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A collection that has no description yet and whose first generation failed on the busy collection reads ``failed``.
+    The operator sets a description and clears it again: the cleared row is as new (no status), and the failure the
+    set and the clear made obsolete does not come back, whichever surface reads."""
+    corpus = tmp_path / "corpus"
+    with (
+        FakeModelServer(reply_text=_SECOND_REPLY, hold_chat=True) as server,
+        _booted(tmp_path, monkeypatch, _description_toml(server.base_url)) as (client, key),
+        cli_against_app(client, key, monkeypatch) as cli,
+    ):
+        _write_documents(corpus, _SEEDED_DOCUMENTS)
+        _ingest(client, key, corpus)
+        _wait_for(lambda: len(server.requests_to(_CHAT_PATH)) >= 1, "the first model call")
+        with _collection_busy(client, monkeypatch):
+            server.release()
+            _await_settled(client)
+            assert _state(client, key) == ("", None, DESCRIPTION_STATUS_FAILED)
+
+        put = client.put(f"/collections/{_COLLECTION}/description", json={"description": _MANUAL_TEXT}, headers=_headers(key))
+        assert put.status_code == 200, put.text
+        assert _state(client, key) == (_MANUAL_TEXT, DESCRIPTION_SOURCE_MANUAL, DESCRIPTION_STATUS_OK)
+        cleared = client.delete(f"/collections/{_COLLECTION}/description", headers=_headers(key))
+        assert cleared.status_code == 200, cleared.text
+
+        assert _state(client, key) == ("", None, None)
+        assert _listed_status(client, key) is None
+        assert _mcp_status(client, key) is None
+        info = cli.invoke(collection_command, ["info", _COLLECTION])
+        assert info.exit_code == 0, info.output
+        assert "description_status" not in info.output  # an empty status is left out
 
 
 def test_e2e_describe_job_on_a_busy_collection_ends_done_with_outcome_failed_and_a_later_describe_recovers(
@@ -363,3 +421,4 @@ def test_e2e_manual_set_on_a_busy_collection_is_503_store_busy_and_stores_nothin
         )
         assert landed.status_code == 200, landed.text
         assert _state(client, key) == (_MANUAL_TEXT, DESCRIPTION_SOURCE_MANUAL, DESCRIPTION_STATUS_OK)
+

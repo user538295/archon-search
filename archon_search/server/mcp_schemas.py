@@ -183,9 +183,9 @@ class _CollectionPublicFields(BaseModel):
     are excluded. ``active_embedding_model`` is renamed to ``embedding_model``.
 
     ``description`` reaches an agent verbatim and is built from chunk text, so the schema labels it as text derived
-    from document content. ``description_status`` is the status a reader sees: the stored value, or ``pending``
-    while a generation is in flight (never stored, and never for a manual description); *overlay* is the description
-    lifecycle that supplies it.
+    from document content. ``description_status`` is the status a reader sees: the stored value, or the lifecycle's
+    overlay of it: ``pending`` while a generation is in flight, ``failed`` for a failed one the store could not record
+    (never stored, and never for a manual description); *overlay* is the description lifecycle that supplies it.
     """
 
     model_config = ConfigDict(extra="forbid")

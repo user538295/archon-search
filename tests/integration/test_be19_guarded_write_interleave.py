@@ -171,3 +171,65 @@ async def test_lock_timeout_is_reported_not_swallowed(store: SearchStore, monkey
 
     retry = await store.write_description(_NAME, _NAMESPACE, _generated_fields(), UNCONDITIONAL)
     assert retry is DescriptionWriteOutcome.WRITTEN, "the timed-out write must not leave the lock or the row broken"
+
+
+_EMBEDDING_DIM = 4
+_OTHER_NAME = "other"
+
+
+async def test_the_description_version_moves_only_when_a_description_write_lands(
+    store: SearchStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reader that remembered a version learns that the description state changed: a landed set (and so a clear, an
+    import, a generated text or a recorded failure) moves it; a lock timeout, a refusal, a missing collection and another
+    collection's write do not."""
+    assert store.description_version(_NAME) == 0
+    monkeypatch.setattr("archon_search.store.INGEST_LOCK_TIMEOUT_S", _SHORT_LOCK_TIMEOUT_S)
+    lock = store.lock_for(_NAME)
+    await lock.acquire()
+    try:
+        assert await store.write_description(_NAME, _NAMESPACE, _manual_fields(), UNCONDITIONAL) is (
+            DescriptionWriteOutcome.LOCK_TIMEOUT
+        )
+    finally:
+        lock.release()
+    assert store.description_version(_NAME) == 0
+
+    assert await store.write_description(_NAME, _NAMESPACE, _manual_fields(), UNCONDITIONAL) is (
+        DescriptionWriteOutcome.WRITTEN
+    )
+    assert store.description_version(_NAME) == 1
+
+    stale = ExpectedState(description=_OLD_TEXT, source="generated", last_described=_STAMP, status="ok")
+    assert await store.write_description(_NAME, _NAMESPACE, _generated_fields(), stale) is (
+        DescriptionWriteOutcome.REFUSED_MANUAL
+    )
+    assert await store.write_description(_OTHER_NAME, _NAMESPACE, _generated_fields(), UNCONDITIONAL) is (
+        DescriptionWriteOutcome.COLLECTION_MISSING
+    )
+    assert (store.description_version(_NAME), store.description_version(_OTHER_NAME)) == (1, 0)
+
+    cleared = DescriptionFields(
+        description=FieldChange.clear(),
+        source=FieldChange.clear(),
+        status=FieldChange.clear(),
+        last_described=FieldChange.clear(),
+        described_at_doc_count=FieldChange.clear(),
+        description_embedding=FieldChange.clear(),
+    )
+    assert await store.write_description(_NAME, _NAMESPACE, cleared, UNCONDITIONAL) is DescriptionWriteOutcome.WRITTEN
+    assert store.description_version(_NAME) == 2
+
+
+async def test_dropping_a_collection_or_deleting_its_meta_row_moves_the_description_version(store: SearchStore) -> None:
+    """A collection that is deleted and created again under the same name is a new collection: nothing remembered about
+    the old one may apply to it."""
+    await store.ensure_collection(_NAME, _EMBEDDING_DIM)
+    await store.ensure_collection(_OTHER_NAME, _EMBEDDING_DIM)
+
+    await store.drop_collection(_NAME, namespace=_NAMESPACE)
+    assert store.description_version(_NAME) == 1
+
+    await store.delete_collection_meta(_NAME, _NAMESPACE)
+    assert store.description_version(_NAME) == 2
+    assert store.description_version(_OTHER_NAME) == 0

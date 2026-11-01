@@ -723,21 +723,21 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
 
 
 async def _build_collection_detail(
-    request: Request, name: str, meta: CollectionMeta | None, resolved: str, *, overlay_pending: bool = True
+    request: Request, name: str, meta: CollectionMeta | None, resolved: str, *, lifecycle_overlay: bool = True
 ) -> CollectionDetail:
     """The one ``CollectionDetail`` builder: GET /collections/{name}, the PATCH response and the PUT and DELETE
     ``/description`` responses share it.
 
     *meta* is ``None`` for a configured collection that has no meta row yet (and when the store is absent); every
-    count is best-effort and falls back to 0. ``description_status`` carries the lifecycle's ``pending`` overlay while a
-    generation is in flight (never for a manual description) and the stored status otherwise, which is all it carries
-    when *overlay_pending* is false (C6).
+    count is best-effort and falls back to 0. ``description_status`` carries the lifecycle's overlay of the stored status
+    (``pending`` while a generation is in flight, ``failed`` for a failed one the store could not record; never for a
+    manual description) and the stored status otherwise, which is all it carries when *lifecycle_overlay* is false (C6).
     """
     config: SearchConfig = request.app.state.config
     state_store = request.app.state.state_store
     ns: str = request.state.namespace
     search_store = getattr(request.app.state, "search_store", None)
-    description_lifecycle = getattr(request.app.state, "description_lifecycle", None) if overlay_pending else None
+    description_lifecycle = getattr(request.app.state, "description_lifecycle", None) if lifecycle_overlay else None
 
     # Pull extra detail from state if available
     last_indexed: str | None = None
@@ -1054,7 +1054,7 @@ async def _apply_description_change(
     # The response says what the write stored: a generation that began earlier is refused at its own write, so it must
     # not make the cleared (or manual) collection read ``pending``.
     return await _build_collection_detail(
-        request, name, changed.meta, _all_collection_paths(config).get(name, ""), overlay_pending=False
+        request, name, changed.meta, _all_collection_paths(config).get(name, ""), lifecycle_overlay=False
     )
 
 
