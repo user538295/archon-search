@@ -8,8 +8,9 @@ from typing import Literal, Protocol, get_args
 from archon_search.constants import DEFAULT_NAMESPACE
 
 # C3: where a description came from, and the outcome of the last attempt to write one. ``pending``, and a ``failed`` the
-# store could not record (its collection lock stayed busy, or it errored), are memory-only overlays owned by the
-# description lifecycle and applied at the API edge: the store never holds or reports them.
+# store could not record (its collection lock stayed busy, it errored, or the run broke before it could record), are
+# memory-only overlays owned by the description lifecycle and applied at the API edge: the store never holds or reports
+# them.
 DescriptionSource = Literal["generated", "manual"]
 DescriptionStoredStatus = Literal["ok", "failed"]
 DESCRIPTION_SOURCE_GENERATED: DescriptionSource = "generated"
@@ -21,7 +22,7 @@ DESCRIPTION_STORED_STATUSES: tuple[str, ...] = get_args(DescriptionStoredStatus)
 
 #: What a reader sees: the stored status with the lifecycle's memory-only states laid over it (never over a manual
 #: description): ``pending`` while a generation is in flight, and ``failed`` for a failed generation the store could not
-#: record because its collection lock stayed busy or it errored.
+#: record (its collection lock stayed busy, it errored, or the run broke before it could record).
 type DescriptionStatus = Literal["ok", "failed", "pending"]
 DESCRIPTION_STATUS_PENDING: DescriptionStatus = "pending"
 

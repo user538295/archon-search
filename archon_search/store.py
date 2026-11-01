@@ -594,8 +594,9 @@ class SearchStore:
         # (``collection_writer``).
         self._active_writers: dict[str, int] = {}
         # How often the description state of a collection changed in this process (``description_version``): bumped by
-        # every guarded description write that lands and by a drop or a meta-row delete, never reset, so a memory taken
-        # at one version cannot match again later. A name enters the map the first time one of those happens.
+        # every guarded description write once its merge landed and by the delete of a meta row, never reset, so a memory
+        # taken at one version cannot match again later. A name enters the map the first time one of those happens: one
+        # small integer per collection name the process has seen change, a number the name space bounds.
         self._description_versions: dict[str, int] = {}
         self._ping_cache: tuple[float, bool] | None = None
         from archon_search.config import SearchConfig as _SearchConfig
@@ -610,8 +611,11 @@ class SearchStore:
         return lock
 
     def description_version(self, collection: str) -> int:
-        """How many times the description state of *collection* changed in this process: a guarded description write
-        landed (set, clear, import, generated or recorded failure), or the collection was dropped or lost its meta row.
+        """How many times the description state of *collection* (its text, source and status: what a reader of the
+        collection's ``description_status`` sees) changed in this process: a guarded description write landed (set, clear,
+        import, generated text or recorded failure), or the collection's meta row was deleted. A vector-only change
+        (reindex promotion, recompute repair) does not count; a table drop alone does not either, because the meta row,
+        and with it the description state, survives it.
 
         Zero until the first change; it only grows, so a reader that remembered a version knows the row moved on when the
         number differs. In memory only (a restart starts from zero, as does everything that remembers a version).
@@ -978,7 +982,6 @@ class SearchStore:
             if name not in names:
                 raise KeyError(name)
             await db.drop_table(name)
-            self._bump_description_version(name)
         finally:
             if lock is not None:
                 lock.release()
@@ -1180,7 +1183,10 @@ class SearchStore:
             return
         table = await db.open_table(_META_TABLE)
         # name validated by _COLLECTION_RE, namespace by _validate_namespace; _where_eq is defense-in-depth
-        await table.delete(_where_eq("name", name) + " AND " + _where_eq("namespace", namespace))
+        row_filter = _where_eq("name", name) + " AND " + _where_eq("namespace", namespace)
+        if not await table.count_rows(row_filter):
+            return  # nothing to delete: the description state did not change (and a delete would commit a table version)
+        await table.delete(row_filter)
         self._bump_description_version(name)
 
     async def get_all_collections_meta(self) -> list[CollectionMeta]:
@@ -2103,8 +2109,9 @@ class SearchStore:
                 refusal = guard.refusal(row)
                 if refusal is not None:
                     return refusal
-            await self._do_write_meta_unlocked(db, collection, fields.apply_to(row))
-            self._bump_description_version(collection)
+            await self._do_write_meta_unlocked(
+                db, collection, fields.apply_to(row), on_merged=lambda: self._bump_description_version(collection)
+            )
             return DescriptionWriteOutcome.WRITTEN
         finally:
             lock.release()
@@ -2165,8 +2172,15 @@ class SearchStore:
             )
 
     async def _do_write_meta_unlocked(
-        self, db: lancedb.db.AsyncConnection, collection: str, meta: CollectionMeta
+        self,
+        db: lancedb.db.AsyncConnection,
+        collection: str,
+        meta: CollectionMeta,
+        *,
+        on_merged: Callable[[], None] | None = None,
     ) -> None:
+        """Write *meta* (one merge_insert, then the removal of a legacy NULL-namespace twin). *on_merged* runs right after
+        the merge, so a caller counts the write even when the cleanup after it raises."""
         # Caller must hold lock_for(collection)
         if collection != meta.name:
             raise ValueError(f"collection {collection!r} != meta.name {meta.name!r}")
@@ -2218,6 +2232,8 @@ class SearchStore:
                 ]
             )
         )
+        if on_merged is not None:
+            on_merged()
         # Remove any legacy NULL-namespace orphan for the same collection name. The canonical
         # row was already written above, so get_collection_meta sees no gap.
         if meta.namespace == DEFAULT_NAMESPACE:

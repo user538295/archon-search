@@ -125,13 +125,14 @@ def _collection_busy(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Ite
 
     The timeout is shortened only here, so the seeding and the recovery are not exposed to it.
     """
-    monkeypatch.setattr("archon_search.store.INGEST_LOCK_TIMEOUT_S", _SHORT_LOCK_TIMEOUT_S)
-    lock = client.portal.call(client.app.state.search_store.lock_for, _COLLECTION)  # type: ignore[union-attr]
-    client.portal.call(lock.acquire)  # type: ignore[union-attr]
-    try:
-        yield
-    finally:
-        client.portal.call(lock.release)  # type: ignore[union-attr]
+    with monkeypatch.context() as short_wait:  # undone when the block ends: the recovery runs with the real wait
+        short_wait.setattr("archon_search.store.INGEST_LOCK_TIMEOUT_S", _SHORT_LOCK_TIMEOUT_S)
+        lock = client.portal.call(client.app.state.search_store.lock_for, _COLLECTION)  # type: ignore[union-attr]
+        client.portal.call(lock.acquire)  # type: ignore[union-attr]
+        try:
+            yield
+        finally:
+            client.portal.call(lock.release)  # type: ignore[union-attr]
 
 
 def _headers(api_key: str) -> dict[str, str]:

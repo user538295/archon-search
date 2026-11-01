@@ -28,12 +28,12 @@ generation started from. Recording needs the collection lock; when the lock stay
 run breaks before it can record anything (a row that cannot be read once the slot is held), the failure is not stored and
 the service remembers it instead, with the store's ``description_version`` read before the row: the collection reads
 ``failed`` through :meth:`overlay_status` for as long as that version is current. Every change of the collection's
-description state (a manual set, a clear, an import, any later guarded write, a drop or a meta-row delete) bumps the
-version in the store and ends the memory; so does a newer unstored failure of the collection, which replaces it. The
-state a reader sees is therefore never the stored ``ok`` of a run that failed, and never a ``failed`` about a row that
-was changed or recreated since. The store itself is not touched: a restart reads the old row, and the next ingest,
-describe or backfill asks again. Nothing in this module logs an excerpt, a prompt, a description or an exception
-message; a failure is logged by collection name and the exception's type.
+description text, source or status (a manual set, a clear, an import, any later guarded write) and the delete of its meta
+row (a collection deleted and created again) bumps the version in the store and ends the memory; so does a newer unstored
+failure of the collection, which replaces it. The state a reader sees is therefore never the stored ``ok`` of a run that
+failed, and never a ``failed`` about a row that was changed or recreated since. The store itself is not touched: a restart
+reads the old row, and the next ingest, describe or backfill asks again. Nothing in this module logs an excerpt, a
+prompt, a description or an exception message; a failure is logged by collection name and the exception's type.
 
 Shutdown is two calls: :meth:`close` first, so a request that races it is refused, then :meth:`drain`, which cancels and
 awaits the tasks and has no timeout of its own (the caller that hosts the service bounds it).
@@ -176,7 +176,7 @@ class LastAttempt:
 
 class LifecycleStore(Protocol):
     """What the lifecycle reads of the store: the row (its source, counts and baseline) and the version of its description
-    state (``SearchStore.description_version``, which changes whenever that state does)."""
+    state (``SearchStore.description_version``, which changes whenever the row's description text, source or status does)."""
 
     async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> CollectionMeta | None: ...
 
@@ -345,7 +345,8 @@ class DescriptionLifecycle:
         #: Collections with a request waiting or running: the single-flight map and the ``pending`` overlay.
         self._in_flight: set[str] = set()
         #: Collection -> the ``description_version`` a failed generation started from, for a failure the store could not
-        #: record (see the module docstring); only entries whose version is still current are kept.
+        #: record (see the module docstring). An entry is ignored by readers once its version is no longer current and is
+        #: dropped when the next unstored failure is remembered.
         self._unstored_failures: dict[str, int] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self._closed = False
@@ -587,8 +588,8 @@ class DescriptionLifecycle:
 
     def _remember_unstored_failure(self, job: _Job) -> None:
         """Remember that *job*'s generation failed and the store did not take it (:meth:`overlay_status` reads it back).
-        Entries a later change of their collection made stale are forgotten here, so the map holds only what readers
-        still see."""
+        Entries a later change of their collection made stale are dropped here (readers already ignore them), so the map
+        holds only what readers can still see as of the last unstored failure."""
         current = {
             name: version
             for name, version in self._unstored_failures.items()

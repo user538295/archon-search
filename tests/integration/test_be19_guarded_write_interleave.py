@@ -175,6 +175,7 @@ async def test_lock_timeout_is_reported_not_swallowed(store: SearchStore, monkey
 
 _EMBEDDING_DIM = 4
 _OTHER_NAME = "other"
+_FOREIGN_NAMESPACE = "team-foreign"
 
 
 async def test_the_description_version_moves_only_when_a_description_write_lands(
@@ -221,15 +222,38 @@ async def test_the_description_version_moves_only_when_a_description_write_lands
     assert store.description_version(_NAME) == 2
 
 
-async def test_dropping_a_collection_or_deleting_its_meta_row_moves_the_description_version(store: SearchStore) -> None:
-    """A collection that is deleted and created again under the same name is a new collection: nothing remembered about
-    the old one may apply to it."""
+async def test_only_deleting_a_meta_row_moves_the_description_version_not_a_table_drop(store: SearchStore) -> None:
+    """A collection whose meta row is deleted and created again under the same name is a new collection: nothing
+    remembered about the old one may apply to it. A table drop alone leaves the meta row (and its description state)
+    in place, and a delete that removes no row (absent row, another namespace) changes nothing."""
     await store.ensure_collection(_NAME, _EMBEDDING_DIM)
-    await store.ensure_collection(_OTHER_NAME, _EMBEDDING_DIM)
 
     await store.drop_collection(_NAME, namespace=_NAMESPACE)
-    assert store.description_version(_NAME) == 1
+    assert store.description_version(_NAME) == 0
+
+    await store.delete_collection_meta(_OTHER_NAME, _NAMESPACE)  # no such row
+    await store.delete_collection_meta(_NAME, _FOREIGN_NAMESPACE)  # another namespace's name
+    assert (store.description_version(_NAME), store.description_version(_OTHER_NAME)) == (0, 0)
 
     await store.delete_collection_meta(_NAME, _NAMESPACE)
-    assert store.description_version(_NAME) == 2
-    assert store.description_version(_OTHER_NAME) == 0
+    assert store.description_version(_NAME) == 1
+    await store.delete_collection_meta(_NAME, _NAMESPACE)  # already gone
+    assert store.description_version(_NAME) == 1
+
+
+async def test_a_write_whose_cleanup_raised_after_the_merge_is_still_counted(
+    store: SearchStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The version moves when the merge landed, not when the whole write returned: a reader must not keep a memory of
+    the row as it was when the new text is already stored."""
+
+    async def failing_cleanup(table: object, name: str) -> None:
+        raise OSError("legacy row cleanup failed")
+
+    monkeypatch.setattr("archon_search.store._delete_legacy_null_namespace_meta", failing_cleanup)
+
+    with pytest.raises(OSError, match="cleanup failed"):
+        await store.write_description(_NAME, _NAMESPACE, _manual_fields(), UNCONDITIONAL)
+
+    assert (await _stored(store)).description == _MANUAL_TEXT
+    assert store.description_version(_NAME) == 1

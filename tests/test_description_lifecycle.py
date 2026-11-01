@@ -116,7 +116,7 @@ class FakeStore:
         return self.versions.get(collection, 0)
 
     def bump(self, collection: str) -> None:
-        """What the real store does whenever the description state of a collection changes (a landed write, a drop)."""
+        """What the real store does whenever the description state of a collection changes (a landed write, a meta-row delete)."""
         self.versions[collection] = self.description_version(collection) + 1
 
     async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> CollectionMeta | None:
@@ -867,9 +867,9 @@ async def test_a_failure_the_store_cannot_record_still_reads_failed(
 
 
 async def test_an_unrecorded_failure_ends_when_the_description_state_changes(rig: Rig) -> None:
-    """A manual set, a clear, an import, a regeneration, a drop of the collection (and so its recreation): each bumps the
-    store's description version, which ends the memory for good, whatever the row reads afterwards. Another collection's
-    change does not."""
+    """A manual set, a clear, an import, a regeneration, the delete of the meta row (a collection deleted and created
+    again): each bumps the store's description version, which ends the memory for good, whatever the row reads
+    afterwards. Another collection's change does not."""
     await _fail_without_being_able_to_record(rig, _save_meets_a_busy_collection, _meta())
     rig.store.bump("other")
     assert rig.lifecycle.overlay_status(_COLLECTION, "ok") == "failed"
@@ -995,6 +995,34 @@ async def test_the_memory_holds_only_failures_that_readers_can_still_see(rig: Ri
 
     assert rig.lifecycle.overlay_status("another", "ok") == "failed"
     assert list(rig.lifecycle._unstored_failures) == ["another"]
+
+
+async def test_two_collections_with_an_unrecorded_failure_each_still_read_failed(rig: Rig) -> None:
+    """Remembering a second failure keeps the first one while it is still current."""
+    rig.store.rows["another"] = _meta("another")
+    await _fail_without_being_able_to_record(rig, _save_meets_a_busy_collection, _meta())
+    await (await rig.request("another")).settled
+
+    assert rig.lifecycle.overlay_status(_COLLECTION, "ok") == "failed"
+    assert rig.lifecycle.overlay_status("another", "ok") == "failed"
+    assert sorted(rig.lifecycle._unstored_failures) == sorted([_COLLECTION, "another"])
+
+
+async def test_a_change_that_lands_while_the_request_waits_for_the_slot_is_part_of_the_row_the_run_reads(rig: Rig) -> None:
+    """The version is read once the slot is held, not when the request is accepted: a set or clear that lands while the
+    request is queued is already in the row the run reads, so the run's failure describes that row and stays visible."""
+    rig.store.rows[_COLLECTION] = _meta()
+    _save_meets_a_busy_collection(rig)
+    holder = await rig.hold_the_slot()
+    waiting = await rig.request(_COLLECTION)
+    assert waiting.outcome is RequestOutcome.ACCEPTED
+    rig.store.bump(_COLLECTION)
+
+    rig.generator.gate("holder").set()
+    await holder.settled
+
+    assert (await waiting.settled).result is GenerationResult.FAILED
+    assert rig.lifecycle.overlay_status(_COLLECTION, "ok") == "failed"
 
 
 async def test_generate_now_reports_failed_when_the_failure_could_not_be_stored(rig: Rig) -> None:
