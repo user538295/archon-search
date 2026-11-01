@@ -293,6 +293,8 @@ def test_backfill_waits_for_a_slow_probe(
 def test_backfill_skipped_with_one_info_when_startup_sync_suppressed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tokens: _Tokens, corpus: Path, seeded: None, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """S86: the backfill is skipped with one INFO and no generation call is made; the content-free probe still runs once
+    (reachability health does not depend on the backfill or on the sync state)."""
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / REAL_APP_DATA_SUBDIR))
     write_sync_suppressed_sentinel()
 
@@ -301,17 +303,80 @@ def test_backfill_skipped_with_one_info_when_startup_sync_suppressed(
         with _second_boot(tmp_path, monkeypatch, tokens, toml) as (client, _admin_key):
             assert client.app.state.sync_result == StartupSyncResult.SUPPRESSED
             _wait_for(_backfill_task(client).done, "the backfill task")
+            _wait_for(client.app.state._description_probe_task.done, "the probe")
             metas = _metas(client)
             reachability = client.app.state.description_reachability
 
-        assert _chat_count(server) == 0
-        assert server.requests_to(_TAGS_PATH) == []  # the probe is skipped too: no provider is called at all
+        assert _chat_count(server) == 0  # no generation call
+        probe_requests = server.requests_to(_TAGS_PATH)
+        assert len(probe_requests) == 1 and probe_requests[0].body is None  # the probe sends nothing from documents
 
-    assert reachability is None
+    assert reachability is not None and reachability.reachable is True
     assert not any(metas[name].description for name in _EMPTY_IN_ORDER)
     infos = [r for r in caplog.records if r.name == description_backfill.__name__ and r.levelno == logging.INFO]
     assert len(infos) == 1
     assert "suppressed" in infos[0].getMessage().lower()
+
+
+def test_provider_down_under_a_suppressed_sync_warns_once_and_status_reports_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tokens: _Tokens, corpus: Path, seeded: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """T-14's reported case: backfill on, sync SUPPRESSED, provider down -> one WARNING, ``/status`` reachable false, and
+    the backfill's own INFO still names the suppressed sync."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / REAL_APP_DATA_SUBDIR))
+    write_sync_suppressed_sentinel()
+
+    with FakeModelServer(reply_text=_REPLY, status_overrides={_TAGS_PATH: 503}) as server, caplog.at_level(logging.INFO):
+        toml = _toml(server.base_url, collections=[corpus])
+        with _second_boot(tmp_path, monkeypatch, tokens, toml) as (client, admin_key):
+            assert client.app.state.sync_result == StartupSyncResult.SUPPRESSED
+            _wait_for(_backfill_task(client).done, "the backfill task")
+            _wait_for(client.app.state._description_probe_task.done, "the probe")
+            status = client.get("/status", headers={"Authorization": f"Bearer {admin_key}"}).json()
+            metas = _metas(client)
+
+        assert _chat_count(server) == 0
+
+    assert status["description"]["reachable"] is False
+    assert not any(metas[name].description for name in _EMPTY_IN_ORDER)
+    warnings = [r for r in caplog.records if r.name == description_backfill.__name__ and r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "not reachable" in warnings[0].getMessage()
+    infos = [r for r in caplog.records if r.name == description_backfill.__name__ and r.levelno == logging.INFO]
+    assert len(infos) == 1 and "suppressed" in infos[0].getMessage().lower()
+
+
+def test_suppressed_backfill_info_does_not_wait_for_a_held_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tokens: _Tokens, corpus: Path, seeded: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The backfill's one INFO under a suppressed sync is logged while the probe is still in flight, and the probe then
+    finishes on its own and publishes its verdict."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / REAL_APP_DATA_SUBDIR))
+    write_sync_suppressed_sentinel()
+    probe_gate = threading.Event()
+    real_probe = description_backfill.probe_description_reachability
+
+    async def held_probe(*args: Any, **kwargs: Any) -> Any:
+        while not probe_gate.is_set():
+            await asyncio.sleep(_POLL_SECONDS)
+        return await real_probe(*args, **kwargs)
+
+    monkeypatch.setattr(description_backfill, "probe_description_reachability", held_probe)
+
+    with FakeModelServer(reply_text=_REPLY) as server, caplog.at_level(logging.INFO):
+        toml = _toml(server.base_url, collections=[corpus])
+        with _second_boot(tmp_path, monkeypatch, tokens, toml) as (client, _admin_key):
+            try:
+                _wait_for(_backfill_task(client).done, "the backfill task")
+                assert not client.app.state._description_probe_task.done()
+                assert client.app.state.description_reachability is None
+            finally:
+                probe_gate.set()
+            _wait_for(client.app.state._description_probe_task.done, "the probe")
+            assert client.app.state.description_reachability.reachable is True
+        assert server.requests_to(_CHAT_PATH) == []
+
+    infos = [r for r in caplog.records if r.name == description_backfill.__name__ and r.levelno == logging.INFO]
+    assert len(infos) == 1 and "suppressed" in infos[0].getMessage().lower()
 
 
 def test_backfill_cancelled_cleanly_at_shutdown(
@@ -362,7 +427,7 @@ def test_provider_down_boots_and_skips_backfill(
     assert len(infos) == 1  # the backfill's one skip notice
 
 
-def test_no_probe_and_no_backfill_task_when_disabled_or_backfill_off(
+def test_no_tasks_when_disabled_and_only_the_probe_when_backfill_is_off(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tokens: _Tokens, seeded: None
 ) -> None:
     toml_off_with_backfill = "[description]\nenabled = false\nbackfill_on_startup = true\n"
@@ -396,4 +461,3 @@ def test_probe_still_runs_under_a_suppressed_sync_when_backfill_is_off(
             _wait_for(client.app.state._description_probe_task.done, "the probe")
             assert client.app.state.description_reachability.reachable is True
             assert client.app.state._description_backfill_task is None
-        assert _chat_count(server) == 0

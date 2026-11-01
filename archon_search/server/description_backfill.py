@@ -7,11 +7,13 @@ refreshed). It sends no prompt and spends nothing: a cloud provider reads as rea
 or llama.cpp server when its model-list or ``/props`` endpoint answers, and ``claude_cli`` when the ``claude`` program is
 found (and only a description configured with ``claude_cli`` looks for it).
 
-The backfill loop waits for the startup sync (in whatever state it ended), for the probe and for the context-window
-resolution, is skipped for the whole run with one INFO when the sync is suppressed or the provider is not reachable, and
-otherwise asks the lifecycle for one collection at a time, across every namespace, for each collection that has no
-description. With a suppressed sync and the backfill on, no probe starts at all (S86: no provider is called); with the
-backfill off the probe runs whatever the sync did.
+The backfill loop waits for the startup sync (in whatever state it ended) and is skipped for the whole run with one INFO
+when the sync is suppressed, without waiting for the probe; otherwise it waits for the probe (skipped with one INFO when
+the provider is not reachable) and for the context-window resolution, and then asks the lifecycle for one collection at
+a time, across every namespace, for each collection that has no description. The probe is independent of the backfill
+and of the sync state (it runs whenever the feature is enabled), so an unreachable provider is one WARNING and
+``/status`` reachability even when the backfill is off or skipped; S86's "no provider is called" means no generation
+call, since the probe sends no prompt and no document text.
 """
 
 from __future__ import annotations

@@ -126,7 +126,7 @@ Implemented in `archon_search/server/routes_status.py` (`_build_search_status`) 
 |---|---|---|
 | `provider` | `str` | `[description].provider`. |
 | `key_available` | `bool` | The provider's API key is set (`anthropic`, `openai`); for `claude_cli` the `claude` program is on `PATH`; `true` for `ollama` and `llama_cpp`, which need no key. |
-| `reachable` | `bool \| null` | The startup probe's verdict; `null` until the probe has run (and when a suppressed startup sync with `backfill_on_startup = true` skipped it). Not refreshed afterwards; the reason stays in the server log. For `anthropic` and `openai` `true` only means the key is set and the package is installed (the probe sends nothing). |
+| `reachable` | `bool \| null` | The startup probe's verdict; `null` until the probe has run (it starts whenever the feature is enabled, whatever `backfill_on_startup` and the startup sync did). Not refreshed afterwards; the reason stays in the server log. For `anthropic` and `openai` `true` only means the key is set and the package is installed (the probe sends nothing). |
 | `effective_context_tokens` | `int \| null` | The context window the description client enforces, as resolved so far (a `llama_cpp` window reads `assumed` 4096 until the startup probe of `/props` answers; an `ollama` value is the configured one even when it exceeds the model's real maximum, which the startup WARNING reports); `null` for providers that trim nothing (`anthropic`, `openai`, `claude_cli`). |
 | `context_window_source` | `"configured" \| "probed" \| "assumed" \| null` | Where that window came from; `null` with the window. |
 | `backfill_on_startup` | `bool` | `[description].backfill_on_startup`. |

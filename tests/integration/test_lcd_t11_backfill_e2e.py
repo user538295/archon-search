@@ -11,11 +11,11 @@ dead process, REST reads with each namespace's own key, and a real child process
   background, after the sync and the probe, skipping one a describe job is already generating. The sync end state
   covered here is DONE (BE-35's file covers a collection-less boot).
 * S34: with the provider down the server boots, the unreachable finding is one WARNING and no model call is made. The
-  scenario's ``/status`` clause is not asserted: the ``/status`` description block arrives with BE-37, whose e2e is T-12;
-  the verdict is read from ``app.state.description_reachability``.
-* S86: a suppressed startup sync skips the backfill and sends neither a prompt nor the probe (the client's own
-  context-window lookup at startup is the one request the provider may see); after a clean ``POST /sync`` the next start
-  backfills.
+  scenario's ``/status`` clause is not asserted here (T-12 and the suppressed-sync test below assert it); the verdict is
+  also read from ``app.state.description_reachability``.
+* S86: a suppressed startup sync skips the backfill with one INFO and makes no generation call; the content-free probe
+  still runs once (reachability health is independent of the backfill and of the sync state, so an unreachable provider
+  is still one WARNING and ``/status`` reachable false); after a clean ``POST /sync`` the next start backfills.
 * S35: a shutdown mid-backfill cancels the run, kills the ``claude`` child before the stores disconnect (its descendants
   by the end of the shutdown), never goes on to another collection, and leaves no description. The cancel lands during
   the model call, so the guarded write itself is never interrupted here (the lifecycle's unit tests cover a cancel
@@ -536,7 +536,8 @@ def _post_sync(client: TestClient, admin_key: str) -> None:
 
 def test_e2e_backfill_skipped_when_startup_sync_suppressed(world: _World, caplog: pytest.LogCaptureFixture) -> None:
     """S86: a RUNNING ingest job left by a dead process suppresses the startup sync, so the backfill is skipped with one
-    INFO and no prompt and no probe reach the provider; after a clean ``POST /sync`` the next start backfills as usual."""
+    INFO and no generation call is made; the content-free probe still runs once (it sends nothing from documents), so
+    ``/status`` reports the provider reachable; after a clean ``POST /sync`` the next start backfills as usual."""
     _seed_crashed_ingest_job(world)
 
     def toml_for(server: FakeModelServer) -> str:
@@ -547,14 +548,19 @@ def test_e2e_backfill_skipped_when_startup_sync_suppressed(world: _World, caplog
             assert client.app.state.sync_result == StartupSyncResult.SUPPRESSED
             assert get_sync_suppressed_file().exists()
             _wait_for(lambda: _backfill_done(client), "the backfill task")
+            _wait_for(client.app.state._description_probe_task.done, "the probe")
+            status = client.get("/status", headers=_headers(admin_key)).json()
             state = _read_state(client, world, admin_key)
             # The clean sync that resumes the operator: it clears the suppression, but the skipped run stays skipped.
             _post_sync(client, admin_key)
             assert client.app.state.sync_result == StartupSyncResult.DONE
             assert not get_sync_suppressed_file().exists()
-        assert server.timeline == []  # no probe, no model call
-        # The only thing the server saw is the context-window lookup of the client's own startup (no prompt, no probe).
-        assert {request.path for request in server.requests} <= {_SHOW_PATH}
+        assert status["description"]["reachable"] is True
+        assert [kind for kind, _detail in server.timeline] == ["probe"]  # one probe, no model call
+        assert len(server.requests_to(_TAGS_PATH)) == 1
+        assert not server.requests_to(_CHAT_PATH)  # no generation
+        # Besides the probe, the server saw only the context-window lookup of the client's own startup.
+        assert {request.path for request in server.requests} <= {_SHOW_PATH, _TAGS_PATH}
         assert all(state[key] == _UNDESCRIBED for key in _EMPTY_IN_ORDER)
         _assert_untouched(state)
         infos = _backfill_infos(caplog)
@@ -573,6 +579,32 @@ def test_e2e_backfill_skipped_when_startup_sync_suppressed(world: _World, caplog
     _assert_empties_filled_each_with_its_own_text(state)
     _assert_untouched(state)
     assert not any("suppressed" in info.lower() for info in _backfill_infos(caplog))
+
+
+@pytest.mark.parametrize("failure", [_ANSWERS_503, _NO_ANSWER])
+def test_e2e_suppressed_sync_with_provider_down_still_warns_and_status_reports_unreachable(
+    world: _World, caplog: pytest.LogCaptureFixture, failure: str
+) -> None:
+    """S34/S39/S86 together: the backfill is skipped for the suppressed sync (its one INFO names that reason), yet the
+    startup probe still reports the dead provider: one WARNING and ``/status`` ``reachable`` false."""
+    _seed_crashed_ingest_job(world)
+
+    with _provider_down(failure) as (base_url, server), caplog.at_level(logging.INFO):
+        with world.boot(_toml(base_url, collections=[world.synced_directory])) as (client, admin_key):
+            assert client.app.state.sync_result == StartupSyncResult.SUPPRESSED
+            _wait_for(lambda: _backfill_done(client), "the backfill task")
+            _wait_for(client.app.state._description_probe_task.done, "the probe")
+            status = client.get("/status", headers=_headers(admin_key)).json()
+            state = _read_state(client, world, admin_key)
+        if server is not None:
+            assert not server.requests_to(_CHAT_PATH)
+
+    assert status["description"]["reachable"] is False
+    assert len(_unreachable_warnings(caplog)) == 1
+    infos = _backfill_infos(caplog)
+    assert len(infos) == 1 and "suppressed" in infos[0].lower()
+    assert all(state[key] == _UNDESCRIBED for key in _EMPTY_IN_ORDER)
+    _assert_untouched(state)
 
 
 def _process_alive(pid: int) -> bool:

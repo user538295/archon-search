@@ -636,15 +636,14 @@ def _start_description_startup_tasks(app: FastAPI, description: DescriptionConfi
     """Start the reachability probe and, with ``backfill_on_startup``, the backfill as background tasks (C5).
 
     Both are tracked in ``_background_tasks``, so shutdown cancels and awaits them with the other tasks, before the
-    lifecycle drains. With a suppressed startup sync and the backfill on, no probe starts: the backfill is skipped for
-    the run and S86 says no provider is called then. The probe sends no prompt, so with the backfill off it still runs.
+    lifecycle drains. The probe's health finding (the unreachable WARNING and ``/status`` reachability) does not depend
+    on the backfill or on how the startup sync ended, so it always starts. It sends no prompt and no document text; a
+    suppressed startup sync only skips the backfill (S86: no generation call, one INFO).
     """
     state = app.state
     track = functools.partial(_spawn_background, state)
 
-    backfill_skipped = description.backfill_on_startup and state.sync_result == StartupSyncResult.SUPPRESSED
-    if not backfill_skipped:
-        state._description_probe_task = track(run_description_probe(state, description))
+    state._description_probe_task = track(run_description_probe(state, description))
     if description.backfill_on_startup:
         state._description_backfill_task = track(
             run_description_backfill(state, state.search_store, state.description_lifecycle)
@@ -1328,9 +1327,8 @@ def create_app(
     # Set to a Task by the lifespan, which resolves the context windows of the enabled features' LLM clients; the
     # None default keeps the attribute readable before the lifespan has run.
     app.state._llm_window_task = None
-    # Set to Tasks by the lifespan only when `[description]` is enabled (the probe: not when the startup sync is
-    # suppressed and the backfill is on; the backfill: only with `backfill_on_startup`); the None defaults keep them
-    # readable on every path.
+    # Set to Tasks by the lifespan only when `[description]` is enabled (the probe always; the backfill: only with
+    # `backfill_on_startup`); the None defaults keep them readable on every path.
     app.state._description_probe_task = None
     app.state._description_backfill_task = None
     # Set to a Task by the lifespan: the hybrid-routing check of the startup validator (it reads every collection row, so
