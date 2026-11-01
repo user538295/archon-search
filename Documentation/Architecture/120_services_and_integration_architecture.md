@@ -70,7 +70,7 @@ The factory now receives, from the lifespan, the full `config` and internally pa
 
 **Namespace propagation (D9 asymmetry fix #2).** Each tool closure resolves the caller namespace at request time via `_get_request_namespace()`, which calls FastMCP's `get_http_request()` and reads `request.state.namespace` (set by the shared `APIKeyMiddleware`). Previously every tool except `update_collection` hardcoded `DEFAULT_NAMESPACE`; now all tools are namespace-correct. See [ADR-09](../ADRs/09_mcp_http_mount_and_namespace_propagation.md).
 
-Tools registered in `server/mcp.py` (17 total; verified against source):
+Tools registered in `server/mcp.py` (22 total; verified against source):
 
 | Tool | Pipeline method | Notes |
 |---|---|---|
@@ -87,6 +87,11 @@ Tools registered in `server/mcp.py` (17 total; verified against source):
 | `update_collection` | `SearchStore.locked_collection_meta` + `update_collection_meta(_locked_by_caller=True)` | **C1** — 11th tool. Accepts `collection_name: str` and `embedding_model: str`; implements the per-collection model state machine (same logic as `PATCH /collections/{name}`). Returns the updated `CollectionMeta` dict or `{error, code}`. |
 | `export_collection` | `JobStore.create_export` (direct) | **D1/D2** — 12th tool. Non-blocking; creates a QUEUED export job. Returns `job_to_dict(job)` or `{error, code}`. |
 | `import_collection` | `JobStore.create_import` (direct) | **D1/D2** — 13th tool. Non-blocking; pre-validates archive and creates a QUEUED import job. Returns `job_to_dict(job)` or `{error, code}`. |
+| `get_graph` | `GraphStore` (direct) | Entity-graph summary for one collection; answers `graph_disabled` when `[graph]` is off. |
+| `get_graph_cross_collection` | `GraphStore` (direct) | Merged entity graph across two or more collections; answers `graph_disabled` when `[graph]` is off. |
+| `graph_impact` | `GraphStore.compute_impact` | Caller/callee impact analysis for a code symbol; answers `graph_disabled` when `[graph]` is off. |
+| `set_collection_description` | `description_change.apply_description_change` over the shared `DescriptionWriter` | **BE-32** — sets a manual description (one line, at most 600 characters, else `validation_error`). Same core as REST `PUT /collections/{name}/description`; owner of the namespace only (no admin scope); a foreign or unknown collection is `not_found`; lock timeout is `store_busy`. Registers before the key-store gate. |
+| `clear_collection_description` | `description_change.apply_description_change` over the shared `DescriptionWriter` | **BE-32** — clears the description and its routing vector; starts no generation. Same core and authorization as REST `DELETE /collections/{name}/description`. |
 | `create_key` | `KeyStore.create` (direct) | **D7** — registers only when `key_store` is present. Mirrors REST `POST /keys`. Returns the raw token once, then the `KeyRecord` metadata. |
 | `list_keys` | `KeyStore.list_keys` (direct) | **D7** — registers only when `key_store` is present. Mirrors REST `GET /keys`. Never returns raw tokens or hashes. |
 | `revoke_key` | `KeyStore.revoke` (direct) | **D7** — registers only when `key_store` is present. Mirrors REST `DELETE /keys/{id}`. |

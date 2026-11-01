@@ -34,13 +34,13 @@ def test_readme_mcp_tool_count_matches_source() -> None:
     unconditional = len(tool_line_indexes) - gated
     total = unconditional + gated
 
-    assert total == 20, f"expected 20 @app.tool() registrations, found {total}"
-    assert unconditional == 16
+    assert total == 22, f"expected 22 @app.tool() registrations, found {total}"
+    assert unconditional == 18
     assert gated == 4
 
     readme = README_PATH.read_text(encoding="utf-8")
-    assert re.search(r"16 tools always register", readme)
-    assert re.search(r"\b20 total\b", readme)
+    assert re.search(r"18 tools always register", readme)
+    assert re.search(r"\b22 total\b", readme)
 
     mcp_source = MCP_PATH.read_text(encoding="utf-8")
     tool_names = re.findall(r"@app\.tool\(\)\s*\n\s*async def (\w+)", mcp_source)

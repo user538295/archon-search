@@ -210,7 +210,7 @@ Breaking changes to REST or MCP land in [`BREAKING.md`](BREAKING.md), not buried
 
 ## MCP tools
 
-Your MCP client gets the same server your HTTP client does — same auth, same data, no separate integration to build. 16 tools always register; the 4 key-management tools join whenever `mcp.create_app` gets a key store, which the shipped server always passes — 20 total (`archon_search/server/mcp.py`):
+Your MCP client gets the same server your HTTP client does — same auth, same data, no separate integration to build. 18 tools always register; the 4 key-management tools join whenever `mcp.create_app` gets a key store, which the shipped server always passes — 22 total (`archon_search/server/mcp.py`):
 
 - `search` — hybrid vector + FTS search; returns `{"results": [...], "acl_filtered": bool}`
 - `search_with_context` — same as `search` with adjacent-chunk context
@@ -223,6 +223,7 @@ Your MCP client gets the same server your HTTP client does — same auth, same d
 - `list_documents` — list documents in a collection
 - `delete_document` — remove a document by `doc_id`
 - `update_collection` — change a collection's embedding model (mirrors `PATCH /collections/{name}`)
+- `set_collection_description` / `clear_collection_description` — set a collection's description by hand or clear it; open to the key whose namespace owns the collection, admin or not (mirrors `PUT` / `DELETE /collections/{name}/description`)
 - `export_collection` / `import_collection` — archive a collection out or restore it
 - `get_graph` — entity-graph summary for one collection (nodes, edges, top entities by salience)
 - `get_graph_cross_collection` — merged entity graph across 2+ collections

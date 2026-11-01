@@ -111,16 +111,16 @@ def _make_valid_tar(
 
 
 # ---------------------------------------------------------------------------
-# Test: tool count is 13 (11 previous + export_collection + import_collection)
+# Test: tool count is 18 without a key store
 # ---------------------------------------------------------------------------
 
 
-def test_mcp_tool_count_is_15(tmp_path: Path) -> None:
-    """create_app must register exactly 16 tools (13 base + 2 graph inspection E2b + 1 graph_impact E2g BE-9)."""
+def test_mcp_tool_count_is_18_without_key_store(tmp_path: Path) -> None:
+    """create_app must register exactly 18 tools without a key store (16 earlier tools + the 2 description tools, BE-32)."""
     pipeline = _make_pipeline()
     job_store = _make_job_store(tmp_path)
     app = _make_mcp_app(pipeline, job_store=job_store)
-    assert len(app.tools) == 16, f"Expected 16 tools, got {len(app.tools)}: {list(app.tools)}"
+    assert len(app.tools) == 18, f"Expected 18 tools, got {len(app.tools)}: {list(app.tools)}"
 
 
 # ---------------------------------------------------------------------------

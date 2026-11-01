@@ -207,6 +207,8 @@ _ALLOWLIST: frozenset[tuple[str, str, str, int]] = frozenset({
     (f"{_SERVER}/mcp.py", "ingest_directory", "IngestTooManyFilesError", 1),
     (f"{_SERVER}/mcp.py", "delete_document", "StoreBusyError", 1),
     (f"{_SERVER}/mcp.py", "update_collection", "StoreBusyError", 1),
+    # check_description_text's rule text (blank, over the limit, not one line): it names the rule and the length, never the text.
+    (f"{_SERVER}/mcp.py", "set_collection_description", "ValueError", 1),
     # Embedding-model validation text written for the caller.
     (f"{_SERVER}/mcp.py", "update_collection", "ModelValidationError", 1),
     (f"{_SERVER}/routes_collections.py", "_add_collection", "ModelValidationError", 1),

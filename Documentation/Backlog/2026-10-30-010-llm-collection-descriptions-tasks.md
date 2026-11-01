@@ -571,7 +571,7 @@ flowchart LR
         - #integration_test — `test_namespace_owner_sets_manual_description_on_meta_only_collection_without_admin` — no config-path entry is needed
         - #integration_test — `test_foreign_namespace_set_and_clear_return_not_found` — the caller cannot see the collection
         - #integration_test — `test_ingest_and_describe_never_overwrite_manual_description` — a later ingest leaves the manual text and source
-- [ ] **BE-32** — MCP `set_collection_description` and `clear_collection_description` registered before the key-store gate (`mcp.py`), with the existing error vocabulary and schema labels; update every count pin and the README counts that `test_readme_contract.py` guards (22 total, 18 without key tools) #backend-role
+- [x] **BE-32** — MCP `set_collection_description` and `clear_collection_description` registered before the key-store gate (`mcp.py`), with the existing error vocabulary and schema labels; update every count pin and the README counts that `test_readme_contract.py` guards (22 total, 18 without key tools) #backend-role
     - Interface Adapters · 4.0h
     - needs BE-31 · completes C8, S60
     - Tests

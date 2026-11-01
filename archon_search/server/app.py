@@ -1033,6 +1033,7 @@ def create_app(
                             # rotate_key read app.state.api_key; rotate_key publishes to it.
                             api_key_state=app.state,
                             description_lifecycle=app.state.description_lifecycle,
+                            description_writer=app.state.description_writer,
                             ingest_policy=app.state.ingest_path_policy,
                         )
                         await _mcp_stack.enter_async_context(

@@ -21,7 +21,10 @@ from archon_search._path_safety import (
 from archon_search.collection_meta import CollectionMeta, visible_description_status
 from archon_search.config import SearchConfig, resolve_active_model, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
-from archon_search.description_write import DescriptionWriteOutcome
+from archon_search.description_change import (
+    DescriptionChangeStatus,
+    apply_description_change,
+)
 from archon_search.description_writer import ClearChange, ManualSetChange
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
@@ -86,7 +89,6 @@ from archon_search.store import (
     ReindexResult,
     SearchStore,
     StoreBusyError,
-    is_valid_collection_name,
 )
 from archon_search.sync import path_to_collection_name
 from archon_search.types import (
@@ -1022,42 +1024,25 @@ async def _apply_description_change(
 ) -> CollectionDetail | JSONResponse:
     """Set or clear *name*'s description for the caller's namespace and answer the updated ``CollectionDetail`` (C6).
 
-    The caller must own the collection: it has a meta row in the caller's namespace, and anything else, a collection of
-    another namespace or a name the store refuses included, is the same 404. That is the whole rule: no admin key and no
-    config-path entry, so a collection that exists only as meta rows works (and a configured collection that has no meta
-    row yet is 404, unlike on GET: there is no row to write). The shared writer embeds the text, then takes the
-    collection lock itself inside one guarded write, so this route holds no lock while it calls it. A lock that is not
-    free in time is 503 ``store_busy``; a collection dropped meanwhile is 404.
+    The ownership rule, the shared writer call and its outcomes live in ``apply_description_change``, shared with the
+    MCP tools: a collection of another namespace or an unknown one is 404 (a configured collection that has no meta row
+    yet is 404 too, unlike on GET: there is no row to write), a lock not free in time is 503 ``store_busy``, and no admin
+    key or config-path entry is needed. This route holds no lock while it calls it.
     """
     search_store = getattr(request.app.state, "search_store", None)
     if search_store is None:
         return JSONResponse({"detail": SERVICE_NOT_READY_DETAIL}, status_code=503)
     ns: str = request.state.namespace
-    # A name the store refuses cannot belong to any collection, so it is the same 404 as an unknown one; checked before
-    # the read, so a ValueError from reading a real row (a corrupt one) is never mistaken for an absent collection.
-    if not is_valid_collection_name(name) or await search_store.get_collection_meta(name, namespace=ns) is None:
-        raise _collection_not_found(name)
-
-    written = await request.app.state.description_writer.apply(name, ns, change)
-    match written.outcome:
-        case DescriptionWriteOutcome.WRITTEN:
-            pass
-        case DescriptionWriteOutcome.LOCK_TIMEOUT:
-            return store_busy_503(STORE_BUSY_DETAIL)
-        case DescriptionWriteOutcome.COLLECTION_MISSING:
-            raise _collection_not_found(name)
-        case refused:
-            # Set and clear carry no guard, so the store has no reason to refuse them: a refusal is a broken contract.
-            raise RuntimeError(f"an unconditional description write was refused: {refused.value}")
-
-    meta = await search_store.get_collection_meta(name, namespace=ns)
-    if meta is None:  # dropped between the write and this read
+    changed = await apply_description_change(search_store, request.app.state.description_writer, name, ns, change)
+    if changed.status is DescriptionChangeStatus.STORE_BUSY:
+        return store_busy_503(STORE_BUSY_DETAIL)
+    if changed.meta is None:
         raise _collection_not_found(name)
     config: SearchConfig = request.app.state.config
     # The response says what the write stored: a generation that began earlier is refused at its own write, so it must
     # not make the cleared (or manual) collection read ``pending``.
     return await _build_collection_detail(
-        request, name, meta, _all_collection_paths(config).get(name, ""), overlay_pending=False
+        request, name, changed.meta, _all_collection_paths(config).get(name, ""), overlay_pending=False
     )
 
 

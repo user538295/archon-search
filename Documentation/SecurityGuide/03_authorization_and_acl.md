@@ -113,7 +113,7 @@ The ACL surface is narrower than its name suggests. It does **not**:
   - `GET /collections` returns only collections whose `CollectionMeta.namespace` matches the caller (`routes_collections.py`).
   - `DELETE /collections/{name}` returns 404 for cross-namespace deletes.
   - `GET /collections/{name}` returns 404 for cross-namespace access.
-  - `PUT` and `DELETE /collections/{name}/description` (set and clear a manual description) return 404 for another namespace's collection and for an unknown name alike; they need no admin key, only that the caller's namespace owns the collection.
+  - `PUT` and `DELETE /collections/{name}/description` (set and clear a manual description) return 404 for another namespace's collection and for an unknown name alike; they need no admin key, only that the caller's namespace owns the collection. The MCP tools `set_collection_description` and `clear_collection_description` follow the same rule and answer `not_found` the same way.
   - `POST /collections/{name}/export` is different: another namespace's collection answers `409` `collection_unavailable` (MCP `export_collection`: `code: "collection_unavailable"`), not 404; only a name that exists nowhere answers 404 (MCP `not_found`). The status code therefore differs from the 404 of `DELETE` and `GET`.
   - `GET /indexing-state` is filtered to the caller's namespace (`routes_state.py`).
   - `GET /status` is filtered to the caller's namespace (`routes_status.py`).

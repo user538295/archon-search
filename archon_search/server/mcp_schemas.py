@@ -231,7 +231,7 @@ class CollectionListItemSchema(_CollectionPublicFields):
 
 
 class CollectionDetailSchema(_CollectionPublicFields):
-    """Public ``CollectionMeta`` fields for ``get_collection_meta`` and ``update_collection`` tools."""
+    """Public ``CollectionMeta`` fields for the ``get_collection_meta``, ``update_collection``, ``set_collection_description`` and ``clear_collection_description`` tools."""
 
 
 class CollectionMetaMcpSchema(_CollectionPublicFields):

@@ -1,9 +1,9 @@
 """D9 / BE-3 — Slice 1 integration tests: tool count, lifecycle, enable gate.
 
 Covers:
-- test_mcp_tool_list_returns_17_tools — JSON-RPC tools/list with key_store wired
-  returns exactly 17 tools.
-- test_mcp_tool_list_returns_13_tools_without_key_store — 13 tools when key_store=None.
+- test_mcp_tool_list_returns_22_tools — JSON-RPC tools/list with key_store wired
+  returns exactly 22 tools.
+- test_mcp_tool_list_returns_18_tools_without_key_store — 18 tools when key_store=None.
 - test_lifecycle_shutdown — TestClient context-manager exit shuts down MCP cleanly;
   no errors or resource leaks.
 - test_mcp_enabled_false_gate — mcp.enabled=False → /mcp returns 404
@@ -97,37 +97,41 @@ def _mcp_tools_list(client, api_key: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def test_mcp_tool_list_returns_19_tools(tmp_path, monkeypatch) -> None:
-    """JSON-RPC tools/list with key_store wired returns exactly 20 tools.
+def test_mcp_tool_list_returns_22_tools(tmp_path, monkeypatch) -> None:
+    """JSON-RPC tools/list with key_store wired returns exactly 22 tools.
 
     create_app() in app.py always wires app.state.key_store to
-    create_mcp_http_app(), so all 20 tools (16 base + 4 key-management) are
-    registered.  Completes S2 (tool list, updated for E2g BE-9) and S14 (key_store present).
+    create_mcp_http_app(), so all 22 tools (18 base + 4 key-management) are
+    registered.  Completes S2 (tool list, updated for BE-32) and S14 (key_store present).
     Base tools: search, search_with_context, explain, ingest_file, ingest_directory,
     list_collections, get_collections_meta, get_collection_meta, list_documents,
     delete_document, update_collection, export_collection, import_collection,
-    get_graph, get_graph_cross_collection, graph_impact (16 total).
+    get_graph, get_graph_cross_collection, graph_impact, set_collection_description,
+    clear_collection_description (18 total).
     """
     with make_real_app(tmp_path, monkeypatch, mcp_enabled=True) as (client, _cfg, api_key):
         tools = _mcp_tools_list(client, api_key)
         tool_names = [t["name"] for t in tools]
-        assert len(tools) == 20, f"Expected 20 tools, got {len(tools)}: {tool_names}"
+        assert len(tools) == 22, f"Expected 22 tools, got {len(tools)}: {tool_names}"
         # Verify the 4 key-management tools are among them (S14)
         for key_tool in ("create_key", "list_keys", "revoke_key", "rotate_key"):
             assert key_tool in tool_names, f"Key-management tool {key_tool!r} missing"
-        # Verify the 3 graph tools are present (E2b + E2g BE-9)
-        for graph_tool in ("get_graph", "get_graph_cross_collection", "graph_impact"):
-            assert graph_tool in tool_names, f"Graph tool {graph_tool!r} missing"
+        # Verify the graph tools (E2b + E2g BE-9) and the description tools (BE-32) are present
+        for named_tool in (
+            "get_graph", "get_graph_cross_collection", "graph_impact",
+            "set_collection_description", "clear_collection_description",
+        ):
+            assert named_tool in tool_names, f"Tool {named_tool!r} missing"
 
 
-def test_mcp_tool_list_returns_15_tools_without_key_store(tmp_path, monkeypatch) -> None:
-    """16 base tools when key_store=None (4 key-management tools are not registered).
+def test_mcp_tool_list_returns_18_tools_without_key_store(tmp_path, monkeypatch) -> None:
+    """18 base tools when key_store=None (4 key-management tools are not registered).
 
     Patches create_mcp_http_app in its defining module (archon_search.server.mcp)
     to pass key_store=None so the key-management tools are omitted.  The lifespan
     in app.py imports the function with a local import, so patching the module
     attribute is the correct target.  Completes S14 (absence side).
-    Base tools: 13 (original) + 2 (E2b graph inspection) + 1 (E2g BE-9 graph_impact) = 16.
+    Base tools: 13 (original) + 2 (E2b graph inspection) + 1 (E2g BE-9 graph_impact) + 2 (BE-32 description tools) = 18.
     """
     from archon_search.server.mcp import create_mcp_http_app as _real_factory
 
@@ -145,8 +149,8 @@ def test_mcp_tool_list_returns_15_tools_without_key_store(tmp_path, monkeypatch)
     ):
         tools = _mcp_tools_list(client, api_key)
         tool_names = [t["name"] for t in tools]
-        assert len(tools) == 16, (
-            f"Expected 16 base tools (no key_store), got {len(tools)}: {tool_names}"
+        assert len(tools) == 18, (
+            f"Expected 18 base tools (no key_store), got {len(tools)}: {tool_names}"
         )
         # Key-management tools must be absent
         for key_tool in ("create_key", "list_keys", "revoke_key", "rotate_key"):
