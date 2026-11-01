@@ -39,14 +39,6 @@ from archon_search.pipeline import (
     FanoutTimeoutError,
     MetadataLookupError,
 )
-from archon_search.server._search_budget import (
-    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
-)
-from archon_search.server._search_budget import (
-    SearchBudgetExceeded,
-    run_within_budget,
-    warmup_for_search,
-)
 from archon_search.server.schemas_openai import (
     ChatCompletionChoice,
     ChatCompletionChunk,
@@ -59,6 +51,14 @@ from archon_search.server.schemas_openai import (
     ModelObject,
     OpenAIError,
     OpenAIErrorResponse,
+)
+from archon_search.services.search_budget import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+)
+from archon_search.services.search_budget import (
+    SearchBudgetExceeded,
+    run_within_budget,
+    warmup_for_search,
 )
 
 logger = logging.getLogger(__name__)

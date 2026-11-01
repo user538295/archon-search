@@ -947,7 +947,7 @@ def test_search_handler_multi_collection_calls_search_many(tmp_path: Path) -> No
 
 def test_search_handler_single_collection_bounds_warmup_and_reranks(tmp_path: Path) -> None:
     """The single-collection branch bounds the warm-up and threads its flag through."""
-    from archon_search.server._search_budget import (
+    from archon_search.services.search_budget import (
         EMBEDDER_WARMUP_WAIT_SECONDS,
         RERANKER_WARMUP_WAIT_SECONDS,
     )
@@ -988,7 +988,7 @@ def test_search_handler_fanout_bounds_warmup_and_reranks(tmp_path: Path) -> None
     reaches ``search_many``. Without these assertions deleting the warm-up
     entirely leaves every other fan-out test green.
     """
-    from archon_search.server._search_budget import (
+    from archon_search.services.search_budget import (
         EMBEDDER_WARMUP_WAIT_SECONDS,
         RERANKER_WARMUP_WAIT_SECONDS,
     )

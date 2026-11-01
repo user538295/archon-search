@@ -102,14 +102,6 @@ from archon_search.pipeline import (
 from archon_search.progress import IndexingState, IndexingStatus
 from archon_search.router import MultiCollectionRouter
 from archon_search.server._hyde import RequestHyDE
-from archon_search.server._search_budget import (
-    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
-)
-from archon_search.server._search_budget import (
-    SearchBudgetExceeded,
-    run_within_budget,
-    warmup_for_search,
-)
 from archon_search.server._validators import (
     validate_scope_filter as _check_scope_filter,
 )
@@ -151,6 +143,14 @@ from archon_search.server.routes_export import is_ingesting_cancel_leftover
 from archon_search.server.schemas import (
     GRAPH_COMMUNITIES_NOT_BUILT_CODE,
     INVALID_SCOPE_FILTER_CODE,
+)
+from archon_search.services.search_budget import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+)
+from archon_search.services.search_budget import (
+    SearchBudgetExceeded,
+    run_within_budget,
+    warmup_for_search,
 )
 from archon_search.store import (
     COLLECTION_UNAVAILABLE_DETAIL,

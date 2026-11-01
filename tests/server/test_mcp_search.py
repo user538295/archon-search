@@ -369,7 +369,7 @@ async def test_mcp_search_fanout_bounds_warmup_and_reranks() -> None:
     *possible*; nothing asserted it happens, so removing the warm-up left them
     all green while restoring the S288 hang.
     """
-    from archon_search.server._search_budget import (
+    from archon_search.services.search_budget import (
         EMBEDDER_WARMUP_WAIT_SECONDS,
         RERANKER_WARMUP_WAIT_SECONDS,
     )
@@ -387,7 +387,7 @@ async def test_mcp_search_fanout_bounds_warmup_and_reranks() -> None:
 @pytest.mark.asyncio
 async def test_mcp_search_single_collection_bounds_warmup_and_reranks() -> None:
     """MCP single-collection path bounds the warm-up and threads its flag through."""
-    from archon_search.server._search_budget import (
+    from archon_search.services.search_budget import (
         EMBEDDER_WARMUP_WAIT_SECONDS,
         RERANKER_WARMUP_WAIT_SECONDS,
     )

@@ -17,7 +17,7 @@ from archon_search.server._hyde import (
     hyde_suppressed,
     resolve_hyde_within_budget,
 )
-from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS
+from archon_search.services.search_budget import SEARCH_TIMEOUT_SECONDS
 from tests._hyde_stubs import stub_hyde_generator
 
 _VECTOR = [0.1, 0.2, 0.3]

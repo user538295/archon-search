@@ -35,9 +35,6 @@ from archon_search.pipeline import (
 )
 from archon_search.router import MultiCollectionRouter
 from archon_search.server._hyde import RequestHyDE
-from archon_search.server._search_budget import (
-    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
-)
 from archon_search.server._validators import (
     validate_scope_filter as _check_scope_filter,
 )
@@ -49,6 +46,9 @@ from archon_search.server.schemas import (
     ErrorDetail,
     ExcludedCollectionSchema,
     route_422_response,
+)
+from archon_search.services.search_budget import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
 )
 from archon_search.telemetry.entry import TelemetryEntry
 

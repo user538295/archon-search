@@ -1,4 +1,4 @@
-"""Unit tests for ``archon_search.server._search_budget`` — S286/S288.
+"""Unit tests for ``archon_search.services.search_budget`` — S286/S288.
 
 The module is tiny but load-bearing: every transport (REST, MCP, the ``/v1``
 shim) routes its warm-up and its overall request budget through it, so a
@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from archon_search.server._search_budget import (
+from archon_search.services.search_budget import (
     EMBEDDER_WARMUP_WAIT_SECONDS,
     RERANKER_WARMUP_WAIT_SECONDS,
     SEARCH_TIMEOUT_SECONDS,

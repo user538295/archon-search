@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.observability import paused_stage_recorder
-from archon_search.server._search_budget import SearchBudgetExceeded, run_within_budget
+from archon_search.services.search_budget import SearchBudgetExceeded, run_within_budget
 
 if TYPE_CHECKING:
     from archon_search.config import HyDEConfig

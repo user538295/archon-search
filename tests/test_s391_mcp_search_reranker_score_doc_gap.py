@@ -41,15 +41,15 @@ from pathlib import Path
 import pytest
 from fastmcp.tools import FunctionTool, Tool
 
-from archon_search.server._search_budget import (
-    RERANKER_WARMUP_WAIT_SECONDS,
-    warmup_for_search,
-)
 from archon_search.server.mcp_schemas import (
     McpSearchResultSchema,
     SearchWithContextItemSchema,
 )
 from archon_search.server.routes_search import SearchRequest, SearchResultSchema
+from archon_search.services.search_budget import (
+    RERANKER_WARMUP_WAIT_SECONDS,
+    warmup_for_search,
+)
 from tests._mcp_tools import input_properties, registered_tools
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent

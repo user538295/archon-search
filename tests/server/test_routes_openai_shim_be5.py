@@ -501,7 +501,7 @@ class TestShimWarmupParity:
     """The ``/v1`` shim runs the same bounded warm-up as REST and MCP (S288)."""
 
     def test_fanout_bounds_warmup_and_reranks(self, tmp_path, monkeypatch):
-        from archon_search.server._search_budget import (
+        from archon_search.services.search_budget import (
             EMBEDDER_WARMUP_WAIT_SECONDS,
             RERANKER_WARMUP_WAIT_SECONDS,
         )
@@ -532,7 +532,7 @@ class TestShimWarmupParity:
         assert app.state.pipeline.search_many.await_args.kwargs["rerank"] is True
 
     def test_direct_bounds_warmup_and_reranks(self, tmp_path, monkeypatch):
-        from archon_search.server._search_budget import (
+        from archon_search.services.search_budget import (
             EMBEDDER_WARMUP_WAIT_SECONDS,
             RERANKER_WARMUP_WAIT_SECONDS,
         )

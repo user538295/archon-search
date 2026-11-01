@@ -111,7 +111,7 @@ flowchart LR
     - Tests
 
 ### Phase 1 · Run search on the services/ search budget *(the walking skeleton: REST, MCP, explain and the shim run their time budget from `services/`)*
-- [ ] **BE-1** — Create `archon_search/services/` (docstring-only `__init__.py`, no `__all__`, no side effects) and `tests/services/` (with `__init__.py`); move `server/_search_budget.py` to `services/search_budget.py` unchanged (git mv), delete the old module, re-point `server/_hyde.py` to it; move `tests/server/test_search_budget.py` to `tests/services/` and fix its module docstring #backend-role
+- [x] **BE-1** — Create `archon_search/services/` (docstring-only `__init__.py`, no `__all__`, no side effects) and `tests/services/` (with `__init__.py`); move `server/_search_budget.py` to `services/search_budget.py` unchanged (git mv), delete the old module, re-point `server/_hyde.py` to it; move `tests/server/test_search_budget.py` to `tests/services/` and fix its module docstring #backend-role
     - Use Case · 2.0h
     - needs K1 · completes C2
     - Tests
