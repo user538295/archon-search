@@ -468,8 +468,13 @@ enabled = false
 # Most chunks sampled for one description. Must be >= 1.
 # max_sample_chunks = 100
 # Thinking control for reasoning models: true, false or "default" (send nothing).
-# Honoured by ollama and llama_cpp only. Set false when a reasoning model returns
-# no usable answer.
+# Honoured by ollama and llama_cpp only. Set false when a reasoning model returns no
+# usable answer, or when its thinking is not wanted. Unless false, every provider's call
+# asks for up to 3072 extra answer tokens for the thinking (a real reasoning model used
+# 1.9k to 2.4k) and, with a local window, the sample gives up to half of its room for
+# it; a reasoning model needs a window of 8192 tokens or more (ollama_context_tokens)
+# and a longer timeout_seconds than the default (a warm real 35B model took about 25 s,
+# close to the 30 s default, and a cold load adds more).
 # think = "default"
 # Local providers only (ollama, llama_cpp): also sample chunks that carry an access list.
 # WARNING: the description may then contain text from chunks the access list hides, and

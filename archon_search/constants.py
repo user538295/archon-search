@@ -47,10 +47,17 @@ ASSUMED_CONTEXT_TOKENS: Final[int] = 4096
 # (C1 ``ollamaEstimateMargin``, 20%): the gpt2 vocabulary only approximates the model's own tokenizer.
 OLLAMA_ESTIMATE_MARGIN: Final[float] = 0.20
 
-# Output tokens every sized prompt leaves free for the model's answer (C1 "reserved answer space"). Generous on
-# purpose: a reasoning model may think before the one-line answer, and the answer ceiling a caller sends as
-# ``LlmCallRequest.max_output_tokens`` should equal it so the reserve covers what the model may produce.
+# Output tokens every sized prompt leaves free for the model's answer (C1 "reserved answer space"). A caller's
+# ``LlmCallRequest.max_output_tokens`` should equal it so the reserve covers what the model may produce; description
+# calls on a model that may think add ``DESCRIPTION_THINKING_HEADROOM_TOKENS`` and pay for it out of their sample.
 ANSWER_RESERVE_TOKENS: Final[int] = 1024
+
+# Extra answer tokens a description call asks for unless ``[description].think`` is false (S54): a reasoning model
+# thinks before its one-line answer and the thinking counts against the answer ceiling. Measured on a real
+# ``qwen3.6:35b-a3b`` with a ~4k-token prompt: 1.9k to 2.4k tokens, so ``ANSWER_RESERVE_TOKENS`` alone returned only
+# thinking. A bounded input budget gives up at most half of itself for it (the window still holds prompt and answer),
+# and none of it when that would leave no room for one excerpt.
+DESCRIPTION_THINKING_HEADROOM_TOKENS: Final[int] = 3072
 
 # Longest description, in characters (C4 ``maxDescriptionChars``): generated text is trimmed to it and manual text over it
 # is rejected.

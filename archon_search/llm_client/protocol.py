@@ -62,8 +62,8 @@ class LlmCallRequest:
     """One stateless call: exactly one user message, no history, no session."""
 
     prompt: str
-    #: Generous for every model so that ``ThinkSetting.DEFAULT`` works on reasoning models; callers pass
-    #: ``constants.ANSWER_RESERVE_TOKENS`` so the answer space the budget reserves is the ceiling they send.
+    #: Callers pass ``constants.ANSWER_RESERVE_TOKENS`` so the answer space the budget reserves is the ceiling they send;
+    #: a description call that may think adds ``DESCRIPTION_THINKING_HEADROOM_TOKENS`` and shrinks its sample to pay for it.
     max_output_tokens: int
     #: Per attempt.
     timeout_seconds: float

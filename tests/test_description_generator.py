@@ -18,6 +18,7 @@ from archon_search.constants import (
     ANSWER_RESERVE_TOKENS,
     DEFAULT_FAST_MODEL,
     DEFAULT_MODEL,
+    DESCRIPTION_THINKING_HEADROOM_TOKENS,
     MAX_DESCRIPTION_CHARS,
 )
 from archon_search.description_generator import (
@@ -238,7 +239,7 @@ class TestSampling:
         store = FakeSampleStore()
         client = _small_window_client()
 
-        await _generator(client, store).generate(_COLLECTION, _NAMESPACE)
+        await _generator(client, store, think=False).generate(_COLLECTION, _NAMESPACE)
 
         assert [len(call[2]) for call in store.read_calls] == [100, 10]
         sent_ids = _read_ids(store)
@@ -278,7 +279,7 @@ class TestSampling:
         store = _TwoTierStore()
         client = _small_window_client()
 
-        outcome = await _generator(client, store).generate(_COLLECTION, _NAMESPACE)
+        outcome = await _generator(client, store, think=False).generate(_COLLECTION, _NAMESPACE)
 
         assert isinstance(outcome, DescriptionGenerated)
         assert [len(call[2]) for call in store.read_calls] == [100, 5, 4]
@@ -347,12 +348,13 @@ class TestWindowTooSmall:
         assert client.requests == []
 
     @pytest.mark.asyncio
-    async def test_not_even_one_excerpt_fits_fails_naming_the_window(self) -> None:
+    @pytest.mark.parametrize("think", [None, True, False])
+    async def test_not_even_one_excerpt_fits_fails_naming_the_window(self, think: bool | None) -> None:
         window = ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
         client = CountingClient(budget_tokens=len(_excerpt(_chunk_id(0))) - 1, window=window)
         store = FakeSampleStore()
 
-        outcome = await _generator(client, store).generate(_COLLECTION, _NAMESPACE)
+        outcome = await _generator(client, store, think=think).generate(_COLLECTION, _NAMESPACE)
 
         assert isinstance(outcome, DescriptionFailed)
         assert outcome.reason is DescriptionFailureReason.CALL_FAILED
@@ -362,12 +364,13 @@ class TestWindowTooSmall:
         assert len(_read_ids(store)) == 1
 
     @pytest.mark.asyncio
-    async def test_exactly_one_excerpt_fitting_is_enough(self) -> None:
+    @pytest.mark.parametrize("think", [None, True, False])
+    async def test_exactly_one_excerpt_fitting_is_enough(self, think: bool | None) -> None:
         window = ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
         client = CountingClient(budget_tokens=len(_excerpt(_chunk_id(0))), window=window, reply=_DESCRIPTION_TEXT)
         store = FakeSampleStore()
 
-        outcome = await _generator(client, store).generate(_COLLECTION, _NAMESPACE)
+        outcome = await _generator(client, store, think=think).generate(_COLLECTION, _NAMESPACE)
 
         assert isinstance(outcome, DescriptionGenerated)
         assert len(_read_ids(store)) == 1
@@ -427,7 +430,7 @@ class TestCall:
         [request] = client.requests
         assert isinstance(request, LlmCallRequest)
         assert request.timeout_seconds == 12.5
-        assert request.max_output_tokens == ANSWER_RESERVE_TOKENS
+        assert request.max_output_tokens == ANSWER_RESERVE_TOKENS + DESCRIPTION_THINKING_HEADROOM_TOKENS
         assert request.prompt == (
             'You are generating a concise description for a document collection named "handbook".\n\n'
             "Below are sample excerpts from documents in this collection:\n\n"
@@ -555,6 +558,149 @@ class TestCall:
         assert client.requests == []
 
 
+class TestThinkingHeadroom:
+    """S54: a reasoning model thinks for thousands of tokens before the one-line answer (measured on a real
+    ``qwen3.6:35b-a3b`` with a ~4k-token prompt: 1.9k to 2.4k tokens, so the old 1024-token ceiling returned only
+    thinking), so unless ``think`` is false the call gets ``DESCRIPTION_THINKING_HEADROOM_TOKENS`` more answer room and
+    a bounded input budget gives half of itself up for it at most (the window still holds prompt plus answer)."""
+
+    _EXCERPT_COST = len(_excerpt(_chunk_id(0)))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("think", [None, True])
+    async def test_unbounded_client_gets_the_full_headroom_on_every_call(self, think: bool | None) -> None:
+        client = _SequenceClient(_OVERLONG_ANSWER, _DESCRIPTION_TEXT)
+
+        await _generator(client, FakeSampleStore(chunk_count=3), think=think).generate(_COLLECTION, _NAMESPACE)
+
+        first, retry = client.requests
+        assert first.max_output_tokens == retry.max_output_tokens == ANSWER_RESERVE_TOKENS + DESCRIPTION_THINKING_HEADROOM_TOKENS
+
+    @pytest.mark.asyncio
+    async def test_unbounded_client_with_think_false_keeps_the_plain_ceiling_on_every_call(self) -> None:
+        client = _SequenceClient(_OVERLONG_ANSWER, _DESCRIPTION_TEXT)
+
+        await _generator(client, FakeSampleStore(chunk_count=3), think=False).generate(_COLLECTION, _NAMESPACE)
+
+        first, retry = client.requests
+        assert first.max_output_tokens == retry.max_output_tokens == ANSWER_RESERVE_TOKENS
+
+    @pytest.mark.asyncio
+    async def test_think_false_keeps_the_plain_ceiling_and_the_whole_budget(self) -> None:
+        """The 300-token budget sends ten excerpts (the shrink loop of ``TestSampling``) and no headroom is taken."""
+        store = FakeSampleStore()
+        client = _small_window_client()
+
+        await _generator(client, store, think=False).generate(_COLLECTION, _NAMESPACE)
+
+        assert client.requests[0].max_output_tokens == ANSWER_RESERVE_TOKENS
+        assert len(_read_ids(store)) == 10
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("think", [None, True])
+    async def test_large_budget_grants_the_full_headroom_and_keeps_the_sample(self, think: bool | None) -> None:
+        store = FakeSampleStore()
+        client = _large_window_client()
+
+        await _generator(client, store, think=think).generate(_COLLECTION, _NAMESPACE)
+
+        assert client.requests[0].max_output_tokens == ANSWER_RESERVE_TOKENS + DESCRIPTION_THINKING_HEADROOM_TOKENS
+        assert len(_read_ids(store)) == 100
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("think", [None, True])
+    async def test_small_budget_gives_half_of_itself_up_for_the_headroom(self, think: bool | None) -> None:
+        """A 4000-token budget leaves 2000 for the sample and grants 2000 more answer tokens: prompt plus answer still
+        fit the window the budget was cut from."""
+        store = FakeSampleStore()
+        window = ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
+        client = CountingClient(budget_tokens=4000, window=window, reply=_DESCRIPTION_TEXT)
+
+        await _generator(client, store, think=think).generate(_COLLECTION, _NAMESPACE)
+
+        assert client.requests[0].max_output_tokens == ANSWER_RESERVE_TOKENS + 2000
+        picks = _read_ids(store)
+        assert 0 < len(picks) < 100
+        assert len(picks) * self._EXCERPT_COST + (len(picks) - 1) * len(_SEPARATOR) <= 2000
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("think", [None, True])
+    async def test_budget_too_small_for_one_excerpt_after_the_headroom_keeps_the_whole_budget_and_the_plain_ceiling(
+        self, think: bool | None
+    ) -> None:
+        """A small window (a 2048-token Ollama window left 736 tokens, and one excerpt is about 500) must not fail for
+        the headroom: the sample keeps the whole budget and the call keeps the plain ceiling, as with ``think = false``."""
+        window = ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
+        client = CountingClient(budget_tokens=self._EXCERPT_COST + 8, window=window, reply=_DESCRIPTION_TEXT)
+        store = FakeSampleStore()
+
+        outcome = await _generator(client, store, think=think).generate(_COLLECTION, _NAMESPACE)
+
+        assert isinstance(outcome, DescriptionGenerated)
+        assert client.requests[0].max_output_tokens == ANSWER_RESERVE_TOKENS
+        assert len(_read_ids(store)) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("think", [None, True])
+    async def test_exactly_one_excerpt_beside_the_headroom_keeps_the_headroom(self, think: bool | None) -> None:
+        """Budget 44 = two excerpts: the headroom takes half (22), one excerpt fits beside it, so no fallback."""
+        window = ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
+        client = CountingClient(budget_tokens=2 * self._EXCERPT_COST, window=window, reply=_DESCRIPTION_TEXT)
+        store = FakeSampleStore()
+
+        await _generator(client, store, think=think).generate(_COLLECTION, _NAMESPACE)
+
+        assert client.requests[0].max_output_tokens == ANSWER_RESERVE_TOKENS + self._EXCERPT_COST
+        assert len(_read_ids(store)) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_counting_failure_is_not_retried_as_a_fallback(self) -> None:
+        """Only a window that is too small falls back to the whole budget; a provider failure fails the generation once."""
+
+        class _BrokenCount(CountingClient):
+            counted = 0
+
+            async def count_tokens(self, text: str) -> int:
+                type(self).counted += 1
+                raise LlmCallFailure("llama_cpp", "tokenize endpoint down")
+
+        window = ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
+        client = _BrokenCount(budget_tokens=_SMALL_WINDOW_BUDGET_TOKENS, window=window)
+        store = FakeSampleStore()
+
+        outcome = await _generator(client, store).generate(_COLLECTION, _NAMESPACE)
+
+        assert isinstance(outcome, DescriptionFailed)
+        assert outcome.reason is DescriptionFailureReason.CALL_FAILED
+        assert "tokenize endpoint down" in outcome.detail
+        assert _BrokenCount.counted == 1
+        assert len(store.read_calls) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("think", [None, True])
+    async def test_a_model_that_thinks_for_2400_tokens_finishes_within_the_ceiling(self, think: bool | None) -> None:
+        """The live defect (S54): a real qwen3.6 spent up to 2352 tokens (thinking plus answer) on this prompt, and the
+        old 1024-token ceiling returned only thinking. This client cuts the answer at ``max_output_tokens`` like a model
+        does, on a window of 8192 tokens (the budget the sizing leaves there is about 5900)."""
+        thinking_and_answer_tokens = 2400
+
+        class _ThinkingModel(CountingClient):
+            async def call(self, request: LlmCallRequest) -> LlmCallResult:
+                self.requests.append(request)
+                if request.max_output_tokens < thinking_and_answer_tokens:
+                    return LlmCallResult(text="<think>Let me look at the excerpts and consider what they have in common")
+                return LlmCallResult(text=f"<think>done thinking</think>{_DESCRIPTION_TEXT}")
+
+        window = ContextWindowTokens(size=8192, source=ContextWindowSource.CONFIGURED)
+        client = _ThinkingModel(budget_tokens=5900, window=window)
+
+        outcome = await _generator(client, FakeSampleStore(), think=think).generate(_COLLECTION, _NAMESPACE)
+
+        assert outcome == DescriptionGenerated(text=_DESCRIPTION_TEXT, trimmed=False)
+        assert len(client.requests) == 1
+        assert ANSWER_RESERVE_TOKENS + DESCRIPTION_THINKING_HEADROOM_TOKENS >= thinking_and_answer_tokens
+
+
 class TestOutputRules:
     """C2 output rules (S53, S21): clean, accept within 600, one retry with the limit reminder, trim, or fail."""
 
@@ -568,7 +714,7 @@ class TestOutputRules:
         assert len(outcome.text) <= MAX_DESCRIPTION_CHARS
         first, retry = client.requests
         assert retry.prompt == first.prompt + _RETRY_REMINDER, "the same single message plus the limit reminder"
-        assert retry.max_output_tokens == first.max_output_tokens == ANSWER_RESERVE_TOKENS
+        assert retry.max_output_tokens == first.max_output_tokens == ANSWER_RESERVE_TOKENS + DESCRIPTION_THINKING_HEADROOM_TOKENS
         assert retry.timeout_seconds == first.timeout_seconds
 
     @pytest.mark.asyncio
@@ -779,7 +925,8 @@ class TestOutputRules:
     async def test_retry_prompt_fits_a_small_window(self) -> None:
         """S11: with a 4k window the sample was sized for the retry, so the retry prompt plus the answer room fits.
 
-        The fit is tight (less than two excerpts of slack), so a sizing that left the reminder out would overflow."""
+        The fit is tight (less than two excerpts of slack), so a sizing that left the reminder out would overflow. The
+        answer room is the ceiling the call really asks for (reserve plus the thinking headroom, which the sample paid)."""
         client = _CharCountingClient(_OVERLONG_ANSWER, _DESCRIPTION_TEXT)
 
         outcome = await _generator(client, _ShortExcerptStore(1000), max_sample_chunks=1000).generate(
@@ -789,7 +936,7 @@ class TestOutputRules:
         assert isinstance(outcome, DescriptionGenerated)
         first, retry = client.requests
         assert retry.prompt == first.prompt + _RETRY_REMINDER
-        slack = _SMALL_WINDOW_SIZE - ANSWER_RESERVE_TOKENS - len(retry.prompt)
+        slack = _SMALL_WINDOW_SIZE - retry.max_output_tokens - len(retry.prompt)
         assert 0 <= slack < _FIT_SLACK_LIMIT
 
     @pytest.mark.asyncio

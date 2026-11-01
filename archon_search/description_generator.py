@@ -28,7 +28,11 @@ trimmed to its last full sentence within the limit (``DescriptionGenerated.trimm
 its last word, or to the limit itself when it has no space. When both answers have nothing left after cleaning the
 outcome is ``unusableOutput`` with a WARNING that points to the ``think`` setting (a reasoning model's answer was eaten by
 its thinking); an empty retry after an over-long first answer trims that first answer instead. Each attempt has the
-configured timeout and the answer ceiling ``ANSWER_RESERVE_TOKENS``, the room the input budget already reserves.
+configured timeout and an answer ceiling: ``ANSWER_RESERVE_TOKENS``, the room the input budget already reserves, plus
+``DESCRIPTION_THINKING_HEADROOM_TOKENS`` unless ``think`` is false (a reasoning model's thinking counts against the
+ceiling and took 1.9k to 2.4k tokens on a real model). Under a token budget the sample gives up min(headroom, budget // 2)
+of it, so prompt plus answer still fit the window; when not even one excerpt then fits (a small window), the sample
+keeps the whole budget and the call the plain ceiling, so a small window never fails for the headroom.
 
 Thinking and restricted chunks (BE-30, S54, S56). ``[description].think`` rides on every call as ``ThinkSetting``
 (``None`` is ``default``, which sends no thinking control); the wrappers decide what goes on the wire and cloud and
@@ -57,6 +61,7 @@ from typing import Final
 from archon_search.config import DescriptionConfig
 from archon_search.constants import (
     ANSWER_RESERVE_TOKENS,
+    DESCRIPTION_THINKING_HEADROOM_TOKENS,
     MAX_DESCRIPTION_CHARS,
     RESTRICTED_CHUNK_PROVIDERS,
 )
@@ -171,6 +176,10 @@ class _GenerationStopped(Exception):
         self.already_logged = False
 
 
+class _WindowTooSmall(_GenerationStopped):
+    """The window leaves too little input room for the prompt, or for one excerpt (a CALL_FAILED stop that names it)."""
+
+
 def _clean_answer(raw: str) -> str:
     """The model's answer without thinking or control characters, as one line (white space runs become one space)."""
     visible = _THINKING_BLOCK.sub(" ", raw)
@@ -260,8 +269,8 @@ class DescriptionGenerator:
         ownership refusal, a store that is not connected) is ``sampleReadFailed`` whose detail names its type.
         """
         try:
-            sample = await self._draw_sample(collection, namespace, self._include_restricted)
-            generated = await self._ask(collection, sample)
+            sample, answer_ceiling = await self._draw_sample(collection, namespace, self._include_restricted)
+            generated = await self._ask(collection, sample, answer_ceiling)
         except _GenerationStopped as stopped:
             failed, provider_failure, logged = stopped.failed, stopped.provider_failure, stopped.already_logged
         except Exception as unexpected:  # noqa: BLE001 — a store-side error; provider steps are covered by _provider_step
@@ -273,7 +282,8 @@ class DescriptionGenerator:
             self._log_failure(collection, failed.detail, provider_failure=provider_failure)
         return failed
 
-    async def _draw_sample(self, collection: str, namespace: str, include_restricted: bool) -> list[str]:
+    async def _draw_sample(self, collection: str, namespace: str, include_restricted: bool) -> tuple[list[str], int]:
+        """The excerpts and the answer ceiling of the calls: the sample fits the budget left after the thinking headroom."""
         try:
             chunk_ids = await self._store.list_chunk_ids(collection, namespace, include_restricted)
         except StoreReadError as failure:
@@ -283,9 +293,21 @@ class DescriptionGenerator:
         with _provider_step():
             budget = (await self._client.input_budget(_sizing_template(collection))).tokens
         count = min(self._config.max_sample_chunks, len(chunk_ids))
+        thinking_possible = self._config.think is not False
         if budget == UNBOUNDED:
-            return await self._read(collection, namespace, _evenly_spaced(chunk_ids, count), include_restricted)
-        return await self._fit(collection, namespace, chunk_ids, include_restricted, budget, count)
+            headroom = DESCRIPTION_THINKING_HEADROOM_TOKENS if thinking_possible else 0
+            excerpts = await self._read(collection, namespace, _evenly_spaced(chunk_ids, count), include_restricted)
+            return excerpts, ANSWER_RESERVE_TOKENS + headroom
+        if thinking_possible:
+            headroom = min(DESCRIPTION_THINKING_HEADROOM_TOKENS, budget // 2)
+            try:
+                excerpts = await self._fit(collection, namespace, chunk_ids, include_restricted, budget - headroom, count)
+            except _WindowTooSmall:
+                pass  # not even one excerpt fits beside the headroom: a small window keeps the sample, not the thinking room
+            else:
+                return excerpts, ANSWER_RESERVE_TOKENS + headroom
+        excerpts = await self._fit(collection, namespace, chunk_ids, include_restricted, budget, count)
+        return excerpts, ANSWER_RESERVE_TOKENS
 
     async def _fit(
         self, collection: str, namespace: str, chunk_ids: list[str], include_restricted: bool, budget: int, count: int
@@ -320,22 +342,22 @@ class DescriptionGenerator:
             raise _no_open_chunk("none of the sampled chunks could be read as unrestricted text")
         return excerpts
 
-    def _window_too_small(self, budget: int) -> _GenerationStopped:
+    def _window_too_small(self, budget: int) -> _WindowTooSmall:
         window = self._client.context_window()
         named = f"{window.size} tokens, {window.source.value}" if isinstance(window, ContextWindowTokens) else str(window)
         room = "the prompt and one excerpt" if budget == 0 else "one excerpt"
-        return _GenerationStopped(
+        return _WindowTooSmall(
             DescriptionFailureReason.CALL_FAILED,
             f"the model's context window ({named}) leaves {budget} input tokens, too little for {room}",
         )
 
-    async def _ask(self, collection: str, sample: list[str]) -> DescriptionGenerated:
+    async def _ask(self, collection: str, sample: list[str], answer_ceiling: int) -> DescriptionGenerated:
         """The model's answer under the output rules: accepted, or retried once and then trimmed or failed."""
         prompt = _DESCRIPTION_PROMPT.format(name=collection, samples=_SAMPLE_SEPARATOR.join(sample))
-        first = await self._attempt(prompt)
+        first = await self._attempt(prompt, answer_ceiling)
         if first and len(first) <= MAX_DESCRIPTION_CHARS:
             return DescriptionGenerated(text=first)
-        second = await self._attempt(prompt + _RETRY_REMINDER)
+        second = await self._attempt(prompt + _RETRY_REMINDER, answer_ceiling)
         cleaned = second or first  # an empty retry still leaves an over-long first answer to trim
         if not cleaned:
             raise _GenerationStopped(DescriptionFailureReason.UNUSABLE_OUTPUT, _NO_USABLE_OUTPUT_DETAIL)
@@ -343,11 +365,11 @@ class DescriptionGenerator:
             return DescriptionGenerated(text=cleaned)
         return DescriptionGenerated(text=trim_to_last_sentence(cleaned), trimmed=True)
 
-    async def _attempt(self, prompt: str) -> str:
+    async def _attempt(self, prompt: str, answer_ceiling: int) -> str:
         """One model call (its own timeout; a provider error stops the generation, it is never retried), cleaned."""
         request = LlmCallRequest(
             prompt=prompt,
-            max_output_tokens=ANSWER_RESERVE_TOKENS,
+            max_output_tokens=answer_ceiling,
             timeout_seconds=self._config.timeout_seconds,
             think=ThinkSetting.from_config(self._config.think),
         )
