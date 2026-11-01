@@ -2368,7 +2368,7 @@ def test_wizard_server_key_prints_restart_note(runner: CliRunner, tmp_path: Path
         )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
-    assert "archon-search restart" in result.output, (
+    assert "archon-search stop, then archon-search start" in result.output, (
         f"Expected restart note in output: {result.output}"
     )
 

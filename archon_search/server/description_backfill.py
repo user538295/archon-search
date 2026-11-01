@@ -14,7 +14,7 @@ a time, across every namespace, for each collection that has no description. The
 and of the sync state (it runs whenever the feature is enabled), so an unreachable provider is one WARNING and
 ``/status`` reachability even when the backfill is off or skipped; S86's "no provider is called" means no generation
 call, since the probe sends no prompt and no document text. A down llama-server is also found by the context-window
-lookup of every ``llama_cpp`` feature (the same ``GET /props``) and by the startup reachability probe (``GET /v1/models``);
+lookup of every ``llama_cpp`` feature (the same ``GET /props``) and by the startup reachability probe (also ``GET /props``);
 the probe reports it through the shared WARNING (``warn_llama_cpp_unreachable``, one per ``host:port`` label and process,
 logged by ``archon_search.llm_client.llama_cpp_client``), so one outage is one WARNING for that server, not one per path.
 Its reason is host-free: the WARNING already names the server.

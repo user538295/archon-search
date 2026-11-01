@@ -407,7 +407,7 @@ def _check_multilingual_deps(config: SearchConfig) -> None:
     if not _multilingual_model_path().exists():
         raise RuntimeError(
             "multilingual=true but lid.176.ftz model is missing; "
-            "run: archon-search install --multilingual"
+            "run: archon-search wizard --multilingual"
         )
 
 

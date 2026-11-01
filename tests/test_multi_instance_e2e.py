@@ -13,7 +13,7 @@ CI both leave it out). It needs developer-machine state and errors at setup on a
 clean host: ``docker-compose.override.yml`` runs ``archon-dev`` from the local
 ``archon-search:dev`` image with ``archon-search.docker-dev.toml``
 (``multilingual = true``) and mounts ``~/.archon-search/models``, which must hold
-``lid.176.ftz`` (``archon-search install --multilingual``); ``archon-test`` runs
+``lid.176.ftz`` (``archon-search wizard --multilingual``); ``archon-test`` runs
 ``ARCHON_SEARCH_IMAGE`` and falls back to a placeholder registry image without it.
 
 Run explicitly with::

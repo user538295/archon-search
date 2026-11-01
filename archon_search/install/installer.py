@@ -1422,7 +1422,7 @@ class RealInstaller(BaseInstaller):
                 "Your --server-key value was written to disk but will not be used while "
                 "ARCHON_SEARCH_API_KEY is set."
             )
-        print("Server key updated. Restart the service to apply: archon-search restart.")
+        print("Server key updated. Restart the service to apply: archon-search stop, then archon-search start.")
 
     def preload_models(
         self, prof: InstallProfile, install_graph_extra: bool = False, graph_device: str = CPU_DEVICE,

@@ -156,7 +156,7 @@ class LanguageDetector:
         if not model_path.exists():
             raise FileNotFoundError(
                 f"fasttext model not found at {model_path}; "
-                "run: archon-search install --multilingual"
+                "run: archon-search wizard --multilingual"
             )
         self._model: Any = fasttext.load_model(str(model_path))
 

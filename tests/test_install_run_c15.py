@@ -350,7 +350,7 @@ def test_run_server_key_prints_restart_note(tmp_path: Path, capsys) -> None:
 
     assert rc == 0
     captured = capsys.readouterr()
-    assert "archon-search restart" in captured.out
+    assert "archon-search stop, then archon-search start" in captured.out
 
 
 def test_run_server_key_with_env_var_prints_priority_warning(tmp_path: Path, capsys) -> None:

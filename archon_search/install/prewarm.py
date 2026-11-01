@@ -365,7 +365,7 @@ def _report_preserved_config(phase: str, bak_path: Path, cause: Exception) -> No
     print(
         f"Install failed {phase}. Your previous config has been preserved at "
         f"{bak_path} for reference. "
-        "Run archon-search install to create a fresh install from scratch. "
+        "Run archon-search wizard to create a fresh install from scratch. "
         f"Cause: {cause}",
         file=sys.stderr,
     )
