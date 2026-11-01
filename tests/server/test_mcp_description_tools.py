@@ -212,7 +212,7 @@ async def test_a_row_dropped_between_the_write_and_the_read_back_is_not_found(to
 class _InFlightLifecycle:
     """A lifecycle whose generation for every collection is in flight, so a status overlay reads ``pending``."""
 
-    def overlay_status(self, collection: str, stored: Any) -> str:
+    def overlay_status(self, meta: CollectionMeta) -> str:
         return "pending"
 
 

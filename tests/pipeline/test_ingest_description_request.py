@@ -218,7 +218,7 @@ class TestManualDescription:
         assert not lifecycle.is_pending("my-col")
         assert generator.calls == []
         store.write_description.assert_not_awaited()
-        assert lifecycle.overlay_status("my-col", "ok") == "ok"
+        assert lifecycle.overlay_status(manual) == "ok"
 
 
 @pytest.mark.integration

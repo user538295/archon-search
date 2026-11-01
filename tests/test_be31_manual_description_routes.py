@@ -19,7 +19,6 @@ from httpx import Response
 from archon_search.collection_meta import (
     CollectionMeta,
     DescriptionStatus,
-    DescriptionStoredStatus,
     visible_description_status,
 )
 from archon_search.config import SearchConfig
@@ -73,8 +72,8 @@ class _RecordingLifecycle:
         self.in_flight: set[str] = set()
         self.requests: list[tuple[Any, ...]] = []
 
-    def overlay_status(self, collection: str, stored: DescriptionStoredStatus | None) -> DescriptionStatus | None:
-        return "pending" if collection in self.in_flight else stored
+    def overlay_status(self, meta: CollectionMeta) -> DescriptionStatus | None:
+        return "pending" if meta.name in self.in_flight else meta.description_status
 
     async def request_generation(self, *args: Any, **kwargs: Any) -> None:
         self.requests.append((args, kwargs))

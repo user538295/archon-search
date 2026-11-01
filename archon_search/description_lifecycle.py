@@ -17,16 +17,22 @@ before the stores disconnect (:meth:`close`, :meth:`drain`).
   inside a class. It holds ``max_queued`` requests (``MAX_QUEUED_GENERATIONS``); over it a describe settles ``failed``
   and an ingest or backfill request is dropped with one WARNING per process (its baseline stays unset, so the next
   qualifying ingest asks again).
-* **State.** ``pending`` (a request that is waiting or running) and the last attempt live in memory only and are lost
-  on restart (S23). The stored status is never ``pending``: readers lay it over the stored value with
-  :meth:`overlay_status`.
+* **State.** ``pending`` (a request that is waiting or running), the last attempt and the failures the store could not
+  record live in memory only and are lost on restart (S23). The stored status is never ``pending``: readers lay the
+  overlay over the stored row with :meth:`overlay_status`.
 * **Manual wins.** A collection whose description source is ``manual`` is never generated, checked when the request
   arrives and again when it gets the slot; the guarded write checks it a third time inside the collection lock.
 
 A failed generation is recorded on the collection through ``DescriptionWriter.record_failure`` under the state the
 generation started from (a failure the service cannot attribute to that state, such as a row that cannot be read once
-the slot is held, settles ``failed`` without a stored status). Nothing in this module logs an excerpt, a prompt, a
-description or an exception message; a failure is logged by collection name and the exception's type.
+the slot is held, settles ``failed`` without a stored status). Recording needs the collection lock; when the lock stays
+busy (or the store errors) the failure cannot be stored, and the service remembers it instead: the collection reads
+``failed`` through :meth:`overlay_status` for as long as its row is what the failed generation started from (a manual
+set, a clear, an import or a later write moves the row on and ends it) and until the next generation of the collection
+is accepted, so the state a reader sees is never the stored ``ok`` of a run that failed. The store itself is not touched:
+a restart reads the old row, and the next ingest, describe or backfill asks again. Nothing in this module logs an
+excerpt, a prompt, a description or an exception message; a failure is logged by collection name and the exception's
+type.
 
 Shutdown is two calls: :meth:`close` first, so a request that races it is refused, then :meth:`drain`, which cancels and
 awaits the tasks and has no timeout of its own (the caller that hosts the service bounds it).
@@ -53,7 +59,6 @@ from archon_search.collection_meta import (
     DESCRIPTION_STATUS_PENDING,
     CollectionMeta,
     DescriptionStatus,
-    DescriptionStoredStatus,
 )
 from archon_search.constants import DEFAULT_NAMESPACE, MAX_QUEUED_GENERATIONS
 from archon_search.description_generator import (
@@ -286,6 +291,8 @@ _DETAIL_OF_DISCARDED_WRITE: Final = {
     DescriptionWriteOutcome.COLLECTION_MISSING: "the collection no longer exists",
 }
 _ATTEMPT_RESULTS: Final = frozenset({GenerationResult.GENERATED, GenerationResult.FAILED})
+#: Why a write was not made when the collection lock stayed taken past ``INGEST_LOCK_TIMEOUT_S``.
+_COLLECTION_BUSY: Final = "the collection was busy"
 
 
 def _refusal(kind: GenerationKind, meta: CollectionMeta) -> GenerationResult | None:
@@ -329,6 +336,8 @@ class DescriptionLifecycle:
         self._slot = _GenerationSlot(max_queued)
         #: Collections with a request waiting or running: the single-flight map and the ``pending`` overlay.
         self._in_flight: set[str] = set()
+        #: Collection -> the row state a failed generation started from, for a failure the store could not record.
+        self._unstored_failures: dict[str, ExpectedState] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self._closed = False
         self._last_attempt: LastAttempt | None = None
@@ -390,7 +399,7 @@ class DescriptionLifecycle:
                 "Reading the description status of collection %r failed (%s)", collection, type(failure).__name__
             )
             return None
-        return self.overlay_status(collection, meta.description_status if meta is not None else None)
+        return self.overlay_status(meta) if meta is not None else None
 
     def _refused_without_reading(self, collection: str) -> GenerationTicket | None:
         if self._closed:
@@ -405,6 +414,7 @@ class DescriptionLifecycle:
         loop = asyncio.get_running_loop()
         job = _Job(collection, namespace, kind, self._slot.reserve(_SLOT_RANK[kind]), loop.create_future())
         self._in_flight.add(collection)
+        self._unstored_failures.pop(collection, None)  # the run now accepted replaces the last failed one
         task = loop.create_task(self._run(job), name=f"{GENERATION_TASK_NAME_PREFIX}{collection}")
         self._tasks.add(task)
         task.add_done_callback(lambda finished: self._on_task_done(job, finished))
@@ -429,11 +439,20 @@ class DescriptionLifecycle:
         """Whether a generation of *collection* is waiting or running."""
         return collection in self._in_flight
 
-    def overlay_status(self, collection: str, stored: DescriptionStoredStatus | None) -> DescriptionStatus | None:
-        """The status a reader sees: *stored* (no overlay, from the store) with ``pending`` laid over it while a
-        generation of *collection* is in flight. Collection names are globally unique, so unlike the contract's
-        ``overlayStatus`` this takes no namespace."""
-        return DESCRIPTION_STATUS_PENDING if self.is_pending(collection) else stored
+    def overlay_status(self, meta: CollectionMeta) -> DescriptionStatus | None:
+        """The status a reader sees for *meta*'s collection: the stored status with ``pending`` laid over it while a
+        generation of the collection is in flight, and ``failed`` while the last generation failed without the store
+        being able to record it and the row is still what that generation started from. A row that moved on drops the
+        memory of the failure. Collection names are globally unique, so the row alone names the collection."""
+        if self.is_pending(meta.name):
+            return DESCRIPTION_STATUS_PENDING
+        unstored = self._unstored_failures.get(meta.name)
+        if unstored is None:
+            return meta.description_status
+        if unstored.refusal(meta) is not None:
+            del self._unstored_failures[meta.name]
+            return meta.description_status
+        return DESCRIPTION_STATUS_FAILED
 
     @property
     def last_attempt(self) -> LastAttempt | None:
@@ -530,7 +549,7 @@ class DescriptionLifecycle:
             return await self._record_failure(job, draft.expected, DescriptionFailureReason.SAVE_FAILED, detail)
         verdict = written.outcome
         if verdict is DescriptionWriteOutcome.LOCK_TIMEOUT:
-            detail = "the collection was busy: the description could not be saved"
+            detail = f"{_COLLECTION_BUSY}: the description could not be saved"
             return await self._record_failure(job, draft.expected, DescriptionFailureReason.SAVE_FAILED, detail)
         return GenerationSettlement(_RESULT_OF_WRITE[verdict], detail=_DETAIL_OF_DISCARDED_WRITE.get(verdict))
 
@@ -538,14 +557,22 @@ class DescriptionLifecycle:
         self, job: _Job, expected: ExpectedState, reason: DescriptionFailureReason, detail: str
     ) -> GenerationSettlement:
         """Store status ``failed`` (the old text is kept). A failure the store refuses (a manual set, a clear or a
-        change landed meanwhile) is discarded and settles as that refusal."""
+        change landed meanwhile) is discarded and settles as that refusal; one it cannot take (the collection stayed
+        busy, or the store errored) is remembered, so readers still see ``failed`` (:meth:`overlay_status`)."""
         verdict = GenerationResult.FAILED
+        not_stored: str | None = None
         try:
             recorded = await self._writer.record_failure(job.collection, job.namespace, expected)
         except Exception as failure:  # noqa: BLE001 — the failure is reported to the caller even when it cannot be stored
-            logger.warning(
-                "Recording the failed description of collection %r failed (%s)", job.collection, type(failure).__name__
-            )
+            not_stored = type(failure).__name__
         else:
             verdict = _RESULT_OF_REFUSED_FAILURE.get(recorded, GenerationResult.FAILED)
+            if recorded is DescriptionWriteOutcome.LOCK_TIMEOUT:
+                not_stored = _COLLECTION_BUSY
+        if not_stored is not None:
+            self._unstored_failures[job.collection] = expected
+            logger.warning(
+                "The failed description of collection %r could not be stored (%s); it reads as failed until the next attempt",
+                job.collection, not_stored,
+            )
         return GenerationSettlement(verdict, detail=detail, reason=reason)

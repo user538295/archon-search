@@ -8,6 +8,7 @@ the fakes on events and drives the event loop with ``until``.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import gc
 import logging
 import weakref
@@ -16,7 +17,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from archon_search.collection_meta import CollectionMeta
+from archon_search.collection_meta import CollectionMeta, visible_description_status
 from archon_search.constants import DEFAULT_NAMESPACE, MAX_QUEUED_GENERATIONS
 from archon_search.description_generator import (
     DescriptionFailed,
@@ -616,24 +617,27 @@ async def test_unreadable_store_at_request_time_starts_nothing_and_raises_nothin
 
 async def test_pending_overlays_the_stored_status_only_while_a_run_is_in_flight(rig: Rig) -> None:
     """S70: ``pending`` is memory only, laid over the stored status while a generation of that collection is in flight."""
+    ok = _row(description="old", source="generated", status="ok", baseline=None)
+    failed = _row(description="old", source="generated", status="failed", baseline=None)
+    empty = _row(description=None, source=None, status=None, baseline=None)
     assert not rig.lifecycle.is_pending(_COLLECTION)
-    assert rig.lifecycle.overlay_status(_COLLECTION, "failed") == "failed"
-    assert rig.lifecycle.overlay_status(_COLLECTION, None) is None
+    assert rig.lifecycle.overlay_status(failed) == "failed"
+    assert rig.lifecycle.overlay_status(empty) is None
     holder = await rig.hold_the_slot(_COLLECTION)
     waiting = await rig.request("queued")
 
     assert rig.lifecycle.is_pending(_COLLECTION)
     assert rig.lifecycle.is_pending("queued")  # pending from the moment the request is accepted
-    assert rig.lifecycle.overlay_status(_COLLECTION, "ok") == "pending"
-    assert rig.lifecycle.overlay_status(_COLLECTION, None) == "pending"
-    assert rig.lifecycle.overlay_status("untouched", "ok") == "ok"
+    assert rig.lifecycle.overlay_status(ok) == "pending"
+    assert rig.lifecycle.overlay_status(empty) == "pending"
+    assert rig.lifecycle.overlay_status(dataclasses.replace(ok, name="untouched")) == "ok"
     rig.generator.gate(_COLLECTION).set()
     await holder.settled
     await waiting.settled
 
     assert not rig.lifecycle.is_pending(_COLLECTION)
     assert not rig.lifecycle.is_pending("queued")
-    assert rig.lifecycle.overlay_status(_COLLECTION, "ok") == "ok"
+    assert rig.lifecycle.overlay_status(ok) == "ok"
 
 
 async def test_pending_is_cleared_when_the_run_fails(rig: Rig) -> None:
@@ -796,6 +800,129 @@ async def test_a_failure_that_lands_after_a_manual_set_or_a_clear_is_discarded(
     settlement = await (await rig.request()).settled
 
     assert settlement.result is expected
+
+
+def _save_meets_a_busy_collection(rig: Rig) -> None:
+    """The generated text cannot be saved and the failure cannot be recorded: the collection lock stays taken."""
+    rig.writer.write_outcome = DescriptionWriteOutcome.LOCK_TIMEOUT
+    rig.writer.failure_outcome = DescriptionWriteOutcome.LOCK_TIMEOUT
+
+
+def _provider_down_and_collection_busy(rig: Rig) -> None:
+    rig.generator.outcomes[_COLLECTION] = DescriptionFailed(DescriptionFailureReason.CALL_FAILED, "down")
+    rig.writer.failure_outcome = DescriptionWriteOutcome.LOCK_TIMEOUT
+
+
+def _save_fails_and_the_store_errors_on_the_failure(rig: Rig) -> None:
+    rig.writer.write_outcome = DescriptionWriteOutcome.LOCK_TIMEOUT
+    rig.writer.failure_error = OSError("lance exploded with secret description text")
+
+
+_UNSTORED_FAILURES = {
+    "save meets a busy collection": _save_meets_a_busy_collection,
+    "provider down, collection busy": _provider_down_and_collection_busy,
+    "store errors on the failure": _save_fails_and_the_store_errors_on_the_failure,
+}
+
+
+async def _fail_without_being_able_to_record(rig: Rig, arrange: Callable[[Rig], None], row: CollectionMeta) -> None:
+    rig.store.rows[_COLLECTION] = row
+    arrange(rig)
+    settlement = await (await rig.request()).settled
+    assert settlement.result is GenerationResult.FAILED
+    assert not rig.lifecycle.is_pending(_COLLECTION)
+
+
+@pytest.mark.parametrize("arrange", _UNSTORED_FAILURES.values(), ids=_UNSTORED_FAILURES.keys())
+@pytest.mark.parametrize("had_text", [True, False], ids=["old text kept", "no text yet"])
+async def test_a_failure_the_store_cannot_record_still_reads_failed(
+    rig: Rig, arrange: Callable[[Rig], None], had_text: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """S22, S20: the lock stays busy (or the store errors) so ``failed`` cannot be stored; the collection reads ``failed``
+    from the lifecycle instead of the stored ``ok`` (or nothing) of a run that failed, once and without any text."""
+    row = _meta() if had_text else _meta(description=None, source=None)
+
+    with caplog.at_level(logging.WARNING, logger=_LIFECYCLE_LOGGER):
+        await _fail_without_being_able_to_record(rig, arrange, row)
+
+    assert rig.lifecycle.overlay_status(row) == "failed"
+    assert rig.lifecycle.overlay_status(row) == "failed", "reading the status does not consume it"
+    assert visible_description_status(row, rig.lifecycle) == "failed"
+    [warning] = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert _COLLECTION in warning.getMessage()
+    assert "secret description text" not in caplog.text
+
+
+_LATER = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
+_ROWS_THAT_MOVED_ON = {
+    "manual set": dataclasses.replace(_meta(), description="hand written", description_source="manual", last_described=_LATER),
+    "cleared": _meta(description=None, source=None),
+    "regenerated": dataclasses.replace(_meta(), description="new text", last_described=_LATER),
+    "failure recorded elsewhere": dataclasses.replace(_meta(), description_status="failed"),
+}
+
+
+@pytest.mark.parametrize("moved", _ROWS_THAT_MOVED_ON.values(), ids=_ROWS_THAT_MOVED_ON.keys())
+async def test_an_unrecorded_failure_ends_when_the_row_moves_on(rig: Rig, moved: CollectionMeta) -> None:
+    """The failed run says nothing about a row that was set, cleared, regenerated or marked since: that row reads as it is
+    stored, and a row that later returns to the old state does not bring the stale ``failed`` back."""
+    row = _meta()
+    await _fail_without_being_able_to_record(rig, _save_meets_a_busy_collection, row)
+    assert rig.lifecycle.overlay_status(row) == "failed"
+
+    assert rig.lifecycle.overlay_status(moved) == moved.description_status
+    assert rig.lifecycle.overlay_status(row) == "ok"
+
+
+async def test_a_manual_description_never_reads_an_unrecorded_failure(rig: Rig) -> None:
+    row = _meta()
+    await _fail_without_being_able_to_record(rig, _save_meets_a_busy_collection, row)
+    manual = dataclasses.replace(row, description_source="manual")
+
+    assert visible_description_status(manual, rig.lifecycle) == "ok"
+
+
+async def test_the_next_accepted_generation_replaces_an_unrecorded_failure(rig: Rig) -> None:
+    """It reads ``pending`` while it runs and whatever the store holds once it has settled: the earlier failure is not
+    shown again."""
+    row = _meta()
+    await _fail_without_being_able_to_record(rig, _save_meets_a_busy_collection, row)
+    rig.writer.write_outcome = DescriptionWriteOutcome.WRITTEN
+    gate = rig.generator.gate(_COLLECTION)
+
+    ticket = await rig.request()
+    await until(lambda: _COLLECTION in rig.generator.started and rig.generator.running == 1)
+    assert rig.lifecycle.overlay_status(row) == "pending"
+    gate.set()
+    assert (await ticket.settled).result is GenerationResult.GENERATED
+
+    assert rig.lifecycle.overlay_status(row) == "ok"
+
+
+@pytest.mark.parametrize(
+    "recorded", [DescriptionWriteOutcome.WRITTEN, DescriptionWriteOutcome.REFUSED_MANUAL, DescriptionWriteOutcome.REFUSED_STALE]
+)
+async def test_a_failure_the_store_took_or_refused_adds_no_overlay(rig: Rig, recorded: DescriptionWriteOutcome) -> None:
+    """The overlay is only for a failure the store could not record: a recorded one is read from the store, a refused one
+    is discarded."""
+    row = _meta()
+    rig.store.rows[_COLLECTION] = row
+    rig.writer.write_outcome = DescriptionWriteOutcome.LOCK_TIMEOUT
+    rig.writer.failure_outcome = recorded
+
+    await (await rig.request()).settled
+
+    assert rig.lifecycle.overlay_status(row) == "ok"
+
+
+async def test_generate_now_reports_failed_when_the_failure_could_not_be_stored(rig: Rig) -> None:
+    """The describe job's result carries the status a reader sees now: ``failed``, not the stored ``ok`` of the run."""
+    rig.store.rows[_COLLECTION] = _meta()
+    _save_meets_a_busy_collection(rig)
+
+    settlement = await rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE)
+
+    assert (settlement.result, settlement.description_status) == (GenerationResult.FAILED, "failed")
 
 
 async def test_last_attempt_records_time_and_outcome_of_the_latest_generation(rig: Rig) -> None:

@@ -7,8 +7,9 @@ from typing import Literal, Protocol, get_args
 
 from archon_search.constants import DEFAULT_NAMESPACE
 
-# C3: where a description came from, and the outcome of the last attempt to write one. ``pending`` is a memory-only
-# overlay owned by the description lifecycle and applied at the API edge: the store never holds or reports it.
+# C3: where a description came from, and the outcome of the last attempt to write one. ``pending``, and a ``failed`` the
+# store could not record, are memory-only overlays owned by the description lifecycle and applied at the API edge: the
+# store never holds or reports them.
 DescriptionSource = Literal["generated", "manual"]
 DescriptionStoredStatus = Literal["ok", "failed"]
 DESCRIPTION_SOURCE_GENERATED: DescriptionSource = "generated"
@@ -18,16 +19,17 @@ DESCRIPTION_STATUS_FAILED: DescriptionStoredStatus = "failed"
 DESCRIPTION_SOURCES: tuple[str, ...] = get_args(DescriptionSource)
 DESCRIPTION_STORED_STATUSES: tuple[str, ...] = get_args(DescriptionStoredStatus)
 
-#: What a reader sees: the stored status with ``pending`` laid over it while a generation is in flight (never over a
-#: manual description).
+#: What a reader sees: the stored status with the lifecycle's memory-only states laid over it (never over a manual
+#: description): ``pending`` while a generation is in flight, and ``failed`` for a failed generation the store could not
+#: record because the collection stayed busy.
 type DescriptionStatus = Literal["ok", "failed", "pending"]
 DESCRIPTION_STATUS_PENDING: DescriptionStatus = "pending"
 
 
 class DescriptionStatusOverlay(Protocol):
-    """The reader side of the description lifecycle: ``pending`` laid over a stored status."""
+    """The reader side of the description lifecycle: its memory-only states laid over a stored row's status."""
 
-    def overlay_status(self, collection: str, stored: DescriptionStoredStatus | None) -> DescriptionStatus | None: ...
+    def overlay_status(self, meta: CollectionMeta) -> DescriptionStatus | None: ...
 
 
 def check_stored_description_value(column: str, value: str | None, allowed: tuple[str, ...]) -> None:
@@ -74,14 +76,14 @@ class CollectionMeta:
 
 
 def visible_description_status(meta: CollectionMeta, overlay: DescriptionStatusOverlay | None) -> DescriptionStatus | None:
-    """The description status a reader sees for *meta*: the stored value, or ``pending`` while the lifecycle has a
-    generation of the collection in flight. *overlay* is ``None`` while ``[description]`` is off, which reads the
-    stored value as it is. Never writes: ``pending`` lives in memory only (C3).
+    """The description status a reader sees for *meta*: the stored value, or the lifecycle's overlay of it (``pending``
+    while a generation of the collection is in flight, ``failed`` for a failed generation the store could not record).
+    *overlay* is ``None`` while ``[description]`` is off, which reads the stored value as it is. Never writes: the
+    overlay lives in memory only (C3).
 
-    A manual description never reads ``pending``: a generation that was in flight when it was set is refused at its own
+    A manual description never reads an overlay: a generation that was in flight when it was set is refused at its own
     write (C11), and none is started for it afterwards, so the stored status is the whole truth.
     """
-    stored = meta.description_status
     if overlay is None or meta.description_source == DESCRIPTION_SOURCE_MANUAL:
-        return stored
-    return overlay.overlay_status(meta.name, stored)
+        return meta.description_status
+    return overlay.overlay_status(meta)
