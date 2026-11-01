@@ -1,9 +1,6 @@
 # Testing rules
 
-Root `CLAUDE.md` carries the two safety rules only. Everything else is here.
-Marker descriptions and the rationale for `norecursedirs` / `-n 8` / `--cov-fail-under=85`
-live as comments in `pyproject.toml` `[tool.pytest.ini_options]` — read those, don't duplicate them.
-Strategy and coverage policy: `Documentation/Architecture/200_testing_strategy.md`.
+Root `CLAUDE.md` carries the two safety rules only. Everything else is here. Marker descriptions and the rationale for `norecursedirs` / `-n 8` / `--cov-fail-under=85` live as comments in `pyproject.toml` `[tool.pytest.ini_options]` — read those, don't duplicate them. Strategy and coverage policy: `Documentation/Architecture/200_testing_strategy.md`.
 
 ## Running
 
@@ -15,8 +12,7 @@ uv run pytest tests/test_x.py --no-cov          # scoped, while iterating
 uv run pytest -n0 -x tests/test_router.py::test_name          # serial — developer debugging ONLY
 ```
 
-`scripts/test-fast.sh` refuses to start if another pytest is running (OOM guard) and always
-tears the RAM disk down, even on Ctrl-C. `--no-cov` is a CLI-only override — never bake it into `addopts`.
+`scripts/test-fast.sh` refuses to start if another pytest is running (OOM guard) and always tears the RAM disk down, even on Ctrl-C. `--no-cov` is a CLI-only override — never bake it into `addopts`.
 
 Lanes excluded from the default run (`norecursedirs` primary, `-m` filter secondary):
 
@@ -39,40 +35,25 @@ The unlocked-dependency lane re-runs the default suite and the docling/graph lan
 bash scripts/test-unlocked-deps.sh            # install + suite + docling + graph; or one step by name
 ```
 
-The smoke lane's server subprocesses run on a throwaway `ARCHON_SEARCH_DATA_DIR`, but `_link_model_cache`
-(`tests/smoke/conftest.py`) symlinks their `models/` at the fixed `~/.archon-search/models`
-(`_SHARED_MODELS_DIR`, not the shell's `ARCHON_SEARCH_DATA_DIR`) — the server's model caches derive from
-its data dir (`paths.py`), so without the link each run would re-download ~1.3 GB of weights and the
-lane's latency budgets would be network-bound. First run on a cold host pays that download once, into
-the shared cache.
+The smoke lane's server subprocesses run on a throwaway `ARCHON_SEARCH_DATA_DIR`, but `_link_model_cache` (`tests/smoke/conftest.py`) symlinks their `models/` at the fixed `~/.archon-search/models` (`_SHARED_MODELS_DIR`, not the shell's `ARCHON_SEARCH_DATA_DIR`) — the server's model caches derive from its data dir (`paths.py`), so without the link each run would re-download ~1.3 GB of weights and the lane's latency budgets would be network-bound. First run on a cold host pays that download once, into the shared cache.
 
 ## PARALLEL TESTS ARE MANDATORY
 
-`addopts` sets `-n 8 --dist=loadgroup`. Never `-n auto` (=14 here) and never `-n0` in a normal run:
-`-n auto` on the real-model lanes (`live_benchmark`/`smoke`, ~2 GB/worker) OOM-crashed the 48 GB machine
-on 2026-07-05. `-n0` disables parallelism and is reserved for developer debugging. For more failure
-detail use `--tb=short` / `--tb=long`, never `-n0 -s`.
+`addopts` sets `-n 8 --dist=loadgroup`. Never `-n auto` (=14 here) and never `-n0` in a normal run: `-n auto` on the real-model lanes (`live_benchmark`/`smoke`, ~2 GB/worker) OOM-crashed the 48 GB machine on 2026-07-05. `-n0` disables parallelism and is reserved for developer debugging. For more failure detail use `--tb=short` / `--tb=long`, never `-n0 -s`.
 
-Release CI (`archon-search-release.yml`, `archon-search-pr.yml`) passes `-n0` explicitly: it uses
-multi-step `--cov-append` across separate invocations, and xdist's per-invocation combine step would
-corrupt the accumulated `.coverage` file.
+Release CI (`archon-search-release.yml`, `archon-search-pr.yml`) passes `-n0` explicitly: it uses multi-step `--cov-append` across separate invocations, and xdist's per-invocation combine step would corrupt the accumulated `.coverage` file.
 
 ## ONE TEST SUITE AT A TIME
 
-Never launch `uv run pytest` fire-and-forget (`run_in_background` without `Monitor`). Subagents may use
-`run_in_background: true` + `Monitor` to outlast the ~120 s Bash foreground ceiling — `Monitor` watches
-the process so nothing is abandoned. Before any run, verify no workers are alive:
+Never launch `uv run pytest` fire-and-forget (`run_in_background` without `Monitor`). Subagents may use `run_in_background: true` + `Monitor` to outlast the ~120 s Bash foreground ceiling — `Monitor` watches the process so nothing is abandoned. Before any run, verify no workers are alive:
 
 ```bash
 ps -Ao args= | grep -E '[/]bin/pytest|[u]v run pytest'
 ```
 
-Match on `args`, never `comm` (macOS truncates a Homebrew interpreter to `/opt/homebrew/Ce`, so the older
-`awk '$1 ~ /[Pp]ython/'` form reports "no workers" mid-suite). `pgrep -fl pytest` self-matches the shell.
-Stacked runs multiply workers and OOM-crashed the 48 GB machine on 2026-07-05.
+Match on `args`, never `comm` (macOS truncates a Homebrew interpreter to `/opt/homebrew/Ce`, so the older `awk '$1 ~ /[Pp]ython/'` form reports "no workers" mid-suite). `pgrep -fl pytest` self-matches the shell. Stacked runs multiply workers and OOM-crashed the 48 GB machine on 2026-07-05.
 
-While iterating, run scoped paths; run the full suite once at task completion and always report its
-wall-clock duration (last measured: ~163 s, `--no-cov -n 8`, 8433 tests, 2026-08-12).
+While iterating, run scoped paths; run the full suite once at task completion and always report its wall-clock duration (last measured: ~317 s, default `addopts` with coverage, `-n 8`, 15067 tests collected, 2026-11-01).
 
 ## Suite layout
 
