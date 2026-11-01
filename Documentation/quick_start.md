@@ -158,7 +158,7 @@ uv run pytest -m live
 uv run pytest -m benchmark   # needs a running server; auto-skips if unreachable
 ```
 
-`live_benchmark` and `smoke` are excluded from the default run and must be run separately (`live_benchmark` needs the two benchmark models in `~/.archon-search/models`; `python -m tests._live_model_cache` downloads them):
+`live_benchmark` and `smoke` are excluded from the default run and must be run separately (`live_benchmark` needs the two benchmark models in `~/.archon-search/models`; `python -m tests._live_model_cache` downloads them and the pinned gpt2 tokenizer of the token ceiling tests):
 
 ```bash
 uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
