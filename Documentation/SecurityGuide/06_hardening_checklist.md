@@ -44,7 +44,7 @@ The server creates the data directory and its subdirectories `0700` (and tighten
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Bearer $NAMESPACE_KEY" http://127.0.0.1:8765/sync
 ```
 
-**Backed by**: [`02_authentication_and_keys.md`](./02_authentication_and_keys.md) "Admin scope"; `archon_search/server/authz.py`.
+**Backed by**: [`02_authentication_and_keys.md`](./02_authentication_and_keys.md) "Admin scope"; `archon_search/services/authz.py`.
 
 ### 3. Server binds to loopback, or the port is firewalled
 

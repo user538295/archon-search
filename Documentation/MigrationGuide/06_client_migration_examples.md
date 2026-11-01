@@ -147,7 +147,7 @@ MCP `search` does **not** accept a `top_k` parameter, so NR-2 has no MCP-side co
 
 ## NR-43 — keys, admin scope and namespace ownership
 
-**Source**: [BREAKING.md → "[next release] — authorization: admin scope for key, sync, backup, maintenance, telemetry and collection-create routes; a collection name belongs to one namespace; API-key format rules; MCP tools fail closed (2026-10-25)"](../../BREAKING.md). **Code**: `archon_search/server/authz.py`, `archon_search/key_manager.py`.
+**Source**: [BREAKING.md → "[next release] — authorization: admin scope for key, sync, backup, maintenance, telemetry and collection-create routes; a collection name belongs to one namespace; API-key format rules; MCP tools fail closed (2026-10-25)"](../../BREAKING.md). **Code**: `archon_search/services/authz.py`, `archon_search/key_manager.py`.
 
 Keys must be at least 32 characters: `ARCHON_SEARCH_API_KEY` lowercase hex (`python3 -c "import secrets; print(secrets.token_hex(32))"`), a `[namespaces]` token printable ASCII. Only the default key, or a managed key created with `"admin": true`, may call `/keys/rotate`, `/sync`, `/backup/trigger`, `/maintenance/trigger`, `/telemetry/*` and `POST /collections/`; any other key gets `403` `{"detail": "this operation requires an admin API key"}`.
 

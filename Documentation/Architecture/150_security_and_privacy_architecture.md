@@ -69,7 +69,7 @@ D7 introduces `KeyStore`, a durable multi-key store backed by `get_data_dir() / 
 ### Bearer enforcement (`archon_search/server/middleware_auth.py`)
 
 - Every request except `/health` and `/ready` requires `Authorization: Bearer <token>`; `/docs`, `/redoc` and `/openapi.json` are exempt only when `[server].docs_enabled = true` (default `false`: the first two do not exist and `/openapi.json` needs a token). A request body over `[server].max_request_body_mb` is refused with `413` before authentication.
-- **Admin scope.** `AuthIdentity.admin` (set by the middleware, enforced in `server/authz.py` for REST and MCP alike) gates admin-only routes with `403`; see [`600_api_reference_or_public_interface.md`](600_api_reference_or_public_interface.md#authentication).
+- **Admin scope.** `AuthIdentity.admin` (set by the middleware, enforced by the policy in `services/authz.py` for REST and MCP alike) gates admin-only routes with `403`; see [`600_api_reference_or_public_interface.md`](600_api_reference_or_public_interface.md#authentication).
 - **D7 dispatch order (with early-exit on managed-key match):**
   1. Managed keys (`key_store.active_keys()`) — token hash computed once per request via `sha256(token).hexdigest()`, compared with `hmac.compare_digest` against each record's `token_hash`. Exits loop on first match (constant-time per comparison; both operands are 64-char hex strings). If a match is found and `request.state.namespace` is set, processing continues.
   2. TOML `[namespaces]` loop — no early `break` (preserving the pre-D7 timing-safe design).

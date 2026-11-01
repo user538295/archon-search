@@ -161,7 +161,7 @@ flowchart LR
         - #integration_test — `test_key_tools_refuse_a_request_whose_state_has_a_namespace_but_no_admin_flag` — existing MCP test; the same refusal reaches an MCP caller, so REST and MCP share one `ForbiddenError`
         - #integration_test — `test_openapi_spec_matches_snapshot` — the OpenAPI snapshot is unchanged and the 403 `ErrorDetail` is still declared
         - #integration_test — `test_a_real_fastmcp_tool_call_without_an_http_request_is_refused` — existing guard; the `get_http_request` fixtures and `real_mcp_auth_context` opt-out still work (ADR 17)
-- [ ] **BE-16** — Re-point the authz path references in the live docs: 140 (`:75`), 600 (`:23`), 150, SecurityGuide 01, 02 and 06, DeveloperGuide 02 (`:15`), MigrationGuide 06 (`:150`) and the root `README.md` (`:190`); leave the historical records alone; add no "HOME" mention to the guides #backend-role
+- [x] **BE-16** — Re-point the authz path references in the live docs: 140 (`:75`), 600 (`:23`), 150, SecurityGuide 01, 02 and 06, DeveloperGuide 02 (`:15`), MigrationGuide 06 (`:150`) and the root `README.md` (`:190`); leave the historical records alone; add no "HOME" mention to the guides #backend-role
     - — · 1.5h
     - needs BE-6 · completes S24
     - Tests
