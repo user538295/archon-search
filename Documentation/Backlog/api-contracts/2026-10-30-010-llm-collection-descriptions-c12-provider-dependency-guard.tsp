@@ -1,4 +1,6 @@
 // C12 — Provider dependency guard (internal logical seam).
+// Revised after implementation (2026-11-01): the guard is ONE shared function, `check_provider_package(provider)` in `server/provider_dependency.py`, returning a `PackageProblem` (package, detail, install hint) or `None`; there is no `GuardResult` type. Graph (`_missing_graph_package` in `app.py`) and description both use it. For graph the WARNING leaves `graph_client = None` while `graph.enabled` stays true (entity graph, PPR and communities still work). For description the probe reports the missing package as not reachable, so backfill is skipped. `claude_cli` and `llama_cpp` are never guarded here (the probe checks the `claude` program). HyDE and RAG Fusion keep `_check_provider_deps` and still refuse to start.
+//
 //
 // Layer edge: Frameworks & Drivers (server startup composition) -> Interface Adapters (provider
 // wrappers, resolved by import or by binary lookup).

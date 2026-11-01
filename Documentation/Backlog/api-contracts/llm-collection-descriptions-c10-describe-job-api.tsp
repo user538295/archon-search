@@ -5,6 +5,8 @@ using Http;
 namespace DescribeJobApi;
 
 // C10 — `GET /jobs/{id}` and `DELETE /jobs/{id}` for the new description job kind.
+// Revised after implementation (2026-11-01): `DescriptionJob(IngestJob)` adds no fields; a crash-left RUNNING job loads `FAILED` (`process_restart`) without arming the crash-loop guard. The settled outcome is `superseded` (also when the collection was deleted during the run), never `collectionMissing`; the result is `{outcome, description_status}` with `generated|failed|alreadyRunning|refusedManual|superseded`, and a shutdown ends the job `FAILED` ("the server is shutting down"). The route holds no collection lock and the job never blocks a collection DELETE. The lifecycle's kinds are `describe|ingest|backfill`. `describe --all` is a CLI loop that first reads `GET /status`; it fills empty or `failed` collections and skips manual, `ok` and no-document ones, and stops at the first not-configured 409.
+//
 //
 // HTTP/API seam. `GET /openapi.json` stays the authoritative contract; this file models only what a
 // description job adds to the existing job response (`JobResponse`, schemas.py line 542, built by

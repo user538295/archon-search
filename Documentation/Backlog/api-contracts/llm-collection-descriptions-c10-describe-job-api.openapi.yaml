@@ -1,3 +1,4 @@
+# Revised after implementation (2026-11-01): generated from the plan's .tsp and not regenerated. The outcome vocabulary is as written here (`superseded`, never `collectionMissing`); a description job adds no fields to the base ingest job. See the C10 .tsp header.
 openapi: 3.0.0
 info:
   title: Archon Search Describe Job API (description job kind)

@@ -1,4 +1,12 @@
 // C1 — Shared LLM client seam (internal logical seam).
+// Revised after implementation (2026-11-01): the text below is the plan as written; the shipped API differs as follows (`archon_search/llm_client/protocol.py`, `fit.py`, `budget.py`).
+// - `call` and `input_budget` are async, `context_window` is sync; `input_budget(template_text, think = ThinkSetting.DEFAULT)` takes the thinking setting because a chat template can frame a prompt differently per setting. `ThinkSetting` members are `DEFAULT`, `ON`, `OFF`.
+// - `LlmCallRequest` fields are `prompt`, `max_output_tokens`, `timeout_seconds`, `think`; callers send `ANSWER_RESERVE_TOKENS` (1024), and a description call that may think adds `DESCRIPTION_THINKING_HEADROOM_TOKENS` (3072) and pays for it out of its sample. `LlmCallFailure(provider, reason)` has the subclasses `LlmCallTimeout` and `LlmThinkingNotSupported`.
+// - Two optional protocols carry counting: `TokenCountingClient.count_tokens` (llama_cpp, ollama) and `TokenBoundingClient.token_ceiling` (a request-free upper bound, so a text surely within budget skips the count).
+// - The fit/budget API of the callers is `fit.py`: `fit_query_to_window(client, template, query, provider=)` (HyDE and RAG Fusion) and `fit_text_to_budget(text, budget, count)`, with `NoRoomForInput` when the window leaves no room, at most `MAX_FIT_COUNTS` (10) counts, and `TemplateCostCache` memoising the template cost. The old fixed 2000-character query cut is gone; a cloud query is sent untrimmed.
+// - The Ollama estimate counts digits and emoji; the llama_cpp budget counts the chat framing through `/apply-template` and honours `think`.
+// - `LlmClientOptions` is realised as the arguments of `build_llm_client` in `server/llm_composition.py` (`rate_limit_rpm`, claude_cli retry flag), not as a model.
+//
 //
 // Layer edge: Use Cases (HyDE generation, RAG Fusion generation, graph community enrichment,
 // description generation) -> Interface Adapters (one wrapper per provider).

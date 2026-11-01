@@ -1,3 +1,4 @@
+# Revised after implementation (2026-11-01): generated from the plan's .tsp and not regenerated. The shipped GET /openapi.json (tests/server/openapi_snapshot.json) differs: `description_source` and `description_status` are optional with a null default (not in `required`); a 422 on PUT is FastAPI's list body; PUT/DELETE answer the stored state with no `pending` overlay; POST /describe never answers store_busy (its 503 is "not ready"; job-creation failure is 500). See the C6 .tsp header.
 openapi: 3.0.0
 info:
   title: Archon Search Collections API (description fields)

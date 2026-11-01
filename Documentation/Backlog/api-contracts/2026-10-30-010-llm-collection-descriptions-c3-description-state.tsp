@@ -1,4 +1,6 @@
 // C3 — Collection description state seam (internal logical seam).
+// Revised after implementation (2026-11-01): the port is realised on `SearchStore` as `write_description(collection, namespace, fields, guard)`, `list_chunk_ids`, `read_excerpts` and `description_version`; reads raise `StoreReadError`. `DescriptionFields` has SIX fields: the routing vector (`description_embedding`) is the sixth. The guard (`ExpectedState`) compares description, source, last-described AND the stored status, as written below. `description_version(collection)` is new: an in-memory counter that grows whenever the description text, source or status changes (or the meta row is deleted); the lifecycle remembers a failure the busy store refused against it and reads the collection as `failed` until the version changes. The overlay lives in `collection_meta.visible_description_status`, and it is applied on GET, list and PATCH only: a manual PUT or DELETE answers the stored state, never `pending`.
+//
 //
 // Layer edge: Use Cases (pipeline, description generation, lifecycle, manual set/clear, import) -> the
 // consumer-owned `DescriptionStore` port below, implemented by the persistence adapter (`SearchStore`,

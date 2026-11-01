@@ -1,4 +1,6 @@
 // C8 — MCP collection tools, description fields (internal logical seam).
+// Revised after implementation (2026-11-01): the tool counts are 18 without a key store and 22 with one, as written. Both tools share `apply_description_change` (`description_change.py`) with the REST routes; `store_busy` carries the existing `StoreBusyError` text, and the answer is the stored state (no `pending` overlay). Without an injected writer the tools answer `internal_error`. An emptied description is reported as `null` here while REST returns `""`. The `outputSchema` of the four list tools also changed.
+//
 //
 // Layer edge: MCP client -> Interface Adapters (`server/mcp.py` tools and `server/mcp_schemas.py`).
 // MCP tools are JSON tool schemas on a mounted FastMCP app, not REST routes, so this is modelled as

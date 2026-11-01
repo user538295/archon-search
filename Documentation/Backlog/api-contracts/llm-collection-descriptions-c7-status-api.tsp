@@ -5,6 +5,8 @@ using Http;
 namespace StatusDescriptionApi;
 
 // C7 — `GET /status` -> `description`.
+// Revised after implementation (2026-11-01): `DescriptionStatusDetail` in `schemas.py` keeps `provider`, `key_available` and `backfill_on_startup` required; every other field is optional with a null default (not required-nullable), and `provider` is a plain string on the wire. `effective_context_tokens` and `context_window_source` are null for any provider that trims nothing (cloud and `claude_cli`). `key_available` for `claude_cli` means the client found the `claude` program. The block reads `app.state` only (no provider call), the probe's free-text reason and install command stay log-only, and the last attempt is process-wide and visible to every authenticated caller. The probe runs whenever descriptions are enabled. `describe --all` preflights `GET /status`: a null `description` prints the setup message and exits 1.
+//
 //
 // HTTP/API seam. `GET /openapi.json` is the authoritative HTTP contract for this project, so this
 // file models only the sub-object this feature adds. The field is additive and nullable, like

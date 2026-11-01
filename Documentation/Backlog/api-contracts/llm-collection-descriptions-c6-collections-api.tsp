@@ -5,6 +5,13 @@ using Http;
 namespace CollectionsDescriptionApi;
 
 // C6 — `/collections` routes, description fields and actions.
+// Revised after implementation (2026-11-01): where the shipped `/openapi.json` differs from the models below:
+//   - `description_source` and `description_status` are optional with a null default (not required-nullable) on `CollectionSummary` and `CollectionDetail`; the same holds for the MCP schemas.
+//   - A 422 on `PUT /collections/{name}/description` is FastAPI's validation body (`{"detail": [{type, loc, msg, input, ctx}]}`, a list), not `{detail: string}`; the rule text comes from `check_description_text`. The CLI validates client-side first.
+//   - `description_status` is overlaid with `pending` on GET, list and PATCH only. A manual PUT or DELETE answers the STORED state (a manual description never reads `pending`), and neither takes the lock in the route: the shared `DescriptionWriter` does, so a lock timeout is 503 `store_busy`. A collection with only config (no meta row yet) is 404 on PUT and DELETE, unlike GET.
+//   - `POST /collections/{name}/describe` never answers `store_busy`: its 503 is only "no search store yet" (`service not ready`), it holds no collection lock, and a failure creating the job is 500. The two 409 bodies (manual, not configured) are told apart by `detail` (`DESCRIBE_MANUAL_DETAIL`, `DESCRIBE_NOT_CONFIGURED_DETAIL`). A foreign or unknown collection is the same 404 for admin and non-admin keys.
+//   - The `.openapi.yaml` next to this file was generated from the plan and is not regenerated; `GET /openapi.json` (snapshot `tests/server/openapi_snapshot.json`) is authoritative.
+//
 //
 // HTTP/API seam. `GET /openapi.json` is the authoritative HTTP contract for this project, so this
 // file models only what this feature changes on the collection routes, not the whole route set.

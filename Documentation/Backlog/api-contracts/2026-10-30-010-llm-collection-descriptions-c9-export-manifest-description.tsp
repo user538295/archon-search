@@ -1,4 +1,6 @@
 // C9 — Export manifest version 2, description fields (internal logical seam).
+// Revised after implementation (2026-11-01): `EXPORT_SCHEMA_VERSION = 2` ships as written. Import builds its own `DescriptionWriter` from the embedder cache (not `app.state.description_writer`) and normalises text with `normalise_description_text` (drops control characters and lone surrogates, collapses whitespace, trims to the last sentence else last word within 600; empty result = no description plus a WARNING).
+//
 //
 // Layer edge: export job (writes the manifest) and import job (reads it) -> the archive format.
 //

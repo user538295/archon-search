@@ -1,4 +1,6 @@
 // C2 — Description generation seam (internal logical seam).
+// Revised after implementation (2026-11-01): the generator is `DescriptionGenerator(config, client, store).generate(collection, namespace)` in `description_generator.py`; it reads the sample itself (the sample is not an argument) and returns `DescriptionGenerated` or `DescriptionFailed`, never raising. The store has no SQL filter helpers: "open" means `acl is None` exactly, read Python-side by `list_chunk_ids` and `read_excerpts` (`include_restricted` flag). A model that may think gets `DESCRIPTION_THINKING_HEADROOM_TOKENS` on top of the answer reserve, and the sample shrinks to pay for it. The failure reasons are the five written below; `saveFailed` is set by the lifecycle, not the generator.
+//
 //
 // Layer edge: Use Cases (ingest pipeline, describe job, startup backfill) -> Use Cases
 // (description generation), which depends on the shared LLM client (C1) and writes through the

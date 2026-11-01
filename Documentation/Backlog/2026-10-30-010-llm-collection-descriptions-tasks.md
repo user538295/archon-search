@@ -222,6 +222,7 @@ flowchart LR
         - #unit_test — `test_ollama_budget_applies_20_percent_margin_and_reserve` — the Ollama input budget is window minus answer reserve minus template, with the margin on the estimate
         - #unit_test — `test_llama_cpp_budget_uses_exact_count` — the `llama_cpp` budget uses the exact token count from its tokenize callback
         - #unit_test — `test_budget_reserves_room_for_retry_reminder` — the template used for sizing includes the retry reminder
+    - Revised after implementation (2026-11-01): the callers size through `llm_client/fit.py` (`fit_query_to_window`, `fit_text_to_budget`, `NoRoomForInput`) with a `TemplateCostCache` for the template cost and a request-free `token_ceiling` fast path; the Ollama estimate also counts digits and emoji, and the `llama_cpp` budget counts the chat framing through `/apply-template` and honours `think`. Thinking-model calls add `DESCRIPTION_THINKING_HEADROOM_TOKENS` (3072) on top of the 1024-token answer reserve.
 - [x] **BE-5** — Ollama wrapper on the native `ollama` SDK (`AsyncClient.chat`, `num_ctx` only when configured, `think`, model maximum from `show`) plus the new loopback fake model server `tests/_fake_model_server.py` (Ollama `/api/chat`, `/api/show`; llama.cpp `/props`, `/tokenize`, `/v1/chat/completions`) #backend-role
     - Interface Adapters · 5.0h
     - needs BE-2, BE-4 · completes S6, S7
@@ -275,6 +276,7 @@ flowchart LR
         - #unit_test — `test_hyde_logs_one_warning_per_process_without_query_text` — many failures log one WARNING and no line holds the query or hypothesis
         - #integration_test — `test_hyde_search_through_shared_client_over_http` — `test_http_hyde_rag_fusion.py` HyDE path returns the hypothetical document as before
         - #integration_test — `test_hyde_per_collection_embedder_with_shared_client` — the per-collection embedder test runs on the new composition
+    - Revised after implementation (2026-11-01): the fixed 2000-character query cut named above is removed; HyDE sizes the query to the model window through `fit_query_to_window` (cloud queries are sent untrimmed). Aborted `/search` and `/explain` requests cancel the provider call.
 - [x] **FE-1** — Ask the Ollama context window per feature in the wizard (HyDE, RAG Fusion, graph): suggest 8192, offer the previous value, warn when two features share a model with different values; `WizardFeatures` fields, `config_writer` reconcile, installer defaults, revert strips the key #frontend-role
     - Presentation · 6.0h
     - needs BE-1 · completes S48, S71
@@ -308,6 +310,7 @@ flowchart LR
         - #unit_test — `test_rag_failure_falls_back_to_single_query` — a raising client gives `rag_fusion_applied: false`
         - #unit_test — `test_rag_logs_one_warning_per_process_without_query_text` — one WARNING for many failures and no query text in logs
         - #integration_test — `test_rag_fusion_through_shared_client_over_http` — the HTTP search path still fuses variants
+    - Revised after implementation (2026-11-01): RAG Fusion sizes its query to the model window the same way as HyDE (`fit_query_to_window`), not by a fixed cut.
 - [x] **BE-13** — Cut over: remove `archon_search/providers/`, `query_expansion_protocol.py` and `_build_query_expansion_provider`, keep HyDE and RAG Fusion refusing to start on a missing package, delete or replace the adapter-pinned tests, re-point `test_no_query_log_in_llama_cpp_provider.py` and `test_anthropic_key_guards.py`; check whether `HyDEDependencyError` and `RAGFusionDependencyError` are still reachable once providers are injected, and remove their paths if not #backend-role
     - Interface Adapters · 5.0h
     - needs BE-11, BE-12 · completes S65
@@ -440,6 +443,7 @@ flowchart LR
         - #integration_test — `test_ingest_returns_before_the_provider_finishes` — with a parked provider the ingest result is already returned
         - #integration_test — `test_ingest_without_lifecycle_requests_no_generation` — eval and installer pipelines stay silent
         - #unit_test — `test_manual_source_collection_is_not_marked_pending` — the rule does not enqueue for a manual description
+    - Revised after implementation (2026-11-01): the ingest hook is no longer only `_finalize_batch_ingest`. Every path that changes a collection's documents asks for a description through ONE routine, `SearchPipeline.finalize_collection_change` (stamp `last_indexed` guarded, recompute if signalled, request kind `ingest` without waiting): batch ingest, single-file `ingest_file`, incremental sync and watcher, and removals through `finalize_after_removal` (document delete, orphan sweep, expired pruning); import and eval do not request. `force_regenerate_description` is removed everywhere in `pipeline.py` (not only `ingest_directory`), and `SearchStore.update_description` is replaced by `touch_last_indexed`. The tests above are extended by `tests/pipeline/test_ingest_description_request.py` and `tests/pipeline/test_description_request_every_path.py`.
 - [x] **BE-25** — Wire the lifecycle in `server/app.py`: build it in the lifespan before the MCP mount, pass it to the pipeline and the MCP app, build the description client from `[description]` (window resolution, unset-Ollama WARNING arm), build nothing when disabled, close then drain in two phases (closed before the cancel gather, drain after, before the stores disconnect) #backend-role
     - Frameworks & Drivers · 6.0h
     - needs BE-23, BE-24, BE-10 · completes S5, S17, S19, S35, S67, S85
@@ -449,6 +453,7 @@ flowchart LR
         - #integration_test — `test_request_after_shutdown_began_is_refused` — a cancelled ingest asking late gets `closed` and starts nothing
         - #integration_test — `test_description_feature_uses_its_own_provider_model_and_host` — the description arm of the per-feature provider check
         - #integration_test — `test_live_local_model_generates_description_when_model_is_pulled` — an auto-skipping lane in the style of `test_llama_cpp_e2e.py` that skips unless the Ollama model is present, not only when the port answers
+    - Revised after implementation (2026-11-01): the lifecycle, its client and the embedder cache are built in `create_app`, not in the lifespan, because the pipeline must receive the lifecycle at construction; the lifespan adds the description client to the window-resolution task, publishes `app.state.embedder_cache`, and after the lifecycle drains it closes the hyde, rag_fusion, graph and description clients before the stores disconnect (`tests/test_shutdown_closes_llm_clients.py`). The reachability probe always runs when descriptions are enabled.
 - [x] **BE-26** — Expose `description_source` and `description_status` in the REST list and detail (`schemas.py`) and the three MCP collection schemas (`mcp_schemas.py`, labelled as data derived from document content), with the `pending` overlay from the lifecycle (tolerant of its absence), a shared detail builder replacing the hand copies, regenerated OpenAPI snapshots #backend-role
     - Interface Adapters · 5.0h
     - needs BE-18, BE-23 · completes C6, C8, S40, S70
@@ -605,6 +610,7 @@ flowchart LR
         - #unit_test — `test_running_description_job_at_crash_loads_failed_without_arming_guard` — `process_restart` and no crash-loop count
         - #integration_test — `test_older_loader_reads_description_job_as_plain_ingest_job` — the jobs file loads and other jobs are untouched
         - #integration_test — `test_delete_job_answers_409_and_generation_continues` — the job delete is refused
+    - Revised after implementation (2026-11-01): BE-33 tests also live in `tests/test_description_job.py` and `tests/integration/test_be33_description_job.py`. The `DELETE /jobs/{id}` 409 text is "a description job cannot be cancelled"; both OpenAPI snapshots were regenerated.
 - [x] **BE-34** — Lifecycle forced entry `generateNow` and `POST /collections/{name}/describe`: 202 `JobResponse` with result `{outcome, description_status}`, tracked task with a cancellation handler ending the job `FAILED` ("the server is shutting down"), 409 for a manual description, 409 with the setup message when descriptions are not configured, namespace check, `?kind=description` #backend-role
     - Interface Adapters · 8.0h
     - needs BE-33, BE-26 · completes C6, C10, S29, S32, S58, S59, S80, S85, S87
@@ -615,6 +621,7 @@ flowchart LR
         - #integration_test — `test_describe_not_configured_returns_409_setup_message_and_creates_no_job` — `detail` carries the setup message
         - #integration_test — `test_describe_provider_down_settles_done_with_outcome_failed` — a down provider is not a 409
         - #integration_test — `test_collection_delete_not_blocked_by_running_describe_job` — the generation finds the collection gone and writes nothing
+    - Revised after implementation (2026-11-01): the forced entry is `DescriptionLifecycle.generate_now` (kinds are `describe|ingest|backfill`), returning a `DescribeSettlement`; a collection that is gone settles `superseded`, not `collectionMissing`. The route never answers `store_busy` (its 503 is "not ready"). BE-34 tests also live in `tests/integration/test_be34_describe_route.py` and `tests/test_description_lifecycle.py`.
 - [x] **FE-11** — CLI `describe <name> [--wait]` and `describe --all`: non-exiting job poll, outcome to exit code per C10, 409 manual and not-configured messages, `--all` fills empty or `failed` collections of the caller's namespace and lists the skipped ones, stops on the first not-configured 409; strip terminal control characters from printed text, and skip collections with no documents as S18 does for generation #frontend-role
     - Presentation · 6.0h
     - needs BE-34, FE-10 · completes S29, S31, S32, S58, S59
@@ -623,6 +630,7 @@ flowchart LR
         - #unit_test — `test_describe_all_fills_empty_or_failed_and_skips_manual_and_ok` — the skip rule and the printed list
         - #unit_test — `test_describe_all_stops_on_not_configured_409` — exit 1 after the first setup message
         - #unit_test — `test_describe_manual_409_prints_clear_first_and_exits_1` — the message says to clear it first
+    - Revised after implementation (2026-11-01): `describe --all` first reads `GET /status`; when description is not configured it prints the setup message and exits 1 even if every collection would be skipped. Tests also live in `tests/integration/test_fe11_describe_cli_bridge.py`.
 - [x] **T-10** — e2e: `describe` and `describe --all` through REST and the CLI bridge #tester-role
     - — · 6.0h
     - needs BE-34, FE-11 · completes S29, S31, S32, S58, S59, S80, S87
@@ -632,6 +640,7 @@ flowchart LR
         - #e2e_test — `test_e2e_describe_not_configured_409_and_provider_down_job_failed` — the two cases are told apart
         - #e2e_test — `test_e2e_two_callers_one_generation_and_manual_set_between_409_check_and_run` — `alreadyRunning` and `refusedManual` with exit 1
         - #e2e_test — `test_e2e_describe_request_during_shutdown_is_refused` — the job ends `FAILED` and nothing writes to the closed store
+    - Revised after implementation (2026-11-01): `tests/integration/test_lcd_t10_describe_e2e.py` holds eight tests: the five above plus `test_e2e_describe_all_reports_not_configured_even_when_every_collection_is_skipped`, `test_e2e_running_describe_job_cannot_be_deleted_and_collection_delete_is_not_blocked` and `test_e2e_foreign_namespace_describe_is_not_found` (REST and CLI). The plan's `collectionMissing` reads `superseded` in code.
 
 ### Phase 9 · Fill existing collections at startup *(reachability probe and backfill task)*
 - [x] **BE-35** — Reachability probe task (once at startup, result on an `app.state` handle, never blocks boot) and the cancellable backfill task: waits for the startup sync in any end state and for the probe, skipped with one INFO when the sync is suppressed or the provider is down, one collection at a time across every namespace through `get_all_collections_meta`, only collections with no description and stored status not `failed`, skipping those in progress; no task when disabled; for `claude_cli` the reachability probe only checks that the `claude` program exists, and only when description is configured to use it #backend-role
@@ -644,6 +653,7 @@ flowchart LR
         - #integration_test — `test_backfill_cancelled_cleanly_at_shutdown` — a mid-run cancel leaves no half-written description
         - #integration_test — `test_provider_down_boots_and_skips_backfill` — the server boots, a WARNING is logged, backfill never starts
         - #unit_test — `test_claude_cli_reachability_is_presence_check_without_model_call` — no model call, and no check when description does not use `claude_cli`
+    - Revised after implementation (2026-11-01): tests also live in `tests/test_be35_description_backfill.py`. The probe runs whenever descriptions are enabled, independent of backfill and sync state, with one WARNING per llama.cpp server.
 - [x] **T-11** — e2e: backfill across namespaces, provider down, suppressed sync and shutdown mid-backfill #tester-role
     - — · 5.0h
     - needs BE-35 · completes S33, S34, S35, S86
@@ -652,6 +662,7 @@ flowchart LR
         - #e2e_test — `test_e2e_backfill_with_provider_down_boots_and_skips` — the server boots and backfill is skipped
         - #e2e_test — `test_e2e_backfill_skipped_when_startup_sync_suppressed` — a seeded RUNNING ingest job suppresses it; a clean sync lets the next start run it
         - #e2e_test — `test_e2e_shutdown_mid_backfill_cancels_and_kills_claude_child` — the lifespan cancel ends the run and the fake `claude` child is killed
+    - Revised after implementation (2026-11-01): `tests/integration/test_lcd_t11_backfill_e2e.py` holds six tests: the four above plus `test_e2e_backfill_runs_in_the_background_and_skips_a_collection_being_described` and `test_e2e_suppressed_sync_with_provider_down_still_warns_and_status_reports_unreachable`.
 
 ### Phase 10 · Know why descriptions are not working *(startup validation, notices and the status block)*
 - [x] **BE-36** — Startup validator that never blocks boot or raises and is silent when disabled: unusable provider WARNING, description package guard (C12: WARNING with hint, generation then fails visibly, backfill skipped), `think` ignored WARNING, restricted-chunk WARNINGs naming provider and host, privacy INFO, the off-notice when `ANTHROPIC_API_KEY` is set and `[description]` is absent, the hybrid-without-descriptions WARNING; one loopback function (`urlsplit`, `ipaddress`) with its table test #backend-role
@@ -664,6 +675,7 @@ flowchart LR
         - #integration_test — `test_privacy_info_for_cloud_and_non_loopback_hosts_only` — a loopback Ollama gets no INFO
         - #integration_test — `test_hybrid_without_descriptions_warns_centroid_fallback` — the WARNING names the fallback
         - #integration_test — `test_missing_description_package_warns_and_generation_fails_visibly` — status `failed`, one WARNING per process
+    - Revised after implementation (2026-11-01): tests also live in `tests/test_be36_description_startup.py`; the package guard is the shared `server/provider_dependency.py` (C12).
 - [x] **BE-37** — `/status` description block: `DescriptionStatusDetail` and a nullable additive `StatusResponse.description` in `schemas.py`, builder beside `_build_hyde_status` in `routes_status.py` (provider, key availability, reachability null until probed, effective context tokens and source, backfill flag, last attempt), never in `/ready` or `provider_warnings`; regenerated snapshots #backend-role
     - Interface Adapters · 4.0h
     - needs BE-25, BE-35 · completes C7, S39, S52, S66
@@ -672,6 +684,7 @@ flowchart LR
         - #unit_test — `test_status_reachability_null_until_probed` — before and after the startup probe
         - #integration_test — `test_ready_unaffected_when_description_provider_down` — `/ready` ignores description health
         - #integration_test — `test_status_response_additive_for_existing_consumers` — existing fields and parsing are unchanged
+    - Revised after implementation (2026-11-01): tests also live in `tests/test_be37_status_description_block.py`; the block's optional fields default to null (not required-nullable).
 - [x] **FE-12** — CLI `status` renders the description block (nothing when null) with its own key-warning wording #frontend-role
     - Presentation · 2.5h
     - needs BE-37 · completes S39, S66
@@ -687,6 +700,7 @@ flowchart LR
         - #e2e_test — `test_e2e_status_description_block_before_and_after_probe_and_attempt` — null reachability, then probed, then last attempt; `/ready` unaffected
         - #e2e_test — `test_e2e_every_llm_provider_down_boots_normally` — the server boots with all providers failing
         - #e2e_test — `test_e2e_missing_description_package_fails_visibly` — masked package: WARNING, status `failed`, provider not reachable, backfill skipped
+    - Revised after implementation (2026-11-01): `tests/integration/test_lcd_t12_notices_and_status_e2e.py` holds five tests: the four above plus `test_e2e_backfill_provider_down_status_and_cli_report_not_ok` (closes S34's `/status` clause).
 
 ### Phase 11 · Keep descriptions in backups *(export manifest version 2 and the import rules; ADR and BREAKING entries for the whole feature)*
 - [x] **BE-38** — Export manifest version 2 (`EXPORT_SCHEMA_VERSION` in `export_archive.py`, covers `routes_export.py` and `mcp.py`) carrying `description` and `description_source`; import restores through the write operation (sourceless becomes `generated`, `manual` stays, status `ok`, baseline unset), normalises text to one line of at most 600 characters, handles the empty-archive path, refuses version 1 unless `ignore_schema_version`; update the pinned version tests #backend-role
@@ -698,11 +712,13 @@ flowchart LR
         - #integration_test — `test_manual_description_round_trips_through_export_and_import` — text and source restored, status `ok`
         - #integration_test — `test_bypassed_v1_description_imports_generated_and_normalised` — a sourceless description imports as `generated`
         - #integration_test — `test_empty_archive_description_written_on_its_own` — no recompute is needed
+    - Revised after implementation (2026-11-01): tests also live in `tests/test_be38_export_import_description.py`; export manifest version 2 is `EXPORT_SCHEMA_VERSION = 2`.
 - [x] **BE-39** — Write the new ADR (next free number, 19 today), the `BREAKING.md` entries with their mandatory `03_breaking_changes_index.md` rows, and the `990_documentation_index_and_contribution_guide.md` index row; the entries cover off-by-default, SDK removal, graph packages, Ollama WARNING, export version 2, startup `default_ttl_seconds` migration, MCP counts and the new routes #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-38, BE-32, BE-34 · completes C6, C9
     - Tests
         - #integration_test — `test_breaking_md_headings_have_index_rows` — every new heading has an index row and none names the removed graph engine
+    - Revised after implementation (2026-11-01): the test named above already existed at `tests/test_removed_engine_repo_guard.py` (`test_breaking_md_headings_have_index_rows`; it fails on any new `BREAKING.md` heading without a row in `03_breaking_changes_index.md`), and `BREAKING.md` is allowlisted to name the removed engine, so the clause "none names the removed graph engine" does not apply. BE-39 was delivered as: ADR 19, the `BREAKING.md` headings with their index rows (NR-54 onward), and the index row, passing that existing guard.
 - [x] **T-13** — e2e: export then import of a manual description, version 1 refusal and bypass #tester-role
     - — · 5.0h
     - needs BE-38 · completes S41, S63, S83
@@ -716,6 +732,7 @@ flowchart LR
     - — · 8.0h
     - needs all prior tasks · completes (acceptance gate)
     - Tests
+    - Revised after implementation (2026-11-01): the manual checklists of T-2, T-4, T-6, T-7 and T-8 were executed; their anthropic and openai arms and the usage-page billing observation are BLOCKED (no cloud key). Late code changes beyond this plan (single `finalize_collection_change` routine, guard comparing the stored status, `describe --all` preflight of `GET /status`, window-fitted HyDE and RAG, reachability probe independent of backfill) are documented in the contract headers under `api-contracts/` and the user and architecture docs.
     - Duties
         - Update all documentation per [2026-10-30-010-llm-collection-descriptions-team-plan.md](./2026-10-30-010-llm-collection-descriptions-team-plan.md)'s "Documentation update" section — project docs, user manuals, architecture docs, `CLAUDE.md`, `AGENTS.md`, etc.; the new ADR and `BREAKING.md` entries (`BE-39`), the TOML template (`FE-9`) and the README counts (`BE-32`) are already done, so check them, do not redo them; `CHANGELOG.md` is generated by git-cliff at release (`release.sh`), so do not hand-edit it.
         - Fix all build / compiler warnings, if any.

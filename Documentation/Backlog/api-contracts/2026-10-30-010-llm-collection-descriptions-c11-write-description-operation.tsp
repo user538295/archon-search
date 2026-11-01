@@ -1,4 +1,6 @@
 // C11 — Shared write-description operation (internal logical seam).
+// Revised after implementation (2026-11-01): `DescriptionWriter.apply` and `record_failure` are in `description_writer.py`; the store step returns `written`, `lockTimeout`, `collectionMissing`, `refusedManual` or `refusedStale`, and the lifecycle maps `collectionMissing` and `refusedStale` to the settled result `superseded`. The guard compares the stored status too (see C3). `force_regenerate_description` and `SearchStore.update_description` are removed; the `last_indexed` stamp is `SearchStore.touch_last_indexed` (lock, re-read, one field). `eval/runner.py` also calls the recompute, with the global embedder, and does not request a description.
+//
 //
 // Layer edge: Use Cases (generation, manual set and clear, import) -> Entities, through the
 // consumer-owned `DescriptionStore` port (C3), which the store implements.

@@ -1,3 +1,4 @@
+# Revised after implementation (2026-11-01): generated from the plan's .tsp and not regenerated. In the shipped GET /openapi.json only `provider`, `key_available` and `backfill_on_startup` are required in the description block; the other fields are optional with a null default. See the C7 .tsp header.
 openapi: 3.0.0
 info:
   title: Archon Search Status API (description block)

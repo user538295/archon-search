@@ -1,4 +1,6 @@
 // C4 — `[description]` configuration seam (internal logical seam).
+// Revised after implementation (2026-11-01): `think` is stored as `bool | None` (`None` = `default`; quoted "true"/"false" are rejected). The wizard's "default answer is No" is not an Enter default: Enter at the description and backfill questions re-asks ("Please answer y or n."), only closed stdin means no. A blank model for openai/ollama/llama_cpp leaves the feature disabled (exit 0), and the shared-model check normalises hosts and models. The answer-space constants `ANSWER_RESERVE_TOKENS` (1024) and `DESCRIPTION_THINKING_HEADROOM_TOKENS` (3072) are in `constants.py`, not in this contract; `maxQueuedGenerations` is `MAX_QUEUED_GENERATIONS` (64).
+//
 //
 // Layer edge: Presentation (install wizard answers, hand-edited TOML) -> Entities (the
 // description settings read by the server at startup).
