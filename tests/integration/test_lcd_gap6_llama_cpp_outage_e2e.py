@@ -336,6 +336,10 @@ _CREDENTIAL_SPELLINGS = [
     pytest.param("ollama", f"http://{_SECRET_USER}:{_SECRET_PASSWORD}@{_LOOPBACK}:{{port}}/?leakq={_SECRET_QUERY_VALUE}", id="ollama-url"),
     pytest.param("ollama", f"{_SECRET_USER}:{_SECRET_PASSWORD}@{_LOOPBACK}:{{port}}", id="ollama-scheme-less"),
     pytest.param("ollama", f"{_LOOPBACK}:{{port}}/{_SECRET_USER}:{_SECRET_PASSWORD}@gpu.test", id="ollama-userinfo-in-path"),
+    # The shape of the original bug: the authority of ``user:12345/x@gpu.test`` ends at the ``/``, so a label read from the URL
+    # the ollama probe rebuilds out of the netloc names the user (``svc-u5er:12345``) as a host.
+    pytest.param("ollama", f"{_SECRET_USER}:12345/x@gpu.test", id="ollama-authority-ends-at-slash"),
+    pytest.param("llama_cpp", f"{_SECRET_USER}:12345/x@gpu.test", id="llama_cpp-authority-ends-at-slash"),
 ]
 
 

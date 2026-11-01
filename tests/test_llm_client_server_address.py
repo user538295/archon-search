@@ -7,6 +7,7 @@ import pytest
 from archon_search.llm_client.server_address import (
     UNKNOWN_HOST,
     ServerAddress,
+    display_url,
     host_port,
     is_url,
     parse_server_address,
@@ -161,3 +162,38 @@ def test_one_path_routed_gateway_is_one_server() -> None:
 
 def test_two_different_refused_values_are_one_label() -> None:
     assert host_port("http://localhost:8080/v1/@x") == host_port("http://other.test:9090/v1/@y") == UNKNOWN_HOST
+
+
+def test_two_different_servers_with_an_at_sign_after_the_authority_share_one_label() -> None:
+    """The accepted limitation the documentation states: the startup probe asks the first of them and the second takes its verdict."""
+    assert host_port("http://a.test:1/v1/@x") == host_port("http://b.test:2/v1/@y") == UNKNOWN_HOST
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        ("http://localhost:11434", "http://localhost:11434"),
+        ("http://localhost:11434/", "http://localhost:11434"),
+        ("  http://127.0.0.1:9  ", "http://127.0.0.1:9"),
+        ("http://u:p@h.test:1/v1/?t=k#f", "http://h.test:1/v1"),
+        ("https://h.test", "https://h.test"),
+        ("//h.test:1/x?t=k", "//h.test:1/x"),
+        ("h.test:1/x?t=k", "h.test:1/x"),
+        ("u:p@h.test", "h.test"),
+        ("http://[::1]:8080/v1", "http://[::1]:8080/v1"),
+        ("http://u:p@[fe80::1]", "http://[fe80::1]"),
+        ("HTTP://LocalHost:80/", "http://localhost:80"),
+        ("", ""),
+        ("   ", ""),
+    ],
+)
+def test_display_url_keeps_scheme_host_port_and_path_only(value: str, shown: str) -> None:
+    assert display_url(value) == shown
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["u:12345/x@h.test", "http://h.test/svc:pw@x", "http://h.test/?a=b@c", "http://[::1", "http://h.test:99999", "http://h\x1b.test", "http://[::1%25lo]"],
+)
+def test_display_url_names_a_value_the_parser_refuses_as_the_unknown_host(value: str) -> None:
+    assert display_url(value) == UNKNOWN_HOST

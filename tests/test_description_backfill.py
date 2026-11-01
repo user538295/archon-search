@@ -396,10 +396,46 @@ async def test_a_probe_of_a_value_that_does_not_parse_never_names_a_piece_of_it(
         ("ollama", "  http://h:1/  ", "http://h:1/api/tags"),
         ("llama_cpp", "localhost:8080", "localhost:8080/props"),  # the llama.cpp client does not add a scheme
         ("llama_cpp", "http://h:2", "http://h:2/props"),
+        # the probe sets the path: nothing of a query or fragment survives, and the endpoint is never appended after one
+        ("ollama", "http://h:1/?k=v", "http://h:1/api/tags"),
+        ("ollama", "http://h:1?k=v", "http://h:1/api/tags"),
+        ("ollama", "http://h:1/#frag", "http://h:1/api/tags"),
+        ("ollama", "http://h:1/a/b/?k=v#f", "http://h:1/a/b/api/tags"),
+        ("ollama", "h:1/?k=v", "http://h:1/api/tags"),
+        ("ollama", "h?k=v", "http://h:11434/api/tags"),
+        ("llama_cpp", "http://h:2/?k=v", "http://h:2/props"),
+        ("llama_cpp", "http://h:2?k=v#f", "http://h:2/props"),
+        ("llama_cpp", "http://gw:2/llama-a/?k=v", "http://gw:2/llama-a/props"),
+        ("llama_cpp", "h:2/?k=v", "h:2/props"),
     ],
 )
 def test_probe_asks_the_url_the_providers_own_client_would_use(provider: str, configured: str, asked: str) -> None:
     assert _probe_url(provider, configured) == asked
+
+
+@pytest.mark.parametrize(
+    ("provider", "field", "path"), [("ollama", "ollama_base_url", "/api/tags"), ("llama_cpp", "llama_cpp_base_url", "/props")]
+)
+async def test_a_base_url_with_a_query_is_still_asked_its_own_endpoint(
+    monkeypatch: pytest.MonkeyPatch, provider: str, field: str, path: str
+) -> None:
+    """``http://h:1/?k=v`` used to be asked as ``/?k=v/api/tags``: the server saw ``/``, so any server that answers ``/`` read
+    as reachable."""
+    asked: list[httpx.URL] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url)
+        return httpx.Response(200 if request.url.path == path else 404)
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        description_backfill.httpx, "AsyncClient", lambda **kwargs: real_client(transport=httpx.MockTransport(answer), **kwargs)
+    )
+
+    result = await probe_description_reachability(_description(provider=provider, **{field: "http://h.test:1/?k=v#f"}))
+
+    assert result.reachable is True, result.reason
+    assert [(url.path, url.query) for url in asked] == [(path, b"")]
 
 
 async def test_scheme_less_llama_cpp_url_reads_unreachable_like_its_generations() -> None:

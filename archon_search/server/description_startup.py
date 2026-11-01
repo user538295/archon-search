@@ -49,7 +49,8 @@ class _MetaStore(Protocol):
 
 
 def _ip_literal(value: str) -> str | None:
-    """*value* when it is an IP literal (an IPv6 one may sit in one matched pair of brackets), else ``None``."""
+    """*value* when it is an IP literal (an IPv6 one may sit in one matched pair of brackets), else ``None``. An IPv6 literal
+    with a zone id (``::1%lo``) is not one: the zone id may carry anything and ``parse_server_address`` refuses it too."""
     bracketed = value.startswith("[") and value.endswith("]")
     inner = value[1:-1] if bracketed else value
     try:
@@ -57,6 +58,8 @@ def _ip_literal(value: str) -> str | None:
     except ValueError:
         return None
     if bracketed and address.version != _IPV6_VERSION:  # ``[127.0.0.1]`` is malformed, not loopback
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.scope_id is not None:
         return None
     return inner
 

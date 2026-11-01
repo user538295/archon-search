@@ -27,7 +27,7 @@ import dataclasses
 import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Final, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -183,15 +183,22 @@ async def _probe_local_server(provider: str, base_url: str, timeout_seconds: flo
 
 
 def _probe_url(provider: str, base_url: str) -> str:
-    """The URL the probe asks. The ``ollama`` SDK reads a scheme-less host the way the wizard writes it (``http://`` and
-    port 11434 when none is given), so the probe does too; llama.cpp's client does not, so its value is used as given and
-    a scheme-less one reads as not reachable, exactly like its generations. Whether a value has a scheme is
+    """The URL the probe asks: the endpoint of *provider* under the path of the configured value, and nothing of its query or
+    fragment (an endpoint appended after a query would be asked as part of it: ``http://h:1/?k=v`` reads as ``/``).
+
+    The ``ollama`` SDK reads a scheme-less host the way the wizard writes it (``http://`` and port 11434 when none is given,
+    and no path), so the probe does too; llama.cpp's client does not, so its value is used as given and a scheme-less one
+    reads as not reachable, exactly like its generations. Whether a value has a scheme is
     :func:`~archon_search.llm_client.server_address.is_url`, the question the label asks too."""
     base_url = base_url.strip()
-    if provider == _OLLAMA and not is_url(base_url):
-        parts = urlsplit(f"//{base_url}")  # keeps any ``user:password@``: the SDK sends it as basic auth too
-        base_url = f"http://{parts.netloc}" if parts.port is not None else f"http://{parts.netloc}:{_OLLAMA_DEFAULT_PORT}"
-    return base_url.rstrip("/") + _PROBE_PATHS[provider]
+    scheme_less = not is_url(base_url)
+    parts = urlsplit(f"//{base_url}" if scheme_less else base_url)  # the netloc keeps any ``user:password@``: the SDK sends it too
+    endpoint = _PROBE_PATHS[provider]
+    if scheme_less and provider == _OLLAMA:
+        netloc = parts.netloc if parts.port is not None else f"{parts.netloc}:{_OLLAMA_DEFAULT_PORT}"
+        return urlunsplit(("http", netloc, endpoint, "", ""))
+    url = urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/") + endpoint, "", ""))
+    return url.removeprefix("//") if scheme_less else url
 
 
 async def run_description_probe(state: State, description: DescriptionConfig) -> None:

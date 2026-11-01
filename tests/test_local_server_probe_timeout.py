@@ -8,6 +8,7 @@ just read a window from. The bound is one constant; these tests read what each p
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Self
 
@@ -24,6 +25,8 @@ from tests._fake_model_server import keep_loopback_out_of_proxies, unreachable_p
 
 _SERVER = "http://127.0.0.1:9"
 _OLLAMA_WINDOW = 4096
+_SHORT_BOUND_SECONDS = 0.05
+_HANG_GUARD_SECONDS = 1.0  # twenty bounds: a probe that kept a longer bound (or none) fails here instead of hanging the run
 
 
 @pytest.fixture(autouse=True)
@@ -110,3 +113,33 @@ async def test_every_startup_probe_of_a_local_server_waits_equally_long(monkeypa
     )
 
     assert len(set(vars(bounds).values())) == 1, vars(bounds)
+
+
+async def test_the_validation_probe_gives_a_silent_server_exactly_the_shared_bound_of_wall_clock_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """httpx limits each phase, not the call, so the probe also puts the constant on the whole call with ``asyncio.timeout``.
+    The stand-in transport answers nothing and httpx never sees a socket, so only that outer bound can end the probe."""
+    never = asyncio.Event()
+
+    async def stays_silent(request: httpx.Request) -> httpx.Response:
+        await never.wait()
+        raise AssertionError("unreachable: the transport answers nothing")
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        model_validation.httpx, "AsyncClient", lambda **kwargs: real_client(transport=httpx.MockTransport(stays_silent), **kwargs)
+    )
+    monkeypatch.setattr(model_validation, "LOCAL_SERVER_PROBE_TIMEOUT_SECONDS", _SHORT_BOUND_SECONDS)
+    config = SearchConfig()
+    config.hyde.enabled = True
+    config.hyde.provider = "llama_cpp"
+    config.hyde.llama_cpp_base_url = _SERVER
+    loop = asyncio.get_running_loop()
+
+    started = loop.time()
+    probed = await asyncio.wait_for(model_validation._probe_llama_cpp(config), _HANG_GUARD_SECONDS)
+    waited = loop.time() - started
+
+    assert probed == {"127.0.0.1:9": False}
+    assert _SHORT_BOUND_SECONDS / 2 <= waited < _HANG_GUARD_SECONDS

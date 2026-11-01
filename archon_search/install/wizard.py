@@ -205,9 +205,16 @@ def _prompt_ollama_model(feature_label: str, default_base_url: str) -> tuple[str
     URL so it survives config regeneration. The answer is normalised before both
     the probe and the comparison, so a scheme-less spelling of the default address
     still collapses to ``""`` instead of pinning a redundant custom URL.
+
+    The address is shown in :func:`~archon_search.llm_client.server_address.display_url` form (no userinfo, query or fragment),
+    in the prompt's default and in the "No models available" notice; Enter still keeps, and the return value still carries,
+    the real value.
     """
+    # lazy: a CLI start must not import llm_client
+    from archon_search.llm_client.server_address import display_url
+
     try:
-        raw_url = input(f"Ollama base URL for {feature_label} [{default_base_url}]: ").strip()
+        raw_url = input(f"Ollama base URL for {feature_label} [{display_url(default_base_url)}]: ").strip()
     except EOFError:
         raw_url = ""
     base_url = _normalise_base_url(raw_url or default_base_url, _OLLAMA_DEFAULT_PORT)
@@ -218,7 +225,7 @@ def _prompt_ollama_model(feature_label: str, default_base_url: str) -> tuple[str
         return stored, _pick_ollama_model(models)
 
     print(
-        f"  No models available from {base_url}.\n"
+        f"  No models available from {display_url(base_url)}.\n"
         f"  Ollama may not be running there, the address may be wrong, or no models are "
         f'installed yet. If it is running, install one with "ollama pull <model-name>" and\n'
         f"  re-run the wizard to pick from the list.\n"
@@ -315,8 +322,12 @@ def _warn_shared_model_contexts(choices: list[OllamaContextChoice]) -> None:
     on one model with different windows pay a reload on every switch. Answers are grouped by
     server and model identity (:func:`_server_identity`, :func:`_model_identity`), so ``localhost``
     and ``127.0.0.1`` or ``m`` and ``m:latest`` count as one; the text printed is the first
-    answer of a group, address and model as the answers carry them.
+    answer of a group, address and model as the answers carry them, the address without its userinfo, query and fragment
+    (:func:`~archon_search.llm_client.server_address.display_url`).
     """
+    # lazy: a CLI start must not import llm_client
+    from archon_search.llm_client.server_address import display_url
+
     by_model: dict[tuple[tuple[str, int | None, str], str], list[OllamaContextChoice]] = {}
     for choice in choices:
         if not choice.model.strip():
@@ -327,7 +338,7 @@ def _warn_shared_model_contexts(choices: list[OllamaContextChoice]) -> None:
         if len({choice.context_tokens for choice in sharing}) < 2:
             continue
         first = sharing[0]
-        url = first.ollama_base_url.strip() or OLLAMA_BASE_URL_DEFAULT
+        url = display_url(first.ollama_base_url.strip() or OLLAMA_BASE_URL_DEFAULT)
         model = first.model.strip()
         windows = ", ".join(f"{choice.feature_label} {choice.context_tokens}" for choice in sharing)
         print(
@@ -543,10 +554,14 @@ def _prompt_llama_cpp_model(feature_label: str, default_base_url: str) -> tuple[
     custom URL so it survives config regeneration. The answer is normalised
     before the comparison, so a scheme-less spelling of the default address, or
     one with a trailing slash, still collapses to ``""`` instead of pinning a
-    redundant custom URL.
+    redundant custom URL. The default is shown in ``display_url`` form (no userinfo, query or fragment); Enter keeps the
+    real value.
     """
+    # lazy: a CLI start must not import llm_client
+    from archon_search.llm_client.server_address import display_url
+
     try:
-        raw_url = input(f"llama-server base URL for {feature_label} [{default_base_url}]: ").strip()
+        raw_url = input(f"llama-server base URL for {feature_label} [{display_url(default_base_url)}]: ").strip()
     except EOFError:
         raw_url = ""
     base_url = _normalise_base_url(raw_url or default_base_url, _LLAMA_CPP_DEFAULT_PORT)
