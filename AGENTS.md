@@ -35,7 +35,7 @@ uv run pytest tests/test_router.py::test_name -x
 # Skip coverage locally (developer override only — never bake into addopts)
 uv run pytest --no-cov
 
-# Marker-gated suites (excluded from default run)
+# Marker-selectable suites (eval, integration, live and benchmark are part of the default run: live and benchmark skip without their prerequisites; the rest below are excluded by the `-m` filter or `norecursedirs`)
 uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py
 uv run pytest -m integration
 uv run pytest -m live
@@ -62,7 +62,8 @@ The runtime is a layered pipeline; understanding the seam between these modules 
 
 - `parser.py` → `chunker.py` → `embedder.py` → `store.py` (LanceDB vector + FTS) → `reranker.py` (cross-encoder second stage) → `pipeline.py` (`SearchPipeline` orchestrates ingest, search, and context retrieval).
 - `router.py` (`MultiCollectionRouter`) does centroid pre-ranking across collections to pick which to query for a given prompt.
-- `collection_meta.py`, `description_generator.py`, `acl.py` add per-collection metadata, auto-generated descriptions, and access control.
+- `collection_meta.py` and `acl.py` add per-collection metadata and access control. `description_generator.py` (`DescriptionGenerator`) turns a collection's open chunks into a description with the configured model and never raises (it returns `DescriptionGenerated` or `DescriptionFailed`); `description_lifecycle.py` (`DescriptionLifecycle`) decides when and in what order generations run (ingest, `POST /collections/{name}/describe`, startup backfill); `description_writer.py`, `description_write.py` and `description_change.py` write a description (generated, manual set/clear, import) through one guarded `SearchStore.write_description`; `description_sample.py` is the sample read port. Descriptions are off by default (`[description]`).
+- `llm_client/` is the shared LLM client every model call goes through (HyDE, RAG Fusion, graph community summaries, descriptions): a consumer-owned `LlmClient` Protocol (`protocol.py`) and one wrapper per provider (`ollama_client.py`, `llama_cpp_client.py`, `anthropic_client.py`, `openai_client.py`, `claude_cli_client.py`), plus input budgeting (`budget.py`, `token_counter.py`), `rate_limit.py` and `once_per_process.py` (`warn_once`). Clients raise `LlmCallFailure`; every consumer catches it and falls back. `server/llm_composition.py` builds one client per feature from its own config section; there is no `claude-agent-sdk`.
 - `watcher.py` + `sync.py` keep on-disk corpora and the index in sync (watchdog-driven).
 - `jobs/` is the async job store (model + store) used by long-running ingest/reindex operations exposed over the API.
 - `key_manager.py` owns the API-key bootstrap (auto-generates `~/.archon-search/.search.env` with mode 600 on first start; `ARCHON_SEARCH_API_KEY` env overrides and must be at least 32 lowercase hex characters; `ARCHON_SEARCH_KEY_FILE` redirects).
@@ -73,7 +74,7 @@ The runtime is a layered pipeline; understanding the seam between these modules 
 
 ### Server (`archon_search/server/`)
 
-`app.py` builds the FastAPI app; `mcp.py` exposes the same control-plane tools over MCP using the shared auth middleware (`middleware_auth.py`). All endpoints except `GET /health` and `GET /ready` require a `Bearer` token. `authz.py` holds the admin-scope policy shared by REST and MCP; `middleware_body_limit.py` enforces `[server].max_request_body_mb` (413) ahead of auth; `_ingest_admission.py` enforces `[ingest].max_concurrent_tasks` (503 `ingest_busy`); `graph_view_token.py` mints the short-lived `view_token` for the graph viewer; `warmup.py` runs warm-up and the background `/ready` recovery.
+`app.py` builds the FastAPI app; `mcp.py` exposes the same control-plane tools over MCP using the shared auth middleware (`middleware_auth.py`). All endpoints except `GET /health` and `GET /ready` require a `Bearer` token. `authz.py` holds the admin-scope policy shared by REST and MCP; `middleware_body_limit.py` enforces `[server].max_request_body_mb` (413) ahead of auth; `_ingest_admission.py` enforces `[ingest].max_concurrent_tasks` (503 `ingest_busy`); `graph_view_token.py` mints the short-lived `view_token` for the graph viewer; `warmup.py` runs warm-up and the background `/ready` recovery; `llm_composition.py` composes the per-feature LLM clients and resolves their context windows in a background task; `description_backfill.py` (reachability probe, startup backfill), `description_startup.py` (startup notices and WARNINGs) and `provider_dependency.py` (provider-package guard) serve the description feature.
 
 Routes are split per resource: `routes_health.py`, `routes_state.py`, `routes_status.py`, `routes_search.py`, `routes_route.py`, `routes_collections.py`, `routes_jobs.py`, `routes_telemetry.py`. `schemas.py` + `schemas_telemetry.py` are the Pydantic request/response models. `GET /openapi.json` is the authoritative API contract — keep it in sync, and record breaking changes in `BREAKING.md`.
 
@@ -97,6 +98,7 @@ Opt-in and **disabled by default**. `writer.py` appends one JSONL line per call 
 - The package directory is `archon_search/` (underscore), the distribution is `archon-search` (hyphen). `pyproject.toml` `[tool.hatch.build.targets.wheel].packages` is explicit about this — don't "fix" it.
 - Breaking REST/MCP changes go in `BREAKING.md`.
 - Telemetry's no-raw-query guarantee is structural: do not add a `query` parameter to telemetry entry constructors.
+- Default-lane tests are kept off real model providers by the session guard `_block_model_providers` (`tests/_model_host_guard.py`), which refuses real `anthropic`/`openai`/`ollama` clients, non-loopback `httpx`/`httpx2` model traffic and `claude` spawns. It has known gaps (`urllib`, `requests`, `aiohttp`, `hf_xet`, `env claude`, and live-marked tests, which lift most guards), so it is a safety net, not a proof. Use `FakeModelServer` (`tests/_fake_model_server.py`; Ollama and llama.cpp endpoints, `unreachable_port()`), `_fake_claude` (`tests/_fake_claude.py`; a real subprocess standing in for `claude`) and `_cli_testclient_bridge` (`cli_against_app`; runs CLI commands against an in-process app). Details and gaps: `tests/CLAUDE.md`.
 
 ## Documentation map
 

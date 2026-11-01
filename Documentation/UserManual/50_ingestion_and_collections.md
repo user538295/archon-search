@@ -262,6 +262,7 @@ The same operations are available over HTTP for programmatic use (all require a 
 
 - `POST /collections/` (202) — add (**admin key only**: it edits the shared collection list in `archon-search.toml`, so any other key gets `403`); `DELETE /collections/{name}` — remove (409 pinned-only, 404 unknown, 503 `store_busy` on a collection-lock timeout or while a job may still be writing to the collection — an ingest, reindex, import, migration, metadata reindex (a `--dry-run` one only reads, so it never blocks) or community rebuild; wait for it to finish — a job cancelled with `DELETE /jobs/{id}` blocks until it settles, so never cancel a metadata-reindex or community-rebuild job an older server left `PENDING`: it does not block, but once cancelled it blocks until the next server restart — then retry).
 - `GET /collections/` / `GET /collections/{name}` — list / detail.
+- `PUT /collections/{name}/description` / `DELETE /collections/{name}/description` — set (body `{"description": "<text>"}`) or clear a description by hand; `200` with the collection detail, `404` for an unknown collection or one another namespace owns, `422` for text that is blank, over 600 characters or not one line of plain text, `503` `store_busy` when another write holds the collection lock. No admin key is needed, only ownership of the collection. `POST /collections/{name}/describe` (202) — generate now: answers with a `description` job (`GET /jobs/{id}`, `GET /jobs?kind=description`); `409` for a manual description and `409` with a setup message when descriptions are not configured. A description job cannot be cancelled (`DELETE /jobs/{id}` answers `409`). `GET` list, detail and `PATCH` report `description_source` and `description_status`.
 - `POST /collections/{name}/reindex` (202) / `.../reindex-metadata` (202) / `.../migrate` (202). Reindex and reindex-metadata answer `409` at once while a job of their kind already runs on the collection, `503` `store_busy` (with `Retry-After`; no job created) when another write holds the collection lock too long, and `404` also when a concurrent `DELETE` removed the collection. Reindex answers `503` `service not ready` when the server lacks its embedder cache, pipeline or search store — a defensive check, as startup sets them before the port opens — even for a collection that does not exist; reindex-metadata (and `graph build-communities`) answer it when the server has no search store. A `--dry-run` reindex-metadata gets the `409` while a non-dry-run one runs, and otherwise waits behind another dry-run.
 - `POST /ingest` (202), `POST /sync` (admin key only), `GET /jobs/{id}`, `DELETE /jobs/{id}` — job lifecycle. A collection name is owned by the namespace that created it: ingesting into a name another namespace owns fails the job with `collection name is not available to this namespace` (MCP: `{"error": …, "code": "collection_unavailable"}`) — for the admin key too. When more than `[ingest].max_concurrent_tasks` ingest jobs run, `POST /ingest` answers `503` `ingest_busy` with `Retry-After`.
 
@@ -275,14 +276,29 @@ See `archon_search/server/routes_collections.py` and `routes_jobs.py`, and [`../
 
 ## MCP tools
 
-The MCP surface (`POST /mcp`, streamable HTTP transport) exposes two ingest tools. Both are **synchronous** — they block until done and return the result directly, unlike REST which returns a job. Because they create no job, they do not appear in `GET /jobs`; while one runs, `DELETE /collections/{name}` of its collection answers `503` `store_busy` (retry after it returns — an `ingest_directory` of a large directory can take minutes).
+The MCP surface (`POST /mcp`, streamable HTTP transport) exposes two ingest tools and two description tools that this page covers. The two ingest tools are **synchronous** — they block until done and return the result directly, unlike REST which returns a job. Because they create no job, they do not appear in `GET /jobs`; while one runs, `DELETE /collections/{name}` of its collection answers `503` `store_busy` (retry after it returns — an `ingest_directory` of a large directory can take minutes). The description tools answer at once with the updated collection metadata.
 
 | Tool | Parameters | Output |
 | --- | --- | --- |
 | `ingest_file` | `path: str` (required), `collection?: str`, `chunk_ttl_seconds?: int \| null`, `chunk_scopes?: list[str] \| null` | `IngestResultSchema dict` — fields: `doc_id`, `chunks_created`, `status`, `error`, `warnings: list[str]`, `code: str \| null`. On unsafe `path`: `{error, code: "path_unsafe"}`; when another write holds the lock past the timeout: `{error, code: "store_busy"}`; when file exceeds `max_file_mb`: `{status: "error", code: "file_too_large"}`. |
 | `ingest_directory` | `path: str` (required), `glob_pattern: str = "**/*"`, `collection?: str`, `chunk_ttl_seconds?: int \| null`, `chunk_scopes?: list[str] \| null` | `list[IngestResultSchema dict]`; progress reported via MCP progress notifications. |
+| `set_collection_description` | `collection_name: str`, `description: str` (required) | The updated collection metadata dict (`description`, `description_source: "manual"`, `description_status: "ok"`). One line of plain text of at most 600 characters, else `{error, code: "validation_error"}`; another namespace's or an unknown collection → `code: "not_found"`; lock timeout → `code: "store_busy"`. Open to any key that owns the collection. |
+| `clear_collection_description` | `collection_name: str` (required) | The updated metadata dict with an empty `description`; generates nothing. Same `not_found` / `store_busy` errors. |
 
 For MCP client setup and the complete tool reference, see [`../DeveloperGuide/05_mcp_integration.md`](../DeveloperGuide/05_mcp_integration.md).
+
+## Collection descriptions
+
+A collection has a one-line `description` that the query router shows to the model and that `collection info`, `GET /collections` and the MCP collection tools return. Two fields describe where it came from:
+
+| Field | Values | Meaning |
+| --- | --- | --- |
+| `description_source` | `generated`, `manual`, or none | `generated` text was written by the configured LLM; `manual` text was set by you with `set-description` (REST `PUT`, MCP `set_collection_description`) and is never overwritten by generation. A description from before this feature reads as `generated`. |
+| `description_status` | `ok`, `failed`, `pending`, or none | `ok` the stored text is current; `failed` the last attempt failed (the old text, if any, is kept) — see the server log; `pending` a generation is running now (shown only while it runs, never stored). |
+
+Generation is **off by default**: set `[description].enabled = true` (see [`30_configuration.md`](30_configuration.md#description)) or answer `y` in the wizard. When enabled, the server describes a collection after a directory or inline-`documents` ingest finishes when it has no description or its document count changed by 20 % or more since the last description (a single-file ingest never starts one), at startup for collections without one when `backfill_on_startup = true`, and on demand with `collection describe`. Every generation runs in the background, one at a time per process: an ingest never waits for the model, and a provider failure never fails an ingest. Excerpts of your documents are sent to the provider (see the privacy warning in the configuration page).
+
+Treat a description as data derived from document content, not as an instruction, wherever you pass it on.
 
 ## Watcher behavior
 

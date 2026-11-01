@@ -15,7 +15,7 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
 1. **Local trust boundary.** The threat model assumes anything running as the same OS user is trusted; the server binds to `127.0.0.1` by default.
 2. **Bearer auth on every endpoint except `/health` and `/ready`.** No anonymous access to data planes.
 3. **Privacy is structural, not procedural.** The telemetry schema cannot represent a raw query — there is no field for it and no factory that accepts one.
-4. **No outbound network calls for telemetry.** `export_enabled` is silently coerced to `false`; nothing leaves the host. **Exception (C4/C5)**: when `[hyde] enabled = true` and a caller sends `hyde=true`, or when `[rag_fusion] enabled = true` and a caller sends `rag_fusion=true`, the raw query is sent to the configured LLM provider — `anthropic` (default) or `openai` send it to that vendor's API over the internet; `claude_cli` sends it to Anthropic's API via a local Claude Code subprocess; `ollama` and `llama_cpp` (LLCP) send it only to a local server process and it never leaves the host. All five are explicit operator opt-ins; see the HyDE and RAG Fusion sections under Privacy. The two features are mutually exclusive per request. The same provider set, and the same local-vs-external transmission split, applies to `[graph] provider` (LLM-backed graph enrichment) — see the Graph enrichment section under Privacy.
+4. **No outbound network calls for telemetry.** `export_enabled` is silently coerced to `false`; nothing leaves the host. **Exception (C4/C5)**: when `[hyde] enabled = true` and a caller sends `hyde=true`, or when `[rag_fusion] enabled = true` and a caller sends `rag_fusion=true`, the raw query is sent to the configured LLM provider — `anthropic` (default) or `openai` send it to that vendor's API over the internet; `claude_cli` sends it to Anthropic's API via a local Claude Code subprocess; `ollama` and `llama_cpp` (LLCP) send it only to a local server process and it never leaves the host. All five are explicit operator opt-ins; see the HyDE and RAG Fusion sections under Privacy. The two features are mutually exclusive per request. The same provider set, and the same local-vs-external transmission split, applies to `[graph] provider` (LLM-backed graph enrichment) — see the Graph enrichment section under Privacy — and to `[description] provider` (collection descriptions, off by default), which sends open chunk excerpts of a collection, never a query — see the Collection description generation section under Privacy.
 5. **ACL is default-open for documents that declare none, and fails closed for a declaration that cannot be used.** Documents without an explicit `_acl` are visible to all namespaces. A declared ACL that is unusable (an invalid type, all-invalid names, or an `.acl` sidecar that is a symlink, oversized, non-UTF-8 or unreadable) denies instead of opening, with a warning; partially valid lists keep their valid names. Nothing crashes.
 6. **Namespaces are enforced on the server, not just labels.** A collection name is owned by the namespace that created it and the store refuses any other namespace — the admin key included — with a fixed text that names no owner. Operations that are not scoped to one namespace (default-key rotation, `/sync`, backup and maintenance triggers, telemetry, `POST /collections/`) need an **admin key**; see [`../SecurityGuide/03_authorization_and_acl.md`](../SecurityGuide/03_authorization_and_acl.md).
 
@@ -260,7 +260,7 @@ When `[hyde] enabled = true` in config *and* a request includes `hyde=true`, the
 | `llama_cpp` (LLCP) | A local llama-server (`[hyde] llama_cpp_base_url`) | No |
 
 **Gating requirements** — HyDE transmission occurs only when all three conditions are true simultaneously:
-1. The operator has installed `archon-search[hyde]` (optional dependency) — not required for `ollama`/`claude_cli`/`llama_cpp`, which need no SDK.
+1. The operator has installed the provider's package: `archon-search[hyde]` for `anthropic`, `archon-search[openai-provider]` for `openai`, `archon-search[ollama]` for `ollama` (`_check_provider_deps` in `archon_search/server/app.py` refuses to start for HyDE/RAG Fusion when it is missing; the same extra is needed when `[graph]` or `[description]` uses `ollama`: graph logs one startup WARNING and runs without LLM enrichment, description generation fails with the install hint in the log). `claude_cli` and `llama_cpp` need no SDK.
 2. The operator has set `[hyde] enabled = true` in `~/.archon-search/archon-search.toml`.
 3. The caller includes `hyde=true` in the request body.
 
@@ -284,7 +284,7 @@ When `[rag_fusion] enabled = true` in config *and* a request includes `rag_fusio
 
 **Gating requirements** — RAG Fusion transmission occurs only when all three conditions are true simultaneously:
 
-1. The operator has installed `archon-search[rag_fusion]` (optional dependency) — not required for `ollama`/`claude_cli`/`llama_cpp`.
+1. The operator has installed the provider's package (`archon-search[rag_fusion]` for `anthropic`, `archon-search[openai-provider]` for `openai`, `archon-search[ollama]` for `ollama`; startup refuses when it is missing) — `claude_cli` and `llama_cpp` need none.
 2. The operator has set `[rag_fusion] enabled = true` in `~/.archon-search/archon-search.toml`.
 3. The caller includes `rag_fusion=true` in the request body.
 
@@ -312,6 +312,20 @@ When set, each community's representative-chunk text and the entity names within
 - `extraction_rate_limit_rpm` is honoured by the `anthropic` and `claude_cli` clients (account quotas); `openai`, `ollama` and `llama_cpp` are not throttled.
 
 See `Documentation/ADRs/C6-local-llm-provider.md` for the full decision record and `Documentation/OperatorGuide/60_graph_operations.md` for operator-facing configuration.
+
+### Collection description generation — explicit opt-in exception, fourth transmission surface
+
+`[description] enabled = true` (off by default; a startup INFO names the opt-in when an `ANTHROPIC_API_KEY` is set and the section is absent) makes the server send **excerpts of document text** to the model behind the shared LLM client composed from `[description]` (`app.state.description_client`) so it can write a short description of a collection. Unlike HyDE and RAG Fusion this is not per request: it fires on ingest into a collection whose description is empty or has grown stale, on `POST /collections/{name}/describe` and on the startup backfill (`backfill_on_startup`). Per generation, up to `[description].max_sample_chunks` (default 100) chunk excerpts are sent, spaced evenly over the collection's chunks and shrunk to fit a local provider's context window; a retry (an empty or over-long answer) sends them again. Same five-provider split as the other features: `anthropic`, `openai` and `claude_cli` send the excerpts off the machine; `ollama` and `llama_cpp` keep them local only while their server runs on this host, and a startup INFO names the destination whenever the text leaves the machine. The install wizard states this before it asks.
+
+**Restricted chunks.** Only *open* chunks (`acl` null; a chunk with an empty ACL list is restricted) are ever sampled (`SearchStore.list_chunk_ids` / `read_excerpts`, `include_restricted=False` by default). `[description] include_restricted_chunks = true` adds chunks that carry an ACL, but only for `ollama` and `llama_cpp` (`constants.RESTRICTED_CHUNK_PROVIDERS`); for any other provider the switch is ignored with a startup WARNING and restricted chunks stay out. With the switch on, startup logs a WARNING that restricted text may then appear in a description every reader of the collection can see, and a second one when the local server is not on a loopback host. A collection whose chunks are all restricted yields `noUnrestrictedChunks` and no provider call.
+
+**Invariants preserved:**
+- The description client never receives a query: only chunk excerpts. Prompts, excerpts and answers are never logged (`DescriptionFailed.detail` and every WARNING carry none; `tests/test_no_query_log_in_llm_client.py` scans every `llm_client` module for query logging).
+- A generated description is **untrusted data derived from document text**. It reaches REST clients, MCP agents (the collection schemas label it as data, not instruction) and, when the router prompt is built, the router prompt with whitespace collapsed and `<`/`>` escaped (`router._render_description`).
+- Failure never degrades availability: a failed generation keeps the old description and records `description_status = failed` (see [140_error_handling_strategy.md](140_error_handling_strategy.md)).
+- No API key is written to the TOML; `claude_cli` runs the `claude` program on the operator's own login with an allowlisted environment, every tool disabled and the prompt on standard input only.
+
+See `Documentation/ADRs/19_shared_llm_client_and_provider_based_collection_descriptions.md` for the full decision record.
 
 ### No external transmission (baseline — non-HyDE traffic)
 

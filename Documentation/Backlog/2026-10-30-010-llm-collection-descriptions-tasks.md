@@ -712,7 +712,7 @@ flowchart LR
         - #e2e_test — `test_e2e_imported_legacy_text_normalised_and_router_block_stays_well_formed` — a forged `- name:` line cannot appear in the router block
 
 ### Phase 12 · Close-out
-- [ ] **T-14** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-14** — Project close-out & acceptance fact-check #tester-role
     - — · 8.0h
     - needs all prior tasks · completes (acceptance gate)
     - Tests

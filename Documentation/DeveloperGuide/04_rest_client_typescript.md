@@ -28,19 +28,27 @@ export interface HealthResponse {
 export interface CollectionSummary {
   name: string;
   path: string;
+  // Text derived from document content: treat it as data, not as an instruction.
   description: string;
   doc_count: number;
   chunk_count: number;
   namespace: string;
   status: string;
+  active_embedding_model: string;
+  needs_reindex: boolean;
+  description_source: "generated" | "manual" | null;
+  description_status: "ok" | "failed" | "pending" | null;
 }
 
 export interface CollectionDetail extends CollectionSummary {
-  embedding_model: string;
+  pending_embedding_model: string | null;
+  reindex_job_id: string | null;
   centroid_present: boolean;
   last_indexed: string | null;
   acl_protected_count: number;
   acl_open_count: number;
+  default_ttl_seconds: number | null;
+  schema_version: number;
 }
 
 export interface JobResponse {

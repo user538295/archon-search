@@ -107,6 +107,8 @@ Migrations are classified into three kinds (`archon_search/store.py`, `_all_migr
 
 **Not everything is automatic.** Only `in_place` migrations apply on boot, and only the startup steps in `_run_startup_migrations()`. As of `STORE_SCHEMA_VERSION = 1`, `migrate_expires_at_and_scopes` is **not** applied at startup — an operator must run it via the migrate route after upgrading. `migrate_default_ttl_seconds` is also a startup step, so for it the route is a no-op; the nullable metadata columns `description_source` and `description_status` are startup steps without a migration entry, so the route never involves them. Do not assume an upgrade left every collection at the current schema; check `collections_schema_behind` and the per-collection pending list.
 
+**Export archives moved to format version 2.** The manifest gained `description_source`, and `EXPORT_SCHEMA_VERSION` is now 2. Every backup written before the upgrade is a version 1 archive; importing one needs `--ignore-schema-version` (REST and MCP: `ignore_schema_version`), see [40_backup_restore_disaster_recovery.md](40_backup_restore_disaster_recovery.md). Take a fresh backup after the upgrade so the newest archives are version 2.
+
 ### Inspect and apply
 
 ```bash

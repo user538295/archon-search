@@ -30,11 +30,11 @@
     "synonym_bridge_recall_at_5": 0.5
   },
   "runtime_config_hash": "71d933f9eeed1406f18cb6026d4c0d72e7a4287654100dd20a9d4385a1226589",
-  "thresholds_hash": "a90f8d82230a20d99c1fd01b18bf46132101fec8654c26579ba6b4c25109fc41",
+  "thresholds_hash": "ca9cee690b30a9970a55e6cc7f00b8afa0493e5e1610ab79d52e8b904add4c5b",
   "waiver_ids": {
     "code_defref_recall_at_5": "BE-10-code-defref-gate-above-baseline: floor=1.0 is intentionally above baseline=0.6667. The baseline measures the no-feature calibration run (regenerate.py, no lancedb_root \u2014 code-defref ingested through the plain stub pipeline, no DefRefExtractor). The gated test (test_eval_gate_code_defref_recall_at_5) passes lancedb_root, routing code-defref through a real GraphStore + DefRefExtractor + RealGraphExpander wired via _build_code_lane_ingest_pipeline, lifting recall from 0.6667 to 1.0. A regression that disables DefRefExtractor wiring reproduces 0.6667, failing the gate.",
     "graph_global_recall_at_5": "E2e-global-floor-below-stub-baseline: baseline=1.0 was measured via CommunityStoreStub hybrid fallback, not real Leiden community retrieval; real Leiden floor is 0.2 on the 5-query 2WikiMultiHopQA eval set",
-    "graph_negative_control_recall_at_5": "E2e-negative-control-nondeterministic: floor=0.34 is conservative regression guard for a non-deterministic metric (observed 0.38-0.43 range due to unseeded store.sample_chunk_texts shuffle); baseline=0.39 reflects a single calibration run",
+    "graph_negative_control_recall_at_5": "E2e-negative-control-nondeterministic: floor=0.34 is conservative regression guard for a non-deterministic metric (observed 0.38-0.43 range; the unseeded store.sample_chunk_texts shuffle once blamed for it was removed, so the cause is unmeasured); baseline=0.41 reflects a single calibration run",
     "synonym_bridge_recall_at_5": "BE-8-synonym-bridge-gate-above-baseline: floor=0.75 is intentionally above baseline=0.5. The baseline measures plain hybrid recall (stub expander, no synonym edges). The gated test uses RealGraphExpander + synonym_of edges (K8s\u2194Kubernetes, ML\u2194machine learning), lifting recall from 0.5 to 1.0. A regression that disables synonym expansion produces 0.5, failing the gate. Floor=0.75 is the discriminating midpoint."
   }
 }

@@ -385,6 +385,8 @@ If the server is unreachable or has no models installed, the wizard says so, sug
 
 After the model pick, each Ollama feature (HyDE, RAG Fusion, graph enrichment and [collection descriptions](#5j-collection-descriptions), each when its provider is `ollama`) asks its own context window, for example `Ollama context window for HyDE (tokens) [8192]:`. The default is 8192, or the `ollama_context_tokens` already in that feature's section on a re-run, so Enter keeps it; a non-number or a value below 1 is refused once, then the default applies. The answer is written to `[hyde].ollama_context_tokens`, `[rag_fusion].ollama_context_tokens`, `[graph].ollama_context_tokens` or `[description].ollama_context_tokens` and sent to Ollama as `num_ctx`. When two or more of the four features use the same model on the same server with different values, the wizard prints a warning naming them: Ollama reloads a model whenever its window changes, so alternating requests reload it each time. A failed install removes the key from the reverted sections along with the provider keys.
 
+**Air-gapped hosts and the gpt2 tokenizer.** For the `ollama` provider, graph community summaries and collection descriptions size each prompt to the context window by counting tokens with the 1.3 MB `openai-community/gpt2` tokenizer (HyDE and RAG Fusion do not use it). The wizard's pre-warm fetches it into `<data-dir>/models/token-counter/` (Step 8); if that fetch fails or is skipped (`--skip-preload`), the server downloads it on first use. On a host with no network and no cached copy, that download fails, and the call fails with `cannot size the prompt: the gpt2 token counter failed` (graph summaries stay empty, descriptions end `failed`). The tokenizer download is the only thing this adds that needs the internet; the tokenizer itself runs locally. For an air-gapped install run the wizard once on a networked host and copy the whole `<data-dir>/models/token-counter/` directory across, as for the other model caches.
+
 For **Claude CLI**: uses your existing Claude Code login — no API key. The wizard checks that the `claude` command is on your PATH (warning, not a hard stop, if it isn't) and then offers a curated list of model aliases with a free-text fallback for full model IDs:
 
 ```
@@ -465,13 +467,13 @@ Collection descriptions:
 Enable collection descriptions? [y/n]:
 ```
 
-**On EOF**: No — `[description].enabled = false` is written. Answering `n` writes the same.
+**On EOF**: No — `[description].enabled = false` is written. Answering `n` writes the same. Like every yes/no question here, it takes only `y` or `n`: Enter on its own does not mean no, it prints `Please answer y or n.` and asks again; only a closed stdin answers no.
 
 If you answer `y`, the wizard asks, in this order:
 
 1. `Which provider for collection descriptions? (anthropic/openai/ollama/claude_cli/llama_cpp) [anthropic]:` and the model, with the same flow as HyDE and RAG Fusion (free-text model for `openai`, base URL then model picker for `ollama` and `llama_cpp`, the Claude alias picker for `claude_cli`). A provider that needs a named model (`openai`, `ollama`, `llama_cpp`) but got a blank one leaves descriptions disabled, with a message, instead of writing a blank `model` that the server would refuse to load; re-run the wizard to try again.
 2. For `ollama` only: `Ollama context window for collection descriptions (tokens) [8192]:` (the stored `[description].ollama_context_tokens` on a re-run), as described in 5h.
-3. `Fill the descriptions of existing collections at startup? [y/n]:` (`[description].backfill_on_startup`). **On EOF**: No.
+3. `Fill the descriptions of existing collections at startup? [y/n]:` (`[description].backfill_on_startup`). The same rule applies: Enter re-asks, and a closed stdin (**On EOF**) answers No.
 
 The answers land in the `[description]` section (`enabled`, `provider`, `model`, the host key for `ollama` or `llama_cpp` when it differs from the built-in default, `ollama_context_tokens`, `backfill_on_startup`). API keys never go into it; they belong in `<data-dir>/.secrets.env` or the environment, like the HyDE and RAG Fusion keys. The installer creates that file for an `anthropic` or `openai` description provider (see 5h). The provider package is installed with the same extras as the other features (Step 7), and a failed install reverts the section (see Step 7).
 

@@ -53,16 +53,15 @@ async def test_unfiltered_eval_matches_baseline_metrics() -> None:
 
     report_metrics_dict = dataclasses.asdict(report.metrics)
 
-    # Fields excluded from bit-exact comparison because they depend on
-    # store.sample_chunk_texts (which uses an unseeded random.shuffle for
-    # collection description generation, deliberately non-deterministic per E0c).
-    # These affect collection centroid / routing, not retrieval quality gates.
+    # Fields excluded from bit-exact comparison because they were observed to vary between runs.
+    # The cause once recorded here (an unseeded shuffle in store.sample_chunk_texts) no longer
+    # exists: that method was removed and description sampling is deterministic. The real cause
+    # is unmeasured. These affect routing / graph retrieval, not the retrieval quality gates.
     _NON_DETERMINISTIC_FIELDS: frozenset[str] = frozenset({
         "graph_mrr",                          # MRR over naive-mode traces; routing non-determinism
         "graph_local_mrr",                    # MRR over local-mode traces; same root cause
         "graph_global_mrr",                   # MRR over global-mode traces; same root cause
-        "graph_negative_control_recall_at_5", # Observed 0.38-0.43 per run; unseeded shuffle in
-                                              # store.sample_chunk_texts affects routing centroid
+        "graph_negative_control_recall_at_5", # Observed 0.38-0.43 per run; cause unmeasured
     })
 
     # Assert every non-null field in baseline.json — including reranker_lift.

@@ -81,9 +81,9 @@ routing_mrr_hybrid = 0.7182539682539683
 #     aggregation across all communities; community chunk coverage is sparse on this small
 #     eval corpus — low floor is expected given corpus size constraints)
 #   graph_negative_control_recall_at_5: 0.4 (HotpotQA distractor naive-mode baseline)
-# graph_negative_control: measured 0.38-0.43 across runs (non-deterministic due to
-# unseeded store.sample_chunk_texts shuffle affecting routing). Floor=0.34 provides
-# regression protection with 0.05+ margin below the lowest observed value.
+# graph_negative_control: measured 0.38-0.43 across runs (non-deterministic; the unseeded
+# store.sample_chunk_texts shuffle once blamed for it was removed, so the cause is unmeasured).
+# Floor=0.34 provides regression protection with a 0.04 margin below the lowest observed value (0.38).
 # graph_global_recall_at_5=0.2 reflects real Leiden community path (see waiver in
 # baseline.json:graph_global_recall_at_5 — baseline of 1.0 was measured via hybrid
 # fallback stub path, not real community retrieval).

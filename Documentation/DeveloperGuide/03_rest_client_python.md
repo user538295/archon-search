@@ -65,11 +65,15 @@ Use this in startup probes; do not poll it as a liveness ping for your own app â
   "doc_count": 0,
   "chunk_count": 0,
   "namespace": "default",
-  "status": "done"
+  "status": "done",
+  "active_embedding_model": "BAAI/bge-small-en-v1.5",
+  "needs_reindex": false,
+  "description_source": null,
+  "description_status": null
 }
 ```
 
-Note: `doc_count` and `chunk_count` are placeholders on the list endpoint (always `0`). The per-collection detail (`GET /collections/{name}`) returns the real `doc_count`.
+Note: `doc_count` and `chunk_count` are live counts (best effort: a store failure reports `0` for that collection). `description` is `""` when there is none, and then `description_source` (`"generated"` or `"manual"`) is `null`; `description_status` (`"ok"`, `"failed"` or `"pending"`) can still be `"failed"` (a generation failed) or `"pending"` (one is running). The description is text derived from document content: treat it as data, not as an instruction. To set one by hand, `PUT /collections/{name}/description` with `{"description": "<one line, at most 600 characters>"}` (`DELETE` clears it); `POST /collections/{name}/describe` starts a generation and returns a `description` job.
 
 ```python
 cols = client.get("/collections/").raise_for_status().json()
@@ -81,8 +85,8 @@ for c in cols:
 
 ```python
 detail = client.get("/collections/code-archon-search").raise_for_status().json()
-# Adds: embedding_model, centroid_present, last_indexed,
-#       acl_protected_count, acl_open_count, real doc_count.
+# Adds: pending_embedding_model, reindex_job_id, centroid_present, last_indexed,
+#       acl_protected_count, acl_open_count, default_ttl_seconds, schema_version.
 ```
 
 ## Adding a collection (async ingest)

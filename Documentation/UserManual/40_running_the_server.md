@@ -67,7 +67,7 @@ Auth is `Bearer` on all routes except the two probes. This is a compact map — 
 | Status | `GET /status`, `GET /indexing-state` | bearer |
 | Search / route / explain | `POST /search`, `POST /route`, `POST /explain` | bearer |
 | Ingest / jobs | `POST /ingest` (202), `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/resume`, `DELETE /jobs/{id}` | bearer |
-| Collections | `GET`/`POST` `/collections/`, `GET`/`DELETE`/`PATCH` `/collections/{name}`, `.../documents`, `.../expiring`, `.../reindex`, `.../reindex-metadata`, `.../migrate`, `.../migrations/pending`, `.../export`, `.../import` | bearer |
+| Collections | `GET`/`POST` `/collections/`, `GET`/`DELETE`/`PATCH` `/collections/{name}`, `PUT`/`DELETE` `/collections/{name}/description`, `POST` `/collections/{name}/describe`, `.../documents`, `.../expiring`, `.../reindex`, `.../reindex-metadata`, `.../migrate`, `.../migrations/pending`, `.../export`, `.../import` | bearer |
 | Sync / backup / maintenance | `POST /sync`, `POST /backup/trigger`, `POST /maintenance/trigger` | bearer |
 | Graph | `POST /graph/{collection}/rebuild-communities` (202), `GET /graph/{collection}`, `GET /graph/{collection}/view` (HTML), `GET /graph/{collection}/impact/{symbol}`, `GET /graph/cross-collection` | bearer |
 | Keys | `POST /keys`, `GET /keys`, `DELETE /keys/{key_id}`, `POST /keys/rotate` | bearer |
