@@ -72,7 +72,7 @@ class KeyRecord(BaseModel):
     stdout at creation time and is never recoverable from disk.
 
     ``admin`` is the capability to manage keys across namespaces and to run the server-wide control
-    endpoints (see ``archon_search.server.authz``). It defaults to ``False``: a record built in code
+    endpoints (see ``archon_search.services.authz``). It defaults to ``False``: a record built in code
     is never admin unless the caller says so. Records read from an existing ``keys.json`` that has no
     ``admin`` field are resolved by :func:`_parse_stored_record`.
     """

@@ -19,8 +19,8 @@ from archon_search.constants import (
     _validate_namespace,
 )
 from archon_search.key_manager import hash_token
-from archon_search.server.authz import AuthIdentity
 from archon_search.server.graph_view_token import GRAPH_VIEW_PATH_RE, verify_view_token
+from archon_search.services.authz import AuthIdentity
 
 if TYPE_CHECKING:
     from archon_search.key_manager import KeyStore

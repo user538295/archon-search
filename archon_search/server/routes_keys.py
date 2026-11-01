@@ -59,7 +59,7 @@ _ERROR_401_422: _Responses = {
     422: {"model": ErrorDetail},
 }
 
-# A non-admin key manages only non-admin keys of its own namespace (see ``archon_search.server.authz``).
+# A non-admin key manages only non-admin keys of its own namespace (see ``archon_search.services.authz``).
 _ERROR_403_KEY_SCOPE: _Responses = {
     403: {"model": ErrorDetail, "description": FOREIGN_NAMESPACE_DETAIL},
 }

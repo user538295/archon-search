@@ -19,7 +19,7 @@ from archon_search.ingest_path_policy import log_if_non_admin_path_ingest_is_ref
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import KeyStore
 from archon_search.server.app import create_app
-from archon_search.server.authz import AuthIdentity
+from archon_search.services.authz import AuthIdentity
 from archon_search.store import SearchStore
 from tests._collection_access_stub import allow_collection_access_everywhere
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp

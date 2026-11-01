@@ -153,7 +153,7 @@ flowchart LR
         - #unit_test — `test_authorize_key_create_and_listing_namespace_rules` — admin-key grant and foreign-namespace refusals
         - #unit_test — `test_caller_may_revoke_reads_key_store` — async policy against a core `KeyStore`, and `can_manage_key` with a `KeyRecord`
         - #unit_test — `test_services_authz_loads_without_fastapi` — subprocess `sys.modules` check (pattern of `test_cli_startup_latency.py`) that import pulls in no `fastapi`, `starlette` or `fastmcp`
-- [ ] **BE-6** — Re-point moved authz names: `mcp.py` (8 names; `identity_of` stays on `server/authz`, so the import splits), `middleware_auth.py` (`AuthIdentity`), `routes_keys.py` (6 names; `ADMIN_ONLY_RESPONSES`, `caller_identity`, `require_admin_dependency` stay), and the tests `integration/test_admin_scope.py`, `server/test_ingest_non_admin_paths.py`, `server/test_mcp_fail_closed.py`; fix the `server.authz` mentions in `key_manager.py`, `routes_keys.py` and `tests/test_no_wire_str_exc.py` (the `middleware_auth.py` stamp comment stays) #backend-role
+- [x] **BE-6** — Re-point moved authz names: `mcp.py` (8 names; `identity_of` stays on `server/authz`, so the import splits), `middleware_auth.py` (`AuthIdentity`), `routes_keys.py` (6 names; `ADMIN_ONLY_RESPONSES`, `caller_identity`, `require_admin_dependency` stay), and the tests `integration/test_admin_scope.py`, `server/test_ingest_non_admin_paths.py`, `server/test_mcp_fail_closed.py`; fix the `server.authz` mentions in `key_manager.py`, `routes_keys.py` and `tests/test_no_wire_str_exc.py` (the `middleware_auth.py` stamp comment stays) #backend-role
     - Interface Adapter · 3.0h
     - needs BE-4, BE-5 · completes S1, S3, S4, S22, S23
     - Tests

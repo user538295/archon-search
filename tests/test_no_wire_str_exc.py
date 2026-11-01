@@ -181,8 +181,8 @@ _SERVER = "archon_search/server"
 # (file, enclosing function, except clause type, ordinal) of one handler whose message is
 # curated, user-facing text.
 _ALLOWLIST: frozenset[tuple[str, str, str, int]] = frozenset({
-    # ForbiddenError carries one of the fixed authz details in ``archon_search.server.authz``; it never embeds caller data.
-    (f"{_SERVER}/authz.py", "require_admin_dependency", "ForbiddenError", 1),
+    # ForbiddenError carries one of the fixed authz details in ``archon_search.services.authz``; it never embeds caller data.
+    (f"{_SERVER}/authz.py", "require_admin_dependency", "policy.ForbiddenError", 1),
     (f"{_SERVER}/routes_keys.py", "create_key", "ForbiddenError", 1),
     (f"{_SERVER}/routes_keys.py", "list_keys", "ForbiddenError", 1),
     # "No community representatives found for collection ..." — names the caller's collection.
