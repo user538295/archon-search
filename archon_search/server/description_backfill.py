@@ -97,7 +97,7 @@ def local_server_url(description: DescriptionConfig) -> str:
 @dataclasses.dataclass(frozen=True, slots=True)
 class StaticProblem:
     """A reason the provider cannot be used. ``reason`` is operator-readable and free of credentials and paths (it reaches
-    ``/status``); ``remedy`` is the install command, which only the log line may carry."""
+    the log; ``/status`` shows only the probe's yes/no); ``remedy`` is the install command, which only the log line may carry."""
 
     reason: str
     remedy: str | None = None

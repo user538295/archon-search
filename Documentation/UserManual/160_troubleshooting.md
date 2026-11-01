@@ -204,7 +204,7 @@ The server started, but the log holds a WARNING such as `Collection descriptions
 - `no answer from <host:port>` or `<host:port> answered HTTP <status>`: the Ollama or llama.cpp server is down or the URL is wrong; this check runs in the background just after start.
 - `the 'claude' program was not found on PATH`: install Claude Code or switch the provider.
 
-Description health never enters `/ready`. After fixing it, restart and run `archon-search collection describe <name>`; the startup check is not repeated while the server runs.
+Description health never enters `/ready`. `GET /status` shows it in the `description` block (`null` when `[description]` is off): `key_available` (the API key is set; for `claude_cli` the `claude` program is on `PATH`), `reachable` (the startup probe's verdict; `null` until it has run, `false` for the problems above, not refreshed while the server runs), `effective_context_tokens` with `context_window_source` (`configured`, `probed` or `assumed`; both `null` for `anthropic`, `openai` and `claude_cli`), `backfill_on_startup`, and `last_attempt_ok` / `last_attempt_at` (the latest generation since the start, for the whole server). After fixing it, restart and run `archon-search collection describe <name>`.
 
 ## Symptom: `/ready` returns 503 (not ready)
 

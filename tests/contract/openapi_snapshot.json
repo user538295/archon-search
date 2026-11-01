@@ -671,6 +671,91 @@
         ],
         "type": "string"
       },
+      "DescriptionStatusDetail": {
+        "description": "Collection-description feature status sub-object for GET /status (C7).\n\nPresent only when ``[description] enabled = true``; the parent ``description`` field being ``null`` signals that\nthe feature is off. Description health lives here and in the startup log only: it never feeds ``GET /ready`` or\n``model_validation.provider_warnings``.\n\n``reachable`` is the startup probe's verdict (``null`` until it has run; never refreshed). The context window\nfields are ``null`` for a provider that trims nothing (cloud, ``claude_cli``). The last attempt is the latest\ngeneration that ran to a verdict, held in memory (``null`` until one has run since start); it names no collection.",
+        "properties": {
+          "backfill_on_startup": {
+            "title": "Backfill On Startup",
+            "type": "boolean"
+          },
+          "context_window_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "configured",
+                  "probed",
+                  "assumed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Window Source"
+          },
+          "effective_context_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Context Tokens"
+          },
+          "key_available": {
+            "title": "Key Available",
+            "type": "boolean"
+          },
+          "last_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt At"
+          },
+          "last_attempt_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt Ok"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "reachable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reachable"
+          }
+        },
+        "required": [
+          "provider",
+          "key_available",
+          "backfill_on_startup"
+        ],
+        "title": "DescriptionStatusDetail",
+        "type": "object"
+      },
       "DisabledResponse": {
         "properties": {
           "enabled": {
@@ -3975,6 +4060,16 @@
             "minimum": 0.0,
             "title": "Collections Schema Behind",
             "type": "integer"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DescriptionStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "failed_expired_ingest_count": {
             "default": 0,

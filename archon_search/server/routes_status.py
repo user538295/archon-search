@@ -12,6 +12,9 @@ from fastapi import APIRouter, Request
 from archon_search import code_enricher
 from archon_search.config import SearchConfig
 from archon_search.jobs.model import JobStatus
+from archon_search.llm_client.claude_cli_client import ClaudeCliClient
+from archon_search.llm_client.protocol import ContextWindowTokens
+from archon_search.llm_client.provider_key import provider_key_available
 from archon_search.progress import compute_eta_seconds
 from archon_search.server.readiness import collect_readiness
 from archon_search.server.routes_collections import _all_collection_paths
@@ -20,6 +23,7 @@ from archon_search.server.schemas import (
     CodeParsersStatusDetail,
     CollectionBackupStatus,
     CollectionHealthEntry,
+    DescriptionStatusDetail,
     ErrorDetail,
     GraphCollectionStats,
     GraphStatusDetail,
@@ -185,6 +189,7 @@ async def status(request: Request) -> StatusResponse:
     mcp_detail = _build_mcp_status(request, config)
     hyde_detail = _build_hyde_status(request, config)
     rag_fusion_detail = _build_rag_fusion_status(request, config)
+    description_detail = _build_description_status(request, config)
     failed_expired_count = _count_failed_expired_ingest_jobs(request, ns)
     search_detail = _build_search_status(
         config, context_window_max=request.app.state.pipeline.context_window_max
@@ -207,6 +212,7 @@ async def status(request: Request) -> StatusResponse:
         search=search_detail,
         hyde=hyde_detail,
         rag_fusion=rag_fusion_detail,
+        description=description_detail,
         failed_expired_ingest_count=failed_expired_count,
         graph=graph_detail,
         code_parsers=code_parsers_detail,
@@ -309,6 +315,45 @@ def _build_rag_fusion_status(request: Request, config: SearchConfig) -> RagFusio
     return RagFusionStatusDetail(
         key_available=generator.is_key_available(),
         provider=config.rag_fusion.provider,
+    )
+
+
+def _description_key_available(provider: str, client: object) -> bool:
+    """The provider's key is set; for ``claude_cli`` (no key; Claude Code's login) the client found its ``claude`` program.
+
+    The client resolved the program when it was built and runs that one, so this is what a generation would use."""
+    if isinstance(client, ClaudeCliClient):
+        return client.binary is not None
+    return provider_key_available(provider)
+
+
+def _build_description_status(request: Request, config: SearchConfig) -> DescriptionStatusDetail | None:
+    """Return the description status sub-object when ``[description] enabled = true``, or ``None`` otherwise (C7).
+
+    Every value is read from live ``app.state`` without any provider call: the startup probe's verdict
+    (``description_reachability``, ``None`` until probed; its free-text reason stays in the log), the client's resolved
+    context window (``None`` for a provider that trims nothing) and the lifecycle's in-memory last attempt (process-wide:
+    outcome and time only, no collection or namespace). Nothing here feeds ``/ready`` or ``provider_warnings``.
+    """
+    description = config.description
+    if not description.enabled:
+        return None
+    state = request.app.state
+    reachability = getattr(state, "description_reachability", None)
+    client = getattr(state, "description_client", None)
+    window = client.context_window() if client is not None else None
+    tokens = window if isinstance(window, ContextWindowTokens) else None
+    lifecycle = getattr(state, "description_lifecycle", None)
+    attempt = lifecycle.last_attempt if lifecycle is not None else None
+    return DescriptionStatusDetail(
+        provider=description.provider,
+        key_available=_description_key_available(description.provider, client),
+        reachable=None if reachability is None else reachability.reachable,
+        effective_context_tokens=None if tokens is None else tokens.size,
+        context_window_source=None if tokens is None else tokens.source.value,
+        backfill_on_startup=description.backfill_on_startup,
+        last_attempt_ok=None if attempt is None else attempt.ok,
+        last_attempt_at=None if attempt is None else attempt.at,
     )
 
 

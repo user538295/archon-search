@@ -392,6 +392,28 @@ class RagFusionStatusDetail(BaseModel):
     provider: str
 
 
+class DescriptionStatusDetail(BaseModel):
+    """Collection-description feature status sub-object for GET /status (C7).
+
+    Present only when ``[description] enabled = true``; the parent ``description`` field being ``null`` signals that
+    the feature is off. Description health lives here and in the startup log only: it never feeds ``GET /ready`` or
+    ``model_validation.provider_warnings``.
+
+    ``reachable`` is the startup probe's verdict (``null`` until it has run; never refreshed). The context window
+    fields are ``null`` for a provider that trims nothing (cloud, ``claude_cli``). The last attempt is the latest
+    generation that ran to a verdict, held in memory (``null`` until one has run since start); it names no collection.
+    """
+
+    provider: str
+    key_available: bool
+    reachable: bool | None = None
+    effective_context_tokens: int | None = None
+    context_window_source: Literal["configured", "probed", "assumed"] | None = None
+    backfill_on_startup: bool
+    last_attempt_ok: bool | None = None
+    last_attempt_at: datetime | None = None
+
+
 class GraphCollectionStats(BaseModel):
     """Per-collection graph statistics (E1a FE-1 / C2).
 
@@ -498,6 +520,8 @@ class StatusResponse(BaseModel):
     # (no startup sync was ever run). Mirrors warmup_result above — see
     # StartupSyncResult for the state machine.
     sync_result: StartupSyncResult | None = None
+    # Collection-description feature status (C7; additive, nullable); null when description.enabled=false
+    description: DescriptionStatusDetail | None = None
 
 
 class IndexingStateCollectionEntry(BaseModel):

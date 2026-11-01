@@ -664,7 +664,7 @@ flowchart LR
         - #integration_test — `test_privacy_info_for_cloud_and_non_loopback_hosts_only` — a loopback Ollama gets no INFO
         - #integration_test — `test_hybrid_without_descriptions_warns_centroid_fallback` — the WARNING names the fallback
         - #integration_test — `test_missing_description_package_warns_and_generation_fails_visibly` — status `failed`, one WARNING per process
-- [ ] **BE-37** — `/status` description block: `DescriptionStatusDetail` and a nullable additive `StatusResponse.description` in `schemas.py`, builder beside `_build_hyde_status` in `routes_status.py` (provider, key availability, reachability null until probed, effective context tokens and source, backfill flag, last attempt), never in `/ready` or `provider_warnings`; regenerated snapshots #backend-role
+- [x] **BE-37** — `/status` description block: `DescriptionStatusDetail` and a nullable additive `StatusResponse.description` in `schemas.py`, builder beside `_build_hyde_status` in `routes_status.py` (provider, key availability, reachability null until probed, effective context tokens and source, backfill flag, last attempt), never in `/ready` or `provider_warnings`; regenerated snapshots #backend-role
     - Interface Adapters · 4.0h
     - needs BE-25, BE-35 · completes C7, S39, S52, S66
     - Tests
