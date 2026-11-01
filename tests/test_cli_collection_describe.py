@@ -75,6 +75,7 @@ class _Api:
         self.details: dict[str, dict[str, Any]] = {}
         self.posts: list[str] = []
         self.gets: list[str] = []
+        self.status_answer: MagicMock | None = None
 
     def post_for(self, name: str, answer: MagicMock) -> None:
         self.post_answers[name] = answer
@@ -86,6 +87,10 @@ class _Api:
 
     def get(self, url: str, **_kwargs: Any) -> MagicMock:
         self.gets.append(url)
+        if url.endswith("/status"):
+            if self.status_answer is None:
+                return _resp(200, {})  # an older server: no `description` field
+            return self.status_answer
         if url.endswith("/collections/"):
             return _resp(200, self.entries)
         if "/jobs/" in url:
@@ -358,6 +363,140 @@ def test_describe_all_stops_on_not_configured_409() -> None:
     assert result.exit_code == 1
     assert _posted_names(api) == ["one"]
     assert result.stderr.count(DESCRIBE_NOT_CONFIGURED_DETAIL) == 1
+
+
+def _status(description: object) -> MagicMock:
+    return _resp(200, {"description": description})
+
+
+_CONFIGURED_BLOCK = {"provider": "anthropic"}
+
+
+def test_describe_all_sends_the_key_to_the_status_preflight() -> None:
+    api = _Api()
+    api.entries = [_entry("ok", description="fine", source="generated", status="ok")]
+    calls: list[dict[str, Any]] = []
+
+    def get(url: str, **kwargs: Any) -> MagicMock:
+        if url.endswith("/status"):
+            calls.append(kwargs)
+        return api.get(url, **kwargs)
+
+    with patch("httpx.get", side_effect=get), patch("httpx.post", side_effect=api.post):
+        result = CliRunner().invoke(collection, ["describe", "--all", "--api-key", _KEY])
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert [call["headers"] for call in calls] == [{"Authorization": f"Bearer {_KEY}"}]
+
+
+def test_describe_all_not_configured_with_an_empty_namespace_still_exits_1() -> None:
+    api = _Api()
+    api.status_answer = _status(None)
+
+    result = _run(api, "--all")
+
+    assert result.exit_code == 1
+    assert result.stderr.count(DESCRIBE_NOT_CONFIGURED_DETAIL) == 1
+
+
+def test_describe_all_status_body_not_json_falls_back_to_the_loop() -> None:
+    api = _Api()
+    api.entries = [_entry("ok", description="fine", source="generated", status="ok")]
+    broken = _resp(200)
+    broken.json.side_effect = ValueError("not json")
+    api.status_answer = broken
+
+    result = _run(api, "--all")
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert "Skipped 'ok'" in result.output
+
+
+def test_describe_single_never_calls_status() -> None:
+    api = _Api()
+    api.job_for("docs", _job())
+
+    result = _run(api, "docs", "--wait")
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert not any(url.endswith("/status") for url in api.gets)
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [_entry("ok", description="fine", source="generated", status="ok"), _entry("m", description="x", source="manual", status="ok"), _entry("e", docs=0)],
+        [_entry("one"), _entry("two")],
+    ],
+    ids=["everything skippable", "fillable"],
+)
+def test_describe_all_not_configured_status_prints_setup_message_and_exits_1_before_touching_anything(entries: list[dict[str, Any]]) -> None:
+    """S32: the status block is null (descriptions off): the setup message once, exit 1, no POST, no collection list."""
+    api = _Api()
+    api.entries = entries
+    api.status_answer = _status(None)
+
+    result = _run(api, "--all")
+
+    assert result.exit_code == 1, result.output + result.stderr
+    assert result.stderr.count(DESCRIBE_NOT_CONFIGURED_DETAIL) == 1
+    assert api.posts == []
+    assert not any(url.endswith("/collections/") for url in api.gets)
+    assert "Skipped" not in result.output and "Summary" not in result.output
+
+
+def test_describe_all_configured_with_nothing_to_fill_exits_0_with_the_skip_list() -> None:
+    api = _Api()
+    api.entries = [_entry("ok", description="fine", source="generated", status="ok")]
+    api.status_answer = _status(_CONFIGURED_BLOCK)
+
+    result = _run(api, "--all")
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert "Skipped 'ok'" in result.output
+    assert api.posts == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        _resp(500, {"detail": "boom"}),
+        _resp(401, {"detail": "no"}),
+        _resp(503, {"description": None}),
+        _resp(200, {"other": 1}),
+        _resp(200, ["x"]),
+    ],
+    ids=["500", "401", "non-200 body saying null", "field absent", "not an object"],
+)
+def test_describe_all_status_unusable_falls_back_to_the_409_loop(answer: MagicMock) -> None:
+    """A failing status call or a server without the field changes nothing: the per-collection 409 still stops the run."""
+    api = _Api()
+    api.entries = [_entry("one"), _entry("two")]
+    api.status_answer = answer
+    api.post_for("one", _resp(409, {"detail": DESCRIBE_NOT_CONFIGURED_DETAIL}))
+
+    result = _run(api, "--all")
+
+    assert result.exit_code == 1
+    assert _posted_names(api) == ["one"]
+    assert result.stderr.count(DESCRIBE_NOT_CONFIGURED_DETAIL) == 1
+
+
+def test_describe_all_status_transport_error_falls_back_to_the_loop() -> None:
+    api = _Api()
+    api.entries = [_entry("ok", description="fine", source="generated", status="ok")]
+    real_get = api.get
+
+    def get(url: str, **kwargs: Any) -> MagicMock:
+        if url.endswith("/status"):
+            raise httpx.ReadTimeout("slow")
+        return real_get(url, **kwargs)
+
+    with patch("httpx.get", side_effect=get), patch("httpx.post", side_effect=api.post):
+        result = CliRunner().invoke(collection, ["describe", "--all", "--api-key", _KEY])
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert "Skipped 'ok'" in result.output
 
 
 def test_describe_all_exits_1_when_a_collection_ends_failed_and_goes_on() -> None:

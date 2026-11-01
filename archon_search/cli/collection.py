@@ -25,7 +25,10 @@ from archon_search.collection_meta import (
     DESCRIPTION_SOURCE_MANUAL,
     DESCRIPTION_STATUS_FAILED,
 )
-from archon_search.constants import DESCRIBE_MANUAL_DETAIL
+from archon_search.constants import (
+    DESCRIBE_MANUAL_DETAIL,
+    DESCRIBE_NOT_CONFIGURED_DETAIL,
+)
 from archon_search.description_write import check_description_text
 from archon_search.key_manager import load_key
 from archon_search.paths import get_data_dir
@@ -61,6 +64,8 @@ _PYDANTIC_VALUE_ERROR_PREFIX = "Value error, "
 _STORE_BUSY_CODE = "store_busy"
 _EMPTY_SERVER_MESSAGE = "the server refused the description"
 _NOT_UTF8_MESSAGE = "the description is not valid UTF-8 text"
+# Timeout of the `GET /status` preflight of `describe --all`.
+_STATUS_PREFLIGHT_TIMEOUT_S = 5.0
 
 
 @click.group()
@@ -602,7 +607,26 @@ def _fill_one(name: str, base_url: str, headers: dict[str, str]) -> _Fill:
     return _Fill.FILLED if settled.outcome == _OUTCOME_GENERATED else _Fill.RUNNING
 
 
+def _descriptions_reported_off(base_url: str, headers: dict[str, str]) -> bool:
+    """True when ``GET /status`` answers with ``description: null`` (descriptions not configured or disabled, BE-37).
+
+    Any other answer (transport error, non-200, a body that is not an object, a server too old to carry the field)
+    is "unknown": the per-collection 409 stays the authority and the guard against a config that changed meanwhile.
+    """
+    try:
+        resp = httpx.get(f"{base_url}/status", headers=headers, timeout=_STATUS_PREFLIGHT_TIMEOUT_S)
+    except httpx.HTTPError:
+        return False
+    if resp.status_code != 200:
+        return False
+    body = _json_body(resp)
+    return "description" in body and body["description"] is None
+
+
 def _describe_all(base_url: str, headers: dict[str, str]) -> None:
+    if _descriptions_reported_off(base_url, headers):
+        click.echo(f"Error: {DESCRIBE_NOT_CONFIGURED_DETAIL}", err=True)
+        raise SystemExit(1)
     entries = _fetch_namespace(base_url, headers)
     if not entries:
         click.echo("No collections found.")

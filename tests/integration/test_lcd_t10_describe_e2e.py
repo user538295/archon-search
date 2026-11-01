@@ -408,8 +408,8 @@ def test_e2e_describe_all_on_mixed_states_fills_only_empty_or_failed(tmp_path: P
 
 def test_e2e_describe_not_configured_409_and_provider_down_job_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S32, S58: descriptions not configured (section absent, or ``enabled = false``) answer 409 with a setup message and
-    create no job, and ``describe --all`` stops at the first such 409 (two collections, the message once, no job); a
-    configured provider that is down gives a job that ends DONE with outcome ``failed`` and an exit code of 1, not a 409.
+    create no job, and ``describe --all`` exits 1 with the message once and no job; a configured provider that is down
+    gives a job that ends DONE with outcome ``failed`` and an exit code of 1, not a 409.
     The three boots share one store, so the same two collections are addressed each time."""
     corpus = _write_corpus(tmp_path / "corpus", "ridge")
     second_corpus = _write_corpus(tmp_path / "corpus-second", "dune")
@@ -461,6 +461,48 @@ def test_e2e_describe_not_configured_409_and_provider_down_job_failed(tmp_path: 
             assert _outcome(job) == (_OUTCOME_FAILED, DESCRIPTION_STATUS_FAILED)
         for name in (_COLLECTION, second_collection):
             assert _state(client, key, name) == ("", None, DESCRIPTION_STATUS_FAILED)
+
+
+def test_e2e_describe_all_reports_not_configured_even_when_every_collection_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S32, S59: with descriptions off, `describe --all` must not look like a success when every collection is skippable
+    (no POST, so no 409): it reads the null `description` block of GET /status, prints the setup message once and exits
+    1 before listing or touching anything, for the admin key and for a plain namespace key (status is open to any
+    authenticated caller). With descriptions on and nothing to fill it exits 0 with the skip list."""
+    empty_directory = tmp_path / "no-documents"
+    empty_directory.mkdir()
+    toml_collections = f"[collections]\ncollections = {json.dumps([str(empty_directory)])}\n"
+    nodocs = path_to_collection_name(str(empty_directory))
+    team_key = secrets.token_hex(32)
+    with FakeModelServer() as server:
+        arms = {"section absent": "", "disabled": _description_toml(server.base_url, enabled=False)}
+        for label, toml in arms.items():
+            with (
+                _booted(tmp_path, monkeypatch, toml_collections + toml, namespaces={team_key: _TEAM}) as (client, key),
+                cli_against_app(client, key, monkeypatch) as cli,
+            ):
+                listed = {item["name"]: item for item in client.get("/collections/", headers=_headers(key)).json()}
+                assert listed[nodocs]["doc_count"] == 0, f"{label}: the only collection has no documents (everything is skippable)"
+                assert client.get("/status", headers=_headers(team_key)).json()["description"] is None, label
+                for token in (key, team_key):  # the team key's namespace holds no collection at all
+                    result = _cli(cli, "describe", "--all", token=token)
+                    assert result.exit_code == 1, f"{label}: {result.output}"
+                    assert result.output.count(DESCRIBE_NOT_CONFIGURED_DETAIL) == 1, label
+                    assert "Summary" not in result.output and "Skipped" not in result.output, label
+                    assert "No collections found" not in result.output, label
+                    assert _describe_jobs(client, token) == [], label
+
+        with (
+            _booted(tmp_path, monkeypatch, toml_collections + _description_toml(server.base_url)) as (client, key),
+            cli_against_app(client, key, monkeypatch) as cli,
+        ):
+            assert client.get("/status", headers=_headers(key)).json()["description"] is not None
+            result = _cli(cli, "describe", "--all")
+            assert result.exit_code == 0, result.output
+            assert _skipped_line(nodocs, _SKIP_NO_DOCUMENTS) in result.output
+            assert DESCRIBE_NOT_CONFIGURED_DETAIL not in result.output
+        assert _chat_count(server) == 0, "no generation was asked of the provider (startup probes aside)"
 
 
 def test_e2e_two_callers_one_generation_and_manual_set_between_409_check_and_run(

@@ -91,7 +91,7 @@ def test_describe_wait_generates_through_the_real_route(tmp_path: Path, monkeypa
 
 
 def test_describe_not_configured_prints_the_setup_message_and_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """S32: descriptions off: the server's 409 setup message reaches the terminal, once, in single and ``--all`` mode."""
+    """S32: descriptions off: the setup message reaches the terminal once, in single mode (the server's 409) and in ``--all`` mode."""
     with (
         FakeModelServer() as server,
         make_real_app(tmp_path, monkeypatch, toml_content=_toml(server.base_url, enabled=False)) as booted,
