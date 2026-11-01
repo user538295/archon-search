@@ -58,3 +58,9 @@
 - **[2026-10-14] (×1) release.sh runs**: `tee` masks the exit code (log `RELEASE_SH_EXIT`); a full disk kills runs silently. Stub `docker` in release.sh tests (wedged daemon hangs `docker info`); probe it with `gtimeout -k 2 8`, not perl alarm. _(evicted from learnings.md 2026-10-21 — lowest N)_
 
 - **[2026-10-31] (×1) compacted from install/wizard and 3rd-party wiring**: force-reinstall `rmtree` needs `db_path.exists()`; interactive guard: optional prompts eat input(), assert prompt TEXT not the count. fastembed with no `cache_dir` lands in `<tmp>/fastembed_cache`; ORT>=1.31 F_GETPATH + APFS hardlinks flake ~5%, macOS-only retry.
+
+## Evicted from learnings.md 2026-11-01 (lowest N, final documentation sweep)
+- **[2026-10-21] (×1) multi-agent sweep**: pytest wait loop `ps|grep` counts its own `/bin/zsh` shells → deadlock; add `| grep -v '^/bin/zsh'` and bound the wait. Cap review at 3 cycles + a diff-size gate: each fix round widens scope (3.5 h, one bug).
+- **[2026-10-21] (×1) branch integration**: parallel fix branches each add `BREAKING.md` + NR-index rows with the same NR-n — renumber once at merge (cross-refs, count prose); regen OpenAPI snapshots, never hand-merge; merged imports can vanish.
+- **[2026-11-01] (×1) LLM sizing detail (manual runs T-2/T-7)**: Ollama estimate used gpt2 tokens x 1.2 margin and under-counted digit/emoji runs (8ccfd37f); llama_cpp budget ignored chat-template framing until `/apply-template` was used (54f1fd86); a thinking model spent the whole 1024-token answer reserve thinking (DESCRIPTION_THINKING_HEADROOM_TOKENS, 76a3336d).
+- **[2026-11-01] (×1) request lifetime detail**: /search and /explain kept calling the provider after the client left (237c8657); MCP search tools after the stream closed (48f48d96); MCP sessions were not tied to their credential (573cdfc3); the unraisable-exception flake was a pooled SDK client closing on a dead loop (ddf9429e, 0b9c72ea plugin names the leaking test).
