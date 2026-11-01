@@ -46,6 +46,7 @@ from archon_search.install.wizard import (
     OLLAMA_CONTEXT_SUGGESTION_TOKENS,
     OllamaContextChoice,
     _gguf_cache_roots,
+    _model_missing,
     _normalise_base_url,
     _prompt_ollama_context,
     _strip_root_qualifier,
@@ -1412,11 +1413,11 @@ class TestWizardFeaturesG10:
         assert features.hyde_ollama_base_url == ""
         assert features.rag_fusion_ollama_base_url == ""
 
-    def test_wizard_eof_during_model_prompt_returns_empty_model(self) -> None:
-        """EOFError during model name prompt leaves model empty.
+    def test_wizard_eof_during_model_prompt_leaves_the_feature_disabled(self, capsys: pytest.CaptureFixture) -> None:
+        """EOFError during the model name prompt leaves HyDE disabled with a message.
 
-        _apply_wizard_features_to_toml writes model="" explicitly for non-Anthropic
-        providers, so config.py raises ConfigError at startup when model is blank.
+        A blank model for a provider that needs one would be written as ``model = ""`` and break
+        ``load_config``; the feature is switched off instead, exactly as for graph and descriptions.
         """
         # "y" = enable, "ollama" = HyDE provider, then EOFError on base-URL prompt and
         # everything after. Empty model list forces the free-text fallback, which also EOFs.
@@ -1440,9 +1441,47 @@ class TestWizardFeaturesG10:
                 routing_strategy="centroid",
                 log_format="text",
             )
-        assert features.enable_hyde is True
-        assert features.hyde_provider == "ollama"
-        assert features.hyde_model == ""  # empty on EOFError
+        assert features.enable_hyde is False
+        assert features.hyde_ollama_context_tokens is None  # no window question for a feature left off
+        assert "No model name was given for ollama, so HyDE is left disabled." in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        ("provider", "typed"), [("openai", ["", ""]), ("ollama", ["", "", ""]), ("llama_cpp", ["", "", ""])]
+    )
+    @pytest.mark.parametrize("feature", ["HyDE", "RAG Fusion"])
+    def test_blank_model_leaves_only_that_feature_disabled(
+        self, feature: str, provider: str, typed: list[str], capsys: pytest.CaptureFixture
+    ) -> None:
+        """A blank model (after strip) for openai / ollama / llama_cpp disables that feature only; the other keeps its answer."""
+        hyde_answers = [provider, *typed] if feature == "HyDE" else ["anthropic"]
+        rag_answers = [provider, *typed] if feature == "RAG Fusion" else ["anthropic"]
+        # "   " proves the answer is stripped before the blank check.
+        hyde_answers = [a if a else "   " for a in hyde_answers]
+        rag_answers = [a if a else "   " for a in rag_answers]
+        with (
+            patch("archon_search.install.wizard._fetch_ollama_models", return_value=[]),
+            patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=[]),
+            patch("builtins.input", side_effect=["y", *hyde_answers, *rag_answers, "n", DECLINE_DESCRIPTION]),
+        ):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
+        left_off, kept = (
+            (features.enable_hyde, features.enable_rag_fusion)
+            if feature == "HyDE"
+            else (features.enable_rag_fusion, features.enable_hyde)
+        )
+        assert left_off is False
+        assert kept is True
+        assert f"No model name was given for {provider}, so {feature} is left disabled." in capsys.readouterr().out
 
     def test_wizard_invalid_provider_falls_back_to_anthropic(self) -> None:
         """Two invalid provider choices fall back to default 'anthropic'."""
@@ -1512,22 +1551,58 @@ class TestWizardFeaturesG10:
         assert features.rag_fusion_provider == "openai"
         assert features.rag_fusion_model == "gpt-4o"
 
-    def test_wizard_non_anthropic_empty_model_writes_empty_to_toml(self) -> None:
-        """When model is empty for non-Anthropic provider, empty string is written to TOML.
-
-        This ensures config.py's 'if not model: raise ConfigError' guard fires at
-        server startup rather than silently running an Anthropic model against OpenAI/Ollama.
-        """
+    @pytest.mark.parametrize("provider", ["openai", "ollama", "llama_cpp"])
+    @pytest.mark.parametrize("section", ["hyde", "rag_fusion"])
+    def test_writer_refuses_an_enabled_section_without_a_required_model(self, section: str, provider: str) -> None:
+        """The writer never stores ``model = ""``: the wizard decides (feature left disabled), and a caller
+        that skips that decision fails loudly instead of leaving a config ``load_config`` rejects."""
         doc = _fresh_config_doc()
-        features = WizardFeatures(
-            enable_hyde=True,
-            hyde_provider="openai",
-            hyde_model="",  # empty — both retries exhausted / EOF
+        features = WizardFeatures(**{f"enable_{section}": True, f"{section}_provider": provider, f"{section}_model": ""})
+        with pytest.raises(ValueError, match=f"{section}.*{provider}.*model"):
+            _apply_wizard_features_to_toml(doc, features)
+
+    def test_writer_treats_a_whitespace_only_model_as_blank(self) -> None:
+        with pytest.raises(ValueError, match="hyde.*openai.*model"):
+            _apply_wizard_features_to_toml(
+                _fresh_config_doc(), WizardFeatures(enable_hyde=True, hyde_provider="openai", hyde_model="   ")
+            )
+
+    def test_a_refused_section_is_left_untouched(self) -> None:
+        """The writer validates before it mutates: a refused enable leaves no half-written section behind."""
+        doc = _fresh_config_doc()
+        before = doc.as_string()
+        with pytest.raises(ValueError):
+            _apply_wizard_features_to_toml(
+                doc, WizardFeatures(enable_hyde=True, hyde_provider="ollama", hyde_model="")
+            )
+        assert doc.as_string() == before
+
+    @pytest.mark.parametrize(
+        ("provider", "model", "missing"),
+        [
+            ("openai", "", True),
+            ("ollama", "   ", True),
+            ("llama_cpp", " \t", True),
+            ("openai", "gpt-4o", False),
+            ("anthropic", "", False),
+            ("claude_cli", "", False),
+        ],
+    )
+    def test_model_missing_decides_by_provider_and_stripped_model(
+        self, provider: str, model: str, missing: bool, capsys: pytest.CaptureFixture
+    ) -> None:
+        assert _model_missing(provider, model, "HyDE is") is missing
+        assert ("left disabled" in capsys.readouterr().out) is missing
+
+    def test_a_disabled_section_keeps_the_provider_block_of_an_earlier_good_run(self) -> None:
+        """A feature left disabled (blank model) writes only ``enabled = false``: the earlier model survives."""
+        doc = _fresh_config_doc()
+        _apply_wizard_features_to_toml(
+            doc, WizardFeatures(enable_hyde=True, hyde_provider="ollama", hyde_model="good:7b")
         )
-        _apply_wizard_features_to_toml(doc, features)
-        assert doc["hyde"]["provider"] == "openai"
-        # Empty model is written explicitly so config.py raises ConfigError at startup
-        assert doc["hyde"]["model"] == ""
+        _apply_wizard_features_to_toml(doc, WizardFeatures(enable_hyde=False, hyde_provider="ollama", hyde_model=""))
+        assert doc["hyde"]["enabled"] is False
+        assert (doc["hyde"]["provider"], doc["hyde"]["model"]) == ("ollama", "good:7b")
 
 
 # =============================================================================
@@ -2194,6 +2269,232 @@ class TestOllamaContextWindowPrompt:
             [OllamaContextChoice("HyDE", "", "", 4096), OllamaContextChoice("RAG Fusion", "", "", 8192)], capsys
         )
         assert out == ""
+
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [
+            ("", "http://localhost:11434"),
+            ("", "http://127.0.0.1:11434"),
+            ("localhost", "127.0.0.1"),
+            ("localhost:11434", "http://[::1]:11434"),
+            ("::1", "[::1]"),
+            ("http://127.0.0.1:11434/", "LOCALHOST"),
+            ("box", "http://box:11434"),
+        ],
+        ids=["empty-default", "empty-127", "bare-aliases", "port-and-ipv6", "bare-ipv6", "slash-and-case", "bare-host"],
+    )
+    def test_spellings_of_one_server_count_as_one_server(
+        self, first: str, second: str, capsys: pytest.CaptureFixture
+    ) -> None:
+        """S48: the default address, scheme-less / with-scheme hosts and the loopback aliases are one server."""
+        out = self._warning(
+            [OllamaContextChoice("HyDE", first, "m1", 4096), OllamaContextChoice("RAG Fusion", second, "m1", 8192)],
+            capsys,
+        )
+        assert "HyDE 4096, RAG Fusion 8192" in out
+        assert out.count("reloads the model") == 1
+
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [
+            ("", "http://localhost:11435"),
+            ("localhost", "http://box:11434"),
+            ("http://127.0.0.1:11434/a", "http://127.0.0.1:11434/b"),
+            ("127.0.0.1", "127.0.0.2"),
+        ],
+        ids=["other-port", "other-host", "other-path", "other-loopback-address"],
+    )
+    def test_different_servers_stay_different(self, first: str, second: str, capsys: pytest.CaptureFixture) -> None:
+        out = self._warning(
+            [OllamaContextChoice("HyDE", first, "m1", 4096), OllamaContextChoice("RAG Fusion", second, "m1", 8192)],
+            capsys,
+        )
+        assert out == ""
+
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [
+            ("m", "m:latest"),
+            ("llama3.1:8b", " llama3.1:8b "),
+            ("lib/m", "lib/m:latest"),
+            ("reg:5000/lib/m", "reg:5000/lib/m:latest"),
+        ],
+    )
+    def test_an_implicit_latest_tag_is_the_same_model(
+        self, first: str, second: str, capsys: pytest.CaptureFixture
+    ) -> None:
+        out = self._warning(
+            [OllamaContextChoice("HyDE", "", first, 4096), OllamaContextChoice("RAG Fusion", "", second, 8192)],
+            capsys,
+        )
+        assert "HyDE 4096, RAG Fusion 8192" in out
+
+    def test_a_different_tag_is_a_different_model(self, capsys: pytest.CaptureFixture) -> None:
+        out = self._warning(
+            [OllamaContextChoice("HyDE", "", "m:7b", 4096), OllamaContextChoice("RAG Fusion", "", "m", 8192)],
+            capsys,
+        )
+        assert out == ""
+
+    def test_the_warning_shows_the_first_answers_address_and_model_as_given(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Normalisation only decides which answers are grouped: the text printed is the first answer's own."""
+        out = self._warning(
+            [
+                OllamaContextChoice("HyDE", "http://127.0.0.1:11434", "m", 4096),
+                OllamaContextChoice("RAG Fusion", "", "m:latest", 8192),
+            ],
+            capsys,
+        )
+        assert "share the Ollama model m at http://127.0.0.1:11434 but use" in out
+
+    def test_loopback_aliases_typed_at_the_real_prompts_are_one_server(self, capsys: pytest.CaptureFixture) -> None:
+        """Through the wizard's own prompts: `127.0.0.1` for HyDE and `localhost` (stored as the default) for RAG Fusion."""
+        with (
+            patch("archon_search.install.wizard._fetch_ollama_models", return_value=["m1"]),
+            patch(
+                "builtins.input",
+                side_effect=["y", "ollama", "127.0.0.1", "1", "4096", "ollama", "localhost", "1", "8192", "n", DECLINE_DESCRIPTION],
+            ),
+        ):
+            _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
+        out = capsys.readouterr().out
+        assert "share the Ollama model m1 at http://127.0.0.1:11434 but use" in out
+        assert "HyDE 4096, RAG Fusion 8192" in out
+
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [
+            ("http://[::1", "http://[::1"),
+            ("http://[bad]:11434", "http://[bad]:11434"),
+            ("http://box:notaport", "http://box:notaport"),
+        ],
+        ids=["unbalanced-bracket", "bad-ipv6", "bad-port"],
+    )
+    def test_an_unparseable_address_never_crashes_and_is_its_own_server(
+        self, first: str, second: str, capsys: pytest.CaptureFixture
+    ) -> None:
+        """A typo in the address is identified by its spelling: same typo twice is one server, nothing raises."""
+        out = self._warning(
+            [OllamaContextChoice("HyDE", first, "m1", 4096), OllamaContextChoice("RAG Fusion", second, "m1", 8192)],
+            capsys,
+        )
+        assert "HyDE 4096, RAG Fusion 8192" in out
+        assert self._warning([OllamaContextChoice("HyDE", first, "m1", 4096)], capsys) == ""
+
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [
+            ("http://[::1]:11434", "http://[0:0:0:0:0:0:0:1]:11434"),
+            ("localhost.", "127.0.0.1"),
+            ("[::1]:11434", "localhost:11434"),
+            ("::1", "http://localhost:11434"),
+        ],
+        ids=["long-ipv6", "trailing-dot", "schemeless-bracket-port", "bare-ipv6-through-normaliser"],
+    )
+    def test_more_loopback_spellings(self, first: str, second: str, capsys: pytest.CaptureFixture) -> None:
+        out = self._warning(
+            [OllamaContextChoice("HyDE", first, "m1", 4096), OllamaContextChoice("RAG Fusion", second, "m1", 8192)],
+            capsys,
+        )
+        assert "HyDE 4096, RAG Fusion 8192" in out
+
+    def test_a_whitespace_only_model_is_no_model(self, capsys: pytest.CaptureFixture) -> None:
+        out = self._warning(
+            [OllamaContextChoice("HyDE", "", "  ", 4096), OllamaContextChoice("RAG Fusion", "", " ", 8192)], capsys
+        )
+        assert out == ""
+
+    def test_a_bare_ipv6_address_is_given_brackets_and_the_ollama_port(self) -> None:
+        """`::1` typed at the base-URL prompt must become a probeable address, not `http://::1`."""
+        assert _normalise_base_url("::1", 11434) == "http://[::1]:11434"
+        assert _normalise_base_url("::1/ollama", 11434) == "http://[::1]:11434/ollama"
+
+    @pytest.mark.parametrize(
+        "address", ["user:pass@host:8080", "user:pass@host", "user:secret@box/ollama"], ids=["port", "no-port", "path"]
+    )
+    def test_userinfo_is_not_mistaken_for_an_ipv6_literal(self, address: str) -> None:
+        """Only a real IPv6 literal gets brackets: a scheme-less address with credentials gets the scheme and nothing else."""
+        assert _normalise_base_url(address, 11434) == f"http://{address}"
+
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [("localhost:0", "localhost"), ("localhost:", "127.0.0.1"), ("http://localhost:0", "http://localhost:80")],
+        ids=["schemeless-port-0", "schemeless-empty-port", "with-scheme-port-0"],
+    )
+    def test_a_missing_or_zero_port_is_the_runtimes_default(
+        self, first: str, second: str, capsys: pytest.CaptureFixture
+    ) -> None:
+        """`host:0` and `host:` resolve like a bare host (Ollama's 11434); with a scheme, port 0 is the scheme's."""
+        out = self._warning(
+            [OllamaContextChoice("HyDE", first, "m1", 4096), OllamaContextChoice("RAG Fusion", second, "m1", 8192)],
+            capsys,
+        )
+        assert "HyDE 4096, RAG Fusion 8192" in out
+
+    def test_only_this_runs_answers_are_compared(self, capsys: pytest.CaptureFixture) -> None:
+        """Documented contract (20_wizard.md): a feature that is not asked in this run (here HyDE, answered by
+        `--enable-hyde`, with a stored window of 4096) is not compared with the windows answered now."""
+        with (
+            patch("archon_search.install.wizard._fetch_ollama_models", return_value=["m1"]),
+            patch("builtins.input", side_effect=["y", "ollama", "", "1", "8192", "n"]),
+        ):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+                enable_hyde=True,
+                hyde_ollama_context_tokens_default=4096,
+            )
+        assert features.description_ollama_context_tokens == 8192
+        assert features.hyde_ollama_context_tokens is None  # not asked, so no window to compare
+        assert "reload" not in capsys.readouterr().out.lower()
+
+    def test_graph_left_off_by_a_blank_model_gets_no_window_question(self) -> None:
+        """Like HyDE, RAG Fusion and descriptions: no model, no feature, so no Ollama context-window question."""
+        asked: list[str] = []
+        answers = iter(["n", "y", "ollama", "", "  ", "  ", DECLINE_DESCRIPTION])
+
+        def _input(prompt: str = "") -> str:
+            asked.append(prompt)
+            return next(answers)
+
+        with (
+            patch("archon_search.install.wizard._fetch_ollama_models", return_value=[]),
+            patch("builtins.input", _input),
+        ):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
+        assert features.graph_provider == "ollama"
+        assert features.graph_extraction_model == ""
+        assert features.graph_ollama_context_tokens is None
+        assert not any("context window" in prompt for prompt in asked)
 
 
 class TestDescriptionStep:

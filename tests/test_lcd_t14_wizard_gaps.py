@@ -54,6 +54,8 @@ _OLLAMA_URL_PROMPT = "Ollama base URL for {} [http://localhost:11434]: "
 _LLAMA_CPP_URL_PROMPT = "llama-server base URL for {} [" + LLAMA_CPP_BASE_URL_DEFAULT + "]: "
 _SHARED_MODEL_WARNING = "Warning: these features share the Ollama model"
 _RELOAD_SENTENCE = "reloads the model"
+_BULLET_HYDE = "• HyDE: enabled (provider: {})"
+_BULLET_RAG_FUSION = "• RAG Fusion: enabled (provider: {})"
 _BULLET_DESCRIPTION = "• Collection descriptions: enabled (provider: {})"
 _BULLET_GRAPH = "• LLM graph enrichment: enabled (provider: {})"
 _PACKAGE_PREFIX = "archon-search"
@@ -436,6 +438,71 @@ def test_blank_openai_model_leaves_descriptions_off_through_the_wizard(runner: C
     assert _written(config_path)["description"] == {"enabled": False}
 
 
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["openai", "ollama", "llama_cpp"])
+@pytest.mark.parametrize("feature", ["HyDE", "RAG Fusion"])
+def test_blank_model_leaves_hyde_or_rag_fusion_off_and_exits_zero(
+    runner: CliRunner, tmp_path: Path, feature: str, provider: str
+) -> None:
+    """A blank model (Enter at every model prompt) for openai / ollama / llama_cpp used to be written as `model = ""`,
+    and the wizard then exited 1 with `[hyde].model must be a non-empty string`, leaving that config on disk. Now the
+    feature is left disabled like graph and descriptions: message, exit 0, only `enabled = false` written, the
+    other feature keeps its answer, and the written file loads."""
+    config_path = tmp_path / "archon-search.toml"
+    other = "RAG Fusion" if feature == "HyDE" else "HyDE"
+    answers: Answers = {
+        _HYDE_QUESTION: "y",
+        _PROVIDER_PROMPT.format(feature): provider,
+        _PROVIDER_PROMPT.format(other): "anthropic",
+        _FREETEXT_MODEL_PROMPT.format(feature): ("", ""),
+    }
+
+    result = _wizard(runner, config_path, answers, ollama_models=(), llama_cpp_models=())
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
+    assert f"No model name was given for {provider}, so {feature} is left disabled." in result.output
+    assert _CONTEXT_PROMPT.format(feature, OLLAMA_CONTEXT_SUGGESTION_TOKENS) not in result.output
+    written = _written(config_path)
+    section, other_section = ("hyde", "rag_fusion") if feature == "HyDE" else ("rag_fusion", "hyde")
+    assert written[section] == {"enabled": False}
+    assert written[other_section] == {"enabled": True}
+    cfg = load_config(config_path)
+    assert getattr(cfg, section).enabled is False
+    assert getattr(cfg, other_section).enabled is True
+
+
+@pytest.mark.integration
+def test_blank_model_on_a_rerun_keeps_the_earlier_provider_block(runner: CliRunner, tmp_path: Path) -> None:
+    """A re-run whose HyDE model is blank must not clobber the model an earlier run stored: only `enabled`
+    flips to false, the provider and model keys stay."""
+    config_path = tmp_path / "archon-search.toml"
+    first = _wizard(
+        runner,
+        config_path,
+        {
+            _HYDE_QUESTION: "y",
+            _PROVIDER_PROMPT.format("HyDE"): "openai",
+            _FREETEXT_MODEL_PROMPT.format("HyDE"): _OPENAI_MODEL,
+            _PROVIDER_PROMPT.format("RAG Fusion"): "anthropic",
+        },
+    )
+    assert first.exit_code == 0, f"Exit {first.exit_code}:\n{first.output}"
+
+    rerun = _wizard(
+        runner,
+        config_path,
+        {
+            _HYDE_QUESTION: "y",
+            _PROVIDER_PROMPT.format("HyDE"): "openai",
+            _FREETEXT_MODEL_PROMPT.format("HyDE"): ("", ""),
+            _PROVIDER_PROMPT.format("RAG Fusion"): "anthropic",
+        },
+    )
+
+    assert rerun.exit_code == 0, f"Exit {rerun.exit_code}:\n{rerun.output}"
+    assert _written(config_path)["hyde"] == {"enabled": False, "provider": "openai", "model": _OPENAI_MODEL}
+
+
 # ---------------------------------------------------------------------------
 # S47: the install summary and the real extras pass
 # ---------------------------------------------------------------------------
@@ -580,6 +647,118 @@ def test_description_exits_revert_for_every_provider(
     assert ended_by in result.output
     assert _written(config_path)["description"] == {"enabled": False}
     assert "collection descriptions have been disabled" in result.output
+
+
+def _all_four_features() -> Answers:
+    """HyDE on ollama, RAG Fusion on openai, graph on llama_cpp, descriptions on claude_cli (backfill yes)."""
+    return (
+        {
+            _HYDE_QUESTION: "y",
+            _PROVIDER_PROMPT.format("HyDE"): "ollama",
+            _PROVIDER_PROMPT.format("RAG Fusion"): "openai",
+            _FREETEXT_MODEL_PROMPT.format("RAG Fusion"): _OPENAI_MODEL,
+            _GRAPH_QUESTION: "y",
+            _PROVIDER_PROMPT.format(_GRAPH_LABEL): "llama_cpp",
+            _MODEL_PICK_PROMPT: ("1", "1"),  # HyDE's Ollama model, then graph's llama.cpp model
+        }
+        | _describe("claude_cli", backfill="y")
+    )
+
+
+def _assert_every_section_reverted(config_path: Path, output: str) -> None:
+    """The file holds none of the four features: HyDE, RAG Fusion and descriptions `enabled = false` with the
+    provider block gone, no graph enrichment key."""
+    written = _written(config_path)
+    assert written["hyde"] == {"enabled": False}
+    assert written["rag_fusion"] == {"enabled": False}
+    assert written["description"] == {"enabled": False}
+    assert not {"provider", "extraction_model", "llama_cpp_base_url"} & written.get("graph", {}).keys()
+    for warning in (
+        "HyDE / RAG Fusion have been disabled",
+        "collection descriptions have been disabled",
+        "LLM-backed graph enrichment has been disabled",
+    ):
+        assert warning in output
+
+
+@pytest.mark.integration
+def test_a_failed_shared_hyde_extra_reverts_all_four_features_it_served(runner: CliRunner, tmp_path: Path) -> None:
+    """S47: HyDE, RAG Fusion, graph enrichment and descriptions all on anthropic share the `hyde` extra, which is
+    installed once under one label naming all three needs; when it fails, EVERY one of the four sections is reverted
+    in the written file (the model and backfill answers gone), with nothing else installed."""
+    config_path = tmp_path / "archon-search.toml"
+    install = _failing(_HYDE_EXTRA)
+    answers: Answers = (
+        {
+            _HYDE_QUESTION: "y",
+            _PROVIDER_PROMPT.format("HyDE"): "anthropic",
+            _PROVIDER_PROMPT.format("RAG Fusion"): "anthropic",
+            _GRAPH_QUESTION: "y",
+            _PROVIDER_PROMPT.format(_GRAPH_LABEL): "anthropic",
+            _FREETEXT_MODEL_PROMPT.format(_GRAPH_LABEL): "haiku-x",
+        }
+        | _describe("anthropic", backfill="y")
+    )
+
+    result = _wizard(runner, config_path, answers, install=install)
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
+    assert _installed(install) == [_HYDE_EXTRA]
+    assert (
+        "Warning: AI query expansion, graph enrichment provider and collection descriptions install failed for "
+        f"{_HYDE_EXTRA}: boom"
+    ) in result.output
+    _assert_every_section_reverted(config_path, result.output)
+
+
+@pytest.mark.integration
+def test_install_summary_lists_all_four_provider_bullets_in_order_before_proceed(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """S47: a run that wrote HyDE, RAG Fusion, graph enrichment and descriptions prints the four provider bullets,
+    in that order, before `Proceed?`."""
+    result = _wizard(runner, tmp_path / "archon-search.toml", _all_four_features())
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
+    _assert_in_order(
+        result.output,
+        [
+            _BULLET_HYDE.format("ollama"),
+            _BULLET_RAG_FUSION.format("openai"),
+            _BULLET_GRAPH.format("llama_cpp"),
+            _BULLET_DESCRIPTION.format("claude_cli"),
+            _PROCEED_PROMPT,
+        ],
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("patches", "typed", "ended_by"),
+    [
+        pytest.param(
+            {f"{_INSTALLER}._check_disk_space": MagicMock(side_effect=InstallError("not enough disk space"))},
+            {},
+            "not enough disk space",
+            id="disk-space",
+        ),
+        pytest.param({}, {_PROCEED_PROMPT: "n"}, "Installation aborted.", id="declined"),
+    ],
+)
+def test_exits_revert_every_section_of_a_run_that_wrote_hyde_graph_and_descriptions(
+    runner: CliRunner, tmp_path: Path, patches: dict[str, Any], typed: dict[str, str], ended_by: str
+) -> None:
+    """S47: the disk-space abort and the declined `Proceed?` of a run that wrote HyDE, RAG Fusion, graph enrichment and
+    descriptions together leave all four reverted, and install nothing."""
+    config_path = tmp_path / "archon-search.toml"
+    install = MagicMock()
+
+    result = _wizard(runner, config_path, _all_four_features() | typed, install=install, wizard_patches=patches)
+
+    assert result.exit_code == 1, f"Exit {result.exit_code}:\n{result.output}"
+    assert ended_by in result.output
+    assert _installed(install) == []
+    _assert_every_section_reverted(config_path, result.output)
 
 
 # ---------------------------------------------------------------------------

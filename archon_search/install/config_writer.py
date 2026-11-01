@@ -23,6 +23,10 @@ API_KEY_PROVIDERS = frozenset({"anthropic", "openai"})
 # WizardFeatures dataclass (Task C8-1.1)
 # ---------------------------------------------------------------------------
 
+# Providers whose blank model means "use the provider's own default"; every other provider needs a named model.
+PROVIDERS_WITHOUT_REQUIRED_MODEL = frozenset({"anthropic", "claude_cli"})
+
+
 @dataclass
 class WizardFeatures:
     """Carries optional-feature choices from wizard prompt functions to config writer."""
@@ -52,7 +56,7 @@ class WizardFeatures:
     enable_rag_fusion: bool | None = None
     # G10 BE-8: provider-selection for HyDE / RAG Fusion
     hyde_provider: str = "anthropic"          # "anthropic" | "openai" | "ollama" | "claude_cli" | "llama_cpp"
-    hyde_model: str = ""                      # empty = use provider default
+    hyde_model: str = ""                      # empty = provider default (anthropic, claude_cli only; others need a name)
     hyde_ollama_base_url: str = ""            # empty = use config default
     hyde_llama_cpp_base_url: str = ""         # empty = use config default
     hyde_ollama_context_tokens: int | None = None  # None = unset (key removed); only written for provider "ollama"
@@ -71,7 +75,7 @@ class WizardFeatures:
     # think / include_restricted_chunks / timeout_seconds / max_sample_chunks are never asked by the wizard.
     description_enabled: bool | None = None
     description_provider: str = "anthropic"
-    description_model: str = ""               # empty = use provider default
+    description_model: str = ""               # empty = provider default (anthropic, claude_cli only; others need a name)
     description_ollama_base_url: str = ""     # empty = use config default
     description_llama_cpp_base_url: str = ""  # empty = use config default
     description_ollama_context_tokens: int | None = None  # only written for provider "ollama"
@@ -370,6 +374,9 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         if not enabled:
             _set_optional(section, "enabled", enabled)
             return
+        # `load_config` rejects `model = ""`; the wizard leaves such a feature disabled before it gets here.
+        if provider not in PROVIDERS_WITHOUT_REQUIRED_MODEL and not model.strip():
+            raise ValueError(f"[{section}] cannot be enabled on provider {provider!r} without a model name")
         _ensure_section(section)
         table = doc[section]
         table["enabled"] = True
@@ -392,9 +399,6 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
             elif provider_answered and "model" in table:
                 del table["model"]
             return
-        # Always write model for ollama/openai (even empty string) so
-        # config.py's "if not model: raise ConfigError" guard fires at
-        # startup when the operator left the model prompt blank.
         table["model"] = model
         if provider == "ollama":
             _reconcile_ollama_base_url(table, ollama_base_url)

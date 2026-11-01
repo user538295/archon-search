@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import http.client
+import ipaddress
 import json
 import logging
 import os
@@ -23,7 +24,7 @@ from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT, OLLAMA_BASE_URL_DEF
 from archon_search.platform.types import GpuType
 from archon_search.profiles import VALID_PROFILE_NAMES, InstallProfile
 
-from .config_writer import WizardFeatures
+from .config_writer import PROVIDERS_WITHOUT_REQUIRED_MODEL, WizardFeatures
 from .extras import (
     CODE_EXTRA_SIZE_ESTIMATE,
     GRAPH_MODEL_SIZE_ESTIMATE,
@@ -100,6 +101,14 @@ _OLLAMA_DEFAULT_PORT = 11434
 _LLAMA_CPP_DEFAULT_PORT = urllib.parse.urlsplit(LLAMA_CPP_BASE_URL_DEFAULT).port
 
 
+def _is_ipv6_literal(host: str) -> bool:
+    try:
+        ipaddress.IPv6Address(host)
+    except ValueError:
+        return False
+    return True
+
+
 def _normalise_base_url(base_url: str, default_port: int) -> str:
     """Fill in the scheme and port a bare ``host`` client is missing, and strip a trailing slash.
 
@@ -119,6 +128,8 @@ def _normalise_base_url(base_url: str, default_port: int) -> str:
     # "http://host/prefix:port" — the latter is stored to config verbatim and
     # would point the runtime provider at an address that cannot resolve.
     host, slash, path = base_url.rstrip("/").partition("/")
+    if _is_ipv6_literal(host):  # a bare IPv6 literal: brackets let it carry a port
+        host = f"[{host}]"
     if ":" not in host.rsplit("]", 1)[-1]:
         host = f"{host}:{default_port}"
     return "http://" + host + slash + path
@@ -150,7 +161,7 @@ def _pick_ollama_model(models: list[str]) -> str:
     """Show a numbered menu of ``models`` and return the chosen name.
 
     One retry on an out-of-range or non-numeric entry; returns ``""`` on EOF or
-    after a second invalid entry (server startup then rejects the empty model).
+    after a second invalid entry (the caller then leaves the feature disabled, see ``_model_missing``).
     """
     print("\nInstalled Ollama models:")
     for i, name in enumerate(models, start=1):
@@ -254,21 +265,70 @@ class OllamaContextChoice(NamedTuple):
     context_tokens: int
 
 
+_LOOPBACK_ADDRESSES = frozenset({"127.0.0.1", "::1"})
+_LOOPBACK_NAME = "localhost"
+_URL_SCHEME_DEFAULT_PORTS = {"http": 80, "https": 443}
+_IMPLICIT_MODEL_TAG = "latest"
+
+
+def _canonical_host(host: str) -> str:
+    """*host* lower-cased, without a trailing dot, with the spellings of ``127.0.0.1`` and ``::1`` reduced to ``localhost``."""
+    host = host.lower().rstrip(".")
+    try:
+        address = str(ipaddress.ip_address(host))  # `0:0:0:0:0:0:0:1` and `::1` spell one address
+    except ValueError:
+        address = host
+    return _LOOPBACK_NAME if address in _LOOPBACK_ADDRESSES or address == _LOOPBACK_NAME else address
+
+
+def _server_identity(base_url: str) -> tuple[str, int | None, str]:
+    """The ``(host, port, path)`` an Ollama address reaches, so spellings of one server compare equal.
+
+    ``""`` is the built-in default; a scheme-less address gets the Ollama port (as the runtime does), a
+    with-scheme address without a port the scheme's port; the loopback aliases (``localhost``,
+    ``127.0.0.1``, ``::1``, ``[::1]``) are one host; host case and a trailing slash do not matter.
+    The scheme itself is not part of the identity. An address that cannot be parsed is identified by
+    its own spelling.
+    """
+    address = (base_url or OLLAMA_BASE_URL_DEFAULT).strip()
+    try:
+        url = urllib.parse.urlsplit(_normalise_base_url(address, _OLLAMA_DEFAULT_PORT))
+        # A port that is missing or 0 is the scheme's for a with-scheme address and Ollama's for a scheme-less one.
+        fallback_port = _URL_SCHEME_DEFAULT_PORTS.get(url.scheme) if "://" in address else _OLLAMA_DEFAULT_PORT
+        port = url.port or fallback_port
+        host = _canonical_host(url.hostname or "")
+    except ValueError:  # an unbalanced bracket or a port that is not a number
+        return address.lower(), None, ""
+    return host, port, url.path.rstrip("/")
+
+
+def _model_identity(model: str) -> str:
+    """The model name with Ollama's implicit ``:latest`` tag spelled out (a tag follows the last ``/``)."""
+    name = model.strip()
+    return name if ":" in name.rpartition("/")[2] else f"{name}:{_IMPLICIT_MODEL_TAG}"
+
+
 def _warn_shared_model_contexts(choices: list[OllamaContextChoice]) -> None:
     """Warn once per Ollama model that features share with different context windows (S48).
 
     Ollama reloads a model whenever a request changes its ``num_ctx``, so features that alternate
-    on one model with different windows pay a reload on every switch.
+    on one model with different windows pay a reload on every switch. Answers are grouped by
+    server and model identity (:func:`_server_identity`, :func:`_model_identity`), so ``localhost``
+    and ``127.0.0.1`` or ``m`` and ``m:latest`` count as one; the text printed is the first
+    answer of a group, address and model as the answers carry them.
     """
-    by_model: dict[tuple[str, str], list[OllamaContextChoice]] = {}
+    by_model: dict[tuple[tuple[str, int | None, str], str], list[OllamaContextChoice]] = {}
     for choice in choices:
-        if not choice.model:
+        if not choice.model.strip():
             continue
-        url = _normalise_base_url(choice.ollama_base_url or OLLAMA_BASE_URL_DEFAULT, _OLLAMA_DEFAULT_PORT)
-        by_model.setdefault((url, choice.model), []).append(choice)
-    for (url, model), sharing in by_model.items():
+        key = (_server_identity(choice.ollama_base_url), _model_identity(choice.model))
+        by_model.setdefault(key, []).append(choice)
+    for sharing in by_model.values():
         if len({choice.context_tokens for choice in sharing}) < 2:
             continue
+        first = sharing[0]
+        url = first.ollama_base_url.strip() or OLLAMA_BASE_URL_DEFAULT
+        model = first.model.strip()
         windows = ", ".join(f"{choice.feature_label} {choice.context_tokens}" for choice in sharing)
         print(
             f"\nWarning: these features share the Ollama model {model} at {url} but use different "
@@ -446,7 +506,7 @@ def _pick_llama_cpp_model(models: list[str]) -> str:
     """Show a numbered menu of ``models`` and return the chosen model name.
 
     One retry on an out-of-range or non-numeric entry; returns ``""`` on EOF or
-    after a second invalid entry (server startup then rejects the empty model).
+    after a second invalid entry (the caller then leaves the feature disabled, see ``_model_missing``).
 
     The entry is shown verbatim but returned with any ``[cache-root]``
     disambiguation suffix removed: that suffix tells the operator which cache a
@@ -684,8 +744,20 @@ def _prompt_provider(
     return provider, "", "", ""
 
 
-# Providers whose blank model means "use the provider's own default"; every other provider needs a named model.
-_PROVIDERS_WITHOUT_REQUIRED_MODEL = frozenset({"anthropic", "claude_cli"})
+def _model_missing(provider: str, model: str, feature_phrase: str) -> bool:
+    """True (after telling the operator) when *provider* needs a named *model* and none was given.
+
+    The writer would store ``model = ""`` and ``load_config`` rejects that, so the caller leaves the feature
+    disabled (a section that has an ``enabled`` key is written ``enabled = false``). *feature_phrase* is the subject of the message ("HyDE is",
+    "collection descriptions are").
+    """
+    if provider in PROVIDERS_WITHOUT_REQUIRED_MODEL or model.strip():
+        return False
+    print(
+        f"  No model name was given for {provider}, so {feature_phrase} left disabled.\n"
+        "  Re-run the wizard to pick a model."
+    )
+    return True
 
 
 class DescriptionChoice(NamedTuple):
@@ -728,11 +800,7 @@ def _prompt_description(
     provider, model, ollama_url, llama_cpp_url = _prompt_provider(
         _DESCRIPTION_LABEL, ask_choice, ollama_base_url_default, llama_cpp_base_url_default
     )
-    if provider not in _PROVIDERS_WITHOUT_REQUIRED_MODEL and not model:
-        print(
-            f"  No model name was given for {provider}, so collection descriptions are left disabled.\n"
-            f"  Re-run the wizard to enable them."
-        )
+    if _model_missing(provider, model, "collection descriptions are"):
         return DescriptionChoice(enabled=False)
     context = (
         _prompt_ollama_context(_DESCRIPTION_LABEL, ollama_context_tokens_default) if provider == "ollama" else None
@@ -995,7 +1063,9 @@ def _prompt_optional_features(
                 _hyde_ollama_base_url_val,
                 _hyde_llama_cpp_base_url_val,
             ) = _prompt_provider("HyDE", _ask_choice, hyde_ollama_base_url_default, hyde_llama_cpp_base_url_default)
-            if _hyde_provider_val == "ollama":
+            if _model_missing(_hyde_provider_val, _hyde_model_val, "HyDE is"):
+                _enable_hyde_val = False
+            elif _hyde_provider_val == "ollama":
                 _hyde_ollama_context_val = _prompt_ollama_context("HyDE", hyde_ollama_context_tokens_default)
 
             # Provider selection for RAG Fusion (same flow, independent picker).
@@ -1007,7 +1077,9 @@ def _prompt_optional_features(
             ) = _prompt_provider(
                 "RAG Fusion", _ask_choice, rag_fusion_ollama_base_url_default, rag_fusion_llama_cpp_base_url_default
             )
-            if _rag_fusion_provider_val == "ollama":
+            if _model_missing(_rag_fusion_provider_val, _rag_fusion_model_val, "RAG Fusion is"):
+                _enable_rag_fusion_val = False
+            elif _rag_fusion_provider_val == "ollama":
                 _rag_fusion_ollama_context_val = _prompt_ollama_context(
                     "RAG Fusion", rag_fusion_ollama_context_tokens_default
                 )
@@ -1026,7 +1098,7 @@ def _prompt_optional_features(
         ) = _prompt_graph_provider(
             _ask_yn, _ask_choice, graph_ollama_base_url_default, graph_llama_cpp_base_url_default
         )
-        if _graph_provider_val == "ollama":
+        if _graph_provider_val == "ollama" and _graph_extraction_model_val:  # a graph left off by a blank model gets no window question
             _graph_ollama_context_val = _prompt_ollama_context(_GRAPH_LABEL, graph_ollama_context_tokens_default)
 
     # --- collection descriptions (FE-7): its own gate, asked whenever the wizard is interactive ---
