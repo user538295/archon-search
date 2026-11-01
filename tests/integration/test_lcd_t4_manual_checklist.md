@@ -2,7 +2,7 @@
 
 Plan task T-4 of `Documentation/Backlog/2026-10-30-010-llm-collection-descriptions-tasks.md`; covers the real-login arms of S64 and S4 of `Documentation/Backlog/2026-10-30-010-llm-collection-descriptions-team-plan.md` (graph enrichment on `claude_cli` through the shared client: prompt on standard input, `extraction_rate_limit_rpm` applied; a failing provider leaves communities without a summary). The automated tests `test_e2e_graph_build_on_claude_cli_stdin_prompt_and_rpm_throttle` and `test_e2e_graph_provider_down_communities_without_summary` in `tests/integration/test_lcd_t4_graph_claude_cli_e2e.py` drive the same build through the real app against `tests/_fake_claude.py`; they cannot show what the real `claude` does with a prompt of several hundred kilobytes, how long it takes, or that the calls land on the login.
 
-**Not yet executed.** The commands were written against the code as implemented (`archon_search/community_builder.py`, `archon_search/llm_client/claude_cli_client.py`, `archon_search/llm_client/rate_limit.py`, `archon_search/server/routes_graph.py`, `archon_search/graph_store.py`). The real-login arms of S64 and S4 stay unproven until the Results table at the end is filled in.
+**Executed on 2026-11-01** (results at the end). The commands were written against the code as implemented (`archon_search/community_builder.py`, `archon_search/llm_client/claude_cli_client.py`, `archon_search/llm_client/rate_limit.py`, `archon_search/server/routes_graph.py`, `archon_search/graph_store.py`). Corrections found by the run, applied below: (a) the original corpus yielded one entity, because the pinned extractor labels only person, concept, system and event (organisations and cities are not extracted) and the repeated sentence gave it no second entity: the corpus now names people and systems; (b) two documents are enough for two communities (the third document only added a billed call per arm); (c) the run used `ARCHON_SEARCH_DATA_DIR=/tmp/lcd-manual/t4/data` (a copy of `~/.archon-search/models` seeded into it with `cp -cR` so nothing is downloaded or written under the real data dir): with that variable set, the key file is `$ARCHON_SEARCH_DATA_DIR/.search.env`, the database is `$ARCHON_SEARCH_DATA_DIR/search` (not `[database] db_path`) and the log is `$ARCHON_SEARCH_DATA_DIR/logs/archon-search.log` (not `[logging] log_file`); (d) the positive control for the leak watcher must not be `sh -c 'sleep 20' 'storage replication findings'` (the shell execs the lone `sleep` and the argument vanishes from the process list): use `sh -c 'sleep 20; true' 'storage replication findings'`.
 
 ## Prerequisites
 
@@ -18,23 +18,21 @@ Plan task T-4 of `Documentation/Backlog/2026-10-30-010-llm-collection-descriptio
 
 **Why manual:** needs a real `claude` login and real GLiNER extraction. The automated tests build the large community from a stubbed extractor and answer from a fake binary; only the real binary shows that a prompt far above any argument limit is accepted on standard input, that the call fits the timeout, and that it is billed to the login.
 
-**Setup of the corpus (real prose with named entities, three documents of about 330 KB each, so each community's prompt is above 300 KB, roughly 80,000 tokens, well inside the model's window):** save the snippet as `/tmp/lcd-t4/make_corpus.py` (not committed) and run `uv run python /tmp/lcd-t4/make_corpus.py`; it writes `/tmp/lcd-t4/corpus/*.md`.
+**Setup of the corpus (real prose with named people and systems, two documents of about 330 KB each, so each community's prompt is above 300 KB, roughly 80,000 tokens, well inside the model's window):** save the snippet as `make_corpus.py` in the scratch directory (not committed) and run it with `uv run python`; it writes `corpus/*.md`.
 
 ```python
 from pathlib import Path
 
-PEOPLE = {
-    "aardvark": ("Alice Johnson", "Acme Corporation", "Borealis project", "Zurich"),
-    "barnacle": ("Bob Martinez", "Globex Industries", "Meridian platform", "Lisbon"),
-    "cormorant": ("Carol Nguyen", "Initech Systems", "Quasar pipeline", "Osaka"),
-}
-SENTENCE = "{p} of {o} reviewed the {j} in {c} and recorded the storage replication findings for the quarterly report. "
+A = ("Alice Johnson maintains the Borealis system, which uses PostgreSQL and Kafka. Borealis depends on Kafka for the event stream, "
+     "and Alice Johnson reviewed the storage replication findings with Bruno Keller. Bruno Keller operates PostgreSQL and the Borealis dashboard. ")
+B = ("Bob Martinez maintains the Meridian platform, which uses Cassandra and RabbitMQ. Meridian depends on RabbitMQ for the job queue, "
+     "and Bob Martinez reviewed the storage replication findings with Carla Souza. Carla Souza operates Cassandra and the Meridian gateway. ")
 TARGET_CHARS = 330_000
 
 out = Path("/tmp/lcd-t4/corpus")
 out.mkdir(parents=True, exist_ok=True)
-for name, (person, org, project, city) in PEOPLE.items():
-    paragraph = SENTENCE.format(p=person, o=org, j=project, c=city) * 6
+for name, para in {"aardvark": A, "barnacle": B}.items():
+    paragraph = para * 6
     text = "\n\n".join([paragraph] * (TARGET_CHARS // len(paragraph)))
     (out / f"{name}.md").write_text(text, encoding="utf-8")
     print(name, len(text))
@@ -110,10 +108,21 @@ asyncio.run(main())
 
 Record per item: date, `claude --version`, model, measured values (`communities_built`, passage bytes per community, seconds per call, number of summarised communities per arm), pass or fail.
 
+Run 2026-11-01, `claude` 2.1.308 (real login), scratch dir `/tmp/lcd-manual/t4`, port 18740, two-document corpus (329,186 and 330,218 bytes), `[graph] provider = "claude_cli"` with a blank model (`extraction_model='claude-haiku-4-5-20251001'` in the log, no `--model` on the argv). Real `claude` calls billed to the login: about 10 (1 plain control, 2 healthy build, 1 throttle arm, up to 2 one-second-timeout attempts, 1 session control, 2 in the cancel-by-DELETE probe, 1 in the shutdown probe), plus 1 call with an invalid key that the CLI rejected (no billing).
+
 | Item | Date | Versions and models | Measured | Pass/fail |
 |------|------|---------------------|----------|-----------|
-| 1 Very large community on a real claude login | | | | |
+| 1a Auth isolation controls | 2026-11-01 | claude 2.1.308 | `env -i ... claude -p 'Reply with one word: ok'` printed `ok`; `ANTHROPIC_API_KEY=sk-ant-invalid claude -p hi` printed `Invalid API key · Fix external API key` (positive control: an invalid key is not ignored). | PASS |
+| 1b Ingest and graph | 2026-11-01 | GLiNER pinned checkpoint | 9 entities, 16 edges (4 + 5 entities per document); the original corpus gave 1 entity (see corrections). | PASS |
+| 1c Healthy build, passages > 300 KB on stdin | 2026-11-01 | claude 2.1.308, default model | `communities_built` 2; job DONE in about 15 s (calls about 6 s and 7 s); passage bytes 330,218 and 329,186; both summaries non-empty and about their own entities (Meridian/Cassandra/RabbitMQ/Bob Martinez/Carla Souza; Borealis/PostgreSQL/Kafka/Alice Johnson); one `claude` child per call, listed with `-p --output-format text --tools  --no-session-persistence --disable-slash-commands --strict-mcp-config --max-turns 1 --safe-mode` (the real binary accepted every flag); leak watcher printed 0 `LEAK` lines (positive control printed 7); `grep -c "storage replication findings"` on the log 0; no `LLM summary failed` line. | PASS |
+| 1d Throttle arm (S64), `extraction_rate_limit_rpm = 1` | 2026-11-01 | claude 2.1.308 | Fresh window (server ready + 62 s): job DONE, `communities_built` 2, exactly 1 summary and 1 `summary: None`; 1 `claude` call; exactly one WARNING `LLM summary failed ... claude_cli: rate limit exhausted (1 rpm); retry later`; whole build 6 s so the new-window caveat did not apply. | PASS |
+| 1e Failure arm (S4), `extraction_timeout_seconds = 1.0` | 2026-11-01 | claude 2.1.308 | Job DONE in 2 s, both communities `summary: None`, one WARNING `LLM summary failed ... claude_cli: no answer within 1s`; `pgrep` found no `claude` process 4 s after the job ended. The 1 s child watcher printed no line at all (a child that lives at most 1 s can fall between two polls), so this arm has no in-run positive control for the child; the positive control is item 1c. | PASS |
+| 1f No session saved | 2026-11-01 | claude 2.1.308 | `find ~/.claude/projects -maxdepth 1 -newer marker -iname "*archon-claude-cli*"` printed nothing after the whole run; positive control (`claude -p 'say ok'` from a fresh `archon-claude-cli-*` temp dir) made the same `find` list that project directory (removed afterwards with `trash`). | PASS |
+| 1g Usage page of the login | 2026-11-01 | | The usage page of the account cannot be opened from this environment. | BLOCKED: account usage page not reachable by the agent; the calls ran on the login (real answers returned), but billing to it is not independently observed |
+| 1h Extra: kill on cancel (not in the original steps) | 2026-11-01 | claude 2.1.308 | `DELETE /jobs/<rebuild>` moved the job to CANCELLING but the rebuild kept running and finished `DONE` with `communities_built` 2 after about 10 s (documented behaviour: a rebuild job is not stopped by DELETE, see `routes_jobs.py`; not an LCD defect). Server shutdown (SIGINT) during an in-flight summary call: the `claude` child existed at t-0 and 0 `claude` processes and 0 server processes remained from t+1 s on. | PASS (shutdown kill); DELETE does not cancel a rebuild (existing, documented) |
+
+Defects found: none in production code; no code was changed. Processes left running: none (servers and watchers stopped, `ps` empty).
 
 ## Acceptance
 
-Accept when item 1 passes: a community prompt above 300 KB reaches the real `claude` on standard input and returns a summary, the request cap throttles the build with one WARNING, a failing or slow call leaves communities without a summary and without a leftover child, and the usage is billed to the login.
+Accept when item 1 passes: a community prompt above 300 KB reaches the real `claude` on standard input and returns a summary, the request cap throttles the build with one WARNING, a failing or slow call leaves communities without a summary and without a leftover child, and the usage is billed to the login. Status after the 2026-11-01 run: every criterion is observed except the usage page (1g, BLOCKED), so the "billed to the login" clause stays unproven.
