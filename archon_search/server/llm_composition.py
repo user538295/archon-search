@@ -22,9 +22,11 @@ import asyncio
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Final
 
-from archon_search.constants import ASSUMED_CONTEXT_TOKENS
+from archon_search.constants import (
+    ASSUMED_CONTEXT_TOKENS,
+    LOCAL_SERVER_PROBE_TIMEOUT_SECONDS,
+)
 from archon_search.llm_client.anthropic_client import AnthropicClient
 from archon_search.llm_client.claude_cli_client import ClaudeCliClient
 from archon_search.llm_client.llama_cpp_client import LlamaCppClient
@@ -39,10 +41,6 @@ from archon_search.llm_client.protocol import (
 from archon_search.llm_client.rate_limit import FixedWindowRateLimiter
 
 _logger = logging.getLogger(__name__)
-
-#: Longest wait for one window read at startup (the model details or the server properties); the answer is metadata, not
-#: a generation, so a server that takes longer is treated as not answering.
-WINDOW_RESOLVE_TIMEOUT_SECONDS: Final = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +112,7 @@ async def resolve_context_windows(features: Iterable[FeatureClient]) -> None:
 async def _resolve_context_window(entry: FeatureClient) -> None:
     try:
         if isinstance(entry.client, LlamaCppClient):
-            await entry.client.probe_context_window(WINDOW_RESOLVE_TIMEOUT_SECONDS)
+            await entry.client.probe_context_window(LOCAL_SERVER_PROBE_TIMEOUT_SECONDS)
         elif isinstance(entry.client, OllamaClient):
             await _check_ollama_window(entry.feature, entry.client)
     except Exception as exc:
@@ -136,7 +134,7 @@ async def _check_ollama_window(feature: str, client: OllamaClient) -> None:
         )
         return
     try:
-        model_maximum = await client.model_max_context_tokens(WINDOW_RESOLVE_TIMEOUT_SECONDS)
+        model_maximum = await client.model_max_context_tokens(LOCAL_SERVER_PROBE_TIMEOUT_SECONDS)
     except LlmCallFailure as failure:
         _logger.info(
             "[%s] could not read the model's maximum context from Ollama (%s); ollama_context_tokens = %d is not checked",

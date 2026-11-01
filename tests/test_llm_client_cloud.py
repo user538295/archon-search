@@ -169,10 +169,11 @@ def test_context_window_is_unbounded(flavour: _Flavour) -> None:
 
 
 @_FLAVOURS
-async def test_input_budget_is_unbounded_and_makes_no_call(flavour: _Flavour) -> None:
+@pytest.mark.parametrize("think", list(ThinkSetting))
+async def test_input_budget_is_unbounded_and_makes_no_call(flavour: _Flavour, think: ThinkSetting) -> None:
     fake = _FakeSdkClient(flavour)
 
-    budget = await _wrapper(flavour, fake).input_budget("a template that is never counted")
+    budget = await _wrapper(flavour, fake).input_budget("a template that is never counted", think=think)
 
     assert budget == InputBudget(tokens=UNBOUNDED)
     assert fake.create_calls == []

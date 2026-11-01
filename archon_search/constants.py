@@ -43,8 +43,14 @@ DEFAULT_MODEL: str = "claude-sonnet-4-6"
 # Ollama value is not sent as ``num_ctx``, so the server's own window applies.
 ASSUMED_CONTEXT_TOKENS: Final[int] = 4096
 
-# Spare share added on top of the gpt2 token estimate before an ``ollama`` prompt is sized to its window
-# (C1 ``ollamaEstimateMargin``, 20%): the gpt2 vocabulary only approximates the model's own tokenizer.
+# Longest wait for one answer from a local model server (Ollama, llama-server) at startup, one request. The context-window
+# lookup, the reachability probe of the model validation and the description probe all ask the same server, so they share
+# it: with different bounds a server that answers in 4 s would be up for one and down for another.
+LOCAL_SERVER_PROBE_TIMEOUT_SECONDS: Final[float] = 5.0
+
+# Spare share added on top of the token estimate (``TokenCounter.count``: gpt2 tokens plus the digit, non-BMP and
+# special-token surcharges) before an ``ollama`` prompt is sized to its window (C1 ``ollamaEstimateMargin``, 20%): the
+# estimate only approximates the model's own tokenizer.
 OLLAMA_ESTIMATE_MARGIN: Final[float] = 0.20
 
 # Output tokens every sized prompt leaves free for the model's answer (C1 "reserved answer space"). A caller's

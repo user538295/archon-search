@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -420,6 +421,105 @@ async def test_budget_too_small_for_the_entity_names_skips_the_call_with_one_war
     warnings = _build_warnings(caplog)
     assert len(warnings) == 1 and "budget" in warnings[0]
     assert "text of c" not in caplog.text
+
+
+_NAME_COUNT = 600
+_NAMES_THAT_FIT = 100
+
+
+class _CountingClient(_GraphClient):
+    """A ``_GraphClient`` that records the text of every ``count_tokens`` call."""
+
+    def __init__(self, budget: InputBudget) -> None:
+        super().__init__(budget=budget)
+        self.counted: list[str] = []
+
+    async def count_tokens(self, text: str) -> int:
+        self.counted.append(text)
+        return await super().count_tokens(text)
+
+
+def _one_large_community(client: _GraphClient, names: list[str]):
+    """A builder over one node per name (the entity name is the name), plus the node ids Leiden is stubbed to return as one group."""
+    from archon_search.community_builder import CommunityBuilder
+
+    nodes = [GraphNode(f"id-{name}", name, EntityType.concept, "doc-1", "test") for name in names]
+    settings = GraphConfig(enabled=True, provider="ollama", extraction_model="m", max_community_size=len(names))
+    builder = CommunityBuilder(make_graph_store(nodes, []), settings, graph_client=client)
+    return builder, [node.id for node in nodes]
+
+
+def _sent_entity_names(prompt: str) -> list[str]:
+    (line,) = [line for line in prompt.splitlines() if line.startswith("Entities: ")]
+    return line.removeprefix("Entities: ").split(", ")
+
+
+@pytest.mark.asyncio
+async def test_a_community_with_more_entity_names_than_the_budget_holds_is_summarised_from_the_first_names_that_fit(caplog):
+    """A community the splitter could not cut (the recursion limit, or a large ``max_community_size``) can have hundreds
+    of entities. Names go first and in group order: the longest prefix that fits the budget is sent, so the community
+    still gets a summary instead of none, and ONE WARNING says that names were left out, with counts and never a name."""
+    names = [f"secret-{index}" for index in range(_NAME_COUNT)]
+    client = _GraphClient(budget=InputBudget(_NAMES_THAT_FIT))
+    builder, group = _one_large_community(client, names)
+
+    with patch("archon_search.community_builder._run_leiden_partition_sync", return_value=[group]), caplog.at_level(
+        logging.WARNING, logger="archon_search.community_builder"
+    ):
+        communities = await builder.build("test-col", ns="default")
+
+    (request,) = client.requests
+    assert _sent_entity_names(request.prompt) == names[:_NAMES_THAT_FIT]
+    assert communities[0].summary_text == "a summary"
+    assert communities[0].entity_ids == group, "the community keeps every entity; only the prompt is cut"
+    (warning,) = _build_warnings(caplog)
+    assert f"{_NAMES_THAT_FIT} of {_NAME_COUNT}" in warning and "budget" in warning
+    assert "secret-" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_entity_names_that_fit_the_budget_are_all_sent_without_a_warning(caplog):
+    names = [f"secret-{index}" for index in range(_NAMES_THAT_FIT)]
+    client = _GraphClient(budget=InputBudget(_NAMES_THAT_FIT))
+    builder, group = _one_large_community(client, names)
+
+    with patch("archon_search.community_builder._run_leiden_partition_sync", return_value=[group]), caplog.at_level(
+        logging.WARNING, logger="archon_search.community_builder"
+    ):
+        await builder.build("test-col", ns="default")
+
+    (request,) = client.requests
+    assert _sent_entity_names(request.prompt) == names
+    assert _build_warnings(caplog) == []
+
+
+@pytest.mark.asyncio
+async def test_cutting_the_entity_names_to_the_budget_takes_a_logarithmic_number_of_counts():
+    """A count is a request to the server for ``llama_cpp``: a 600-name community must not be counted name by name."""
+    names = [f"secret-{index}" for index in range(_NAME_COUNT)]
+    client = _CountingClient(InputBudget(_NAMES_THAT_FIT))
+    builder, group = _one_large_community(client, names)
+
+    with patch("archon_search.community_builder._run_leiden_partition_sync", return_value=[group]):
+        await builder.build("test-col", ns="default")
+
+    assert len(client.counted) <= 1 + math.ceil(math.log2(_NAME_COUNT))
+
+
+@pytest.mark.asyncio
+async def test_a_first_entity_name_that_alone_exceeds_the_budget_skips_the_call_with_one_warning(caplog):
+    client = _GraphClient(budget=InputBudget(5))
+    builder, group = _one_large_community(client, ["a very long name of ten words in it " + "more " * 2, "short"])
+
+    with patch("archon_search.community_builder._run_leiden_partition_sync", return_value=[group]), caplog.at_level(
+        logging.WARNING, logger="archon_search.community_builder"
+    ):
+        communities = await builder.build("test-col", ns="default")
+
+    assert client.requests == []
+    assert communities[0].summary_text is None
+    (warning,) = _build_warnings(caplog)
+    assert "budget" in warning and "very long" not in caplog.text
 
 
 @pytest.mark.asyncio

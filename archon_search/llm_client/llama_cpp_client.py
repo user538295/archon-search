@@ -5,21 +5,26 @@ Thin wrapper over ``httpx`` (a core dependency) talking to a llama-server (llama
 * ``GET /props`` holds the window under ``default_generation_settings.n_ctx``; :meth:`LlamaCppClient.probe_context_window`
   reads it once at composition time (``context_window`` is synchronous). Until it succeeds, and when it fails, the
   window is ``ASSUMED_CONTEXT_TOKENS`` and one WARNING per server (``host:port``) and process says so (S8).
-* ``POST /apply-template`` (``{"messages": [...]}`` answers ``{"prompt": "..."}``) renders a message through the model's
-  chat template and ``POST /tokenize`` (``{"content": text}`` answers ``{"tokens": [...]}``) counts it: the exact count
-  :meth:`input_budget` sizes with (S11, ``llm_client.budget.exact_budget``), chat framing included.
+* ``POST /apply-template`` (``{"messages": [...], "chat_template_kwargs": {...}}`` answers ``{"prompt": "..."}``)
+  renders a message through the model's chat template with the thinking switch the call will send, and
+  ``POST /tokenize`` (``{"content": text}`` answers ``{"tokens": [...]}``) counts it: the exact count
+  :meth:`input_budget` sizes with (S11, ``llm_client.budget.exact_budget``), chat framing included. The two requests
+  share one deadline (``SIZING_DEADLINE_SECONDS``); a failure names the request (``POST /apply-template: HTTP 404: ...``).
 * ``POST /v1/chat/completions`` carries every call: one fresh user message, nothing carried over (S6). llama-server
   rejects an oversized prompt with an error, which is raised as a failure.
 * ``think``: ``ON`` / ``OFF`` send ``chat_template_kwargs: {"enable_thinking": true / false}`` (the chat template decides
   whether it has any effect; a template without thinking ignores it); ``DEFAULT`` sends nothing.
 * Every failure is raised as ``LlmCallFailure`` (a timeout as ``LlmCallTimeout``). The reason carries the server's own
-  status and error text where it gave one, never the prompt.
+  status and error text where it gave one, never the prompt (a server that echoes it back is masked).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import functools
 import logging
+from collections.abc import Iterator
 from typing import Any, Final
 
 import httpx
@@ -35,6 +40,7 @@ from archon_search.llm_client.protocol import (
     LlmCallRequest,
     LlmCallResult,
     LlmCallTimeout,
+    ThinkSetting,
 )
 from archon_search.llm_client.server_address import host_port
 from archon_search.llm_client.server_text import bounded_server_text, exception_types
@@ -43,8 +49,11 @@ PROVIDER_NAME: Final = "llama_cpp"
 
 _logger = logging.getLogger(__name__)
 
-#: Longest wait for one ``/tokenize`` or ``/apply-template`` answer; ``input_budget`` takes no timeout of its own.
+#: Longest wait for one ``/tokenize`` or ``/apply-template`` answer.
 TOKENIZE_TIMEOUT_SECONDS: Final = 10.0
+#: Longest wait for a whole ``input_budget`` sizing: ``/apply-template`` and ``/tokenize`` together, not each. A wedged
+#: server costs a caller this much once per sizing at most, and a failure is not remembered.
+SIZING_DEADLINE_SECONDS: Final = 10.0
 
 _PROPS_PATH: Final = "/props"
 _TOKENIZE_PATH: Final = "/tokenize"
@@ -76,6 +85,27 @@ def _assumed_window() -> ContextWindowTokens:
 
 def _unexpected_reply(exc: Exception) -> LlmCallFailure:
     return LlmCallFailure(PROVIDER_NAME, f"unexpected reply ({type(exc).__name__}); is the base URL a llama-server?")
+
+
+def _thinking_fields(think: ThinkSetting) -> dict[str, dict[str, bool]]:
+    """The request field a call of *think* carries (empty for ``DEFAULT``, so the server's own default applies)."""
+    enable_thinking = think.enabled
+    if enable_thinking is None:
+        return {}
+    return {_TEMPLATE_KWARGS_FIELD: {_ENABLE_THINKING_KWARG: enable_thinking}}
+
+
+@contextlib.contextmanager
+def _naming_endpoint(path: str) -> Iterator[None]:
+    """Prefix the reason of a failure raised inside with the request that failed (``POST /apply-template: HTTP 404: ...``).
+
+    A server without the endpoint answers a bare 404 that names nothing; the path is a constant of this module, never
+    part of the configured URL, so it carries no credentials. The failure keeps its type (a timeout stays a timeout).
+    """
+    try:
+        yield
+    except LlmCallFailure as failure:
+        raise type(failure)(failure.provider, f"POST {path}: {failure.reason}") from failure
 
 
 #: Stands in for a failure reason a caller did not have.
@@ -124,7 +154,7 @@ class LlamaCppClient:
         self._base_url = base_url
         self._transport = transport
         self._window = _assumed_window()
-        self._template_costs = TemplateCostCache()
+        self._template_costs = {think: TemplateCostCache() for think in ThinkSetting}  # a template frames per setting
 
     async def probe_context_window(self, timeout_seconds: float) -> ContextWindowTokens:
         """Read the window from ``GET /props`` and make it the client's window; never raises.
@@ -158,7 +188,8 @@ class LlamaCppClient:
             )
         else:
             self._window = ContextWindowTokens(size=window_size, source=ContextWindowSource.PROBED)
-            self._template_costs.clear()  # the server that answers may be another model than the one counted before
+            for costs in self._template_costs.values():  # the server that answers may be another model than the one counted
+                costs.clear()
         return self._window
 
     async def call(self, request: LlmCallRequest) -> LlmCallResult:
@@ -166,10 +197,8 @@ class LlamaCppClient:
             "model": self._model,
             "max_tokens": request.max_output_tokens,
             "messages": [{"role": "user", "content": request.prompt}],
+            **_thinking_fields(request.think),
         }
-        enable_thinking = request.think.enabled
-        if enable_thinking is not None:
-            payload[_TEMPLATE_KWARGS_FIELD] = {_ENABLE_THINKING_KWARG: enable_thinking}
         body = await self._request("POST", _CHAT_PATH, request.timeout_seconds, payload, prompt=request.prompt)
         try:
             text = body["choices"][0]["message"]["content"]
@@ -182,9 +211,19 @@ class LlamaCppClient:
     def context_window(self) -> ContextWindowTokens:
         return self._window
 
-    async def input_budget(self, template_text: str) -> InputBudget:
-        # The template's framed count is asked of the server once; the window is read live, so a window resolved later is used.
-        return await exact_budget(self._window, template_text, self._template_costs.memoize_async(self._count_framed_tokens))
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+        """Window minus answer reserve minus the template's framed count, for calls that send *think*.
+
+        The count is asked of the server once per template and setting (``/apply-template``, then ``/tokenize``); the window
+        is read live, so one resolved later is used. The whole sizing, both requests together, is bounded by
+        ``SIZING_DEADLINE_SECONDS``; a server that does not answer in time raises ``LlmCallTimeout`` and nothing is cached.
+        """
+        count = self._template_costs[think].memoize_async(functools.partial(self._count_framed_tokens, think=think))
+        try:
+            async with asyncio.timeout(SIZING_DEADLINE_SECONDS):
+                return await exact_budget(self._window, template_text, count)
+        except TimeoutError as exc:
+            raise LlmCallTimeout(PROVIDER_NAME, f"sizing the template took longer than {SIZING_DEADLINE_SECONDS:g}s") from exc
 
     def token_ceiling(self, text: str) -> int:
         """Bytes of *text* plus the SentencePiece dummy-prefix token. ``/tokenize`` adds no BOS (``add_special`` defaults to
@@ -194,30 +233,36 @@ class LlamaCppClient:
         text is at least two bytes (see ``_SPM_DUMMY_PREFIX_TOKENS``)."""
         return len(text.encode("utf-8", "surrogatepass")) + _SPM_DUMMY_PREFIX_TOKENS
 
-    async def _count_framed_tokens(self, text: str) -> int:
-        """Tokens of *text* as one user message after the server's chat template (system block, role markers, generation prompt).
+    async def _count_framed_tokens(self, text: str, think: ThinkSetting) -> int:
+        """Tokens of *text* as one user message after the server's chat template (system block, role markers, generation
+        prompt), rendered with the thinking switch a call of *think* sends.
 
-        The server cuts the reserved answer space by these tokens when it builds the prompt of a call, so the budget counts them
-        (T-2: with the plain count a prompt of exactly the budget overran ``n_ctx - ANSWER_RESERVE_TOKENS`` by 29 tokens on Qwen2.5).
+        The server cuts the reserved answer space by these tokens when it builds the prompt of a call, so the budget counts
+        them (T-2: with the plain count a prompt of exactly the budget overran ``n_ctx - ANSWER_RESERVE_TOKENS`` by 29
+        tokens on Qwen2.5). A template may frame differently per switch (Qwen3 appends an empty think block when
+        ``enable_thinking`` is false), so the request carries the same ``chat_template_kwargs`` the call will.
         """
-        body = await self._request("POST", _APPLY_TEMPLATE_PATH, TOKENIZE_TIMEOUT_SECONDS, {"messages": [{"role": "user", "content": text}]}, prompt=text)
-        try:
-            framed = body["prompt"]
-        except (KeyError, TypeError) as exc:
-            raise _unexpected_reply(exc) from exc
-        if not isinstance(framed, str):
-            raise _unexpected_reply(TypeError("prompt is not a string"))
+        payload = {"messages": [{"role": "user", "content": text}], **_thinking_fields(think)}
+        with _naming_endpoint(_APPLY_TEMPLATE_PATH):
+            body = await self._request("POST", _APPLY_TEMPLATE_PATH, TOKENIZE_TIMEOUT_SECONDS, payload, prompt=text)
+            try:
+                framed = body["prompt"]
+            except (KeyError, TypeError) as exc:
+                raise _unexpected_reply(exc) from exc
+            if not isinstance(framed, str):
+                raise _unexpected_reply(TypeError("prompt is not a string"))
         return await self.count_tokens(framed)
 
     async def count_tokens(self, text: str) -> int:
-        body = await self._request("POST", _TOKENIZE_PATH, TOKENIZE_TIMEOUT_SECONDS, {"content": text}, prompt=text)
-        try:
-            tokens = body["tokens"]
-        except (KeyError, TypeError) as exc:
-            raise _unexpected_reply(exc) from exc
-        if not isinstance(tokens, list):
-            raise _unexpected_reply(TypeError("tokens is not a list"))
-        return len(tokens)
+        with _naming_endpoint(_TOKENIZE_PATH):
+            body = await self._request("POST", _TOKENIZE_PATH, TOKENIZE_TIMEOUT_SECONDS, {"content": text}, prompt=text)
+            try:
+                tokens = body["tokens"]
+            except (KeyError, TypeError) as exc:
+                raise _unexpected_reply(exc) from exc
+            if not isinstance(tokens, list):
+                raise _unexpected_reply(TypeError("tokens is not a list"))
+            return len(tokens)
 
     async def _request(
         self, method: str, path: str, timeout_seconds: float, payload: dict[str, Any] | None = None, *, prompt: str = ""

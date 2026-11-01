@@ -37,6 +37,7 @@ from archon_search.collection_meta import (
     CollectionMeta,
 )
 from archon_search.config import DescriptionConfig
+from archon_search.constants import LOCAL_SERVER_PROBE_TIMEOUT_SECONDS
 from archon_search.description_lifecycle import (
     GenerationKind,
     GenerationResult,
@@ -47,7 +48,12 @@ from archon_search.llm_client.claude_cli_client import resolve_claude_binary
 from archon_search.llm_client.llama_cpp_client import warn_llama_cpp_unreachable
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.provider_key import provider_key_available
-from archon_search.llm_client.server_address import UNKNOWN_HOST, host_port
+from archon_search.llm_client.server_address import (
+    UNKNOWN_HOST,
+    ServerAddress,
+    is_url,
+    parse_server_address,
+)
 from archon_search.server.provider_dependency import check_provider_package
 from archon_search.server.schemas import StartupSyncResult
 
@@ -59,8 +65,6 @@ logger = logging.getLogger(__name__)
 #: ``warn_once`` key of the unreachable-provider WARNING: the startup validator (BE-36) reuses it, so the finding is
 #: logged once per process however many startup paths find it.
 DESCRIPTION_UNREACHABLE_WARN_KEY: Final = "description_provider_unreachable"
-#: The longest the probe waits for a local server to answer (one request).
-PROBE_TIMEOUT_SECONDS: Final = 5.0
 
 _OLLAMA: Final = "ollama"
 _LLAMA_CPP: Final = "llama_cpp"
@@ -128,7 +132,7 @@ def warn_description_unreachable(provider: str, reason: str | None, remedy: str 
 
 
 async def probe_description_reachability(
-    description: DescriptionConfig, *, timeout_seconds: float = PROBE_TIMEOUT_SECONDS
+    description: DescriptionConfig, *, timeout_seconds: float = LOCAL_SERVER_PROBE_TIMEOUT_SECONDS
 ) -> DescriptionReachability:
     """Whether the configured description provider can be used, without sending a prompt. Never raises."""
     provider = description.provider
@@ -145,18 +149,24 @@ async def probe_description_reachability(
 
 
 def probed_server_label(provider: str, base_url: str) -> str:
-    """``host:port`` of the server the probe of *provider* asks, from the URL it actually asks (an ``ollama`` value without
-    a scheme or port gains ``http://`` and 11434 first, as :func:`_probe_url` does): the name an operator message uses for
-    that server. ``UNKNOWN_HOST`` when the value does not parse."""
-    try:
-        return host_port(_probe_url(provider, base_url))
-    except ValueError:  # an ``ollama`` value such as ``[::1`` that ``urlsplit`` rejects
+    """``host:port`` of the server the probe of *provider* asks: the name an operator message uses for that server.
+
+    Taken from the RAW configured value, never from the URL :func:`_probe_url` builds: that URL is rebuilt from the netloc and
+    may name part of a credential the value did not parse to (``alice:12345/rest@server`` asks ``alice:12345``). So the
+    label is :func:`~archon_search.llm_client.server_address.host_port` of the value, ``UNKNOWN_HOST`` when it does not
+    parse, except that an ``ollama`` value without a scheme or port gains the 11434 the probe (and the SDK) ask."""
+    address = parse_server_address(base_url)
+    if address is None:
         return UNKNOWN_HOST
+    if provider == _OLLAMA and address.port is None and not is_url(base_url):
+        address = ServerAddress(address.host, _OLLAMA_DEFAULT_PORT)
+    return address.label
 
 
 async def _probe_local_server(provider: str, base_url: str, timeout_seconds: float) -> DescriptionReachability:
     # An Ollama reason names the server (the WARNING does not); a llama_cpp reason does not, because its WARNING already
-    # reads "the server at <host:port> is not reachable (<reason>)".
+    # reads "the server at <host:port> is not reachable (<reason>)". The reasons carry no parenthesis of their own: both
+    # WARNINGs wrap the reason in one.
     host = probed_server_label(provider, base_url)
     named = f" from {host}" if provider == _OLLAMA else ""
     try:
@@ -165,7 +175,7 @@ async def _probe_local_server(provider: str, base_url: str, timeout_seconds: flo
         async with asyncio.timeout(timeout_seconds), httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.get(url)
     except Exception as failure:  # noqa: BLE001 — every failure reads as "not reachable"; the probe never raises
-        return DescriptionReachability(False, f"no answer{named} ({type(failure).__name__})")
+        return DescriptionReachability(False, f"no answer{named}: {type(failure).__name__}")
     if not response.is_success:
         answered = f"{host} answered" if provider == _OLLAMA else "answered"
         return DescriptionReachability(False, f"{answered} HTTP {response.status_code}")
@@ -175,8 +185,10 @@ async def _probe_local_server(provider: str, base_url: str, timeout_seconds: flo
 def _probe_url(provider: str, base_url: str) -> str:
     """The URL the probe asks. The ``ollama`` SDK reads a scheme-less host the way the wizard writes it (``http://`` and
     port 11434 when none is given), so the probe does too; llama.cpp's client does not, so its value is used as given and
-    a scheme-less one reads as not reachable, exactly like its generations."""
-    if provider == _OLLAMA and "//" not in base_url:
+    a scheme-less one reads as not reachable, exactly like its generations. Whether a value has a scheme is
+    :func:`~archon_search.llm_client.server_address.is_url`, the question the label asks too."""
+    base_url = base_url.strip()
+    if provider == _OLLAMA and not is_url(base_url):
         parts = urlsplit(f"//{base_url}")  # keeps any ``user:password@``: the SDK sends it as basic auth too
         base_url = f"http://{parts.netloc}" if parts.port is not None else f"http://{parts.netloc}:{_OLLAMA_DEFAULT_PORT}"
     return base_url.rstrip("/") + _PROBE_PATHS[provider]

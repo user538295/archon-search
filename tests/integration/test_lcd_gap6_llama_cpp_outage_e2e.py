@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -318,3 +319,64 @@ def test_e2e_a_live_hyde_server_and_a_down_graph_server_log_exactly_one_warning(
     assert validation["llama_cpp_ok"] is False
     assert [r for r in caplog.records if r.levelno >= logging.WARNING and r.exc_info] == []
     assert EXTRACTION_MODEL_PROBE_ERROR_WARNING not in validation["provider_warnings"]
+
+
+# A down server whose configured URL carries credentials. The user name, the password and the query value are strings no other
+# log line holds ("user" or "token" would match "tokens are assumed" and the like), and each spelling is one the operator may
+# have typed: userinfo and query on a URL, userinfo on a scheme-less value, and userinfo smuggled into the path.
+_SECRET_USER = "svc-u5er"
+_SECRET_PASSWORD = "s3cr3t"
+_SECRET_QUERY_VALUE = "t0k3n-q9"
+_SECRETS = (_SECRET_USER, _SECRET_PASSWORD, _SECRET_QUERY_VALUE)
+_PRECONDITION_TIMEOUT_SECONDS = 0.5
+_CREDENTIAL_SPELLINGS = [
+    pytest.param("llama_cpp", f"http://{_SECRET_USER}:{_SECRET_PASSWORD}@{_LOOPBACK}:{{port}}/?leakq={_SECRET_QUERY_VALUE}", id="llama_cpp-url"),
+    pytest.param("llama_cpp", f"{_SECRET_USER}:{_SECRET_PASSWORD}@{_LOOPBACK}:{{port}}", id="llama_cpp-scheme-less"),
+    pytest.param("llama_cpp", f"http://{_LOOPBACK}:{{port}}/{_SECRET_USER}:{_SECRET_PASSWORD}@gpu.test?leakq={_SECRET_QUERY_VALUE}", id="llama_cpp-userinfo-in-path"),
+    pytest.param("ollama", f"http://{_SECRET_USER}:{_SECRET_PASSWORD}@{_LOOPBACK}:{{port}}/?leakq={_SECRET_QUERY_VALUE}", id="ollama-url"),
+    pytest.param("ollama", f"{_SECRET_USER}:{_SECRET_PASSWORD}@{_LOOPBACK}:{{port}}", id="ollama-scheme-less"),
+    pytest.param("ollama", f"{_LOOPBACK}:{{port}}/{_SECRET_USER}:{_SECRET_PASSWORD}@gpu.test", id="ollama-userinfo-in-path"),
+]
+
+
+def _description_section(provider: str, url: str) -> str:
+    return (
+        f'[description]\nenabled = true\nprovider = "{provider}"\nmodel = "{_MODEL}"\n{provider}_base_url = "{url}"\n'
+    )
+
+
+def _assert_a_real_httpx_failure_carries_the_url(url: str) -> None:
+    """The precondition that makes the leak test mean something: the exception httpx raises for a connect failure to this very
+    URL holds the credentials, so a log that formats the exception chain would print them."""
+    with pytest.raises(httpx.TransportError) as failure:
+        httpx.get(url, timeout=_PRECONDITION_TIMEOUT_SECONDS)
+    assert _SECRET_PASSWORD in str(failure.value.request.url)
+
+
+@pytest.mark.parametrize(("provider", "spelling"), _CREDENTIAL_SPELLINGS)
+def test_e2e_a_down_server_with_credentials_in_its_url_leaks_none_into_the_log_or_status(
+    provider: str, spelling: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The window lookup, the validation probe and the description probe each fail against a real dead port (a real httpx
+    failure whose exception chain names the full URL); neither the log (messages and tracebacks, DEBUG included) nor the
+    ``/status`` body carries the user name, the password or the query value."""
+    bodies: list[str] = []
+    blocks: list[dict[str, Any]] = []
+
+    def read_status(client: TestClient, admin_key: str) -> None:
+        bodies.append(client.get("/status", headers={"Authorization": f"Bearer {admin_key}"}).text)
+        blocks.append(_description_block(client, admin_key))
+
+    with unreachable_port() as port, caplog.at_level(logging.DEBUG):
+        url = spelling.format(port=port)
+        if "://" in url:
+            _assert_a_real_httpx_failure_carries_the_url(url)
+        _boot_and_settle(tmp_path, monkeypatch, _description_section(provider, url), after_boot=read_status)
+
+    [block] = blocks
+    assert block["reachable"] is False  # the outage was really found, so the clean log below is not a vacuous pass
+    assert [r for r in caplog.records if r.levelno == logging.WARNING and "not reachable" in r.getMessage()]
+    logged = caplog.text + "".join(logging.Formatter().formatException(r.exc_info) for r in caplog.records if r.exc_info)
+    for secret in _SECRETS:
+        assert secret not in logged, secret
+        assert secret not in bodies[0], secret

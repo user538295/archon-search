@@ -323,6 +323,14 @@ async def test_input_budget_is_the_gpt2_estimate_for_the_configured_window() -> 
     assert budget == InputBudget(tokens=_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)
 
 
+@pytest.mark.parametrize("think", list(ThinkSetting))
+async def test_input_budget_does_not_depend_on_the_thinking_setting(think: ThinkSetting) -> None:
+    """Ollama applies its own chat template and the estimate never counts it, so the setting changes nothing."""
+    wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW)
+
+    assert await wrapper.input_budget(_TEMPLATE, think=think) == InputBudget(tokens=_ROOM_IN_GPT2_TOKENS - _TEMPLATE_TOKENS)
+
+
 async def test_input_budget_uses_the_assumed_window_when_unset() -> None:
     wrapper = _wrapper(_Factory(), context_tokens=None)
 
@@ -344,7 +352,7 @@ async def test_failing_counter_raises_call_failure() -> None:
 
 
 async def test_input_budget_counts_a_template_once_per_cached_template() -> None:
-    """The gpt2 count of the fixed template is not repeated for every search that sizes a query."""
+    """The token estimate of the fixed template is not repeated for every search that sizes a query."""
     stub = StubTokenizer()
     wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW, counter=TokenCounter(load_tokenizer=lambda: stub))
 

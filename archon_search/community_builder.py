@@ -18,7 +18,8 @@ import asyncio
 import logging
 import math
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -62,6 +63,8 @@ _SUMMARY_FAILED_WARN_KEY = "graph_community_summary"
 _SUMMARY_BUDGET_WARN_KEY = "graph_community_summary_budget"
 _SUMMARY_NO_PASSAGE_WARN_KEY = "graph_community_summary_no_passage"
 _SUMMARY_EMPTY_WARN_KEY = "graph_community_summary_empty"
+#: ``warn_once`` key: one WARNING per process for the first community whose entity names are cut to the budget.
+_SUMMARY_NAMES_CUT_WARN_KEY = "graph_community_summary_names_cut"
 
 
 def render_summary_prompt(entity_names: Sequence[str], chunk_texts: Sequence[str]) -> str:
@@ -75,6 +78,31 @@ def render_summary_prompt(entity_names: Sequence[str], chunk_texts: Sequence[str
 def _variable_text(entity_names: Sequence[str], chunk_texts: Sequence[str]) -> str:
     """What a prompt holds beyond its template: the entity names and the passages, as sent."""
     return _PASSAGE_SEPARATOR.join([_ENTITY_SEPARATOR.join(entity_names), *chunk_texts])
+
+
+@dataclass(frozen=True, slots=True)
+class _FittedInput:
+    """The entity names and passages one summary prompt sends, cut to the input budget."""
+
+    entity_names: list[str]
+    chunk_texts: list[str]
+
+
+async def _longest_fitting_prefix(total: int, fits: Callable[[int], Awaitable[bool]]) -> int:
+    """The length of a prefix of ``total`` items that ``fits`` accepts, found by bisection (``ceil(log2(total))`` calls).
+
+    The prefix of ``total`` items is known not to fit; the empty prefix is taken to fit without asking. The answer is
+    always a length ``fits`` itself accepted (or 0), so a count that is not strictly monotonic never yields a prefix that
+    overruns the budget.
+    """
+    fitting, too_long = 0, total
+    while too_long - fitting > 1:
+        middle = (fitting + too_long) // 2
+        if await fits(middle):
+            fitting = middle
+        else:
+            too_long = middle
+    return fitting
 
 
 def _describe_window(window: ContextWindow) -> str:
@@ -418,8 +446,8 @@ class CommunityBuilder:
     3. Load all edges from ``GraphStore.get_all_edges``.
     4. Run ``_cluster_with_size_limit`` via ``asyncio.to_thread``.
     5. Fill representative_chunk_ids via MMR (when search_store is provided).
-    6. Optionally summarise each community on the shared graph client (passages sized to its input budget); a failure
-       keeps ``summary_text=None`` and logs one WARNING per process.
+    6. Optionally summarise each community on the shared graph client (entity names and passages sized to its input
+       budget); a failure keeps ``summary_text=None`` and logs one WARNING per process.
     7. Persist communities via ``GraphStore.write_communities``.
     8. Return one ``Community`` per group with a fresh UUID.
     """
@@ -446,28 +474,41 @@ class CommunityBuilder:
         set and a client is injected); it is otherwise responsible for catching any failure raised here and substituting
         ``summary_text=None`` (the client raises, callers decide the fallback).
 
-        The passages are sized to the client's input budget first (C1): the budget is the window minus the answer reserve
-        minus the template, and the entity names plus as many passages as fit within it are sent. A cloud client has no
-        budget, so everything goes. The budget holds ``ANSWER_RESERVE_TOKENS`` back for the answer: an
-        ``extraction_token_budget`` above that comes out of the room for passages, so the prompt and the answer together
-        still fit the window.
+        The names and passages are sized to the client's input budget first (C1): the budget is the window minus the answer
+        reserve minus the template. The entity names go first, in the order given (all of them, or the longest prefix that
+        fits: a community can have hundreds of entities), then as many passages as fit in what is left. A cloud client has
+        no budget, so everything goes. The budget holds ``ANSWER_RESERVE_TOKENS`` back for the answer: an
+        ``extraction_token_budget`` above that comes out of the room for the names and passages, so the prompt and the
+        answer together still fit the window.
         """
         budget = (await client.input_budget(SUMMARIZE_PROMPT_TEMPLATE)).tokens
         max_output_tokens = self._config.extraction_token_budget
         if isinstance(budget, int):
             budget = max(0, budget - max(0, max_output_tokens - ANSWER_RESERVE_TOKENS))
-            fitting = await self._passages_within(client, budget, entity_names, chunk_texts)
-            if fitting is None:
+            fitted = await self._fit_to_budget(client, budget, entity_names, chunk_texts)
+            if fitted is None:
                 warn_once(
                     _logger,
                     _SUMMARY_BUDGET_WARN_KEY,
-                    "community_builder: the model's input budget is %d tokens (%s); the entity names of a community do "
-                    "not fit, so communities are built without summaries (later skips in this process are not logged)",
+                    "community_builder: the model's input budget is %d tokens (%s); not even the first entity name of a "
+                    "community fits, so communities are built without summaries (later skips in this process are not logged)",
                     budget,
                     _describe_window(client.context_window()),
                 )
                 return None
-            if chunk_texts and not fitting:
+            if len(fitted.entity_names) < len(entity_names):
+                warn_once(
+                    _logger,
+                    _SUMMARY_NAMES_CUT_WARN_KEY,
+                    "community_builder: a community has more entity names than the model's input budget of %d tokens "
+                    "(%s) holds; only the first names that fit are sent (%d of %d in this community), so its summary may "
+                    "leave entities out (later cases in this process are not logged)",
+                    budget,
+                    _describe_window(client.context_window()),
+                    len(fitted.entity_names),
+                    len(entity_names),
+                )
+            if chunk_texts and not fitted.chunk_texts:
                 warn_once(
                     _logger,
                     _SUMMARY_NO_PASSAGE_WARN_KEY,
@@ -475,7 +516,7 @@ class CommunityBuilder:
                     "communities are summarised from their entity names alone (later cases in this process are not logged)",
                     budget,
                 )
-            chunk_texts = fitting
+            entity_names, chunk_texts = fitted.entity_names, fitted.chunk_texts
         request = LlmCallRequest(
             prompt=render_summary_prompt(entity_names, chunk_texts),
             max_output_tokens=max_output_tokens,
@@ -496,12 +537,16 @@ class CommunityBuilder:
         return summary
 
     @staticmethod
-    async def _passages_within(
+    async def _fit_to_budget(
         client: LlmClient, budget: int, entity_names: list[str], chunk_texts: list[str]
-    ) -> list[str] | None:
-        """The longest prefix of *chunk_texts* that, with the entity names, fits *budget* tokens; ``None`` when even the
-        entity names alone do not fit. Tokens are counted by the client, in the unit its budget is measured in
-        (``llama_cpp``: the server's tokenizer; ``ollama``: gpt2 tokens).
+    ) -> _FittedInput | None:
+        """The entity names and passages of one prompt, cut to *budget* tokens; ``None`` when not even the first name fits.
+
+        The names go first and in the order given: all of them when they fit, else the longest prefix that does (found
+        with a logarithmic number of counts: a count is a request to the server for ``llama_cpp``). The passages then
+        take what is left: the longest prefix of *chunk_texts* that fits with those names. Tokens are counted by the
+        client, in the unit its budget is measured in (``llama_cpp``: the server's tokenizer; ``ollama``: the token
+        estimate).
 
         Raises:
             LlmCallFailure: the client has a budget but cannot count tokens, or the count failed.
@@ -509,17 +554,23 @@ class CommunityBuilder:
         if not isinstance(client, TokenCountingClient):
             raise LlmCallFailure("graph", "the client sizes its input to a budget but cannot count tokens")
 
-        async def _count(passages: list[str]) -> int:
-            return await client.count_tokens(_variable_text(entity_names, passages))
+        async def _count(names: list[str], passages: list[str]) -> int:
+            return await client.count_tokens(_variable_text(names, passages))
 
-        if await _count([]) > budget:
-            return None
+        async def _names_fit(count: int) -> bool:
+            return await _count(entity_names[:count], []) <= budget
+
+        names = entity_names
+        if not await _names_fit(len(entity_names)):
+            names = entity_names[: await _longest_fitting_prefix(len(entity_names), _names_fit)]
+            if not names:
+                return None
         fitting: list[str] = []
         for text in chunk_texts:
-            if await _count([*fitting, text]) > budget:
+            if await _count(names, [*fitting, text]) > budget:
                 break
             fitting.append(text)
-        return fitting
+        return _FittedInput(entity_names=names, chunk_texts=fitting)
 
     async def _select_representative_chunk_ids(
         self,

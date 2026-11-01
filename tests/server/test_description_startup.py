@@ -80,6 +80,19 @@ _PROVIDER_EXTRA = {"ollama": "ollama", "openai": "openai-provider", "anthropic":
         ("http://[::1", False),
         ("http://localhost:80/x@evil.test", False),
         ("localhost/x@evil.test", False),
+        # spellings of 127.0.0.1 or localhost that this check does not resolve fail safe: not loopback, the operator gets the INFO
+        ("127.0.0.1.nip.io", False),  # a name: DNS is never consulted
+        ("http://127.0.0.1.nip.io:8080", False),
+        ("127.1", False),  # short IPv4 forms are not IP literals to ``ipaddress``
+        ("http://127.1:8080", False),
+        ("2130706433", False),  # 127.0.0.1 as one integer
+        ("http://2130706433:8080", False),
+        ("ｌｏｃａｌｈｏｓｔ", False),  # fullwidth letters are not ``localhost``
+        ("http://ｌｏｃａｌｈｏｓｔ:8080", False),
+        ("localhost.evil.com", False),
+        ("http://localhost.evil.com:8080", False),
+        # a legal ``@`` after the authority is refused with the credential-smuggling shape, so it is not loopback either
+        ("http://localhost:8080/v1/@x", False),
     ],
 )
 def test_is_loopback_host_table(value: str, expected: bool) -> None:

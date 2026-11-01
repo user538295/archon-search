@@ -42,22 +42,46 @@ _NEVER_SECONDS = 60.0
 _TEMPLATE = "Describe the collection in one sentence."
 _TEMPLATE_TOKENS = 6
 _FRAME_TOKENS = 6  # the framing ``_applied`` adds, counted as words by the fake tokenizer: system block, markers
+_THINK_OFF_BLOCK = "<think> </think>"
+_THINK_OFF_FRAME_TOKENS = 2  # a Qwen3-style template adds this empty block to the generation prompt when thinking is off
 _MAX_REASON_CHARS = 400
 _LOGGER_NAME = "archon_search.llm_client.llama_cpp_client"
 
 
-def _applied(content: str) -> str:
-    return f"<|system|> You are helpful. <|user|> {content} <|assistant|>"
+def _applied(content: str, *, thinking_off: bool = False) -> str:
+    framed = f"<|system|> You are helpful. <|user|> {content} <|assistant|>"
+    return f"{framed} {_THINK_OFF_BLOCK}" if thinking_off else framed
+
+
+def _echoed_prompt(body: dict[str, object]) -> str:
+    """The text a request carries as its prompt, on any of the three endpoints that take one."""
+    if "content" in body:
+        return str(body["content"])
+    messages = body["messages"]
+    assert isinstance(messages, list)
+    return str(messages[0]["content"])
 
 
 class _Server:
-    """Records every request and answers by path; a path in ``failures`` raises that exception instead."""
+    """Records every request and answers by path; a path in ``failures`` raises that exception instead.
 
-    def __init__(self, *, props: object | None = None, failures: dict[str, Exception] | None = None, statuses: dict[str, tuple[int, object]] | None = None) -> None:
+    A path in ``echoing`` answers its HTTP status with an error that quotes the request's own prompt, as a server that
+    rejects a prompt may. ``/apply-template`` honours ``chat_template_kwargs.enable_thinking`` like a Qwen3 template.
+    """
+
+    def __init__(
+        self,
+        *,
+        props: object | None = None,
+        failures: dict[str, Exception] | None = None,
+        statuses: dict[str, tuple[int, object]] | None = None,
+        echoing: dict[str, int] | None = None,
+    ) -> None:
         self.requests: list[httpx.Request] = []
         self._props = props if props is not None else {"default_generation_settings": {"n_ctx": _PROBED_WINDOW}}
         self._failures = failures or {}
         self._statuses = statuses or {}
+        self._echoing = echoing or {}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -67,10 +91,15 @@ class _Server:
         if path in self._statuses:
             status, body = self._statuses[path]
             return httpx.Response(status, json=body)
+        if path in self._echoing:
+            echo = _echoed_prompt(json.loads(request.content))
+            return httpx.Response(self._echoing[path], json={"error": {"message": f"cannot process: {echo}"}})
         if path == "/props":
             return httpx.Response(200, json=self._props)
         if path == "/apply-template":
-            return httpx.Response(200, json={"prompt": _applied(json.loads(request.content)["messages"][0]["content"])})
+            body = json.loads(request.content)
+            thinking_off = body.get("chat_template_kwargs", {}).get("enable_thinking") is False
+            return httpx.Response(200, json={"prompt": _applied(body["messages"][0]["content"], thinking_off=thinking_off)})
         if path == "/tokenize":
             return httpx.Response(200, json={"tokens": list(range(len(json.loads(request.content)["content"].split())))})
         return httpx.Response(200, json={"choices": [{"index": 0, "message": {"role": "assistant", "content": _REPLY}}]})
@@ -417,8 +446,7 @@ async def test_llama_cpp_input_budget_failure_raises_llm_call_failure() -> None:
     with pytest.raises(LlmCallFailure) as raised:
         await _client(server).input_budget(_TEMPLATE)
 
-    assert "HTTP 500" in raised.value.reason
-    assert _TEMPLATE not in str(raised.value)
+    assert raised.value.reason == "POST /tokenize: HTTP 500: tokenizer down"
 
 
 async def test_llama_cpp_input_budget_malformed_tokenize_answer_raises_failure() -> None:
@@ -441,14 +469,66 @@ async def test_llama_cpp_input_budget_asks_the_server_to_frame_the_template_as_o
     assert server.bodies("/apply-template") == [{"messages": [{"role": "user", "content": _TEMPLATE}]}]
 
 
-async def test_llama_cpp_input_budget_apply_template_failure_raises_llm_call_failure() -> None:
+async def test_llama_cpp_input_budget_without_apply_template_endpoint_names_the_endpoint() -> None:
+    """A llama-server older than ``/apply-template`` answers 404 'File Not Found': the failure must say which request failed."""
     server = _Server(statuses={"/apply-template": (404, {"error": {"message": "File Not Found"}})})
 
     with pytest.raises(LlmCallFailure) as raised:
         await _client(server).input_budget(_TEMPLATE)
 
-    assert "HTTP 404" in raised.value.reason
+    assert raised.value.reason == "POST /apply-template: HTTP 404: File Not Found"
+    assert _paths(server) == ["/apply-template"]
+
+
+async def test_llama_cpp_input_budget_names_the_endpoint_of_a_malformed_apply_template_answer() -> None:
+    server = _Server(statuses={"/apply-template": (200, {"prompt": 7})})
+
+    with pytest.raises(LlmCallFailure) as raised:
+        await _client(server).input_budget(_TEMPLATE)
+
+    assert raised.value.reason.startswith("POST /apply-template: unexpected reply")
+
+
+async def test_llama_cpp_sizing_timeout_keeps_its_type_and_names_the_endpoint() -> None:
+    def server(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    with pytest.raises(LlmCallTimeout) as raised:
+        await _client(server).input_budget(_TEMPLATE)
+
+    assert raised.value.reason.startswith("POST /apply-template: no answer within ")
+
+
+@pytest.mark.parametrize("path", ["/apply-template", "/tokenize"])
+async def test_llama_cpp_sizing_failure_masks_the_prompt_the_server_echoes(path: str) -> None:
+    """The server's error quotes the prompt it was sent; the failure reason carries a marker instead of it."""
+    server = _Server(echoing={path: 400})
+
+    with pytest.raises(LlmCallFailure) as raised:
+        await _client(server).input_budget(_TEMPLATE)
+
+    assert raised.value.reason == f"POST {path}: HTTP 400: cannot process: [prompt]"
     assert _TEMPLATE not in str(raised.value)
+
+
+async def test_llama_cpp_count_tokens_failure_masks_the_prompt_the_server_echoes() -> None:
+    server = _Server(echoing={"/tokenize": 400})
+
+    with pytest.raises(LlmCallFailure) as raised:
+        await _client(server).count_tokens(_PROMPT)
+
+    assert raised.value.reason == "POST /tokenize: HTTP 400: cannot process: [prompt]"
+    assert _PROMPT not in str(raised.value)
+
+
+async def test_llama_cpp_call_failure_masks_the_prompt_the_server_echoes() -> None:
+    server = _Server(echoing={"/v1/chat/completions": 400})
+
+    with pytest.raises(LlmCallFailure) as raised:
+        await _client(server).call(_request())
+
+    assert raised.value.reason == "HTTP 400: cannot process: [prompt]"
+    assert _PROMPT not in str(raised.value)
 
 
 async def test_llama_cpp_input_budget_malformed_apply_template_answer_raises_failure() -> None:
@@ -734,3 +814,62 @@ async def test_llama_cpp_probe_with_unparseable_base_url_assumes_4096_and_warns(
 
     assert window.source is ContextWindowSource.ASSUMED
     assert len(_warnings(caplog)) == 1
+
+
+@pytest.mark.parametrize(
+    ("think", "expected"),
+    [
+        (ThinkSetting.DEFAULT, None),
+        (ThinkSetting.ON, {"enable_thinking": True}),
+        (ThinkSetting.OFF, {"enable_thinking": False}),
+    ],
+)
+async def test_llama_cpp_input_budget_frames_the_template_with_the_thinking_switch_the_call_sends(
+    think: ThinkSetting, expected: dict[str, bool] | None
+) -> None:
+    """Qwen3's template adds an empty think block when thinking is off: the sizing must render what the call will render."""
+    server = _Server()
+    client = _client(server)
+
+    await client.input_budget(_TEMPLATE, think=think)
+    await client.call(LlmCallRequest(prompt=_PROMPT, max_output_tokens=ANSWER_RESERVE_TOKENS, timeout_seconds=_TIMEOUT_SECONDS, think=think))
+
+    [applied] = server.bodies("/apply-template")
+    [chat] = server.bodies("/v1/chat/completions")
+    assert applied.get("chat_template_kwargs") == expected
+    assert chat.get("chat_template_kwargs") == applied.get("chat_template_kwargs")
+
+
+async def test_llama_cpp_input_budget_counts_the_framing_the_thinking_switch_adds() -> None:
+    client = _client(_Server())
+    await client.probe_context_window(_TIMEOUT_SECONDS)
+    plain = _PROBED_WINDOW - ANSWER_RESERVE_TOKENS - _TEMPLATE_TOKENS - _FRAME_TOKENS
+
+    assert await client.input_budget(_TEMPLATE) == InputBudget(tokens=plain)
+    assert await client.input_budget(_TEMPLATE, think=ThinkSetting.ON) == InputBudget(tokens=plain)
+    assert await client.input_budget(_TEMPLATE, think=ThinkSetting.OFF) == InputBudget(tokens=plain - _THINK_OFF_FRAME_TOKENS)
+
+
+async def test_llama_cpp_input_budget_keeps_one_count_per_template_and_thinking_setting() -> None:
+    server = _Server()
+    client = _client(server)
+
+    for _ in range(2):
+        for think in ThinkSetting:
+            await client.input_budget(_TEMPLATE, think=think)
+
+    assert _paths(server) == _TEMPLATE_REQUESTS * len(ThinkSetting)
+
+
+async def test_llama_cpp_successful_probe_drops_the_counts_of_every_thinking_setting() -> None:
+    server = _Server()
+    client = _client(server)
+    for think in ThinkSetting:
+        await client.input_budget(_TEMPLATE, think=think)
+    server.requests.clear()
+
+    await client.probe_context_window(_TIMEOUT_SECONDS)
+    for think in ThinkSetting:
+        await client.input_budget(_TEMPLATE, think=think)
+
+    assert _paths(server) == ["/props", *_TEMPLATE_REQUESTS * len(ThinkSetting)]

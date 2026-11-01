@@ -7,6 +7,7 @@ import socket
 import pytest
 
 from archon_search.constants import ANSWER_RESERVE_TOKENS, ASSUMED_CONTEXT_TOKENS
+from archon_search.llm_client import llama_cpp_client
 from archon_search.llm_client.llama_cpp_client import LlamaCppClient
 from archon_search.llm_client.protocol import (
     ContextWindowSource,
@@ -35,6 +36,9 @@ _WINDOW = 8192
 _TIMEOUT_SECONDS = 10.0
 _SHORT_TIMEOUT_SECONDS = 0.2
 _LONGER_THAN_THE_TIMEOUT_SECONDS = 1.0
+_SLOW_ANSWER_SECONDS = 0.4  # one sizing request fits the deadline below, the two together do not
+_SIZING_DEADLINE_SECONDS = 0.6
+_GENEROUS_DEADLINE_SECONDS = 30.0
 # The fake's tokenize counts one token per whitespace-separated word.
 _TEMPLATE = "Describe the collection in one sentence."
 _TEMPLATE_TOKENS = 6
@@ -130,3 +134,30 @@ async def test_llama_cpp_wrapper_reports_unreachable_server() -> None:
 
     assert not isinstance(raised.value, LlmCallTimeout)
     assert "cannot connect" in raised.value.reason
+
+
+async def test_llama_cpp_sizing_against_a_server_without_apply_template_names_the_endpoint() -> None:
+    with FakeModelServer(status_overrides={"/apply-template": 404}) as server:
+        client = LlamaCppClient(model=_MODEL, base_url=server.base_url)
+
+        with pytest.raises(LlmCallFailure) as raised:
+            await client.input_budget(_TEMPLATE)
+
+    assert raised.value.reason.startswith("POST /apply-template: HTTP 404: ")
+    assert _TEMPLATE not in raised.value.reason
+
+
+async def test_llama_cpp_sizing_is_bounded_as_a_whole_not_per_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each of the two sizing requests answers within its own allowance, yet together they outlast the one deadline."""
+    monkeypatch.setattr(llama_cpp_client, "SIZING_DEADLINE_SECONDS", _SIZING_DEADLINE_SECONDS)
+    with FakeModelServer(response_delay_seconds=_SLOW_ANSWER_SECONDS) as slow:
+        client = LlamaCppClient(model=_MODEL, base_url=slow.base_url)
+
+        with pytest.raises(LlmCallTimeout) as raised:
+            await client.input_budget(_TEMPLATE)
+
+        monkeypatch.setattr(llama_cpp_client, "SIZING_DEADLINE_SECONDS", _GENEROUS_DEADLINE_SECONDS)
+        within = await client.input_budget(_TEMPLATE)
+
+    assert raised.value.reason == f"sizing the template took longer than {_SIZING_DEADLINE_SECONDS:g}s"
+    assert isinstance(within.tokens, int)

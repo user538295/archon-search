@@ -246,7 +246,7 @@ async def test_failed_model_details_read_skips_the_check_without_a_warning(caplo
 async def test_unanswered_window_reads_are_bounded_by_the_resolve_timeout(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr(llm_composition, "WINDOW_RESOLVE_TIMEOUT_SECONDS", _SHORT_TIMEOUT_SECONDS)
+    monkeypatch.setattr(llm_composition, "LOCAL_SERVER_PROBE_TIMEOUT_SECONDS", _SHORT_TIMEOUT_SECONDS)
     with FakeModelServer(response_delay_seconds=_LONGER_THAN_THE_TIMEOUT_SECONDS) as server:
         ollama = _client("ollama", ollama_url=server.base_url, context=_ABOVE_THE_MAXIMUM)
         llama_cpp = _client("llama_cpp", llama_cpp_url=server.base_url)

@@ -139,7 +139,7 @@ class InputBudget:
     """How many input tokens a caller may send, or ``UNBOUNDED``.
 
     The window minus the reserved answer space minus the prompt template, after the provider's
-    counting rule (exact for ``llama_cpp``, gpt2 estimate plus ``OLLAMA_ESTIMATE_MARGIN`` for ``ollama``).
+    counting rule (exact for ``llama_cpp``, the token estimate plus ``OLLAMA_ESTIMATE_MARGIN`` for ``ollama``).
 
     A window too small for reserve and template gives 0, never a negative number (``llm_client.budget``).
     """
@@ -165,13 +165,16 @@ class LlmClient(Protocol):
         """The window this client sizes to; fixed when the client is built."""
         ...
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         """The budget callers size their input to.
 
         Args:
             template_text: the LONGEST form of the prompt template the caller will send: the
                 template WITH the retry reminder, so a retry of a full sample still fits a small
                 window and never needs a second sizing.
+            think: the thinking setting of the calls the budget is for. A chat template can frame a prompt differently
+                per setting (Qwen3 appends an empty think block when thinking is off), so a client that counts the
+                framing renders it for this setting; ``DEFAULT`` is what a call sends when it sets nothing.
         """
         ...
 

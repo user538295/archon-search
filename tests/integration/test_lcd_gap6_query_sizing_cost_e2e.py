@@ -2,7 +2,7 @@
 
 The window-fit of a query (``llm_client/fit.py``) used to ask the server to render and count the fixed prompt template on
 every search, and to count every query however short: on ``llama_cpp`` about three to twelve local requests per
-expansion, on ``ollama`` a gpt2 count of the template and of the query. Now the template is counted once per process and a
+expansion, on ``ollama`` a token-estimate count of the template and of the query. Now the template is counted once per process and a
 query whose UTF-8 length is within the budget skips the count (a token covers at least one byte). Only a query longer than
 the room left goes through the counting loop. The recorder of ``FakeModelServer`` (llama.cpp) and a recording
 ``TokenCounter.count`` (Ollama's in-process estimate) show what is asked.

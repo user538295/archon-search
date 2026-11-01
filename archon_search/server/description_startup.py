@@ -66,7 +66,13 @@ def is_loopback_host(base_url: str) -> bool:
 
     ``localhost`` (any case, one trailing dot allowed) and loopback IP literals qualify, an IPv4-mapped IPv6 address by
     its IPv4 form. Everything else is not loopback on purpose: ``0.0.0.0`` (a wildcard), ``host.docker.internal`` and
-    every other name (DNS is never consulted), an empty or unparsable value (the operator then gets the INFO).
+    every other name (DNS is never consulted; ``127.0.0.1.nip.io`` and ``localhost.evil.com`` are names), spellings of
+    ``127.0.0.1`` that are not IP literals to ``ipaddress`` (``127.1``, ``2130706433``), fullwidth letters, an empty or
+    unparsable value, and a value ``parse_server_address`` refuses for an ``@`` after its authority
+    (``http://localhost:8080/v1/@x``): the operator then gets the INFO, the cautious answer.
+
+    Loopback is judged by the ADDRESS alone, not by where the traffic ends up: a ``127.0.0.1`` port that ``ssh -L`` or a
+    published container port forwards to another machine counts as local.
     """
     value = base_url.strip()
     # A bare IPv6 literal (``::1``) is all colons to ``urlsplit``, which reads a port into it: take the literal whole.

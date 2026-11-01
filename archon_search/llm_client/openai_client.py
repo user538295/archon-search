@@ -31,6 +31,7 @@ from archon_search.llm_client.protocol import (
     LlmCallRequest,
     LlmCallResult,
     LlmCallTimeout,
+    ThinkSetting,
 )
 from archon_search.llm_client.provider_key import provider_key_available
 from archon_search.llm_client.server_text import bounded_server_text
@@ -91,7 +92,7 @@ class OpenAIClient:
     def context_window(self) -> ContextWindow:
         return UNBOUNDED
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         return cloud_budget()
 
     async def aclose(self) -> None:

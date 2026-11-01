@@ -91,7 +91,7 @@ _VALIDATE_DEVICE = "archon_search.model_validation.validate_device"
 _RESOLVE_DEVICE = "archon_search.model_validation.resolve_device"
 _PROBE_TEXT = "archon search validation probe"
 _PROBE_PAIR = ("archon search query", "archon search document")
-_TRICKLE_SECONDS = 2.0  # a GET that stays open far past any bound under test
+_HANG_GUARD_SECONDS = 5.0  # far past any bound under test: a call that has lost its deadline fails here instead of hanging the run
 _SHORT_PROBE_BOUND_SECONDS = 0.05
 
 
@@ -662,16 +662,17 @@ async def test_probe_failure_keeps_the_exception_types_at_debug(caplog: pytest.L
 @pytest.mark.asyncio
 async def test_a_trickling_server_is_cut_off_by_an_overall_deadline_and_reads_unreachable(caplog: pytest.LogCaptureFixture):
     """httpx limits each phase, not the request: a server that keeps the GET open must still end as ``False`` + one WARNING."""
-    async def trickle(*_args: object, **_kwargs: object) -> MagicMock:
-        await asyncio.sleep(_TRICKLE_SECONDS)
-        return _ok_response()
+    async def never_answers(*_args: object, **_kwargs: object) -> MagicMock:
+        await asyncio.Event().wait()
+        return _ok_response()  # unreachable: the GET stays open until its caller gives up
 
-    mock_cls = _make_async_client_cls(get_side_effect=trickle)
+    mock_cls = _make_async_client_cls(get_side_effect=never_answers)
     with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
-         patch("archon_search.model_validation._LLAMA_CPP_PROBE_TIMEOUT_SECONDS", _SHORT_PROBE_BOUND_SECONDS), \
+         patch("archon_search.model_validation.LOCAL_SERVER_PROBE_TIMEOUT_SECONDS", _SHORT_PROBE_BOUND_SECONDS), \
          patch(_VALIDATE_DEVICE, return_value=(True, True, [])), \
          caplog.at_level(logging.WARNING):
-        result = await asyncio.wait_for(validate_models_async(_llama_cpp_cfg(), timeout_seconds=5), _TRICKLE_SECONDS / 2)
+        # The outer bound turns a probe that lost its own deadline into a failure of this test instead of a hang of the run.
+        result = await asyncio.wait_for(validate_models_async(_llama_cpp_cfg(), timeout_seconds=5), _HANG_GUARD_SECONDS)
 
     assert result.llama_cpp_ok is False
     [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]

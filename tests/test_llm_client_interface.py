@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import inspect
 import logging
 import pickle
 import subprocess
@@ -285,8 +286,15 @@ class _StubClient:
     def context_window(self) -> ContextWindow:
         return UNBOUNDED
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         return InputBudget(tokens=UNBOUNDED)
+
+
+def test_input_budget_takes_the_thinking_setting_of_the_calls_it_sizes_for() -> None:
+    """The chat template's framing can depend on it (llama.cpp ``enable_thinking``); the default is what a call sends when it sets nothing."""
+    parameter = inspect.signature(LlmClient.input_budget).parameters["think"]
+
+    assert parameter.default is ThinkSetting.DEFAULT
 
 
 def test_interface_is_structural_and_runtime_checkable() -> None:

@@ -8,7 +8,7 @@ joiner sequence, a skin tone or a flag), and
 
 * Cloud: the budget is unbounded, so the text is returned as it came: nothing is counted or cut (S9).
 * ``llama_cpp``: the count is the server's own (``LlamaCppClient.count_tokens``).
-* ``ollama``: the count is the gpt2 estimate (``OllamaClient.count_tokens``); the 20% margin already sits in the budget.
+* ``ollama``: the count is the token estimate (``OllamaClient.count_tokens``); the 20% margin already sits in the budget.
 
 A text is fitted with a bounded number of counts (``MAX_FIT_COUNTS``, each one a request to the server for
 ``llama_cpp``) and the text returned is one the count has itself seen fit, never an extrapolation. The one exception

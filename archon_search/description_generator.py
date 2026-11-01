@@ -46,7 +46,9 @@ excerpt, a prompt or an answer (the provider's failure text is prompt-masked by 
 error is named by its type only). A failed provider call logs once per process (``warn_once``): a provider that is down
 fails every collection the same way. Every other failure (a window too small, a store error, no open chunk) is per
 collection and logs every time. The one exception is ``think = true`` on a model with no thinking mode: its own WARNING
-(model name, no collection) replaces the failure line and appears once per process and model.
+(model name, no collection) replaces the failure line and appears once per process and model. A sample the budget cut
+below the count asked for (``max_sample_chunks`` or the number of open chunks) is not a failure and logs one INFO line per
+generation with the collection name, ``N of M`` excerpts, the input room they fit and the window: the sizes only.
 """
 from __future__ import annotations
 
@@ -291,7 +293,8 @@ class DescriptionGenerator:
         if not chunk_ids:
             raise _no_open_chunk("no unrestricted chunks to describe; set a description by hand")
         with _provider_step():
-            budget = (await self._client.input_budget(_sizing_template(collection))).tokens
+            sizing = await self._client.input_budget(_sizing_template(collection), think=ThinkSetting.from_config(self._config.think))
+            budget = sizing.tokens
         count = min(self._config.max_sample_chunks, len(chunk_ids))
         thinking_possible = self._config.think is not False
         if budget == UNBOUNDED:
@@ -312,13 +315,18 @@ class DescriptionGenerator:
     async def _fit(
         self, collection: str, namespace: str, chunk_ids: list[str], include_restricted: bool, budget: int, count: int
     ) -> list[str]:
-        """Draw, count and shrink until the excerpts fit *budget* (the stated loop of the module docstring)."""
+        """Draw, count and shrink until the excerpts fit *budget* (the stated loop of the module docstring).
+
+        A sample the budget cut below the *count* asked for is logged at INFO (the sizes only): a window can shrink
+        ``max_sample_chunks`` to a handful of excerpts and nothing else would tell the operator.
+        """
         if budget == 0:
             raise self._window_too_small(budget)
         if not isinstance(self._client, TokenCountingClient):
             raise _GenerationStopped(
                 DescriptionFailureReason.CALL_FAILED, "the client sizes its input to a budget but cannot count tokens"
             )
+        asked = count
         while True:
             excerpts = await self._read(
                 collection, namespace, _evenly_spaced(chunk_ids, count), include_restricted
@@ -326,6 +334,16 @@ class DescriptionGenerator:
             with _provider_step():
                 cost = await self._client.count_tokens(_SAMPLE_SEPARATOR.join(excerpts))
             if cost <= budget:
+                if count < asked:
+                    logger.info(
+                        "Description sample for collection %r cut to %d of %d excerpts to fit the model's input room of "
+                        "%d tokens (context window: %s)",
+                        collection,
+                        count,
+                        asked,
+                        budget,
+                        self._named_window(),
+                    )
                 return excerpts
             if count == 1:
                 raise self._window_too_small(budget)
@@ -342,13 +360,16 @@ class DescriptionGenerator:
             raise _no_open_chunk("none of the sampled chunks could be read as unrestricted text")
         return excerpts
 
-    def _window_too_small(self, budget: int) -> _WindowTooSmall:
+    def _named_window(self) -> str:
+        """The client's window as a message names it: its size and where the size came from."""
         window = self._client.context_window()
-        named = f"{window.size} tokens, {window.source.value}" if isinstance(window, ContextWindowTokens) else str(window)
+        return f"{window.size} tokens, {window.source.value}" if isinstance(window, ContextWindowTokens) else str(window)
+
+    def _window_too_small(self, budget: int) -> _WindowTooSmall:
         room = "the prompt and one excerpt" if budget == 0 else "one excerpt"
         return _WindowTooSmall(
             DescriptionFailureReason.CALL_FAILED,
-            f"the model's context window ({named}) leaves {budget} input tokens, too little for {room}",
+            f"the model's context window ({self._named_window()}) leaves {budget} input tokens, too little for {room}",
         )
 
     async def _ask(self, collection: str, sample: list[str], answer_ceiling: int) -> DescriptionGenerated:

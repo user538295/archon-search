@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx
 
+from archon_search.constants import LOCAL_SERVER_PROBE_TIMEOUT_SECONDS
 from archon_search.embedder import EmbedderBackend, ModelEmbedder
 from archon_search.llm_client.claude_cli_client import resolve_claude_binary
 from archon_search.llm_client.llama_cpp_client import warn_llama_cpp_unreachable
@@ -35,10 +36,6 @@ GraphClientFactory = Callable[[], "LlmClient | None"]
 
 logger = logging.getLogger(__name__)
 
-# Short, fixed timeout for the llama-server reachability probe — bounded
-# independently of the caller's overall `timeout_seconds` budget for the
-# embedder/reranker probe, since this is an unrelated side check.
-_LLAMA_CPP_PROBE_TIMEOUT_SECONDS: float = 3.0
 # The ``provider`` value that selects a local llama-server in ``[hyde]``/``[rag_fusion]``/``[graph]``/``[description]``.
 _LLAMA_CPP_PROVIDER: Final[str] = "llama_cpp"
 # The ``provider`` value that selects the ``claude`` program in ``[graph]``.
@@ -165,15 +162,16 @@ def _llama_cpp_base_urls(config: SearchConfig) -> list[str]:
 
 
 async def _probe_llama_cpp_server(base_url: str) -> bool:
-    """``GET {base_url}/v1/models`` under a short, fixed bound: ``True`` on any 2xx answer, else ``False`` after the one
-    per-server "not reachable" WARNING (shared with the context-window lookup and the description probe). Never raises.
+    """``GET {base_url}/v1/models`` under ``LOCAL_SERVER_PROBE_TIMEOUT_SECONDS``: ``True`` on any 2xx answer, else ``False``
+    after the one per-server "not reachable" WARNING (shared with the context-window lookup and the description probe).
+    Never raises.
 
     httpx limits each phase, not the whole request, so a server that keeps answering a byte at a time would hold the probe
     open: the same bound is also put on the whole call with ``asyncio.timeout``."""
     try:
         async with (
-            asyncio.timeout(_LLAMA_CPP_PROBE_TIMEOUT_SECONDS),
-            httpx.AsyncClient(base_url=base_url, timeout=_LLAMA_CPP_PROBE_TIMEOUT_SECONDS) as client,
+            asyncio.timeout(LOCAL_SERVER_PROBE_TIMEOUT_SECONDS),
+            httpx.AsyncClient(base_url=base_url, timeout=LOCAL_SERVER_PROBE_TIMEOUT_SECONDS) as client,
         ):
             response = await client.get("/v1/models")
             response.raise_for_status()

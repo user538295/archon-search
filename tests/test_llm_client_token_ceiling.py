@@ -8,7 +8,7 @@ Two real tokenizers add a little, and each client states its own bound:
   dummy-prefix token, so a text of N bytes can cost N + 1 tokens (``"\u20ac"`` on a Llama 2 vocabulary: the prefix token plus its
   three byte tokens).
 * ``ollama``: the estimate counts every digit run as its digits plus one placeholder token, so it can exceed the byte
-  length by one per digit run.
+  length by one per digit run; the gpt2 special-token literal ``<|endoftext|>`` is charged its bytes, not one token.
 
 The worst case a byte-level tokenizer can show is one token per byte, so the property tests count with exactly that.
 """
@@ -16,17 +16,22 @@ The worst case a byte-level tokenizer can show is one token per byte, so the pro
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import os
 import re
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 
 import httpx
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from archon_search.constants import ANSWER_RESERVE_TOKENS
+from archon_search.hyde import HYDE_PROMPT_TEMPLATE
+from archon_search.llm_client.fit import fit_query_to_window
 from archon_search.llm_client.llama_cpp_client import LlamaCppClient
 from archon_search.llm_client.ollama_client import OllamaClient
 from archon_search.llm_client.protocol import TokenBoundingClient
@@ -42,6 +47,8 @@ from tests._token_counter_stub import StubEncoding
 _SPM_DUMMY_PREFIX_TOKENS = 1
 _SPM_SPECIAL_TOKENS = ("<s>", "</s>", "<unk>")
 _CI_ENV = "CI"
+_TOKENIZERS_MODULE = "tokenizers"
+_ABSENT_MODULE = "archon_search_absent_tokenizers_stand_in"
 _SPM_SPECIAL_SPLIT = re.compile("(" + "|".join(re.escape(token) for token in _SPM_SPECIAL_TOKENS) + ")")
 _LONE_SURROGATE = "\ud83d"  # a str that cannot be encoded as UTF-8 strictly
 # ``1`` next to an astral character, fullwidth and Arabic-Indic digits (not ASCII digit runs), and spaces.
@@ -277,20 +284,60 @@ def test_an_uncached_tokenizer_skips_outside_ci(monkeypatch: pytest.MonkeyPatch,
         _require_cached_tokenizer(tmp_path / "absent" / TOKEN_COUNTER_TOKENIZER_FILE)
 
 
-@pytest.fixture(scope="module")
-def real_gpt2_counter() -> TokenCounter:
-    """A counter over the real pinned gpt2 ``tokenizer.json``, loaded straight from the model cache.
+def _import_tokenizers(module_name: str = _TOKENIZERS_MODULE) -> ModuleType:
+    """Import ``tokenizers``; skip when it is missing locally, but raise on CI: a skip there would turn the real-vocabulary tests vacuously green."""
+    if os.environ.get(_CI_ENV):
+        return importlib.import_module(module_name)
+    return pytest.importorskip(module_name)
 
-    The autouse fixtures stub ``load_gpt2_tokenizer`` and block the network, so the file is read with
-    ``tokenizers.Tokenizer.from_file``; a missing cache skips the test locally and fails it on CI (``CI`` set), where the
-    PR workflow prefetches it. A module-scoped fixture runs before the per-test data-dir redirection, so the cache is the
-    operator's own.
+
+def test_a_missing_tokenizers_package_fails_on_ci(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(_CI_ENV, "true")
+
+    with pytest.raises(ImportError, match=_ABSENT_MODULE):
+        _import_tokenizers(_ABSENT_MODULE)
+
+
+def test_a_missing_tokenizers_package_skips_outside_ci(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(_CI_ENV, raising=False)
+
+    with pytest.raises(pytest.skip.Exception, match=_ABSENT_MODULE):
+        _import_tokenizers(_ABSENT_MODULE)
+
+
+@pytest.mark.parametrize("on_ci", [True, False])
+def test_an_installed_tokenizers_package_is_imported_on_and_off_ci(monkeypatch: pytest.MonkeyPatch, on_ci: bool) -> None:
+    if on_ci:
+        monkeypatch.setenv(_CI_ENV, "true")
+    else:
+        monkeypatch.delenv(_CI_ENV, raising=False)
+
+    assert _import_tokenizers().__name__ == _TOKENIZERS_MODULE
+
+
+@pytest.fixture(scope="module")
+def pinned_tokenizer_file() -> Path:
+    """The cached pinned gpt2 ``tokenizer.json``; a missing cache skips the test locally and fails it on CI (``CI`` set).
+
+    Every lane that runs the default suite prefetches the tokenizer (the PR and release workflows,
+    ``scripts/test-unlocked-deps.sh``). A module-scoped fixture runs before the per-test data-dir redirection, so the
+    cache is the operator's own.
     """
     snapshot = get_token_counter_models_dir() / f"models--{TOKEN_COUNTER_MODEL_NAME.replace('/', '--')}" / "snapshots" / TOKEN_COUNTER_MODEL_REVISION
     tokenizer_file = snapshot / TOKEN_COUNTER_TOKENIZER_FILE
     _require_cached_tokenizer(tokenizer_file)
-    tokenizers = pytest.importorskip("tokenizers")
-    tokenizer = tokenizers.Tokenizer.from_file(str(tokenizer_file))
+    return tokenizer_file
+
+
+@pytest.fixture(scope="module")
+def real_gpt2_counter(pinned_tokenizer_file: Path) -> TokenCounter:
+    """A counter over the real pinned gpt2 ``tokenizer.json``, loaded straight from the model cache.
+
+    The autouse fixtures stub ``load_gpt2_tokenizer`` and block the network, so the file is read with
+    ``tokenizers.Tokenizer.from_file``; a missing ``tokenizers`` package skips the test locally and fails it on CI.
+    """
+    tokenizers = _import_tokenizers()
+    tokenizer = tokenizers.Tokenizer.from_file(str(pinned_tokenizer_file))
     return TokenCounter(load_tokenizer=lambda: tokenizer)
 
 
@@ -311,3 +358,58 @@ def test_the_ollama_ceiling_holds_on_the_real_gpt2_vocabulary_for_adjacent_digit
     real_gpt2_counter: TokenCounter, text: str
 ) -> None:
     assert real_gpt2_counter.count(text) <= TokenCounter.ceiling(text)
+
+
+_SPECIAL_TOKEN_LITERAL = "<|endoftext|>"
+_LITERAL_COUNT = 20
+_OVERLONG_LITERAL_COUNT = 10_000  # 130 000 characters: far more than any window holds
+
+
+def test_the_pinned_gpt2_vocabulary_has_no_added_token_but_the_literal_the_counter_charges_by_its_bytes(pinned_tokenizer_file: Path) -> None:
+    """``token_counter`` removes this one literal from the text; a second added token in the pinned vocabulary would be counted as one."""
+    tokenizers = _import_tokenizers()
+    tokenizer = tokenizers.Tokenizer.from_file(str(pinned_tokenizer_file))
+
+    assert [token.content for token in tokenizer.get_added_tokens_decoder().values()] == [_SPECIAL_TOKEN_LITERAL]
+
+
+def test_the_ollama_estimate_of_special_token_literals_is_not_below_a_tokenizer_that_splits_them(
+    real_gpt2_counter: TokenCounter, pinned_tokenizer_file: Path
+) -> None:
+    """The literal is one token to the pinned gpt2 vocabulary but a run of plain BPE pieces to a Llama or Qwen one.
+
+    The stand-in for the splitting model is the same vocabulary with its added token removed (its byte-level BPE of
+    the characters): 7 tokens per literal. The estimate must not fall below that, or the budget lets a prompt through
+    that overruns the window.
+    """
+    tokenizers = _import_tokenizers()
+    data = json.loads(pinned_tokenizer_file.read_text(encoding="utf-8"))
+    data["added_tokens"] = []
+    splitting = tokenizers.Tokenizer.from_str(json.dumps(data))
+    text = _SPECIAL_TOKEN_LITERAL * _LITERAL_COUNT
+    splitting_count = len(splitting.encode(text, add_special_tokens=False).ids)
+
+    assert splitting_count > _LITERAL_COUNT, "the stand-in reads the literal as more than one token"
+    assert real_gpt2_counter.count(text) >= splitting_count
+
+
+@pytest.mark.asyncio
+async def test_a_query_of_special_token_literals_is_cut_to_what_a_splitting_tokenizer_still_fits_in_the_window(
+    real_gpt2_counter: TokenCounter, pinned_tokenizer_file: Path
+) -> None:
+    """The sizing step end to end: the query head ``fit_query_to_window`` sends, read by a vocabulary that splits the
+    literal, plus the template and the answer reserve, stays inside the window (the 4096 an unset ``ollama_context_tokens``
+    assumes)."""
+    tokenizers = _import_tokenizers()
+    data = json.loads(pinned_tokenizer_file.read_text(encoding="utf-8"))
+    data["added_tokens"] = []
+    splitting = tokenizers.Tokenizer.from_str(json.dumps(data))
+    client = OllamaClient(model="m", base_url="http://ollama.test:11434", context_tokens=None, token_counter=real_gpt2_counter)
+    window = client.context_window().size
+    template = HYDE_PROMPT_TEMPLATE.format(query="")
+
+    sent = await fit_query_to_window(client, template, _SPECIAL_TOKEN_LITERAL * _OVERLONG_LITERAL_COUNT, provider="ollama")
+
+    prompt_tokens = len(splitting.encode(HYDE_PROMPT_TEMPLATE.format(query=sent), add_special_tokens=False).ids)
+    assert sent, "the window has room for part of the query"
+    assert prompt_tokens + ANSWER_RESERVE_TOKENS <= window

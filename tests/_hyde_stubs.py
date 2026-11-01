@@ -25,6 +25,7 @@ from archon_search.llm_client.protocol import (
     InputBudget,
     LlmCallRequest,
     LlmCallResult,
+    ThinkSetting,
 )
 
 
@@ -45,7 +46,7 @@ class ScriptedLlmClient:
     def context_window(self) -> ContextWindow:
         return UNBOUNDED
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         return InputBudget(UNBOUNDED)
 
 
@@ -76,7 +77,7 @@ class BudgetedLlmClient(ScriptedLlmClient):
     def context_window(self) -> ContextWindow:
         return ContextWindowTokens(size=self.window_tokens, source=ContextWindowSource.CONFIGURED)
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         self.templates.append(template_text)
         return InputBudget(self.budget)
 

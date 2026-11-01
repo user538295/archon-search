@@ -21,18 +21,41 @@ class ServerAddress(NamedTuple):
     host: str
     port: int | None
 
+    @property
+    def label(self) -> str:
+        """``host:port`` (``host`` alone without a port; an IPv6 host in brackets): the name a log line gives the server."""
+        host = f"[{self.host}]" if ":" in self.host else self.host
+        return host if self.port is None else f"{host}:{self.port}"
+
+
+def is_url(value: str) -> bool:
+    """Whether *value* is a URL (it starts with ``//`` or ``scheme://``) and not an authority and path (``localhost:8080/v1``).
+
+    The one answer to that question for everything that reads a configured server address: a ``//`` later in the path
+    (``localhost:11434/a//b``) does not make a URL of an authority.
+    """
+    return _URL_PREFIX.match(value.strip()) is not None
+
+
 
 def parse_server_address(value: str) -> ServerAddress | None:
     """The one parser of a configured server URL: host and port, never the authority, so no userinfo reaches a caller.
 
     Accepts a URL or a scheme-less ``host:port`` (``//`` is prepended, because ``urlsplit`` reads ``localhost:11434`` as
-    scheme ``localhost``). The port is the written one, else the default of ``http`` (80) or ``https`` (443), else
-    ``None``. ``None`` when the value has no usable host: it does not parse (a bad port, an unclosed bracket), has no host,
-    or has an ``@`` outside its authority (``u:p/s@h`` ends the authority at the ``/``, so the real userinfo sits in the
-    path, query or fragment and what parses as host and port may be part of a credential).
+    scheme ``localhost``); surrounding whitespace is stripped once, here. The port is the written one, else the default of
+    ``http`` (80) or ``https`` (443), else ``None``. ``None`` when the value has no usable host: it does not parse (a bad
+    port, an unclosed bracket), has no host, or has an ``@`` outside its authority.
+
+    That last rule is deliberate and fails safe (an accepted limitation): ``u:p/s@h`` ends the authority at the ``/``, so
+    the real userinfo may sit in the path, query or fragment and what parses as host and port (``u:p``) may be part of a
+    credential. A value that is an ordinary URL with a legal ``@`` in its path (``http://localhost:8080/v1/@x``) is refused
+    with it, because the two cannot be told apart without guessing which client reads the value how (``localhost/x@evil.test``
+    reaches ``localhost`` for one and ``evil.test`` for another); a refused value is labelled ``UNKNOWN_HOST`` and is not
+    loopback (see ``is_loopback_host``), the cautious answers.
     """
+    text = value.strip()
     try:
-        parts = urlsplit(value if _URL_PREFIX.match(value) else f"//{value}")
+        parts = urlsplit(text if is_url(text) else f"//{text}")
         host, port = parts.hostname, parts.port
     except ValueError:  # an unclosed bracket, a port that is not a number in range
         return None
@@ -50,15 +73,14 @@ def host_port(base_url: str) -> str:
     Built only from :func:`parse_server_address`: the host is lower-cased with a trailing dot dropped, an IPv6 address stays
     in brackets, and the default port of ``http`` (80) or ``https`` (443) is filled in. A value without a scheme
     (``localhost:8080``) keeps its own port, or none. A value without a usable host (see ``parse_server_address``, e.g.
-    userinfo that breaks the authority such as ``u:p/s@h``) is ``UNKNOWN_HOST``.
+    userinfo that breaks the authority such as ``u:p/s@h``, or any ``@`` after the authority) is ``UNKNOWN_HOST``.
 
-    Same label = same host and port; a path routes nothing here, so ``http://gw/a`` and ``http://gw/b`` behind one proxy
-    are one server. Spellings that give the same label are one server (``LOCALHOST:8080`` and ``localhost:8080``;
-    ``http://localhost`` and ``http://localhost:80``). Different names of one machine (``localhost``, ``127.0.0.1``,
-    ``[::1]``) are different labels, hence different servers; all unparsable values are one label.
+    The identity of a server is its ``host:port`` and nothing else: a path routes nothing here, so ``http://gw/a`` and
+    ``http://gw/b`` behind one path-routed gateway are one server and share one WARNING and one probe verdict. Spellings
+    that give the same label are one server (``LOCALHOST:8080`` and ``localhost:8080``; ``http://localhost`` and
+    ``http://localhost:80``). Different names of one machine (``localhost``, ``127.0.0.1``, ``[::1]``) are different
+    labels, hence different servers; all unparsable values are one label (``UNKNOWN_HOST``), so two different broken URLs
+    are one server too.
     """
     address = parse_server_address(base_url)
-    if address is None:
-        return UNKNOWN_HOST
-    host = f"[{address.host}]" if ":" in address.host else address.host
-    return host if address.port is None else f"{host}:{address.port}"
+    return UNKNOWN_HOST if address is None else address.label

@@ -1,6 +1,6 @@
 """Fitting a text to an input budget (``llm_client.fit``): the head of the text, cut at a word or grapheme boundary.
 
-The count is the caller's: ``llama_cpp`` counts through its server, ``ollama`` through the gpt2 estimate. The helper
+The count is the caller's: ``llama_cpp`` counts through its server, ``ollama`` through the token estimate. The helper
 asks for a bounded number of counts and returns a text it has itself seen fit; an unbounded budget (cloud) returns
 the text untouched without counting.
 """
@@ -493,7 +493,7 @@ class _PerByteTokenizer:
 
 
 class _RealOllamaClient(OllamaClient):
-    """The real ollama ``token_ceiling`` and ``count_tokens`` (the gpt2 estimate over a token-per-byte tokenizer)."""
+    """The real ollama ``token_ceiling`` and ``count_tokens`` (the token estimate over a token-per-byte tokenizer)."""
 
     def __init__(self, budget: int) -> None:
         self.tokenizer = _PerByteTokenizer()

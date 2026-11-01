@@ -6,7 +6,8 @@ OpenAI-compatible endpoint has no such field.
 * Stateless (S6): every call builds its own SDK client and sends exactly one user message; nothing carries over.
 * Context (S7): a configured ``context_tokens`` is sent as ``options.num_ctx`` and is the window the prompt is sized
   to; unset, the window is ``ASSUMED_CONTEXT_TOKENS``, assumed and NOT sent, so the server's own window applies.
-* Sizing (S11): :meth:`OllamaClient.input_budget` counts estimate tokens (gpt2 plus digit and astral-plane surcharges, ``llm_client.token_counter``) plus ``OLLAMA_ESTIMATE_MARGIN`` (``llm_client.budget``).
+* Sizing (S11): :meth:`OllamaClient.input_budget` counts the token estimate (gpt2 tokens plus the digit, astral-plane and
+  special-token surcharges, ``llm_client.token_counter``) plus ``OLLAMA_ESTIMATE_MARGIN`` (``llm_client.budget``).
 * ``think``: ``DEFAULT`` sends no thinking control; ``ON`` and ``OFF`` send the SDK's ``think=True`` / ``think=False``.
 * Every failure is raised as ``LlmCallFailure`` (a timeout as ``LlmCallTimeout``, ``think = true`` on a model without a
   thinking mode as ``LlmThinkingNotSupported``). The reason carries the provider's own
@@ -34,6 +35,7 @@ from archon_search.llm_client.protocol import (
     LlmCallResult,
     LlmCallTimeout,
     LlmThinkingNotSupported,
+    ThinkSetting,
 )
 from archon_search.llm_client.server_text import bounded_server_text
 from archon_search.llm_client.token_counter import TokenCounter
@@ -76,7 +78,7 @@ class OllamaClient:
             model: the Ollama model name.
             base_url: the Ollama host URL.
             context_tokens: the configured ``ollama_context_tokens``, or ``None`` when unset.
-            token_counter: estimates tokens (gpt2-based) for sizing; one is built when omitted.
+            token_counter: computes the token estimate (gpt2-based) for sizing; one is built when omitted.
             client_factory: opens the SDK client; replaced in tests.
         """
         self._model = model
@@ -112,8 +114,9 @@ class OllamaClient:
     def context_window(self) -> ContextWindowTokens:
         return self._window
 
-    async def input_budget(self, template_text: str) -> InputBudget:
-        # The count of the fixed template is kept; only a miss pays the worker thread (the first count may download the tokenizer).
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
+        # The estimate counts no chat template, so *think* changes nothing. The count of the fixed template is kept; only a
+        # miss pays the worker thread (the first count may download the tokenizer).
         try:
             return await estimated_budget(self._window, template_text, self._cached_template_count)
         except Exception as exc:
@@ -127,8 +130,9 @@ class OllamaClient:
         return await asyncio.to_thread(self._token_counter.count, text)
 
     async def count_tokens(self, text: str) -> int:
-        """The token estimate of *text* (gpt2 plus the digit and astral-plane surcharges), the unit :meth:`input_budget` is measured in (callers that size passages to the
-        budget count with this); the count runs in a thread because the counter's first use may download its tokenizer."""
+        """The token estimate of *text* (gpt2 tokens plus the digit, astral-plane and special-token surcharges), the unit
+        :meth:`input_budget` is measured in (callers that size passages to the budget count with this); the count runs in
+        a thread because the counter's first use may download its tokenizer."""
         try:
             return await self._count_in_thread(text)
         except Exception as exc:

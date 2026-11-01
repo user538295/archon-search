@@ -31,6 +31,7 @@ from tests._token_counter_stub import StubTokenizer
 _THREAD_COUNT = 8
 _LOAD_DELAY_SECONDS = 0.05
 _COMMIT_HASH = re.compile(r"[0-9a-f]{40}")
+_SPECIAL_TOKEN_LITERAL = "<|endoftext|>"
 
 _IMPORT_PROBE = """\
 import json
@@ -118,6 +119,31 @@ def test_counter_counts_a_character_outside_the_bmp_as_its_four_utf8_bytes() -> 
 
     assert TokenCounter(load_tokenizer=lambda: stub).count("ship \U0001f680\U0001f680 now") == 2 + 8
     assert stub.calls == ["ship  now"]
+
+
+def test_counter_charges_the_gpt2_special_token_literal_as_its_utf8_bytes() -> None:
+    # gpt2's tokenizer.json parses this literal out of the text as ONE token (even with add_special_tokens=False), but a
+    # Llama or Qwen vocabulary reads the same 13 characters as several tokens (7 on a byte-level BPE): a text of such
+    # literals must not be counted as one token each, or a prompt full of them overruns the window.
+    stub = StubTokenizer()
+
+    assert TokenCounter(load_tokenizer=lambda: stub).count(f"a {_SPECIAL_TOKEN_LITERAL} b") == 2 + len(_SPECIAL_TOKEN_LITERAL)
+    assert stub.calls == ["a  b"], "the literal never reaches the tokenizer that would parse it as a special token"
+
+
+def test_counter_charges_every_special_token_literal_of_a_text() -> None:
+    counter = TokenCounter(load_tokenizer=StubTokenizer)
+
+    assert counter.count(_SPECIAL_TOKEN_LITERAL * 3) == 3 * len(_SPECIAL_TOKEN_LITERAL)
+
+
+def test_counter_charges_a_special_token_literal_that_an_astral_character_splits() -> None:
+    # Removing the character leaves the literal for gpt2 to parse as one token, so the literal is looked for after it.
+    stub = StubTokenizer()
+    split_literal = _SPECIAL_TOKEN_LITERAL.replace("endo", "endo\U0001f680")
+
+    assert TokenCounter(load_tokenizer=lambda: stub).count(split_literal) == 4 + len(_SPECIAL_TOKEN_LITERAL)
+    assert stub.calls == [""]
 
 
 def test_counter_leaves_text_without_digits_or_astral_characters_untouched() -> None:

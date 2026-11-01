@@ -154,7 +154,8 @@ async def test_window_and_budget_are_unbounded_like_a_cloud_provider(fake: _fake
     client = _client(fake)
 
     assert client.context_window() == UNBOUNDED
-    assert await client.input_budget("template") == InputBudget(tokens=UNBOUNDED)
+    for think in ThinkSetting:
+        assert await client.input_budget("template", think=think) == InputBudget(tokens=UNBOUNDED)
 
 
 async def test_think_is_ignored(tmp_path: Path) -> None:

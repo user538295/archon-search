@@ -6,15 +6,17 @@ A window too small to hold reserve and template gives a budget of 0 (never negat
 "nothing fits" and reports with the window it holds. There is no check after the call.
 
 * ``llama_cpp``: :func:`exact_budget`; the count is the server's own, in the server's tokens, and it counts the template
-  as the server's chat template frames it.
-* ``ollama``: :func:`estimated_budget`; the count is ``TokenCounter.count`` (gpt2 tokens, every digit and every
-  non-BMP character counted pessimistically; see ``token_counter``), and callers measure their input in that unit
-  too. The real tokenizer may count up to ``OLLAMA_ESTIMATE_MARGIN`` more, so the budget divides the room by
-  ``1 + margin``: an input at the budget still fits in real tokens. The chat template's own tokens (role markers, a
-  default system prompt: 9 to 33 on the models measured) are not counted, and the margin must cover them.
+  as the server's chat template frames it for the thinking setting of the calls (``input_budget(..., think=...)``).
+* ``ollama``: :func:`estimated_budget`; the count is the token estimate, ``TokenCounter.count`` (gpt2 tokens with every
+  digit, every non-BMP character and the special-token literal counted pessimistically; see ``token_counter``), and
+  callers measure their input in that unit too. The real tokenizer may count up to ``OLLAMA_ESTIMATE_MARGIN`` more, so
+  the budget divides the room by ``1 + margin``: an input at the budget still fits in real tokens. The chat template's
+  own tokens (role markers, a default system prompt: 9 to 33 on the models measured) are not counted, and the margin
+  must cover them.
 * cloud: :func:`cloud_budget`; no limit, nothing is counted or trimmed.
-* :class:`TemplateCostCache`: a client memoizes the count of each template it sizes (counts only, bounded). Budgets are
-  computed from the live window on every call, so a window resolved after start-up is used at once.
+* :class:`TemplateCostCache`: a client memoizes the count of each template it sizes (counts only, bounded; ``llama_cpp``
+  keeps one cache per thinking setting, since its template framing depends on the switch). Budgets are computed from the
+  live window on every call, so a window resolved after start-up is used at once.
 
 A failing count (an unreachable tokenize endpoint, a tokenizer that cannot be downloaded) propagates; the wrapper
 that calls these functions turns it into ``LlmCallFailure``.
@@ -33,7 +35,7 @@ from archon_search.llm_client.protocol import (
     InputBudget,
 )
 
-#: Token count of a text: exact from a server (``llama_cpp`` tokenize endpoint) or the gpt2 estimate of a counter run
+#: Token count of a text: exact from a server (``llama_cpp`` tokenize endpoint) or the token estimate of a counter run
 #: in a worker thread (``ollama``).
 AsyncTokenCount = Callable[[str], Awaitable[int]]
 
@@ -106,12 +108,12 @@ async def exact_budget(window: ContextWindowTokens, template_text: str, count_to
     return InputBudget(tokens=max(0, window.size - ANSWER_RESERVE_TOKENS - template_tokens))
 
 
-async def estimated_budget(window: ContextWindowTokens, template_text: str, count_gpt2_tokens: AsyncTokenCount) -> InputBudget:
+async def estimated_budget(window: ContextWindowTokens, template_text: str, count_estimate: AsyncTokenCount) -> InputBudget:
     """Budget in estimate tokens (``TokenCounter.count``) for a provider whose tokenizer is unknown (``ollama``).
 
-    *count_gpt2_tokens* is async so that a client can keep the blocking count (its first use may download the tokenizer)
+    *count_estimate* is async so that a client can keep the blocking count (its first use may download the tokenizer)
     in a worker thread and still skip that thread when the answer is cached (:class:`TemplateCostCache`).
     """
-    template_tokens = await count_gpt2_tokens(template_text)
-    room_in_gpt2_tokens = (window.size - ANSWER_RESERVE_TOKENS) // (1 + _ESTIMATE_MARGIN)
-    return InputBudget(tokens=max(0, room_in_gpt2_tokens - template_tokens))
+    template_tokens = await count_estimate(template_text)
+    room_in_estimate_tokens = (window.size - ANSWER_RESERVE_TOKENS) // (1 + _ESTIMATE_MARGIN)
+    return InputBudget(tokens=max(0, room_in_estimate_tokens - template_tokens))

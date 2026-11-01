@@ -42,6 +42,7 @@ from archon_search.llm_client.protocol import (
     LlmCallRequest,
     LlmCallResult,
     LlmCallTimeout,
+    ThinkSetting,
 )
 from tests._hyde_stubs import ScriptedLlmClient
 
@@ -103,12 +104,14 @@ class CountingClient(ScriptedLlmClient):
         self._budget_tokens = budget_tokens
         self._window = window
         self.sized_templates: list[str] = []
+        self.sized_thinks: list[ThinkSetting] = []
 
     def context_window(self) -> ContextWindow:
         return self._window
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         self.sized_templates.append(template_text)
+        self.sized_thinks.append(think)
         return InputBudget(self._budget_tokens)
 
     async def count_tokens(self, text: str) -> int:
@@ -176,7 +179,7 @@ class _CharCountingClient(_SequenceClient):
     def context_window(self) -> ContextWindow:
         return ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         window = self.context_window()
         assert isinstance(window, ContextWindowTokens)
         return await exact_budget(window, template_text, self.count_tokens)
@@ -390,7 +393,7 @@ class TestWindowTooSmall:
         """A budget in tokens needs the client's own counter; without it the sample cannot be fitted."""
 
         class _NoCounter(ScriptedLlmClient):
-            async def input_budget(self, template_text: str) -> InputBudget:
+            async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
                 return InputBudget(_SMALL_WINDOW_BUDGET_TOKENS)
 
         client = _NoCounter()
@@ -416,6 +419,23 @@ class TestSizingTemplate:
         assert 'named "other-collection".' in second
         assert first.endswith("Answer again in one line of at most 600 characters."), "the retry reminder ends the template"
         assert "excerpt of" not in first, "the template carries no excerpts"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("configured", "expected"),
+        [(None, ThinkSetting.DEFAULT), (True, ThinkSetting.ON), (False, ThinkSetting.OFF)],
+    )
+    async def test_budget_is_sized_with_the_thinking_setting_the_calls_send(
+        self, configured: bool | None, expected: ThinkSetting
+    ) -> None:
+        """The chat template's framing depends on the switch (Qwen3 adds an empty think block when it is off), so the
+        sizing is asked for the setting every call of this generator carries."""
+        client = _large_window_client()
+
+        await _generator(client, FakeSampleStore(), think=configured).generate(_COLLECTION, _NAMESPACE)
+
+        assert client.sized_thinks == [expected]
+        assert {request.think for request in client.requests} == {expected}
 
 
 class TestCall:
@@ -489,7 +509,7 @@ class TestCall:
     @pytest.mark.asyncio
     async def test_failure_while_sizing_is_a_call_failed_value(self) -> None:
         class _BrokenSizing(ScriptedLlmClient):
-            async def input_budget(self, template_text: str) -> InputBudget:
+            async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
                 raise LlmCallFailure("ollama", "cannot size the prompt")
 
         client = _BrokenSizing()
@@ -968,10 +988,10 @@ class TestNeverRaises:
         self, broken: str, caplog: pytest.LogCaptureFixture
     ) -> None:
         class _Broken(CountingClient):
-            async def input_budget(self, template_text: str) -> InputBudget:
+            async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
                 if broken == "input_budget":
                     raise TypeError("secret tokenizer path")
-                return await super().input_budget(template_text)
+                return await super().input_budget(template_text, think)
 
             async def count_tokens(self, text: str) -> int:
                 raise TypeError("secret tokenizer path")
@@ -1050,6 +1070,68 @@ class TestWindowFailureLogging:
         assert len(messages) == 3
         assert "'second'" in messages[1] and "'third'" in messages[2]
         assert str(_SMALL_WINDOW_SIZE) in messages[1] and "assumed" in messages[1]
+
+
+class _VanishingChunksStore(FakeSampleStore):
+    """A store whose every other picked chunk is gone by the time it is read (deleted since it was listed)."""
+
+    async def read_excerpts(
+        self, collection: str, namespace: str, chunk_ids: list[str], include_restricted: bool = False
+    ) -> list[str]:
+        return await super().read_excerpts(collection, namespace, chunk_ids[::2], include_restricted)
+
+
+class TestSampleSizeLog:
+    """A window can cut the sample from ``max_sample_chunks`` to a handful of excerpts. Nothing else tells the operator,
+    so a cut sample logs one INFO line per generation with the sizes (never an excerpt, a prompt or an answer)."""
+
+    @staticmethod
+    def _info_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "archon_search.description_generator" and record.levelname == "INFO"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_sample_cut_to_the_budget_logs_one_info_line_with_the_sizes(self, caplog: pytest.LogCaptureFixture) -> None:
+        client = _small_window_client()
+
+        with caplog.at_level("INFO", logger="archon_search.description_generator"):
+            await _generator(client, FakeSampleStore(), think=False).generate(_COLLECTION, _NAMESPACE)
+
+        (message,) = self._info_messages(caplog)
+        assert "'handbook'" in message
+        assert "10 of 100" in message
+        assert f"{_SMALL_WINDOW_BUDGET_TOKENS} tokens" in message
+        assert f"{_SMALL_WINDOW_SIZE} tokens, configured" in message
+        assert "chunk-" not in message and _DESCRIPTION_TEXT not in message
+
+    @pytest.mark.asyncio
+    async def test_the_line_names_the_room_left_after_the_thinking_headroom(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A 4000-token budget gives 2000 to the thinking headroom (``TestThinkingHeadroom``): the sample fits the other 2000."""
+        window = ContextWindowTokens(size=_SMALL_WINDOW_SIZE, source=ContextWindowSource.CONFIGURED)
+        client = CountingClient(budget_tokens=4000, window=window, reply=_DESCRIPTION_TEXT)
+
+        with caplog.at_level("INFO", logger="archon_search.description_generator"):
+            await _generator(client, FakeSampleStore(), think=None).generate(_COLLECTION, _NAMESPACE)
+
+        (message,) = self._info_messages(caplog)
+        assert " of 100 " in message and "2000 tokens" in message
+
+    @pytest.mark.asyncio
+    async def test_a_sample_that_fits_whole_logs_nothing(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("INFO", logger="archon_search.description_generator"):
+            await _generator(_large_window_client(), FakeSampleStore()).generate(_COLLECTION, _NAMESPACE)
+
+        assert self._info_messages(caplog) == []
+
+    @pytest.mark.asyncio
+    async def test_excerpts_that_vanished_before_the_read_are_not_blamed_on_the_budget(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("INFO", logger="archon_search.description_generator"):
+            await _generator(_large_window_client(), _VanishingChunksStore()).generate(_COLLECTION, _NAMESPACE)
+
+        assert self._info_messages(caplog) == []
 
 
 class TestNoOpenChunk:

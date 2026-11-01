@@ -8,6 +8,7 @@ from archon_search.llm_client.server_address import (
     UNKNOWN_HOST,
     ServerAddress,
     host_port,
+    is_url,
     parse_server_address,
 )
 
@@ -15,6 +16,9 @@ from archon_search.llm_client.server_address import (
 @pytest.mark.parametrize(
     ("base_url", "expected"),
     [
+        (" http://localhost:8080", "localhost:8080"),
+        ("\thttps://llama.test/v1\n", "llama.test:443"),
+        ("  localhost:11434  ", "localhost:11434"),
         ("http://user:secret@gpu-box.internal:11434/api?token=x", "gpu-box.internal:11434"),
         ("http://localhost:8080", "localhost:8080"),
         ("localhost:11434", "localhost:11434"),
@@ -116,3 +120,44 @@ def test_parse_server_address_is_the_one_parser_of_host_and_port(value: str, exp
 @pytest.mark.parametrize("value", ["http://[::1", "", "http://user/x@h.test:80", "http://:80"])
 def test_parse_server_address_is_none_for_a_value_without_a_usable_host(value: str) -> None:
     assert parse_server_address(value) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("http://h:1", True),
+        ("HTTPS://h", True),
+        ("//h:1", True),
+        ("ftp://files.test/pub", True),
+        ("  http://h:1  ", True),
+        ("h:1", False),
+        ("localhost:11434/a//b", False),  # a ``//`` inside the path does not make a URL of an authority
+        ("user:secret@h:1", False),
+        ("[::1]:8080", False),
+        ("", False),
+    ],
+)
+def test_is_url_tells_a_url_from_an_authority_and_path(value: str, expected: bool) -> None:
+    assert is_url(value) is expected
+
+
+@pytest.mark.parametrize("value", [" http://localhost:8080", "http://localhost:8080 ", "\thttp://localhost:8080\n"])
+def test_parse_server_address_strips_the_value_once(value: str) -> None:
+    assert parse_server_address(value) == ServerAddress("localhost", 8080)
+
+
+@pytest.mark.parametrize("value", ["http://localhost:8080/v1/@x", "http://localhost:8080/?mail=a@b", "localhost:8080#a@b"])
+def test_an_at_sign_after_the_authority_is_refused_even_where_it_is_legal(value: str) -> None:
+    """Deliberate fail-safe: ``localhost/x@evil.test`` and ``localhost:8080/v1/@x`` cannot be told apart without guessing which
+    client reads them how, so neither is parsed: the label is the unknown host."""
+    assert parse_server_address(value) is None
+    assert host_port(value) == UNKNOWN_HOST
+
+
+def test_one_path_routed_gateway_is_one_server() -> None:
+    """The identity of a server is its ``host:port``: two paths behind one gateway share one label, hence one WARNING."""
+    assert host_port("http://gw.test:8080/llama-a/v1") == host_port("http://gw.test:8080/llama-b/v1") == "gw.test:8080"
+
+
+def test_two_different_refused_values_are_one_label() -> None:
+    assert host_port("http://localhost:8080/v1/@x") == host_port("http://other.test:9090/v1/@y") == UNKNOWN_HOST

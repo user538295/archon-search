@@ -51,6 +51,7 @@ from archon_search.llm_client.protocol import (
     LlmCallRequest,
     LlmCallResult,
     LlmCallTimeout,
+    ThinkSetting,
 )
 from archon_search.llm_client.rate_limit import FixedWindowRateLimiter
 from archon_search.llm_client.server_text import bounded_server_text
@@ -206,7 +207,7 @@ class ClaudeCliClient:
     def context_window(self) -> ContextWindow:
         return UNBOUNDED
 
-    async def input_budget(self, template_text: str) -> InputBudget:
+    async def input_budget(self, template_text: str, think: ThinkSetting = ThinkSetting.DEFAULT) -> InputBudget:
         return cloud_budget()
 
     def _model_argv(self) -> list[str]:

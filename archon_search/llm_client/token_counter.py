@@ -1,14 +1,15 @@
 """Token counter that sizes ``ollama`` prompts ahead of the call (contract C1, scenario S11).
 
-The count is a conservative estimate built on the gpt2 vocabulary: Ollama's real tokenizer is the model's own, so
-the caller adds ``OLLAMA_ESTIMATE_MARGIN`` on top. Plain gpt2 counts stay inside that margin on prose, code and
-non-Latin scripts, but two kinds of text break it (T-2 manual run on four real Ollama models of four tokenizer
-families: llama3.1 8b, qwen2.5, gemma3, tinyllama): digits (per-digit tokenizers cost up to 1.68x the gpt2 count on
-digit tables, 1.9x on single digits separated by spaces, 2.8x on two-digit numbers) and characters outside the Basic
-Multilingual Plane such as emoji (byte-fallback tokenizers cost up to 1.55x). :meth:`TokenCounter.count` therefore
-counts every ASCII digit as one token (plus one per digit run) and every such character as its four UTF-8 bytes; the
-rest of the text is counted by gpt2. The real count of every measured text class then stays within 1.2x this
-estimate (worst measured: 1.15, digit-free English prose on tinyllama, a Llama 2 sentencepiece model).
+``TokenCounter.count`` is **the token estimate**: a conservative count built on the gpt2 vocabulary. Ollama's real
+tokenizer is the model's own, so the caller adds ``OLLAMA_ESTIMATE_MARGIN`` on top. Plain gpt2 counts stay inside that
+margin on prose, code and non-Latin scripts, but two kinds of text break it (T-2 manual run on four real Ollama models of
+four tokenizer families: llama3.1 8b, qwen2.5, gemma3, tinyllama): digits (per-digit tokenizers cost up to 1.68x the gpt2
+count on digit tables, 1.9x on single digits separated by spaces, 2.8x on two-digit numbers) and characters outside the
+Basic Multilingual Plane such as emoji (byte-fallback tokenizers cost up to 1.55x). The estimate therefore counts every
+ASCII digit as one token (plus one per digit run) and every such character as its four UTF-8 bytes, and the one literal
+gpt2 reads as a special token (``<|endoftext|>``, which Llama and Qwen vocabularies split into several tokens) as its 13
+UTF-8 bytes; the rest of the text is counted by gpt2. The real count of every measured text class then stays within 1.2x
+this estimate (worst measured: 1.15, digit-free English prose on tinyllama, a Llama 2 sentencepiece model).
 
 The tokenizer is the pinned ``tokenizer.json`` of
 ``paths.TOKEN_COUNTER_MODEL_NAME`` at ``TOKEN_COUNTER_MODEL_REVISION``, fetched through
@@ -44,6 +45,13 @@ _DIGIT_RUN = re.compile(r"[0-9]+")
 # counted as their four UTF-8 bytes, the most a byte-fallback tokenizer spends on one.
 _ASTRAL_CHARACTER = re.compile("[\U00010000-\U0010ffff]")
 _ASTRAL_CHARACTER_TOKENS = 4
+
+# The pinned gpt2 ``tokenizer.json`` has ONE added token, ``<|endoftext|>``, and ``encode`` parses that literal out of the
+# text as a single token even with ``add_special_tokens=False``. A Llama or Qwen vocabulary reads the same characters as
+# several tokens (seven on a byte-level BPE), so a text full of them would be under-counted. The literal is removed from
+# the gpt2 text and charged its UTF-8 length: the most any tokenizer spends on it, the bound ``ceiling`` states.
+_SPECIAL_TOKEN_LITERAL = "<|endoftext|>"
+_SPECIAL_TOKEN_LITERAL_TOKENS = len(_SPECIAL_TOKEN_LITERAL)  # ASCII: one byte, at most one token, per character
 
 
 class _Encoding(Protocol):
@@ -90,20 +98,29 @@ class TokenCounter:
         self._lock = threading.Lock()
 
     def count(self, text: str) -> int:
-        """Conservative token estimate of *text* (see the module docstring): gpt2 plus digit and astral-plane surcharges."""
+        """The token estimate of *text* (see the module docstring): gpt2 tokens plus the three surcharges."""
         digits = sum(len(run) for run in _DIGIT_RUN.findall(text))
         astral_characters = len(_ASTRAL_CHARACTER.findall(text))
+        # The literal is looked for after the astral characters are gone: removing one can leave the literal behind.
         gpt2_text = _ASTRAL_CHARACTER.sub("", _DIGIT_RUN.sub("0", text))
+        special_token_literals = gpt2_text.count(_SPECIAL_TOKEN_LITERAL)
+        gpt2_text = gpt2_text.replace(_SPECIAL_TOKEN_LITERAL, "")
         gpt2_tokens = len(self._get_tokenizer().encode(gpt2_text, add_special_tokens=False).ids)
-        return gpt2_tokens + digits + _ASTRAL_CHARACTER_TOKENS * astral_characters
+        return (
+            gpt2_tokens
+            + digits
+            + _ASTRAL_CHARACTER_TOKENS * astral_characters
+            + _SPECIAL_TOKEN_LITERAL_TOKENS * special_token_literals
+        )
 
     @staticmethod
     def ceiling(text: str) -> int:
         """An upper bound of :meth:`count` that needs no tokenizer: the UTF-8 length plus one per digit run.
 
         gpt2 is byte-level, so a token covers at least one byte and the gpt2 part is at most the bytes of the text it is
-        given; an astral character is charged its four bytes (as many as it has); a digit run of N digits is charged N plus
-        one placeholder that stands for N bytes already counted. Hence ``count(text) <= len(utf8) + digit runs``.
+        given; an astral character and a special-token literal are charged their bytes (as many as they have); a digit
+        run of N digits is charged N plus one placeholder that stands for N bytes already counted. Hence
+        ``count(text) <= len(utf8) + digit runs``.
         """
         return len(text.encode("utf-8", "surrogatepass")) + len(_DIGIT_RUN.findall(text))
 

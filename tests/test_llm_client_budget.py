@@ -1,6 +1,6 @@
 """BE-4 (collection-descriptions plan, C1, S9, S11): sizing every prompt ahead of the call.
 
-``llama_cpp`` counts exactly through its tokenize callback, ``ollama`` estimates with the gpt2 counter plus
+``llama_cpp`` counts exactly through its tokenize callback, ``ollama`` estimates with the token estimate (``TokenCounter.count``) plus
 ``OLLAMA_ESTIMATE_MARGIN``, cloud is unbounded. The budget is the window minus the answer reserve minus the
 template (the longest form, retry reminder included); a window too small for reserve and template gives 0.
 """
@@ -35,8 +35,8 @@ _TEMPLATE = "Describe this collection in one sentence based on the excerpts belo
 _TEMPLATE_TOKENS = 11
 _WINDOW = 8192
 
-# The independent oracle for the margin: real tokens may be 6/5 of the gpt2 count, so the gpt2 room is 5/6 of the
-# real room. Written as integers here, apart from ``OLLAMA_ESTIMATE_MARGIN``, so the test does not mirror the code.
+# The independent oracle for the margin: real tokens may be 6/5 of the token estimate, so the room in estimate tokens is
+# 5/6 of the real room. Written as integers here, apart from ``OLLAMA_ESTIMATE_MARGIN``, so the test does not mirror the code.
 _MARGIN_ROOM_NUMERATOR = 5
 _MARGIN_ROOM_DENOMINATOR = 6
 _LARGEST_REAL_OVER_GPT2 = 6 / 5

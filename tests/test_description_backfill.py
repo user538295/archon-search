@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from types import SimpleNamespace
 from typing import Any, Self
 
@@ -32,6 +33,7 @@ from archon_search.description_lifecycle import (
 )
 from archon_search.llm_client import once_per_process
 from archon_search.llm_client.llama_cpp_client import LlamaCppClient
+from archon_search.llm_client.server_address import UNKNOWN_HOST
 from archon_search.server import description_backfill
 from archon_search.server.description_backfill import (
     DESCRIPTION_UNREACHABLE_WARN_KEY,
@@ -39,6 +41,7 @@ from archon_search.server.description_backfill import (
     _probe_url,
     backfill_candidates,
     probe_description_reachability,
+    probed_server_label,
     run_description_backfill,
     run_description_probe,
 )
@@ -54,6 +57,7 @@ _ONE_TICK_SECONDS = 0.001
 _GENERATION_SECONDS = 0.01
 _PROBE_TIMEOUT_SECONDS = 2.0
 _SHORT_PROBE_TIMEOUT_SECONDS = 0.5
+_HANG_GUARD_SECONDS = 5.0  # far past any bound under test: a call that has lost its own deadline fails here instead of hanging the run
 
 
 @pytest.fixture(autouse=True)
@@ -218,7 +222,7 @@ async def test_llama_cpp_probe_reasons_do_not_repeat_the_host_the_warning_names(
             timeout_seconds=_SHORT_PROBE_TIMEOUT_SECONDS,
         )
     assert dead.reachable is False
-    assert dead.reason is not None and dead.reason.startswith("no answer (") and "127.0.0.1" not in dead.reason
+    assert dead.reason is not None and re.fullmatch(r"no answer: \w+", dead.reason)  # host-free, no parenthesis inside the WARNING's
 
 
 async def test_probe_reason_names_host_and_port_only_never_credentials_or_path() -> None:
@@ -280,7 +284,7 @@ async def test_an_ollama_reason_labels_the_url_actually_probed(
         _description(provider="ollama", ollama_base_url=configured), timeout_seconds=_SHORT_PROBE_TIMEOUT_SECONDS
     )
 
-    assert result.reason == f"no answer from {label} (ConnectError)"
+    assert result.reason == f"no answer from {label}: ConnectError"
 
 
 async def test_a_request_that_never_completes_is_cut_by_the_overall_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -299,12 +303,86 @@ async def test_a_request_that_never_completes_is_cut_by_the_overall_timeout(monk
 
     monkeypatch.setattr(description_backfill.httpx, "AsyncClient", _Hanging)
 
-    result = await probe_description_reachability(
-        _description(provider="ollama", ollama_base_url="http://127.0.0.1:1"), timeout_seconds=_SHORT_PROBE_TIMEOUT_SECONDS
+    # The outer bound turns a probe that lost its own deadline into a failure of this test instead of a hang of the run.
+    result = await asyncio.wait_for(
+        probe_description_reachability(
+            _description(provider="ollama", ollama_base_url="http://127.0.0.1:1"), timeout_seconds=_SHORT_PROBE_TIMEOUT_SECONDS
+        ),
+        _HANG_GUARD_SECONDS,
     )
 
     assert result.reachable is False
     assert result.reason is not None and "TimeoutError" in result.reason
+
+
+@pytest.mark.parametrize("provider", ["ollama", "llama_cpp"])
+@pytest.mark.parametrize(
+    "configured",
+    [
+        "alice:12345/rest@server",  # no scheme: the authority ends at the ``/``, so ``alice:12345`` may be user and password
+        "alice:12345/rest@server.test:80",
+        "alice:s3cr3t@host.test/x@y",
+        "alice:12345?k=v@server.test",
+        "alice:12345#f@server.test",
+        "http://alice:12345/rest@server.test",
+        "[::1]alice@server.test",
+        "user:12345@/@x",
+        "http://[::1",
+        "http://host.test:notaport",
+    ],
+)
+def test_a_label_comes_from_the_raw_value_so_a_value_that_does_not_parse_has_no_name(provider: str, configured: str) -> None:
+    """The ollama probe rebuilds the URL it asks from the netloc, which reads ``alice:12345`` out of the first value: a label
+    taken from that URL would name the user and a password prefix. The label is the raw value's, or ``UNKNOWN_HOST``."""
+    assert probed_server_label(provider, configured) == UNKNOWN_HOST
+
+
+@pytest.mark.parametrize(
+    ("provider", "configured", "label"),
+    [
+        ("ollama", "myollama.internal", "myollama.internal:11434"),
+        ("ollama", "user:secret@[::1]", "[::1]:11434"),
+        ("ollama", "myollama.internal:9/v1//x", "myollama.internal:9"),
+        ("ollama", "http://myollama.internal", "myollama.internal:80"),
+        ("ollama", "  http://Host.Test:5/  ", "host.test:5"),
+        ("llama_cpp", "http://user:secret@LLAMA.test:8080/v1?x=1", "llama.test:8080"),
+        ("llama_cpp", "localhost:8080", "localhost:8080"),
+        ("llama_cpp", "localhost", "localhost"),
+    ],
+)
+def test_the_label_of_a_value_that_parses_is_its_host_and_port_as_the_probe_asks_it(provider: str, configured: str, label: str) -> None:
+    assert probed_server_label(provider, configured) == label
+
+
+async def test_the_shared_warning_has_one_parenthesis_for_a_reason_that_has_none_of_its_own(caplog: pytest.LogCaptureFixture) -> None:
+    """``is not reachable (<reason>)`` with ``<reason>`` = ``no answer (ConnectError)`` read as a nested parenthesis."""
+    with unreachable_port() as port:
+        state = SimpleNamespace(description_reachability=None)
+        with caplog.at_level(logging.WARNING):
+            await run_description_probe(
+                state, _description(provider="ollama", ollama_base_url=f"http://127.0.0.1:{port}")
+            )
+            await run_description_probe(
+                state, _description(provider="llama_cpp", llama_cpp_base_url=f"http://127.0.0.1:{port}")
+            )
+
+    ollama, llama = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert re.search(rf"provider ollama is not reachable \(no answer from 127\.0\.0\.1:{port}: \w+\); generations will fail", ollama)
+    assert re.search(rf"the server at 127\.0\.0\.1:{port} is not reachable \(no answer: \w+\); requests to it fail", llama)
+
+
+async def test_a_probe_of_a_value_that_does_not_parse_never_names_a_piece_of_it(caplog: pytest.LogCaptureFixture) -> None:
+    """The real connect failure goes to ``127.0.0.1`` (what the netloc names), whatever the path spells out."""
+    with unreachable_port() as port:
+        configured = f"127.0.0.1:{port}/svc-u5er:s3cr3t@gpu.test"
+        state = SimpleNamespace(description_reachability=None)
+        with caplog.at_level(logging.DEBUG):
+            await run_description_probe(state, _description(provider="ollama", ollama_base_url=configured))
+
+    assert re.fullmatch(rf"no answer from {UNKNOWN_HOST}: \w+", state.description_reachability.reason)
+    logged = caplog.text + "".join(logging.Formatter().formatException(r.exc_info) for r in caplog.records if r.exc_info)
+    for secret in ("svc-u5er", "s3cr3t", "gpu.test"):
+        assert secret not in logged
 
 
 @pytest.mark.parametrize(
@@ -314,6 +392,8 @@ async def test_a_request_that_never_completes_is_cut_by_the_overall_timeout(monk
         ("ollama", "localhost:9", "http://localhost:9/api/tags"),
         ("ollama", "myollama.internal", "http://myollama.internal:11434/api/tags"),
         ("ollama", "user:secret@[::1]", "http://user:secret@[::1]:11434/api/tags"),
+        ("ollama", "localhost:11434/a//b", "http://localhost:11434/api/tags"),  # a ``//`` in the path is not a URL prefix
+        ("ollama", "  http://h:1/  ", "http://h:1/api/tags"),
         ("llama_cpp", "localhost:8080", "localhost:8080/props"),  # the llama.cpp client does not add a scheme
         ("llama_cpp", "http://h:2", "http://h:2/props"),
     ],
