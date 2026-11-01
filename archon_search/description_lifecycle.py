@@ -26,8 +26,9 @@ before the stores disconnect (:meth:`close`, :meth:`drain`).
 A failed generation is recorded on the collection through ``DescriptionWriter.record_failure`` under the state the
 generation started from. Recording needs the collection lock; when the lock stays busy (or the store errors), and when a
 run breaks before it can record anything (a row that cannot be read once the slot is held), the failure is not stored and
-the service remembers it instead, with the store's ``description_version`` read before the row: the collection reads
-``failed`` through :meth:`overlay_status` for as long as that version is current. Every change of the collection's
+the service remembers it instead, with the store's ``description_version`` of the row the run started from (the row and
+its version are read together, :meth:`DescriptionLifecycle._read_row`): the collection reads ``failed`` through
+:meth:`overlay_status` for as long as that version is current. Every change of the collection's
 description text, source or status (a manual set, a clear, an import, any later guarded write) and the delete of its meta
 row (a collection deleted and created again) bumps the version in the store and ends the memory; so does a newer unstored
 failure of the collection, which replaces it. The state a reader sees is therefore never the stored ``ok`` of a run that
@@ -262,8 +263,8 @@ class _Job:
     settled: asyncio.Future[GenerationSettlement]
     #: Set by ``_finish``: its cleanup runs once, whatever happens to ``settled`` (a caller may cancel that future).
     finished: bool = False
-    #: The store's ``description_version`` of the collection, read once the slot is held and before the row is read
-    #: (``None`` until then).
+    #: The store's ``description_version`` of the row the run started from (``None`` until the slot is held): the version
+    #: read before the row and found unchanged after it (:meth:`DescriptionLifecycle._read_row`).
     version: int | None = None
 
 
@@ -452,8 +453,11 @@ class DescriptionLifecycle:
         """The status a reader sees: *stored* (no overlay, from the store) with ``pending`` laid over it while a
         generation of *collection* is in flight, and ``failed`` while its last generation failed without the store
         being able to record it and nothing has changed the collection's description state since (the store's
-        ``description_version`` is still the one the failed run started from). Collection names are globally unique, so
-        unlike the contract's ``overlayStatus`` this takes no namespace. Reads only."""
+        ``description_version`` is still the one the failed run started from). *stored* comes from a row the caller read
+        before this call, so a write that lands in between ends the memory and the caller gets that row's stored status,
+        as of before the write; only a row read inside the store's gap between a write's commit and its version move can
+        read ``failed`` over the new row, once. Collection names are globally unique, so unlike the contract's
+        ``overlayStatus`` this takes no namespace. Reads only."""
         if self.is_pending(collection):
             return DESCRIPTION_STATUS_PENDING
         remembered = self._unstored_failures.get(collection)
@@ -518,8 +522,7 @@ class DescriptionLifecycle:
         """Hold the slot for the row read, the sample read and the model call, and nothing else."""
         try:
             await job.granted
-            job.version = self._store.description_version(job.collection)  # before the row read: a change during it counts
-            meta = await self._store.get_collection_meta(job.collection, job.namespace)
+            meta = await self._read_row(job)
             if meta is None:
                 return GenerationSettlement(GenerationResult.SUPERSEDED, detail="the collection no longer exists")
             if (refusal := _refusal(job.kind, meta)) is not None:
@@ -530,6 +533,25 @@ class DescriptionLifecycle:
             return _Draft(await self._generate(job), expected, meta.doc_count)
         finally:
             self._slot.release(job.granted)
+
+    async def _read_row(self, job: _Job) -> CollectionMeta | None:
+        """Read the row the run starts from, and leave in ``job.version`` the ``description_version`` of that very row.
+
+        A write changes the row and then moves the version, so a version that is the same before and after the read means
+        no write landed while the row was read: the row is the state that version counts. A version that moved means a
+        write landed during the read and the snapshot may be on either side of it, so the row is read again. Neither
+        single read order is right: version first, and a write between the two tags the run's failure with a version
+        older than its row (readers then treat the failure as stale); row first, and it is tagged with one newer than its
+        row (readers then see ``failed`` over a row the run never saw). Every repeat needs a landed write of this
+        collection's description state, so the loop ends when those stop. What stays is the store's own gap between a
+        write's commit and its version move: a row that is already new under a version that is still old makes the
+        failure read as stale (the stored status shows), never as failed over a row the run never saw. The version is set
+        before the read, so a read that raises (the run settles ``failed``) still leaves one."""
+        while True:
+            job.version = self._store.description_version(job.collection)
+            meta = await self._store.get_collection_meta(job.collection, job.namespace)
+            if self._store.description_version(job.collection) == job.version:
+                return meta
 
     async def _generate(self, job: _Job) -> DescriptionOutcome:
         """The generator never raises; a stand-in or a bug that does is a failed call, so the slot and the status hold."""

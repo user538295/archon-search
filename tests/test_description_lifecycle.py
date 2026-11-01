@@ -888,25 +888,92 @@ async def test_a_manual_description_never_reads_an_unrecorded_failure(rig: Rig) 
     assert visible_description_status(manual, rig.lifecycle) == "ok"
 
 
-async def test_a_change_that_lands_while_the_run_reads_its_row_ends_the_memory_at_once(rig: Rig) -> None:
-    """The version is read before the row, so a set or clear that lands during that read is counted: the run's failure
-    describes a row that no longer exists and is not shown."""
-    rig.store.rows[_COLLECTION] = _meta()
-    _save_meets_a_busy_collection(rig)
+def _park_the_first_row_read_at_the_slot(rig: Rig, *, the_read_sees_the_write: bool) -> tuple[asyncio.Event, asyncio.Event]:
+    """Park the run's first row read once it holds the slot (the version is read just before it) and return the events
+    ``(parked, release)``: the test lands a write while the read is parked, then releases it. The released read answers
+    the row as it is then (a snapshot taken after the write) or the row as it was when it was parked (a snapshot taken
+    before the write, which finishes after the write's version bump)."""
+    parked, release = asyncio.Event(), asyncio.Event()
     reads = 0
     read = rig.store.get_collection_meta
 
-    async def read_with_a_change_landing(name: str, namespace: str = _NAMESPACE) -> CollectionMeta | None:
+    async def parked_read(name: str, namespace: str = _NAMESPACE) -> CollectionMeta | None:
         nonlocal reads
         reads += 1
-        if reads == _SLOT_TIME_READ:
-            rig.store.bump(name)
-        return await read(name, namespace)
+        if reads != _SLOT_TIME_READ:
+            return await read(name, namespace)
+        before_the_write = rig.store.rows[name]
+        parked.set()
+        await release.wait()
+        return rig.store.rows[name] if the_read_sees_the_write else before_the_write
 
-    rig.store.get_collection_meta = read_with_a_change_landing  # type: ignore[method-assign]
+    rig.store.get_collection_meta = parked_read  # type: ignore[method-assign]
+    return parked, release
 
-    assert (await (await rig.request()).settled).result is GenerationResult.FAILED
 
+def _land_a_description_write(rig: Rig, row: CollectionMeta) -> None:
+    """What a guarded write does to the store: the row changes, then the version moves."""
+    rig.store.rows[row.name] = row
+    rig.store.bump(row.name)
+
+
+_WRITTEN_MEANWHILE = "text that landed while the run was reading its row"
+
+
+@pytest.mark.parametrize("the_read_sees_the_write", [True, False], ids=["read after the write", "read before the write"])
+async def test_a_write_that_lands_while_the_run_reads_its_row_leaves_the_failure_about_the_row_it_used(
+    rig: Rig, the_read_sees_the_write: bool
+) -> None:
+    """A write lands between the version read and the row read finishing. Whichever side of the write the row snapshot
+    fell on, the failure the busy collection refuses to store is remembered under the version of the row the run really
+    started from, so readers see ``failed`` and not the stored ``ok``."""
+    rig.store.rows[_COLLECTION] = _meta()
+    _save_meets_a_busy_collection(rig)
+    parked, release = _park_the_first_row_read_at_the_slot(rig, the_read_sees_the_write=the_read_sees_the_write)
+    ticket = await rig.request()
+    await until(parked.is_set)
+
+    _land_a_description_write(rig, _meta(description=_WRITTEN_MEANWHILE))
+    release.set()
+    settlement = await asyncio.wait_for(ticket.settled, timeout=_SETTLE_TIMEOUT_S)
+
+    assert settlement.result is GenerationResult.FAILED
+    [(_, _, started_from)] = rig.writer.failures
+    assert started_from.description == _WRITTEN_MEANWHILE, "the run started from the row the write left"
+    assert rig.generator.calls == [(_COLLECTION, _NAMESPACE)], "one model call, whatever the row read had to repeat"
+    assert rig.lifecycle.overlay_status(_COLLECTION, "ok") == "failed"
+
+
+async def test_a_manual_set_that_lands_while_the_run_reads_its_row_stops_the_run_before_the_model_call(rig: Rig) -> None:
+    """The row read is repeated after a write, so the run sees the manual description and is refused at the slot instead
+    of calling the model for a text the guarded write would discard."""
+    rig.store.rows[_COLLECTION] = _meta()
+    parked, release = _park_the_first_row_read_at_the_slot(rig, the_read_sees_the_write=False)
+    ticket = await rig.request()
+    await until(parked.is_set)
+
+    _land_a_description_write(rig, _meta(description=_WRITTEN_MEANWHILE, source="manual"))
+    release.set()
+    settlement = await asyncio.wait_for(ticket.settled, timeout=_SETTLE_TIMEOUT_S)
+
+    assert settlement.result is GenerationResult.REFUSED_MANUAL
+    assert rig.generator.calls == []
+
+
+async def test_a_write_that_lands_after_the_run_has_its_row_ends_the_memory_of_its_failure(rig: Rig) -> None:
+    """The version belongs to the row the run read, not to the moment the failure is remembered: a write that lands
+    during the model call is a change the failure knows nothing about."""
+    rig.store.rows[_COLLECTION] = _meta()
+    _save_meets_a_busy_collection(rig)
+    gate = rig.generator.gate(_COLLECTION)
+    ticket = await rig.request()
+    await until(lambda: _COLLECTION in rig.generator.started)
+
+    _land_a_description_write(rig, _meta(description=_WRITTEN_MEANWHILE))
+    gate.set()
+    settlement = await asyncio.wait_for(ticket.settled, timeout=_SETTLE_TIMEOUT_S)
+
+    assert settlement.result is GenerationResult.FAILED
     assert rig.lifecycle.overlay_status(_COLLECTION, "ok") == "ok"
 
 

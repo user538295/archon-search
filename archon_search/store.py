@@ -595,8 +595,11 @@ class SearchStore:
         self._active_writers: dict[str, int] = {}
         # How often the description state of a collection changed in this process (``description_version``): bumped by
         # every guarded description write once its merge landed and by the delete of a meta row, never reset, so a memory
-        # taken at one version cannot match again later. A name enters the map the first time one of those happens: one
-        # small integer per collection name the process has seen change, a number the name space bounds.
+        # taken at one version cannot match again later. A name enters the map the first time a landed write or a row
+        # delete touches it (one that finds no row adds nothing): one entry of about 150 bytes (a 64-character name, its
+        # integer and the slot) per distinct collection name that ever had such a write or delete in this process, never
+        # pruned (a dropped entry would restart at zero and a version remembered earlier could match again). Collection
+        # churn under ever-new names grows it without bound, slowly; requests for names without a row do not.
         self._description_versions: dict[str, int] = {}
         self._ping_cache: tuple[float, bool] | None = None
         from archon_search.config import SearchConfig as _SearchConfig
@@ -1169,7 +1172,8 @@ class SearchStore:
         """Delete the metadata row for (*name*, *namespace*), if any.
 
         A no-op if the shared metadata table does not exist yet, or if no row
-        matches — this method never raises for "nothing to delete".
+        matches — this method never raises for "nothing to delete". Only a delete that removed a row moves the
+        collection's ``description_version`` (a no-op leaves the description state as it was).
 
         Raises:
             RuntimeError: if the store is not connected.
