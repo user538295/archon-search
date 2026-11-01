@@ -703,7 +703,7 @@ flowchart LR
     - needs BE-38, BE-32, BE-34 · completes C6, C9
     - Tests
         - #integration_test — `test_breaking_md_headings_have_index_rows` — every new heading has an index row and none names the removed graph engine
-- [ ] **T-13** — e2e: export then import of a manual description, version 1 refusal and bypass #tester-role
+- [x] **T-13** — e2e: export then import of a manual description, version 1 refusal and bypass #tester-role
     - — · 5.0h
     - needs BE-38 · completes S41, S63, S83
     - Tests
