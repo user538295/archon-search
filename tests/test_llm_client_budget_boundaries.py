@@ -34,7 +34,7 @@ _HOST = "http://llama.test:8080"
 _TIMEOUT_SECONDS = 5.0
 _WORST_REAL_OVER_ESTIMATE = 1.2
 # Real framing tokens measured on the Ollama models (llama3.1:8b 9, gemma3:1b 8, qwen2.5 29, tinyllama 33).
-_MEASURED_FRAMING_TOKENS = [9, 29, 33]
+_FRAMING_TOKENS = [9, 29, 33, 64]  # the three real ones, and the allowance itself: a model that framed with all of it still fits
 _TOKEN = re.compile(r"\n+|\S+")  # a run of newlines is one token, like "\n\n" in a real vocabulary: the join boundary
 _STARVATION_FLOOR = {2048: 900, 4096: 2000, 8192: 5000}  # estimate tokens a query keeps at the smallest feature room
 
@@ -75,8 +75,12 @@ def _llama_server(window: int, tokens_of: Callable[[str], list[int]]) -> Callabl
     return answer
 
 
-def _newline_runs_are_one_token(text: str) -> list[int]:
-    return list(range(len(_TOKEN.findall(text))))
+def _newline_runs_are_one_token(text: str, extra_join_tokens: int = 0) -> list[int]:
+    """Tokens of *text*; a framed prompt that holds a query costs *extra_join_tokens* more (a wider join than the newline's)."""
+    tokens = len(_TOKEN.findall(text))
+    if text.startswith("<|user|>") and len(text) > len(_framed("")):
+        tokens += extra_join_tokens
+    return list(range(tokens))
 
 
 def _one_token_per_byte(text: str) -> list[int]:
@@ -127,6 +131,22 @@ async def test_llama_cpp_query_cut_to_the_budget_leaves_the_answer_ceiling_insid
     assert await _prompt_tokens(client, render(fitted)) + ceiling <= window
 
 
+@pytest.mark.parametrize("extra_join_tokens", [1, 3], ids=["worst-measured-join-of-2", "join-of-4-the-whole-slack"])
+@pytest.mark.parametrize(("render", "ceiling"), FEATURES)
+async def test_llama_cpp_query_of_exactly_the_budget_fits_with_the_widest_join_the_slack_covers(
+    render: Render, ceiling: int, extra_join_tokens: int
+) -> None:
+    """The measured worst surplus is 2 tokens (the join of the graph template); the allowance is 4, twice that."""
+    window = 4096
+    client = await _llama(window, lambda text: _newline_runs_are_one_token(text, extra_join_tokens))
+    budget = (await client.input_budget(render(""), max_output_tokens=ceiling)).tokens
+    assert isinstance(budget, int)
+
+    fitted = await fit_query_to_window(client, render(""), _words(budget), provider="llama_cpp", max_output_tokens=ceiling)
+
+    assert await _prompt_tokens(client, render(fitted)) + ceiling <= window
+
+
 async def test_the_join_boundary_really_costs_a_token_on_this_fake() -> None:
     """Guards the fixture: without the join cost the tests above would pass for the wrong reason."""
     client = await _llama(4096)
@@ -171,7 +191,7 @@ def _ollama(window: int) -> OllamaClient:
     )
 
 
-@pytest.mark.parametrize("framing", _MEASURED_FRAMING_TOKENS)
+@pytest.mark.parametrize("framing", _FRAMING_TOKENS)
 @pytest.mark.parametrize("window", [2048, 4096, 8192])
 @pytest.mark.parametrize(("render", "ceiling"), FEATURES)
 async def test_ollama_prompt_at_the_budget_fits_with_the_chat_framing_at_the_worst_ratio(
