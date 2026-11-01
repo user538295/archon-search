@@ -31,8 +31,9 @@ description or an exception message; a failure is logged by collection name and 
 Shutdown is two calls: :meth:`close` first, so a request that races it is refused, then :meth:`drain`, which cancels and
 awaits the tasks and has no timeout of its own (the caller that hosts the service bounds it).
 
-The describe job will force a generation and wait for its settlement (``GenerationKind.DESCRIBE`` and the ticket's
-``settled`` future are the entry for that); the rule that only the ingest kind asks is :func:`_should_regenerate`.
+The describe job forces a generation and waits for its settlement through :meth:`DescriptionLifecycle.generate_now`
+(``GenerationKind.DESCRIBE`` and the ticket's ``settled`` future); the rule that only the ingest kind asks is
+:func:`_should_regenerate`.
 """
 from __future__ import annotations
 
@@ -145,6 +146,16 @@ class GenerationTicket:
 
     outcome: RequestOutcome
     settled: asyncio.Future[GenerationSettlement]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class DescribeSettlement:
+    """How a forced generation (the describe job) settled, with the status a reader sees at that moment."""
+
+    result: GenerationResult
+    #: The collection's ``description_status`` as read once the run was over: ``pending`` when another generation of
+    #: it is in flight (``alreadyRunning``), ``None`` when nothing is stored or the row cannot be read.
+    description_status: DescriptionStatus | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -348,6 +359,36 @@ class DescriptionLifecycle:
         if (refusal := _refusal(kind, meta)) is not None:
             return _resolved(_OUTCOME_OF_REFUSAL[refusal], GenerationSettlement(refusal))
         return self._admit(collection, namespace, kind)
+
+    async def generate_now(self, collection: str, namespace: str) -> DescribeSettlement:
+        """The forced entry of the describe job: generate *collection*'s description whatever the 20% rule or the
+        stored status say, wait for the run and answer how it settled (C5 ``generateNow``).
+
+        It is ``request_generation(DESCRIBE)`` awaited: the describe kind skips the ingest rule and the
+        empty-description rule of backfill, and keeps the manual short-circuit (``refusedManual``), single-flight
+        (``alreadyRunning``), the process slot and the queue (served first, a full queue settles ``failed``). After
+        :meth:`close` nothing starts and nothing is read: ``shuttingDown``. A collection that is gone settles
+        ``superseded``; a row that cannot be read, ``failed``. Never raises for a store failure.
+        """
+        ticket = await self.request_generation(collection, namespace, GenerationKind.DESCRIBE)
+        if ticket.outcome is RequestOutcome.UNREADABLE:  # the row cannot be read: no second read for a status
+            return DescribeSettlement((await ticket.settled).result, None)
+        result = (await ticket.settled).result
+        if result is GenerationResult.NOT_REQUIRED:  # no row: the collection no longer exists
+            result = GenerationResult.SUPERSEDED
+        if result is GenerationResult.SHUTTING_DOWN:
+            return DescribeSettlement(result, None)
+        return DescribeSettlement(result, await self._visible_status(collection, namespace))
+
+    async def _visible_status(self, collection: str, namespace: str) -> DescriptionStatus | None:
+        try:
+            meta = await self._store.get_collection_meta(collection, namespace)
+        except Exception as failure:  # noqa: BLE001 — the status is informational; the settlement stands without it
+            logger.warning(
+                "Reading the description status of collection %r failed (%s)", collection, type(failure).__name__
+            )
+            return None
+        return self.overlay_status(collection, meta.description_status if meta is not None else None)
 
     def _refused_without_reading(self, collection: str) -> GenerationTicket | None:
         if self._closed:

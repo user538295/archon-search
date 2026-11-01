@@ -605,7 +605,7 @@ flowchart LR
         - #unit_test — `test_running_description_job_at_crash_loads_failed_without_arming_guard` — `process_restart` and no crash-loop count
         - #integration_test — `test_older_loader_reads_description_job_as_plain_ingest_job` — the jobs file loads and other jobs are untouched
         - #integration_test — `test_delete_job_answers_409_and_generation_continues` — the job delete is refused
-- [ ] **BE-34** — Lifecycle forced entry `generateNow` and `POST /collections/{name}/describe`: 202 `JobResponse` with result `{outcome, description_status}`, tracked task with a cancellation handler ending the job `FAILED` ("the server is shutting down"), 409 for a manual description, 409 with the setup message when descriptions are not configured, namespace check, `?kind=description` #backend-role
+- [x] **BE-34** — Lifecycle forced entry `generateNow` and `POST /collections/{name}/describe`: 202 `JobResponse` with result `{outcome, description_status}`, tracked task with a cancellation handler ending the job `FAILED` ("the server is shutting down"), 409 for a manual description, 409 with the setup message when descriptions are not configured, namespace check, `?kind=description` #backend-role
     - Interface Adapters · 8.0h
     - needs BE-33, BE-26 · completes C6, C10, S29, S32, S58, S59, S80, S85, S87
     - Tests

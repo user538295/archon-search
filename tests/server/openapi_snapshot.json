@@ -4710,6 +4710,101 @@
         "summary": "Patch Collection"
       }
     },
+    "/collections/{name}/describe": {
+      "post": {
+        "description": "Force a fresh description of a collection as a job (S29, S58): 202 with a RUNNING ``description`` job.\n\nA generated, failed or empty description is regenerated whatever the 20% rule says; the job is polled through\n``GET /jobs/{id}`` and ends ``DONE`` with ``{outcome, description_status}``. Open to the key whose namespace owns the\ncollection, admin or not: a collection of another namespace or an unknown one is the same 404. 409 (told apart by\n``detail``, no job created) for a manual description and for descriptions not configured. A configured provider that\nis down is not a 409: the job settles ``failed``. Holds no collection lock, and the job never blocks a collection\ndelete (the run then finds the collection gone and settles ``superseded``).",
+        "operationId": "describe_collection_collections__name__describe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "The collection has a manual description (body {\"detail\": \"the collection has a manual description: clear it first (`archon-search collection clear-description <name>` or DELETE /collections/<name>/description), then describe it\"}), or descriptions are not configured (body {\"detail\": \"collection descriptions are not configured: set enabled = true and a provider in the [description] section of the server config (`archon-search wizard` asks for it), then restart the server\"}); told apart by ``detail``. No job is created."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Creating the job failed (body {\"detail\": \"internal error\"})"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "No search store yet (body {\"detail\": \"service not ready\"})"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Describe Collection"
+      }
+    },
     "/collections/{name}/description": {
       "delete": {
         "description": "Clear the description: text, source, status, last-described, baseline and routing vector are reset.\n\nNothing is generated: the next qualifying trigger (an ingest that changes the collection enough, a describe) does\nthat (S28). Open to the key whose namespace owns the collection, admin or not.",

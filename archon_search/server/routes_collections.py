@@ -12,19 +12,25 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.datastructures import State
 
 from archon_search._path_safety import (
     PathUnsafeError,
     unsafe_path_detail,
     validate_ingest_source,
 )
-from archon_search.collection_meta import CollectionMeta, visible_description_status
+from archon_search.collection_meta import (
+    DESCRIPTION_SOURCE_MANUAL,
+    CollectionMeta,
+    visible_description_status,
+)
 from archon_search.config import SearchConfig, resolve_active_model, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.description_change import (
     DescriptionChangeStatus,
     apply_description_change,
 )
+from archon_search.description_lifecycle import DescriptionLifecycle, GenerationResult
 from archon_search.description_writer import ClearChange, ManualSetChange
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
@@ -89,9 +95,11 @@ from archon_search.store import (
     ReindexResult,
     SearchStore,
     StoreBusyError,
+    is_valid_collection_name,
 )
 from archon_search.sync import path_to_collection_name
 from archon_search.types import (
+    DescriptionJob,
     IngestJob,
     JobStatus,
     MetadataReindexJob,
@@ -1066,6 +1074,132 @@ async def clear_collection_description(name: str, request: Request) -> Collectio
     that (S28). Open to the key whose namespace owns the collection, admin or not.
     """
     return await _apply_description_change(request, name, ClearChange())
+
+
+#: 409 ``detail`` of ``POST /collections/{name}/describe`` while descriptions are not configured: it says how to set one
+#: up, so a client prints it as it is (S32). No job exists then.
+DESCRIBE_NOT_CONFIGURED_DETAIL = (
+    "collection descriptions are not configured: set enabled = true and a provider in the [description] section of "
+    "the server config (`archon-search wizard` asks for it), then restart the server"
+)
+#: 409 ``detail`` for a collection whose description was set by hand (S59): generation never replaces it.
+DESCRIBE_MANUAL_DETAIL = (
+    "the collection has a manual description: clear it first "
+    "(`archon-search collection clear-description <name>` or DELETE /collections/<name>/description), then describe it"
+)
+#: ``error`` of a describe job that the shutdown ended (S85): the run was refused or its wait was cancelled; the
+#: generation itself is cancelled by the lifecycle's own drain, which runs after the other background tasks.
+DESCRIBE_SHUTTING_DOWN_DETAIL = "the server is shutting down"
+_DESCRIBE_TASK_LOG_CONTEXT = "_describe_task"
+
+_ERROR_DESCRIBE = {
+    **_ERROR_401_404,
+    409: {
+        "model": ErrorDetail,
+        "description": (
+            f'The collection has a manual description (body {{"detail": "{DESCRIBE_MANUAL_DETAIL}"}}), or descriptions '
+            f'are not configured (body {{"detail": "{DESCRIBE_NOT_CONFIGURED_DETAIL}"}}); told apart by ``detail``. '
+            "No job is created."
+        ),
+    },
+    500: {"model": ErrorDetail, "description": f'Creating the job failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})'},
+    503: {"model": ErrorDetail, "description": f'No search store yet (body {{"detail": "{SERVICE_NOT_READY_DETAIL}"}})'},
+}
+
+
+def _fail_describe_for_shutdown(job_store: JobStore, job_id: str) -> None:
+    """End a describe job that is still ``RUNNING`` ``FAILED`` with the shutting-down text; any other state is left as it is."""
+    job = job_store.get(job_id)
+    if job is not None and job.status is JobStatus.RUNNING:
+        _persist_job_status(
+            job_store, job_id, JobStatus.FAILED, context=_DESCRIBE_TASK_LOG_CONTEXT, error=DESCRIBE_SHUTTING_DOWN_DETAIL
+        )
+
+
+def _fail_cancelled_describe(task: asyncio.Task[None], job_store: JobStore, job_id: str) -> None:
+    if task.cancelled():
+        _fail_describe_for_shutdown(job_store, job_id)
+
+
+def _spawn_describe_task(app_state: State, job: DescriptionJob, job_store: JobStore, lifecycle: DescriptionLifecycle) -> None:
+    """Run ``_describe_task`` as a task kept in ``app_state._background_tasks``, which the lifespan cancels at shutdown.
+
+    A task cancelled before its first step never runs its handler, so a done-callback ends such a job (a no-op for any
+    other end, which wrote its own terminal state).
+    """
+    task = asyncio.create_task(_describe_task(job, job_store, lifecycle))
+    app_state._background_tasks.add(task)
+    task.add_done_callback(app_state._background_tasks.discard)
+    task.add_done_callback(lambda finished: _fail_cancelled_describe(finished, job_store, job.job_id))
+
+
+
+async def _describe_task(job: DescriptionJob, job_store: JobStore, lifecycle: DescriptionLifecycle) -> None:
+    """Drive a RUNNING ``DescriptionJob`` to its end through the lifecycle's forced entry (C10).
+
+    ``DONE`` with ``{outcome, description_status}`` whenever the run settled (a failed generation is an outcome, not a
+    broken job). ``FAILED`` only when the job itself broke: an unexpected error, or the server shutting down, either as
+    the cancellation of this task or as the lifecycle refusing or cancelling the run. The description job is not
+    cancellable by its owner, so no ``CANCELLED`` state exists here. Terminal writes are best-effort
+    (``_persist_job_status``) and touch the job file only, never the closed store.
+    """
+    try:
+        settled = await lifecycle.generate_now(job.collection, job.namespace)
+    except asyncio.CancelledError:
+        _fail_describe_for_shutdown(job_store, job.job_id)
+        raise
+    except Exception as failure:  # noqa: BLE001 — an exception escaping here would leave the job RUNNING forever
+        # The type only: a raw message may echo document text (S76).
+        logger.error("%s: job %s failed (%s)", _DESCRIBE_TASK_LOG_CONTEXT, job.job_id, type(failure).__name__)
+        _persist_job_status(
+            job_store, job.job_id, JobStatus.FAILED, context=_DESCRIBE_TASK_LOG_CONTEXT, error=INTERNAL_ERROR_DETAIL
+        )
+        return
+    if settled.result is GenerationResult.SHUTTING_DOWN:
+        _fail_describe_for_shutdown(job_store, job.job_id)
+        return
+    _persist_job_status(
+        job_store,
+        job.job_id,
+        JobStatus.DONE,
+        context=_DESCRIBE_TASK_LOG_CONTEXT,
+        result={"outcome": settled.result.value, "description_status": settled.description_status},
+    )
+
+
+@router.post("/{name}/describe", status_code=202, response_model=JobResponse, responses=_ERROR_DESCRIBE)
+async def describe_collection(name: str, request: Request) -> JobResponse | JSONResponse:
+    """Force a fresh description of a collection as a job (S29, S58): 202 with a RUNNING ``description`` job.
+
+    A generated, failed or empty description is regenerated whatever the 20% rule says; the job is polled through
+    ``GET /jobs/{id}`` and ends ``DONE`` with ``{outcome, description_status}``. Open to the key whose namespace owns the
+    collection, admin or not: a collection of another namespace or an unknown one is the same 404. 409 (told apart by
+    ``detail``, no job created) for a manual description and for descriptions not configured. A configured provider that
+    is down is not a 409: the job settles ``failed``. Holds no collection lock, and the job never blocks a collection
+    delete (the run then finds the collection gone and settles ``superseded``).
+    """
+    search_store = getattr(request.app.state, "search_store", None)
+    if search_store is None:
+        return JSONResponse({"detail": SERVICE_NOT_READY_DETAIL}, status_code=503)
+    ns: str = request.state.namespace
+    if not is_valid_collection_name(name):
+        raise _collection_not_found(name)
+    meta = await search_store.get_collection_meta(name, namespace=ns)
+    if meta is None:
+        raise _collection_not_found(name)
+    lifecycle: DescriptionLifecycle | None = getattr(request.app.state, "description_lifecycle", None)
+    if lifecycle is None:
+        return JSONResponse({"detail": DESCRIBE_NOT_CONFIGURED_DETAIL}, status_code=409)
+    if meta.description_source == DESCRIPTION_SOURCE_MANUAL:
+        return JSONResponse({"detail": DESCRIBE_MANUAL_DETAIL}, status_code=409)
+    job_store: JobStore = request.app.state.job_store
+    try:
+        job = job_store.create_description(name, namespace=ns)
+    except Exception:
+        logger.exception("describe_collection: could not create the description job for collection %s", name)
+        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
+    _spawn_describe_task(request.app.state, job, job_store, lifecycle)
+    return JobResponse(**job_to_dict(job))
 
 
 _ERROR_REINDEX = {

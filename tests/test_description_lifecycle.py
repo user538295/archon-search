@@ -927,3 +927,176 @@ async def test_a_cancelled_ticket_future_of_a_never_started_task_is_cleaned_up_b
 
     assert not rig.lifecycle.is_pending("waiting")
     assert (await holder.settled).result is GenerationResult.SHUTTING_DOWN
+
+
+# ---------------------------------------------------------------------------
+# BE-34: the forced entry ``generate_now`` (the describe job; S29, S58, S59, S80, S85)
+# ---------------------------------------------------------------------------
+
+
+def _row(*, description: str | None, source: str | None, status: str | None, baseline: int | None) -> CollectionMeta:
+    return CollectionMeta(
+        name=_COLLECTION,
+        description=description,
+        description_source=source,  # type: ignore[arg-type]
+        description_status=status,  # type: ignore[arg-type]
+        doc_count=_DOC_COUNT,
+        chunk_count=_CHUNK_COUNT,
+        described_at_doc_count=baseline,
+        last_described=_STAMP if description else None,
+    )
+
+
+_FORCEABLE_ROWS = {
+    "generated_and_unchanged": _row(description="old", source="generated", status="ok", baseline=_DOC_COUNT),
+    "failed_over_old_text": _row(description="old", source="generated", status="failed", baseline=_DOC_COUNT),
+    "failed_with_no_text": _row(description=None, source=None, status="failed", baseline=None),
+    "empty": _row(description=None, source=None, status=None, baseline=None),
+}
+
+
+@pytest.mark.parametrize("row", _FORCEABLE_ROWS.values(), ids=_FORCEABLE_ROWS.keys())
+async def test_generate_now_forces_over_existing_generated_description(rig: Rig, row: CollectionMeta) -> None:
+    """S29: a generated, failed or empty description is regenerated whatever the 20% rule says; the ingest request
+    for the very same unchanged row is not required, so the force is the entry's own."""
+    rig.store.rows[_COLLECTION] = row
+    if row.described_at_doc_count is not None:
+        assert (await rig.request(_COLLECTION, GenerationKind.INGEST)).outcome is RequestOutcome.NOT_REQUIRED
+
+    settlement = await rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE)
+
+    assert settlement.result is GenerationResult.GENERATED
+    assert rig.generator.calls == [(_COLLECTION, _NAMESPACE)]
+    assert [(name, ns) for name, ns, _change in rig.writer.applied] == [(_COLLECTION, _NAMESPACE)]
+
+
+async def test_generate_now_over_manual_is_refused(rig: Rig) -> None:
+    """S59: a manual description is never generated; nothing is asked of the model or the writer."""
+    rig.store.rows[_COLLECTION] = _row(description="mine", source="manual", status="ok", baseline=None)
+
+    settlement = await rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE)
+
+    assert settlement.result is GenerationResult.REFUSED_MANUAL
+    assert rig.generator.calls == []
+    assert rig.writer.applied == []
+    assert not rig.lifecycle.is_pending(_COLLECTION)
+
+
+async def test_generate_now_reports_the_status_stored_when_it_settled(rig: Rig) -> None:
+    """The settlement carries the collection's status as read after the run (the job result's ``description_status``):
+    the writer stores ``failed`` and that, not the row from before the run, is what is reported."""
+    rig.store.rows[_COLLECTION] = _FORCEABLE_ROWS["empty"]
+    rig.generator.outcomes[_COLLECTION] = DescriptionFailed(DescriptionFailureReason.CALL_FAILED, "provider down")
+    record_failure = rig.writer.record_failure
+
+    async def recording_the_stored_status(
+        collection: str, namespace: str, expected: ExpectedState
+    ) -> DescriptionWriteOutcome:
+        rig.store.rows[collection] = _row(description=None, source=None, status="failed", baseline=None)
+        return await record_failure(collection, namespace, expected)
+
+    rig.writer.record_failure = recording_the_stored_status  # type: ignore[method-assign]
+
+    settlement = await rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE)
+
+    assert (settlement.result, settlement.description_status) == (GenerationResult.FAILED, "failed")
+
+
+async def test_generate_now_settles_failed_when_the_row_cannot_be_read(rig: Rig) -> None:
+    """A store that cannot be read is a failed describe (never an exception) with no status to report."""
+    rig.store.error = OSError("disk")
+
+    settlement = await rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE)
+
+    assert (settlement.result, settlement.description_status) == (GenerationResult.FAILED, None)
+    assert rig.generator.calls == []
+
+
+async def test_generate_now_over_a_full_queue_settles_failed() -> None:
+    """S80: the forced entry is a describe: over the queue bound it settles ``failed``, and nothing is left pending."""
+    rig = Rig(max_queued=0)
+    try:
+        holder = await rig.hold_the_slot()
+
+        settlement = await rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE)
+
+        assert settlement.result is GenerationResult.FAILED
+        assert not rig.lifecycle.is_pending(_COLLECTION)
+        rig.generator.gate("holder").set()
+        await holder.settled
+    finally:
+        await rig.lifecycle.drain()
+
+
+async def test_a_cancelled_generate_now_caller_leaves_nothing_pending_and_frees_the_slot(rig: Rig) -> None:
+    """The caller (the describe job's task) may be cancelled while it waits: the generation's own cleanup still runs, so
+    the collection is not pending afterwards and the next request is served."""
+    rig.generator.gate(_COLLECTION)
+    caller = asyncio.create_task(rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE))
+    await until(lambda: _COLLECTION in rig.generator.started)
+    caller.cancel()
+    await asyncio.gather(caller, return_exceptions=True)
+    rig.generator.gate(_COLLECTION).set()
+    await until(lambda: not rig.lifecycle.is_pending(_COLLECTION))
+    again = await rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE)
+    assert again.result is GenerationResult.GENERATED
+
+
+async def test_generate_now_while_a_generation_runs_settles_already_running_and_reads_pending(rig: Rig) -> None:
+    """S80: single-flight holds for the forced entry; the status read says ``pending`` while the other run is in flight."""
+    holder = await rig.hold_the_slot(_COLLECTION)
+
+    settlement = await rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE)
+
+    assert (settlement.result, settlement.description_status) == (GenerationResult.ALREADY_RUNNING, "pending")
+    rig.generator.gate(_COLLECTION).set()
+    await holder.settled
+
+
+async def test_generate_now_takes_the_describe_slot_class_ahead_of_ingest_and_backfill(rig: Rig) -> None:
+    """S80: the forced entry waits for the slot like a describe and is served before waiting ingest and backfill."""
+    holder = await rig.hold_the_slot()
+    waiting = [await rig.request("i1", GenerationKind.INGEST), await rig.request("b1", GenerationKind.BACKFILL)]
+    forced = asyncio.create_task(rig.lifecycle.generate_now("d1", _NAMESPACE))
+    await until(lambda: ("d1", _NAMESPACE) in rig.store.reads)
+
+    rig.generator.gate("holder").set()
+    await holder.settled
+    assert (await forced).result is GenerationResult.GENERATED
+    for ticket in waiting:
+        await ticket.settled
+
+    assert rig.generator.started == ["holder", "d1", "i1", "b1"]
+
+
+async def test_generate_now_after_close_is_refused_as_shutting_down_and_reads_nothing(rig: Rig) -> None:
+    """S85: once shutdown began nothing starts and no row is read."""
+    rig.lifecycle.close()
+
+    settlement = await rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE)
+
+    assert settlement.result is GenerationResult.SHUTTING_DOWN
+    assert rig.store.reads == []
+    assert rig.generator.calls == []
+
+
+async def test_generate_now_of_a_missing_collection_settles_superseded_and_writes_nothing(rig: Rig) -> None:
+    """S87: the collection was dropped: nothing generated, nothing written, nothing recreated."""
+    rig.store.rows[_COLLECTION] = None
+
+    settlement = await rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE)
+
+    assert settlement.result is GenerationResult.SUPERSEDED
+    assert (rig.generator.calls, rig.writer.applied, rig.writer.failures) == ([], [], [])
+    assert settlement.description_status is None
+
+
+async def test_generate_now_cancelled_by_drain_settles_shutting_down(rig: Rig) -> None:
+    """S85: a describe waiting on its generation when the server drains is told the server is shutting down."""
+    rig.generator.gate(_COLLECTION)
+    forced = asyncio.create_task(rig.lifecycle.generate_now(_COLLECTION, _NAMESPACE))
+    await until(lambda: _COLLECTION in rig.generator.started)
+
+    await rig.lifecycle.drain()
+
+    assert (await forced).result is GenerationResult.SHUTTING_DOWN

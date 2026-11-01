@@ -29,9 +29,12 @@ Operations that run as jobs:
 | Export a collection | `archon-search export` | `POST /collections/{name}/export` |
 | Import a collection | `archon-search import` | `POST /collections/{name}/import` |
 | Rebuild graph communities | `archon-search graph build-communities` | `POST /graph/{collection}/rebuild-communities` |
+| Generate a collection description now | (no CLI command yet) | `POST /collections/{name}/describe` |
 | Scheduled backups | (automatic) | `POST /backup/trigger` |
 
 See [Ingestion and collections](50_ingestion_and_collections.md) and [Export / import](90_export_import.md) for the operation-specific flags.
+
+A description job (`POST /collections/{name}/describe`) is created `RUNNING` and ends `DONE` with `result` `{"outcome", "description_status"}` — the outcome is `generated`, `failed` (for example the provider is down), `alreadyRunning`, `refusedManual` or `superseded` — or `FAILED` only when the job itself broke: an unexpected server error (`error` `internal error`) or the server shutting down while it ran (`error` `the server is shutting down`). It cannot be cancelled (`DELETE /jobs/{id}` answers `409`), never blocks deleting its collection, and is listed with `GET /jobs?kind=description`.
 
 ### The startup sync is a job too
 
