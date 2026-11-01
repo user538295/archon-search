@@ -6,7 +6,7 @@ import functools
 import importlib
 import logging
 import secrets
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Coroutine
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -636,6 +636,36 @@ def _build_description_lifecycle(
     return DescriptionLifecycle(store, generator, writer)
 
 
+def _start_description_startup_tasks(app: FastAPI, description: DescriptionConfig) -> None:
+    """Start the reachability probe and, with ``backfill_on_startup``, the backfill as background tasks (C5).
+
+    Both are tracked in ``_background_tasks``, so shutdown cancels and awaits them with the other tasks, before the
+    lifecycle drains. With a suppressed startup sync and the backfill on, no probe starts: the backfill is skipped for
+    the run and S86 says no provider is called then. The probe sends no prompt, so with the backfill off it still runs.
+    """
+    # Imported here, not at module level, like the lifecycle above: only an enabled `[description]` needs them.
+    from archon_search.server.description_backfill import (
+        run_description_backfill,
+        run_description_probe,
+    )
+
+    state = app.state
+
+    def track(coroutine: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
+        task = asyncio.create_task(coroutine)
+        state._background_tasks.add(task)
+        task.add_done_callback(state._background_tasks.discard)
+        return task
+
+    backfill_skipped = description.backfill_on_startup and state.sync_result == StartupSyncResult.SUPPRESSED
+    if not backfill_skipped:
+        state._description_probe_task = track(run_description_probe(state, description))
+    if description.backfill_on_startup:
+        state._description_backfill_task = track(
+            run_description_backfill(state, state.search_store, state.description_lifecycle)
+        )
+
+
 def create_app(
     config: SearchConfig,
     job_store: JobStore,
@@ -1139,6 +1169,11 @@ def create_app(
                     app.state._background_tasks.add(sync_task)
                     sync_task.add_done_callback(app.state._background_tasks.discard)
 
+                # Startup: the description feature's own tasks (C5), after the sync decision above so the backfill can
+                # wait for the sync and be skipped when it is suppressed. Neither blocks boot.
+                if config.description.enabled:
+                    _start_description_startup_tasks(app, config.description)
+
                 yield
         finally:
             # Shutdown: stop filesystem watcher before disconnecting the store.
@@ -1291,6 +1326,14 @@ def create_app(
     # Set to a Task by the lifespan, which resolves the context windows of the enabled features' LLM clients; the
     # None default keeps the attribute readable before the lifespan has run.
     app.state._llm_window_task = None
+    # Set to Tasks by the lifespan only when `[description]` is enabled (the probe: not when the startup sync is
+    # suppressed and the backfill is on; the backfill: only with `backfill_on_startup`); the None defaults keep them
+    # readable on every path.
+    app.state._description_probe_task = None
+    app.state._description_backfill_task = None
+    # The description provider's reachability as of the startup probe (`DescriptionReachability`); None until probed
+    # and never refreshed (C7).
+    app.state.description_reachability = None
     # Set to True by _run_startup_sync when the sync crashed (except branch) or
     # completed with per-collection errors (result.errors non-empty); the False
     # default keeps the attribute readable on every path.

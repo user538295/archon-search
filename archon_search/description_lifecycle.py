@@ -49,6 +49,7 @@ from typing import Final, Protocol
 
 from archon_search.collection_meta import (
     DESCRIPTION_SOURCE_MANUAL,
+    DESCRIPTION_STATUS_FAILED,
     DESCRIPTION_STATUS_PENDING,
     CollectionMeta,
     DescriptionStatus,
@@ -290,14 +291,15 @@ _ATTEMPT_RESULTS: Final = frozenset({GenerationResult.GENERATED, GenerationResul
 def _refusal(kind: GenerationKind, meta: CollectionMeta) -> GenerationResult | None:
     """Why a generation of *meta*'s collection must not happen, or ``None``: manual wins; the ingest kind also asks the
     unchanged 20% rule over the counts stored now against the baseline of the last description; backfill fills only a
-    collection that has no description."""
+    collection that has no description and whose stored status is not ``failed`` (the row may have changed since the
+    backfill listed it)."""
     if meta.description_source == DESCRIPTION_SOURCE_MANUAL:
         return GenerationResult.REFUSED_MANUAL
     if kind is GenerationKind.INGEST and not _should_regenerate(
         meta.doc_count, meta.chunk_count, meta.described_at_doc_count
     ):
         return GenerationResult.NOT_REQUIRED
-    if kind is GenerationKind.BACKFILL and meta.description:
+    if kind is GenerationKind.BACKFILL and (meta.description or meta.description_status == DESCRIPTION_STATUS_FAILED):
         return GenerationResult.NOT_REQUIRED
     return None
 

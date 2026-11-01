@@ -634,7 +634,7 @@ flowchart LR
         - #e2e_test — `test_e2e_describe_request_during_shutdown_is_refused` — the job ends `FAILED` and nothing writes to the closed store
 
 ### Phase 9 · Fill existing collections at startup *(reachability probe and backfill task)*
-- [ ] **BE-35** — Reachability probe task (once at startup, result on an `app.state` handle, never blocks boot) and the cancellable backfill task: waits for the startup sync in any end state and for the probe, skipped with one INFO when the sync is suppressed or the provider is down, one collection at a time across every namespace through `get_all_collections_meta`, only collections with no description and stored status not `failed`, skipping those in progress; no task when disabled; for `claude_cli` the reachability probe only checks that the `claude` program exists, and only when description is configured to use it #backend-role
+- [x] **BE-35** — Reachability probe task (once at startup, result on an `app.state` handle, never blocks boot) and the cancellable backfill task: waits for the startup sync in any end state and for the probe, skipped with one INFO when the sync is suppressed or the provider is down, one collection at a time across every namespace through `get_all_collections_meta`, only collections with no description and stored status not `failed`, skipping those in progress; no task when disabled; for `claude_cli` the reachability probe only checks that the `claude` program exists, and only when description is configured to use it #backend-role
     - Frameworks & Drivers · 7.0h
     - needs BE-25, BE-23 · completes C5, S33, S34, S35, S86
     - Tests

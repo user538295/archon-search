@@ -135,6 +135,8 @@ On-disk corpus changes are separate — the file watcher (`archon_search/watcher
 
 If you changed `[database].chunk_size` and left `[database].auto_reindex_on_chunk_size_change = true` (the default), affected collections are reindexed on the next start.
 
+If `[description].backfill_on_startup = true`, each start also describes the collections that have no description, one at a time in the background, after the startup sync (`/ready` does not wait for it). Watch the log: the backfill is skipped with one INFO line when the startup sync is suppressed (run `archon-search sync` and restart) or the description provider is not reachable (a WARNING names the provider and the reason first). Collections with no documents, a manual description, a description, or a failed last attempt are left alone; fill those with `archon-search collection describe`.
+
 ## Related documents
 
 - [`00_index.md`](00_index.md) — UserManual table of contents.

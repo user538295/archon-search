@@ -285,9 +285,11 @@ def test_description_feature_uses_its_own_provider_model_and_host(boot: Boot) ->
         replies = (_call(client.app.state.hyde_client), _call(client.app.state.description_client), _call(client.app.state.graph_client))
 
     assert replies == (_HYDE_REPLY, _DESCRIPTION_REPLY, _GRAPH_REPLY)
-    # Besides its chat call each Ollama host got the window check's `/api/show`; the graph host the model validation probe.
+    # Besides its chat call each Ollama host got the window check's `/api/show`, and the description host the startup
+    # reachability probe's `/api/tags` (BE-35); the graph host the model validation probe.
     assert [r.path for r in hyde_host.requests if r.path != "/api/show"] == ["/api/chat"]
-    assert [r.path for r in description_host.requests if r.path != "/api/show"] == ["/api/chat"]
+    assert [r.path for r in description_host.requests if r.path not in ("/api/show", "/api/tags")] == ["/api/chat"]
+    assert [r.path for r in description_host.requests if r.path == "/api/tags"] == ["/api/tags"]
     assert [r.path for r in graph_host.requests if r.path != "/v1/models"] == ["/v1/chat/completions"]
     [hyde_request] = hyde_host.requests_to("/api/chat")
     [description_request] = description_host.requests_to("/api/chat")

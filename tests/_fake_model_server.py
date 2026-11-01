@@ -3,7 +3,7 @@
 One server answers the endpoints of both local providers, so a wrapper test talks to a real HTTP server through the
 real SDK or ``httpx`` instead of a mock:
 
-* Ollama (what the ``ollama`` SDK calls): ``POST /api/chat`` and ``POST /api/show``.
+* Ollama (what the ``ollama`` SDK calls): ``POST /api/chat`` and ``POST /api/show``, and ``GET /api/tags`` (the model list the description reachability probe reads).
 * llama.cpp ``llama-server``: ``GET /props``, ``POST /tokenize`` and ``POST /v1/chat/completions``.
 
 Every request is recorded (method, path, decoded JSON body) for assertions on what a wrapper sent. The server listens
@@ -194,6 +194,8 @@ class FakeModelServer:
             return _OK, self._ollama_chat()
         if route == ("POST", "/api/show"):
             return _OK, self._ollama_show()
+        if route == ("GET", "/api/tags"):
+            return _OK, {"models": [{"name": _MODEL_NAME, "model": _MODEL_NAME}]}
         if route == ("GET", "/props"):
             return _OK, {"default_generation_settings": {"n_ctx": self._llama_n_ctx}, "total_slots": 1}
         if route == ("POST", "/tokenize"):

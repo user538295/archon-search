@@ -260,6 +260,10 @@ On Linux, use `journalctl --user -u archon-search | grep 'centroid stale'`.
 
 **Note on delete-only workloads**: collections that undergo many deletions without subsequent ingest will accumulate `mutations_since_recompute` until the configured threshold is exceeded. When the threshold fires, the pipeline sets `needs_recompute = True` and queues a recompute automatically. If no ingest follows, the recompute must be triggered manually via `archon-search collection reindex <name>`.
 
+### Startup description backfill (BE-35)
+
+`[description].backfill_on_startup = true` (default `false`) fills collections that have no description in a background task once the server is up; it never delays `/ready` and never enters it. The task waits for the startup sync and for the provider probe, then describes one collection at a time. It is skipped, with one INFO in the log, in two cases: the startup sync is `suppressed` (the previous run died mid-ingest, so the index may be stale: run `archon-search sync`, then restart) and the description provider is not reachable (the probe logs one WARNING naming the provider and the reason: a missing API key, a missing `claude` program, or no answer from the Ollama or llama.cpp host). A collection with no documents, a manual description, a description, or a failed last attempt (`description_status = failed`) is not touched by the backfill; use `archon-search collection describe <name>`. Stopping the server cancels a running backfill and its generation; no half-written description is stored.
+
 ## Maintenance runbook (D5)
 
 `MaintenanceLoop` runs four configurable policies each pass: FTS optimize, orphan chunk cleanup, and expired-chunk pruning (**E2a**, `prune_expired_chunks`) are per-non-excluded-collection; failed-ingest retry is pass-level (runs once per maintenance pass, not per-collection). Disabled by default (`interval_hours = 0`).

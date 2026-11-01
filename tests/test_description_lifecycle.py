@@ -547,6 +547,19 @@ async def test_backfill_asks_only_for_a_collection_without_a_description(rig: Ri
     assert sorted(rig.generator.started) == ["empty", "holder"]
 
 
+async def test_backfill_refuses_a_collection_whose_stored_status_is_failed(rig: Rig) -> None:
+    """The backfill's listing can be stale: a collection that failed since is not retried by it (ingest and describe still do)."""
+    rig.store.rows["failed"] = CollectionMeta(name="failed", description_status="failed", doc_count=_DOC_COUNT)
+
+    backfill = await rig.request("failed", GenerationKind.BACKFILL)
+    describe = await rig.request("failed", GenerationKind.DESCRIBE)
+
+    assert backfill.outcome is RequestOutcome.NOT_REQUIRED
+    assert describe.outcome is RequestOutcome.ACCEPTED
+    assert (await describe.settled).result is GenerationResult.GENERATED
+    assert rig.generator.started == ["failed"]
+
+
 
 async def test_the_ingest_rule_is_asked_again_when_the_request_gets_the_slot(rig: Rig) -> None:
     """A describe that landed while the ingest request waited made the description fresh: no second paid call."""
