@@ -679,7 +679,7 @@ flowchart LR
         - #unit_test — `test_status_prints_description_block_fields` — provider, key, reachability, window and source, backfill, last attempt
         - #unit_test — `test_status_prints_nothing_when_block_null` — a disabled feature adds no lines
         - #unit_test — `test_status_description_key_warning_wording` — the missing-key message does not talk about query expansion
-- [ ] **T-12** — e2e: startup notices, `/status` before and after the probe and an attempt, every provider down, missing package #tester-role
+- [x] **T-12** — e2e: startup notices, `/status` before and after the probe and an attempt, every provider down, missing package #tester-role
     - — · 6.0h
     - needs BE-36, BE-37, FE-12 · completes S36, S37, S38, S39, S51, S52, S66, S75
     - Tests
