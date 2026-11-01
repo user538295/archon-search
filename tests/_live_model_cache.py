@@ -12,7 +12,7 @@ The lanes therefore load from the developer's real ``<ARCHON_SEARCH_DATA_DIR>/mo
 lane's ``_link_model_cache`` links — through a symlink that keeps the rest of the isolated
 data dir private.
 
-``python -m tests._live_model_cache`` downloads the lanes' models (CI's prefetch step).
+``python -m tests._live_model_cache`` downloads the lanes' models and the pinned gpt2 tokenizer (CI's prefetch step).
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from archon_search.llm_client.token_counter import load_gpt2_tokenizer
 from archon_search.model_specs import (
     EmbedderSpec,
     RerankerSpec,
@@ -48,6 +49,11 @@ def prefetch_live_models() -> None:
     """Download the live specs' pinned snapshots into the models dir (no-op when cached)."""
     for spec in live_specs():
         ensure_model(spec)
+
+
+def prefetch_token_counter_tokenizer() -> None:
+    """Download the pinned gpt2 snapshot (no-op when cached): ``test_llm_client_token_ceiling.py`` fails on CI without it."""
+    load_gpt2_tokenizer()
 
 
 def pin_models_dir(live_models_dir: Path) -> None:
@@ -82,4 +88,5 @@ def _pin_live_models_dir(_archon_isolated_data_dir: None, live_models_dir: Path)
 
 if __name__ == "__main__":
     prefetch_live_models()
+    prefetch_token_counter_tokenizer()
     print("Live-lane models prefetched")

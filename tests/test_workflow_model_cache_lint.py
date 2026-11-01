@@ -16,12 +16,16 @@ from pathlib import Path
 import pytest
 import yaml
 
+from archon_search.paths import TOKEN_COUNTER_MODEL_REVISION
+from tests import _live_model_cache as live_cache
 from tests._live_model_cache import live_specs
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
 CACHE_ACTION = "actions/cache@"
 MODELS_ROOT = "~/.archon-search/models"
+TOKEN_COUNTER_DIR = f"{MODELS_ROOT}/token-counter"
+PR_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "archon-search-pr.yml"
 PREFETCH_COMMAND = "python -m tests._live_model_cache"
 # Path prefix shared by `tests/eval/live/` and `tests/eval/live_benchmark/`.
 REAL_MODEL_LANE_PATH = "tests/eval/live"
@@ -79,6 +83,28 @@ def test_cache_key_changes_with_the_pinned_revisions(workflow: Path) -> None:
         f"{workflow.name}: cache key {key!r} lacks the pinned revisions {stale}; a revision bump in "
         "model_specs would keep restoring the old snapshots"
     )
+
+
+def _pr_cache_step() -> dict:
+    (cache_step,) = [s for s in _steps(PR_WORKFLOW) if _caches_live_models(s)]
+    return cache_step
+
+
+def test_pr_workflow_caches_the_pinned_token_counter_tokenizer() -> None:
+    # The real-gpt2 tests fail (not skip) on CI when the tokenizer is missing, so the PR job must restore and prefetch it.
+    step = _pr_cache_step()
+
+    assert TOKEN_COUNTER_DIR in {p.rstrip("/") for p in step["with"]["path"].split()}
+    assert TOKEN_COUNTER_MODEL_REVISION in step["with"]["key"]
+
+
+def test_prefetch_downloads_the_token_counter_tokenizer(monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded: list[bool] = []
+    monkeypatch.setattr(live_cache, "load_gpt2_tokenizer", lambda: loaded.append(True))
+
+    live_cache.prefetch_token_counter_tokenizer()
+
+    assert loaded == [True]
 
 
 @pytest.mark.parametrize("workflow", _workflows_caching_live_models(), ids=lambda p: p.name)

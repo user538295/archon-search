@@ -104,8 +104,9 @@ async def fit_query_to_window(client: LlmClient, template_text: str, query: str,
         return query
     if budget > 0:
         if not isinstance(client, TokenBoundingClient):
-            missing = " and ".join(method for method in _COUNTING_METHODS if not callable(getattr(client, method, None)))
-            raise LlmCallFailure(provider, f"the client sizes its input to a budget but has no {missing}")
+            # `isinstance` fails on a method `getattr` still finds (supplied through `__getattr__`): then name both.
+            missing = [method for method in _COUNTING_METHODS if not callable(getattr(client, method, None))] or _COUNTING_METHODS
+            raise LlmCallFailure(provider, f"the client sizes its input to a budget but has no {' and '.join(missing)}")
         if len(query) <= budget and client.token_ceiling(query) <= budget:
             # Fast path: a token covers at least one byte, so a text whose request-free ceiling (its UTF-8 length plus the
             # client's own surcharge, see ``TokenBoundingClient.token_ceiling``) is within the budget cannot exceed it. A

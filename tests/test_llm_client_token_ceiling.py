@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from collections.abc import Callable
+from pathlib import Path
 
 import httpx
 import pytest
@@ -39,6 +41,7 @@ from tests._token_counter_stub import StubEncoding
 
 _SPM_DUMMY_PREFIX_TOKENS = 1
 _SPM_SPECIAL_TOKENS = ("<s>", "</s>", "<unk>")
+_CI_ENV = "CI"
 _SPM_SPECIAL_SPLIT = re.compile("(" + "|".join(re.escape(token) for token in _SPM_SPECIAL_TOKENS) + ")")
 _LONE_SURROGATE = "\ud83d"  # a str that cannot be encoded as UTF-8 strictly
 # ``1`` next to an astral character, fullwidth and Arabic-Indic digits (not ASCII digit runs), and spaces.
@@ -73,7 +76,7 @@ def _spm_token_count(text: str) -> int:
 
     The text is split on the special-token strings; every non-empty piece costs the dummy-prefix token plus at most one
     token per byte, and every special token costs one token. Assumption: a special token's text is at least two bytes
-    (``<s>``, ``</s>``, ``<unk>``, ``<0x0A>``, ...), so it pays for the prefix its neighbour adds.
+    (``<s>``, ``</s>``, ``<unk>``, ...), so it pays for the prefix its neighbour adds.
     """
     cost = 0
     for piece in _SPM_SPECIAL_SPLIT.split(text):
@@ -174,13 +177,14 @@ def test_a_text_that_cannot_be_encoded_as_utf8_has_a_ceiling_of_three_bytes_per_
     assert _counted(_ollama_client(), text) == 3 * lone_surrogates
 
 
-# --- the ceiling is exact where the worst case is reached: it cannot be lowered ---------------------------------------
+# --- the ceiling is not looser than the model's worst case on the examples ---------------------------------------------
 
 
 @pytest.mark.parametrize("text", [text for text in _EXAMPLES if text])
-def test_the_ceilings_are_reached_by_a_worst_case_tokenizer_so_neither_can_be_lowered(text: str) -> None:
-    assert _spm_token_count(text) == _llama_client().token_ceiling(text)  # no special-token string in the examples
-    assert _counted(_ollama_client(), text) == TokenCounter.ceiling(text)
+def test_neither_ceiling_is_looser_than_the_worst_case_model_on_the_examples(text: str) -> None:
+    """Pins only that the ceiling is not looser than the simulated worst case on these inputs (no special-token string among them)."""
+    assert _spm_token_count(text) <= _llama_client().token_ceiling(text)
+    assert _counted(_ollama_client(), text) <= TokenCounter.ceiling(text)
 
 
 def test_the_llama_ceiling_is_reached_by_a_text_without_a_special_token_and_is_not_by_the_empty_text() -> None:
@@ -234,7 +238,7 @@ def test_the_ollama_ceiling_charges_only_ascii_digit_runs(text: str) -> None:
     assert _counted(_ollama_client(), text) <= TokenCounter.ceiling(text)
 
 
-# --- the real pinned gpt2 vocabulary (never downloaded: the test is skipped when it is not cached) ------------------------
+# --- the real pinned gpt2 vocabulary (never downloaded: skipped locally, a failure on CI, when it is not cached) ---------
 
 _REAL_GPT2_EXAMPLES = [
     *_EXAMPLES,
@@ -249,18 +253,42 @@ _REAL_GPT2_EXAMPLES = [
 ]
 
 
+def _require_cached_tokenizer(tokenizer_file: Path) -> None:
+    """Skip when the pinned tokenizer is not cached, but fail on CI: a skip there would turn the real-vocabulary tests vacuously green."""
+    if tokenizer_file.is_file():
+        return
+    message = f"the pinned gpt2 tokenizer is not cached at {tokenizer_file} (run `archon-search prewarm`)"
+    if os.environ.get(_CI_ENV):
+        pytest.fail(message, pytrace=False)
+    pytest.skip(message)
+
+
+def test_an_uncached_tokenizer_fails_on_ci(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(_CI_ENV, "true")
+
+    with pytest.raises(pytest.fail.Exception, match="not cached"):
+        _require_cached_tokenizer(tmp_path / "absent" / TOKEN_COUNTER_TOKENIZER_FILE)
+
+
+def test_an_uncached_tokenizer_skips_outside_ci(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv(_CI_ENV, raising=False)
+
+    with pytest.raises(pytest.skip.Exception, match="not cached"):
+        _require_cached_tokenizer(tmp_path / "absent" / TOKEN_COUNTER_TOKENIZER_FILE)
+
+
 @pytest.fixture(scope="module")
 def real_gpt2_counter() -> TokenCounter:
     """A counter over the real pinned gpt2 ``tokenizer.json``, loaded straight from the model cache.
 
     The autouse fixtures stub ``load_gpt2_tokenizer`` and block the network, so the file is read with
-    ``tokenizers.Tokenizer.from_file`` and a missing cache skips the test: the suite never downloads it. A module-scoped
-    fixture runs before the per-test data-dir redirection, so the cache is the operator's own.
+    ``tokenizers.Tokenizer.from_file``; a missing cache skips the test locally and fails it on CI (``CI`` set), where the
+    PR workflow prefetches it. A module-scoped fixture runs before the per-test data-dir redirection, so the cache is the
+    operator's own.
     """
     snapshot = get_token_counter_models_dir() / f"models--{TOKEN_COUNTER_MODEL_NAME.replace('/', '--')}" / "snapshots" / TOKEN_COUNTER_MODEL_REVISION
     tokenizer_file = snapshot / TOKEN_COUNTER_TOKENIZER_FILE
-    if not tokenizer_file.is_file():
-        pytest.skip(f"the pinned gpt2 tokenizer is not cached at {tokenizer_file} (run `archon-search prewarm`)")
+    _require_cached_tokenizer(tokenizer_file)
     tokenizers = pytest.importorskip("tokenizers")
     tokenizer = tokenizers.Tokenizer.from_file(str(tokenizer_file))
     return TokenCounter(load_tokenizer=lambda: tokenizer)

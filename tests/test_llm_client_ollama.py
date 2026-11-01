@@ -343,7 +343,7 @@ async def test_failing_counter_raises_call_failure() -> None:
     assert raised.value.provider == "ollama"
 
 
-async def test_input_budget_counts_a_template_once_per_process() -> None:
+async def test_input_budget_counts_a_template_once_per_cached_template() -> None:
     """The gpt2 count of the fixed template is not repeated for every search that sizes a query."""
     stub = StubTokenizer()
     wrapper = _wrapper(_Factory(), context_tokens=_CONFIGURED_WINDOW, counter=TokenCounter(load_tokenizer=lambda: stub))

@@ -367,6 +367,24 @@ async def test_a_client_with_a_budget_that_cannot_count_is_a_failure() -> None:
     assert "token_ceiling" in raised.value.reason
 
 
+async def test_a_client_that_supplies_its_counting_methods_through_getattr_is_named_by_both_methods() -> None:
+    """``isinstance`` does not see a method supplied by ``__getattr__``, yet ``getattr`` finds it: the message still names a method."""
+
+    class Dynamic(ScriptedLlmClient):
+        async def input_budget(self, template_text: str) -> InputBudget:
+            return InputBudget(100)
+
+        def __getattr__(self, name: str) -> Callable[..., object]:
+            if name in ("count_tokens", "token_ceiling"):
+                return lambda *args: 0
+            raise AttributeError(name)
+
+    with pytest.raises(LlmCallFailure) as raised:
+        await fit_query_to_window(Dynamic(), "the template", "a query", provider="llama_cpp")
+
+    assert "no count_tokens and token_ceiling" in raised.value.reason
+
+
 # --- the byte-bound fast path -------------------------------------------------------------------------------------
 
 
