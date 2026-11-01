@@ -639,8 +639,8 @@ def route_422_response() -> dict[str, Any]:
         "model": CodedErrorDetail | ErrorDetail,
         "description": (
             "Request validation failure (`HTTPValidationError`); a request the route rejects itself, "
-            "with a string `detail` (`ErrorDetail`, e.g. an unsupported option combination or a "
-            "missing HyDE / RAG Fusion package); or a `{code, message}` `detail` (`CodedErrorDetail`, "
+            "with a string `detail` (`ErrorDetail`, e.g. an unsupported option combination); "
+            "or a `{code, message}` `detail` (`CodedErrorDetail`, "
             f"code `{GRAPH_COMMUNITIES_NOT_BUILT_CODE}`)."
         ),
         "content": {"application/json": {"schema": {"anyOf": [{"$ref": f"{REF_PREFIX}HTTPValidationError"}]}}},

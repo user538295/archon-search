@@ -1,4 +1,5 @@
 """Documentation contract tests."""
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -84,6 +85,34 @@ def test_adr_07_exists_and_references_adr_04() -> None:
     content = adr_path.read_text(encoding="utf-8")
     assert content.strip(), "ADR-07 is empty"
     assert "ADR-04" in content, "ADR-07 must reference ADR-04"
+
+
+def test_adr_numbers_are_unique_contiguous_and_every_adr_is_in_the_documentation_index() -> None:
+    """The new ADR takes the next free number, and each ADR file has a row in the documentation index."""
+    adr_dir = REPO_ROOT / "Documentation" / "ADRs"
+    numbers = sorted(int(path.name.split("_", 1)[0]) for path in adr_dir.glob("[0-9]*.md"))
+    assert numbers == list(range(1, len(numbers) + 1)), f"ADR numbers must be unique and contiguous: {numbers}"
+    index = (REPO_ROOT / "Documentation" / "Architecture" / "990_documentation_index_and_contribution_guide.md").read_text(
+        encoding="utf-8"
+    )
+    unlisted = [path.name for path in sorted(adr_dir.glob("*.md")) if f"ADRs/{path.name}" not in index]
+    assert not unlisted, f"ADR files missing from the 990 documentation index: {unlisted}"
+
+
+def test_shared_llm_client_adr_cites_real_lines_of_the_adrs_it_supersedes() -> None:
+    """Each `file.md:N[-M]` citation in the supersession block points at existing, non-blank lines of that ADR."""
+    adr_dir = REPO_ROOT / "Documentation" / "ADRs"
+    adr = next(adr_dir.glob("*_shared_llm_client_*.md")).read_text(encoding="utf-8")
+    block = adr.split("## Context", 1)[0]
+    assert "partially supersedes" in block
+    for earlier in ("C4-hyde", "C5-rag-fusion", "C6-local-llm-provider", "12_local_prose", "07_description_embedding"):
+        assert earlier in block, f"the ADR must name {earlier} in its Supersedes block"
+    citations = re.findall(r"`([\w.-]+\.md):(\d+)(?:-(\d+))?`", block)
+    assert citations, "the supersession block cites no ADR lines"
+    for name, first, last in citations:
+        lines = (adr_dir / name).read_text(encoding="utf-8").splitlines()
+        cited = lines[int(first) - 1 : int(last or first)]
+        assert cited and all(line.strip() for line in cited), f"{name}:{first}-{last or first} is not a real cited line"
 
 
 def test_claude_md_mentions_git_cliff() -> None:

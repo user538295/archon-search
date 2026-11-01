@@ -4,7 +4,7 @@
 **Deciders**: archon-search contributors
 **Date**: 2026-06-07
 **Supersedes**: nothing
-**Superseded by**: nothing
+**Superseded in part by**: [ADR 19 — One Shared LLM Client for Every LLM Feature, and Provider-Based Collection Descriptions](19_shared_llm_client_and_provider_based_collection_descriptions.md) — only Decision item 5's "clear 422" for a missing `anthropic` package (`:69`): the package guard now runs at startup, and a package lost after boot is a failed call that falls back (`hyde_applied: false`).
 
 ---
 

@@ -698,7 +698,7 @@ flowchart LR
         - #integration_test — `test_manual_description_round_trips_through_export_and_import` — text and source restored, status `ok`
         - #integration_test — `test_bypassed_v1_description_imports_generated_and_normalised` — a sourceless description imports as `generated`
         - #integration_test — `test_empty_archive_description_written_on_its_own` — no recompute is needed
-- [ ] **BE-39** — Write the new ADR (next free number, 19 today), the `BREAKING.md` entries with their mandatory `03_breaking_changes_index.md` rows, and the `990_documentation_index_and_contribution_guide.md` index row; the entries cover off-by-default, SDK removal, graph packages, Ollama WARNING, export version 2, startup `default_ttl_seconds` migration, MCP counts and the new routes #backend-role
+- [x] **BE-39** — Write the new ADR (next free number, 19 today), the `BREAKING.md` entries with their mandatory `03_breaking_changes_index.md` rows, and the `990_documentation_index_and_contribution_guide.md` index row; the entries cover off-by-default, SDK removal, graph packages, Ollama WARNING, export version 2, startup `default_ttl_seconds` migration, MCP counts and the new routes #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-38, BE-32, BE-34 · completes C6, C9
     - Tests

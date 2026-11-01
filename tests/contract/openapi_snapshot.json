@@ -5880,7 +5880,7 @@
                 }
               }
             },
-            "description": "Request validation failure (`HTTPValidationError`); a request the route rejects itself, with a string `detail` (`ErrorDetail`, e.g. an unsupported option combination or a missing HyDE / RAG Fusion package); or a `{code, message}` `detail` (`CodedErrorDetail`, code `graph_communities_not_built`)."
+            "description": "Request validation failure (`HTTPValidationError`); a request the route rejects itself, with a string `detail` (`ErrorDetail`, e.g. an unsupported option combination); or a `{code, message}` `detail` (`CodedErrorDetail`, code `graph_communities_not_built`)."
           },
           "500": {
             "content": {
@@ -7415,7 +7415,7 @@
                 }
               }
             },
-            "description": "Request validation failure (`HTTPValidationError`); a request the route rejects itself, with a string `detail` (`ErrorDetail`, e.g. an unsupported option combination or a missing HyDE / RAG Fusion package); or a `{code, message}` `detail` (`CodedErrorDetail`, code `graph_communities_not_built`)."
+            "description": "Request validation failure (`HTTPValidationError`); a request the route rejects itself, with a string `detail` (`ErrorDetail`, e.g. an unsupported option combination); or a `{code, message}` `detail` (`CodedErrorDetail`, code `graph_communities_not_built`)."
           },
           "500": {
             "content": {
