@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 import archon_search.jobs.scheduler as _scheduler_module
+from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION
 from archon_search.types import ImportJob, IngestJob, JobStatus
 from tests.integration.conftest import (
     REAL_APP_DATA_SUBDIR,
@@ -332,7 +333,7 @@ def test_user_job_precedes_backup_source_job(
 def _make_unsafe_archive(archive_path: Path) -> None:
     """Build a .tar.gz with a zip-slip path component (../../evil.txt)."""
     manifest = {
-        "schema_version": 1,
+        "schema_version": EXPORT_SCHEMA_VERSION,
         "collection": "col",
         "exported_at": "2025-01-01T00:00:00+00:00",
         "doc_count": 0,

@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION
 from archon_search.store import COLLECTION_UNAVAILABLE_DETAIL, CollectionOwnershipError
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
@@ -82,7 +83,7 @@ def _own_dir(tmp_path: Path) -> Path:
 def _make_valid_tar(
     tmp_path: Path,
     embedding_model: str = "BAAI/bge-small-en-v1.5",
-    schema_version: object = 1,
+    schema_version: object = EXPORT_SCHEMA_VERSION,
     namespace: str = "default",
 ) -> Path:
     """Create a minimal valid .tar.gz archive with manifest.json and documents.jsonl."""
@@ -393,8 +394,6 @@ async def test_mcp_import_schema_mismatch_truncates_archive_supplied_value(
     tmp_path: Path, crafted_schema: object, quoted: str
 ) -> None:
     """A non-int schema_version is quoted truncated, in the REST route's exact wording."""
-    from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION
-
     result = await _import_tool_result(tmp_path, _make_valid_tar(tmp_path, schema_version=crafted_schema))
 
     assert result == {
@@ -404,6 +403,30 @@ async def test_mcp_import_schema_mismatch_truncates_archive_supplied_value(
         ),
         "code": "schema_version_mismatch",
     }
+
+
+@pytest.mark.asyncio
+async def test_mcp_import_refuses_a_version_1_archive_unless_ignore_schema_version(tmp_path: Path) -> None:
+    """C9: version 1 is refused; ignore_schema_version skips only that comparison and the import starts."""
+    archive_path = _make_valid_tar(tmp_path, schema_version=1)
+
+    refused = await _import_tool_result(tmp_path, archive_path)
+    assert refused == {
+        "error": (
+            f"archive has schema_version=1; server expects {EXPORT_SCHEMA_VERSION!r}; "
+            "use ignore_schema_version=true to bypass"
+        ),
+        "code": "schema_version_mismatch",
+    }
+
+    app = _make_mcp_app(
+        _make_pipeline(collection_meta=None), config=_make_config(), job_store=_make_job_store(tmp_path)
+    )
+    with patch("archon_search.server.mcp.get_data_dir", return_value=tmp_path):
+        bypassed = await app.tools["import_collection"](
+            collection="new-col", path=str(archive_path), ignore_schema_version=True
+        )
+    assert "job_id" in bypassed
 
 
 # ---------------------------------------------------------------------------

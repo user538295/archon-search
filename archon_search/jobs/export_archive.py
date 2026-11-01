@@ -40,7 +40,9 @@ from archon_search.constants import DEFAULT_NAMESPACE
 
 logger = logging.getLogger(__name__)
 
-EXPORT_SCHEMA_VERSION: int = 1
+#: Version 2 added ``description_source`` next to ``description`` to the manifest (C9). A version 1 archive, which every
+#: backup made before it is, is refused by an import unless ``ignore_schema_version`` is set.
+EXPORT_SCHEMA_VERSION: int = 2
 
 
 def _open_private(path: Path, extra_flags: int, mode: str) -> IO[bytes]:

@@ -28,11 +28,22 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from archon_search._durable_io import ensure_private_dir
 from archon_search._path_safety import PathUnsafeError, validate_archive_file
 from archon_search._types import ChunkRecord
+from archon_search.collection_meta import (
+    DESCRIPTION_SOURCE_GENERATED,
+    DESCRIPTION_SOURCE_MANUAL,
+    CollectionMeta,
+    DescriptionSource,
+)
 from archon_search.config import SearchConfig
 from archon_search.constants import (
     IMPORTED_CHUNK_METADATA_KEY,
     IMPORTED_CHUNK_METADATA_VALUE,
 )
+from archon_search.description_write import (
+    DescriptionWriteOutcome,
+    normalise_description_text,
+)
+from archon_search.description_writer import DescriptionWriter, ImportedChange
 from archon_search.embedder_cache import (
     EMBEDDER_NOT_READY_DETAIL,
     EmbedderCache,
@@ -65,6 +76,7 @@ from archon_search.server.schemas import ErrorDetail, JobResponse
 from archon_search.store import (
     COLLECTION_UNAVAILABLE_DETAIL,
     META_MAX_FIELDS,
+    STORE_SCHEMA_VERSION,
     CollectionOwnershipError,
     SearchStore,
     normalize_ingested_by,
@@ -231,7 +243,7 @@ async def _export_task(
 
             meta = await search_store.get_collection_meta(job.collection, job.namespace)
             active_model = meta.active_embedding_model if meta else ""
-            description = meta.description if meta else ""
+            description = (meta.description if meta else None) or ""
 
             manifest = {
                 "archon_search_version": archon_version,
@@ -246,6 +258,8 @@ async def _export_task(
                 # against. Null on PackageNotFoundError.
                 "lancedb_version": get_lancedb_version(),
             }
+            if description and meta is not None and meta.description_source is not None:
+                manifest["description_source"] = meta.description_source
             writer.finalize(manifest, archive_path)
 
         store.update(job_id, status=JobStatus.DONE, result={"archive_path": str(archive_path)})
@@ -696,6 +710,101 @@ async def _ingest_docs(
     return counters
 
 
+def _imported_source(manifest: dict[str, Any]) -> DescriptionSource:
+    """The source an imported description gets: ``manual`` only when the manifest says so, else ``generated`` (every
+    version 1 archive, a missing source and any value the archive forged)."""
+    if manifest.get("description_source") == DESCRIPTION_SOURCE_MANUAL:
+        return DESCRIPTION_SOURCE_MANUAL
+    return DESCRIPTION_SOURCE_GENERATED
+
+
+async def _ensure_meta_row(job: ImportJob, manifest: dict[str, Any], search_store: SearchStore) -> bool:
+    """Create a bare metadata row for the imported collection unless it has one; True when this call created it.
+
+    The check and the write share one hold of the collection lock, so a row another writer made is never replaced.
+    """
+    async with search_store.locked_collection_meta(job.collection, job.namespace) as existing:
+        if existing is not None:
+            return False
+        await search_store.update_collection_meta(
+            CollectionMeta(
+                name=job.collection,
+                namespace=job.namespace,
+                active_embedding_model=manifest["active_embedding_model"],
+                schema_version=STORE_SCHEMA_VERSION,
+            ),
+            _locked_by_caller=True,
+        )
+        return True
+
+
+def _cancel_requested(store: JobStore, job_id: str) -> bool:
+    """Whether a ``DELETE /jobs/{id}`` asked the running job to stop."""
+    current = store.get(job_id)
+    return current is not None and current.status == JobStatus.CANCELLING
+
+
+async def _remove_bare_meta_row(job: ImportJob, search_store: SearchStore) -> None:
+    """Undo ``_ensure_meta_row`` after the description write did not land; best effort, never raises.
+
+    Under the collection lock and only while the row is still bare (no documents counted), so a row another writer has
+    filled since is never removed. A row that cannot be removed stays: the retry then needs ``force_overwrite``.
+    """
+    try:
+        async with search_store.locked_collection_meta(job.collection, job.namespace) as row:
+            if row is not None and row.doc_count == 0 and row.chunk_count == 0:
+                await search_store.delete_collection_meta(job.collection, job.namespace)
+    except Exception:
+        logger.warning("_import_task: could not remove the metadata row made for %r", job.collection, exc_info=True)
+
+
+async def _restore_description(
+    job: ImportJob,
+    manifest: dict[str, Any],
+    search_store: SearchStore,
+    embedder_cache: EmbedderCache,
+    config: SearchConfig,
+) -> None:
+    """Restore the archive's description onto the imported collection through ``DescriptionWriter`` (C9, S41, S63, S83).
+
+    The text is untrusted: ``normalise_description_text`` makes it one storable line, and a text with nothing left
+    (or that is no string at all) imports as no description, with a WARNING naming the collection and never the text.
+    The writer sets status ``ok`` and leaves the baseline unset, and embeds the text with the collection's own
+    embedder (kept without a vector when that fails). It builds on the collection's metadata row, which an archive
+    without chunks does not have yet: one is created for it, and removed again when the write does not land, so a
+    failed empty import leaves nothing behind and can be retried.
+
+    A write that cannot take the collection lock in time raises, failing the job (it is resumable and the restore
+    runs again). A resume restores unconditionally, so a description the operator set by hand between the failure and
+    the resume is replaced by the archive's.
+    """
+    raw = manifest.get("description")
+    text = normalise_description_text(raw) if isinstance(raw, str) else ""
+    if not text:
+        if raw not in (None, ""):
+            logger.warning(
+                "_import_task: the description of the archive for %r has no storable text; imported without one",
+                job.collection,
+            )
+        return
+    created_row = await _ensure_meta_row(job, manifest, search_store)
+    landed = False
+    try:
+        writer = DescriptionWriter(search_store, embedder_cache, default_embedding_model=config.embedding_model)
+        result = await writer.apply(job.collection, job.namespace, ImportedChange(text, _imported_source(manifest)))
+        if result.outcome is DescriptionWriteOutcome.LOCK_TIMEOUT:
+            raise RuntimeError(f"description of {job.collection!r} not restored: the collection lock was not free in time")
+        landed = result.outcome is DescriptionWriteOutcome.WRITTEN
+        if not landed:
+            logger.warning(
+                "_import_task: the description of the archive for %r was not restored: %s",
+                job.collection, result.outcome,
+            )
+    finally:
+        if created_row and not landed:
+            await _remove_bare_meta_row(job, search_store)
+
+
 async def _import_task(
     job: ImportJob,
     store: JobStore,
@@ -716,7 +825,9 @@ async def _import_task(
            import's data, which only a new import may overwrite.
          The run then claims the collection, revoking every other import's claim of it (``_claim_collection``).
       3. ingesting phase: stream docs from archive into the store; checkpoint progress
-      4. indexing phase: rebuild FTS index, recompute collection meta, warm the models
+      4. indexing phase: rebuild FTS index, restore the description (the manifest's ``description`` and
+         ``description_source``, through ``DescriptionWriter``), recompute collection meta, warm the models. An
+         archive without chunks has none of that but the description, restored once the cancel check passed.
       5. mark DONE on success; FAILED on any exception; CANCELLED if CANCELLING detected
 
     A cancelled task (only the lifespan shutdown cancels it) leaves the job RUNNING on
@@ -795,6 +906,10 @@ async def _import_task(
             await search_store.rebuild_fts_index(job.collection, language=detected_language)
 
             collection_embedder = await embedder_cache.get_or_load(manifest["active_embedding_model"])
+            # Restored before the recompute, which re-reads the row under the collection lock and carries the
+            # description state as stored (C9, C11); should the writer fail to embed, the recompute's repair of a
+            # description without a vector retries it.
+            await _restore_description(job, manifest, search_store, embedder_cache, config)
             await pipeline.recompute_collection_meta(
                 job.collection, collection_embedder, namespace=job.namespace, force=True
             )
@@ -804,13 +919,15 @@ async def _import_task(
             # hit (S288 (import)).
             await await_models_warm(pipeline, job_id, collection_embedder)
         else:
-            # Empty archive: table was never created; nothing to index or recompute.
+            # Empty archive: the table was never created; nothing to index or recompute. Its description restores on
+            # its own, on a metadata row created for it, unless the job was cancelled meanwhile.
             logger.info("_import_task: archive for %r is empty; skipping FTS rebuild and centroid recompute", job.collection)
+            if not _cancel_requested(store, job_id):
+                await _restore_description(job, manifest, search_store, embedder_cache, config)
 
         # A DELETE /jobs/{id} may have landed during the indexing phase (the warm-up
-        # can take minutes on a cold server); honour it rather than overwrite it.
-        current = store.get(job_id)
-        if current is not None and current.status == JobStatus.CANCELLING:
+        # can take minutes on a cold server) or the description restore; honour it rather than overwrite it.
+        if _cancel_requested(store, job_id):
             store.update(job_id, status=JobStatus.CANCELLED)
             return
 

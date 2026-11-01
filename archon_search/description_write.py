@@ -4,11 +4,16 @@ One write changes only the description fields, and each field says whether it is
 "unchanged" is never confused with "empty". A generated write and a recorded failure carry the state the generation
 started from (``ExpectedState``) and are refused when the row inside the collection lock differs; set, clear and
 import are the authority and carry ``UNCONDITIONAL``.
+
+The text rules an import applies to an archive's description (``normalise_description_text``, built on
+``collapse_to_one_line`` and ``trim_to_last_sentence``, which the description generator shares) live here too, next to
+``check_description_text``, which every text must pass before it is written.
 """
 from __future__ import annotations
 
 import dataclasses
 import math
+import re
 import unicodedata
 from datetime import datetime
 from enum import StrEnum
@@ -120,6 +125,47 @@ def check_description_text(text: str) -> None:
         raise ValueError("description cannot be set to blank text: clear it instead")
     if any(unicodedata.category(character) in _NOT_PLAIN_TEXT_CATEGORIES for character in text):
         raise ValueError("description must be one line of plain text: remove line breaks, tabs and control characters")
+
+
+#: Characters dropped by ``collapse_to_one_line``: the control characters that are not white space (NUL, ESC, DEL, the C1
+#: controls except NEL, ...), as a stored description is plain text and ``check_description_text`` refuses every control
+#: character; and lone surrogates (legal in a JSON archive, but no store can write them). The white-space controls
+#: (tab, line feeds, NEL, U+2028/U+2029, ...) are left out on purpose: ``split`` turns them into one space, so no
+#: control character or line break survives.
+_DROPPED_CHARACTERS: Final = re.compile(r"[\x00-\x08\x0e-\x1b\x7f-\x84\x86-\x9f\ud800-\udfff]")
+#: A sentence end: a terminator (and any closing quote or bracket) before white space or the end of the text, so ``3.5``
+#: is no end; or a CJK terminator.
+_SENTENCE_END: Final = re.compile(r"[.!?…][\"')\]”’]*(?=\s|\Z)|[。！？]")
+
+
+def collapse_to_one_line(text: str) -> str:
+    """*text* without control characters, every run of white space (line breaks included) one space, trimmed."""
+    return " ".join(_DROPPED_CHARACTERS.sub("", text).split())
+
+
+def trim_to_last_sentence(text: str) -> str:
+    """*text* (one line, longer than the limit) cut to its last full sentence within ``MAX_DESCRIPTION_CHARS``.
+
+    Without a sentence end in range the cut is at the last word, and at the limit itself when there is no space."""
+    window = text[: MAX_DESCRIPTION_CHARS + 1]
+    sentence_ends = [match.end() for match in _SENTENCE_END.finditer(window) if match.end() <= MAX_DESCRIPTION_CHARS]
+    if sentence_ends:
+        return text[: sentence_ends[-1]]
+    last_space = window.rfind(" ")
+    return text[:last_space] if last_space > 0 else text[:MAX_DESCRIPTION_CHARS]
+
+
+def normalise_description_text(text: str) -> str:
+    """The description an import stores for the untrusted archive *text* (C9, S83): one line without control
+    characters, trimmed to its last full sentence within ``MAX_DESCRIPTION_CHARS`` characters. An import normalises
+    instead of refusing because an old backup must stay restorable.
+
+    Returns ``""`` when nothing storable is left (empty, white space, control or invisible characters only): no
+    description. Any other result passes ``check_description_text``."""
+    one_line = collapse_to_one_line(text)
+    if len(one_line) > MAX_DESCRIPTION_CHARS:
+        one_line = trim_to_last_sentence(one_line)
+    return "" if _is_blank(one_line) else one_line
 
 
 @dataclasses.dataclass(frozen=True)

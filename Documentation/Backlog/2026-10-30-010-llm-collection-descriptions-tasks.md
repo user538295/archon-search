@@ -689,7 +689,7 @@ flowchart LR
         - #e2e_test — `test_e2e_missing_description_package_fails_visibly` — masked package: WARNING, status `failed`, provider not reachable, backfill skipped
 
 ### Phase 11 · Keep descriptions in backups *(export manifest version 2 and the import rules; ADR and BREAKING entries for the whole feature)*
-- [ ] **BE-38** — Export manifest version 2 (`EXPORT_SCHEMA_VERSION` in `export_archive.py`, covers `routes_export.py` and `mcp.py`) carrying `description` and `description_source`; import restores through the write operation (sourceless becomes `generated`, `manual` stays, status `ok`, baseline unset), normalises text to one line of at most 600 characters, handles the empty-archive path, refuses version 1 unless `ignore_schema_version`; update the pinned version tests #backend-role
+- [x] **BE-38** — Export manifest version 2 (`EXPORT_SCHEMA_VERSION` in `export_archive.py`, covers `routes_export.py` and `mcp.py`) carrying `description` and `description_source`; import restores through the write operation (sourceless becomes `generated`, `manual` stays, status `ok`, baseline unset), normalises text to one line of at most 600 characters, handles the empty-archive path, refuses version 1 unless `ignore_schema_version`; update the pinned version tests #backend-role
     - Interface Adapters · 7.0h
     - needs BE-20 · completes C9, S41, S63, S83
     - Tests

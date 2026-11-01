@@ -290,10 +290,10 @@ class TestImportArchiveReader:
             ImportArchiveReader(archive_path).read_manifest()
         assert str(excinfo.value) == "manifest.json must be a JSON object, got list"
 
-    def test_export_schema_version_is_int_1(self) -> None:
-        """EXPORT_SCHEMA_VERSION is defined as int 1."""
+    def test_export_schema_version_is_int_2(self) -> None:
+        """EXPORT_SCHEMA_VERSION is defined as int 2: version 2 adds ``description_source`` to the manifest (C9)."""
         assert isinstance(EXPORT_SCHEMA_VERSION, int)
-        assert EXPORT_SCHEMA_VERSION == 1
+        assert EXPORT_SCHEMA_VERSION == 2
 
 
 # ---------------------------------------------------------------------------

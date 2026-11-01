@@ -61,6 +61,7 @@ from archon_search.constants import (
     RESTRICTED_CHUNK_PROVIDERS,
 )
 from archon_search.description_sample import DescriptionSampleStore, StoreReadError
+from archon_search.description_write import collapse_to_one_line, trim_to_last_sentence
 from archon_search.llm_client.once_per_process import warn_once
 from archon_search.llm_client.protocol import (
     UNBOUNDED,
@@ -83,14 +84,6 @@ _THINKING_BLOCK: Final = re.compile(rf"<({_THINKING_TAGS})\b[^>]*>.*?</\1\s*>", 
 _THINKING_ORPHAN_CLOSE: Final = re.compile(rf"\A.*</(?:{_THINKING_TAGS})\s*>", re.IGNORECASE | re.DOTALL)
 #: An opening tag at the start that is never closed (the model ran out of answer room while thinking): all is thinking.
 _THINKING_UNCLOSED: Final = re.compile(rf"\A\s*<(?:{_THINKING_TAGS})\b[^>]*>.*\Z", re.IGNORECASE | re.DOTALL)
-#: A sentence end: a terminator (and any closing quote or bracket) before white space or the end of the text, so ``3.5``
-#: is no end; or a CJK terminator.
-_SENTENCE_END: Final = re.compile(r"[.!?…][\"')\]”’]*(?=\s|\Z)|[。！？]")
-#: Control characters that are not white space (NUL, ESC, DEL, the C1 controls except NEL, ...): dropped, as a stored
-#: description is plain text and the shared text check (``check_description_text``) refuses every control character.
-#: The white-space controls (tab, line feeds, NEL, U+2028/U+2029, ...) are left out on purpose: ``_clean_answer`` collapses
-#: them to one space with ``split``, so no control character or line break survives the cleaning.
-_CONTROL_CHARACTERS: Final = re.compile(r"[\x00-\x08\x0e-\x1b\x7f-\x84\x86-\x9f]")
 #: The failure detail (and WARNING) when the answer has nothing left after cleaning, even after the retry (S21).
 _NO_USABLE_OUTPUT_DETAIL: Final = (
     "the model returned no usable text after one retry (empty, or only thinking); it may be a reasoning model: "
@@ -183,19 +176,7 @@ def _clean_answer(raw: str) -> str:
     visible = _THINKING_BLOCK.sub(" ", raw)
     visible = _THINKING_ORPHAN_CLOSE.sub("", visible)
     visible = _THINKING_UNCLOSED.sub("", visible)
-    return " ".join(_CONTROL_CHARACTERS.sub("", visible).split())
-
-
-def _trim_to_last_sentence(text: str) -> str:
-    """*text* (one line, longer than the limit) cut to its last full sentence within ``MAX_DESCRIPTION_CHARS``.
-
-    Without a sentence end in range the cut is at the last word, and at the limit itself when there is no space."""
-    window = text[: MAX_DESCRIPTION_CHARS + 1]
-    sentence_ends = [match.end() for match in _SENTENCE_END.finditer(window) if match.end() <= MAX_DESCRIPTION_CHARS]
-    if sentence_ends:
-        return text[: sentence_ends[-1]]
-    last_space = window.rfind(" ")
-    return text[:last_space] if last_space > 0 else text[:MAX_DESCRIPTION_CHARS]
+    return collapse_to_one_line(visible)
 
 
 def _should_regenerate(
@@ -360,7 +341,7 @@ class DescriptionGenerator:
             raise _GenerationStopped(DescriptionFailureReason.UNUSABLE_OUTPUT, _NO_USABLE_OUTPUT_DETAIL)
         if len(cleaned) <= MAX_DESCRIPTION_CHARS:
             return DescriptionGenerated(text=cleaned)
-        return DescriptionGenerated(text=_trim_to_last_sentence(cleaned), trimmed=True)
+        return DescriptionGenerated(text=trim_to_last_sentence(cleaned), trimmed=True)
 
     async def _attempt(self, prompt: str) -> str:
         """One model call (its own timeout; a provider error stops the generation, it is never retried), cleaned."""
