@@ -237,7 +237,7 @@ flowchart LR
         - #unit_test — `test_unclaimed_surface_fails` — a live route, tool or command missing from the registry fails
         - #unit_test — `test_claimed_surface_that_does_not_exist_fails` — except lifespan-only `/mcp`
         - #unit_test — `test_gap_without_waiver_and_pending_waiver_without_slice_fail` — both failure kinds
-- [ ] **BE-10** — Create the registry as a plain data module in `tests/parity/` (T-3 mutates a copy): one capability per roadmap slice S1–S32, its service method, and per interface the live surface identifier or a waiver (`permanent`, or `pending` naming a slice); seed by hand about 107 identifiers from the live REST routes, 22 MCP tools and 36 Click surfaces, plus the roadmap waivers and the descriptions row (a permanent waiver for the missing MCP describe tool, citing the descriptions plan C8 and ADR 19; see Decisions) #backend-role
+- [x] **BE-10** — Create the registry as a plain data module in `tests/parity/` (T-3 mutates a copy): one capability per roadmap slice S1–S32, its service method, and per interface the live surface identifier or a waiver (`permanent`, or `pending` naming a slice); seed by hand about 107 identifiers from the live REST routes, 22 MCP tools and 36 Click surfaces, plus the roadmap waivers and the descriptions row (a permanent waiver for the missing MCP describe tool, citing the descriptions plan C8 and ADR 19; see Decisions) #backend-role
     - — · 5.0h
     - needs K2, BE-11 · completes C4, S11, S15, S16
     - Tests

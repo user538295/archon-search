@@ -4,7 +4,7 @@
 collectors (:func:`rest_identifiers`, :func:`mcp_tool_names`, :func:`cli_identifiers`, :func:`collect_live_surfaces`)
 read the three live surfaces. The contract is
 ``Documentation/Backlog/interface-parity/00_service_layer_foundation-c4-parity-registry.tsp``. The unit tests here run
-against synthetic registries; the real registry is a separate data module that is not part of this file.
+against synthetic registries; the real registry is the data module ``registry.py``, checked against the live surfaces at the end.
 
 Registry shape. A registry is a plain list of plain dicts, with no imports and no behaviour, so it can be copied,
 serialised and mutated (the e2e guard test deletes a row from a copy)::
@@ -53,6 +53,7 @@ imported is ``tests/_mcp_tools.py``.
 """
 from __future__ import annotations
 
+import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -77,6 +78,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.key_manager import KeyStore
 from archon_search.server.app import create_app
 from tests._mcp_tools import registered_tools
+from tests.parity.registry import REGISTRY
 
 _HEAD = "HEAD"
 # Mounted inside the app lifespan (``app.py``, ``create_mcp_http_app``), which the parity test does not run.
@@ -542,3 +544,34 @@ def test_live_cli_commands_resolve_lazy_nested_and_invokable_groups(live_surface
     assert {"graph build-communities", "collection list", "key create", "backup", "backup status", "status"} <= commands
     # Namespaces are not surfaces: only a group invokable without a subcommand counts, and today only ``backup`` is.
     assert not {"collection", "graph", "jobs", "key", "config", "maintenance"} & commands
+
+
+@_LIVE_GROUP
+def test_parity_passes_on_live_surfaces(live_surfaces: LiveSurfaces) -> None:
+    """The real registry claims or waives every live surface (S11, S15) and claims no surface that is not live, bar ``/mcp``."""
+    assert verify(REGISTRY, live_surfaces) == []
+
+
+_SLICE_ROW = re.compile(r"S(\d+) ")
+
+
+def test_registry_has_one_row_per_roadmap_slice_and_pending_waivers_name_their_own_slice() -> None:
+    """S16: rows S1 to S32 are all present, and a pending waiver in a slice row names that slice."""
+    slice_rows = {match.group(0).strip(): row for row in REGISTRY if (match := _SLICE_ROW.match(row["name"]))}
+
+    assert list(slice_rows) == [f"S{number}" for number in range(1, 33)]
+    for slice_id, row in slice_rows.items():
+        pending = {
+            claim["waiver"]["pending_slice"] for claim in row["claims"] if (claim["waiver"] or {}).get("kind") == "pending"
+        }
+        assert pending <= {slice_id}, f"{row['name']} has a pending waiver naming {pending - {slice_id}}"
+
+
+def test_registry_has_the_descriptions_row_with_the_permanent_mcp_describe_waiver() -> None:
+    """D9: the missing MCP describe tool is a permanent waiver that cites descriptions plan C8 and ADR 19."""
+    row = next(row for row in REGISTRY if row["name"].startswith("Descriptions"))
+    waiver = next(claim["waiver"] for claim in row["claims"] if claim["surface"] == "mcp" and claim["identifier"] is None)
+
+    assert waiver["kind"] == "permanent"
+    assert "C8" in waiver["reason"]
+    assert "ADR 19" in waiver["reason"]
