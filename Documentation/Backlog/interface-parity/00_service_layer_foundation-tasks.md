@@ -265,7 +265,7 @@ flowchart LR
     - — · 1.0h
     - needs BE-9 · completes S24
     - Tests
-- [ ] **T-4** — Manual: review the new ADR for format, accuracy and supersession #tester-role
+- [x] **T-4** — Manual: review the new ADR for format, accuracy and supersession #tester-role
     - — · 1.0h
     - needs BE-12 · completes S25
     - Tests
