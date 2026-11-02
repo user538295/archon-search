@@ -221,7 +221,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_stale_allowlist_entry_fails` — a fixed violation turns its entry stale, scope included (a function-local import left after the module-level one is fixed keeps its own entry)
         - #integration_test — `test_real_tree_has_no_unlisted_boundary_violation` — passes on the current tree, which needs FE-2 (four sibling CLI imports) and BE-6; the eight seeded edges are `_collection_job` → `routes_jobs`; `mcp` → `routes_explain`, `routes_export` and, function-local, `routes_collections`; `routes_collections`, `routes_graph`, `routes_sync` → `routes_jobs`; `routes_status` → `routes_collections`
-- [ ] **BE-15** — Add the S31 scan to the same test file: every import in `archon_search/` and `tests/` of a moved authz name from `archon_search.server.authz`, plus a check that `server/authz.py` defines no `__all__` #backend-role
+- [x] **BE-15** — Add the S31 scan to the same test file: every import in `archon_search/` and `tests/` of a moved authz name from `archon_search.server.authz`, plus a check that `server/authz.py` defines no `__all__` #backend-role
     - — · 1.5h
     - needs BE-6, BE-8 · completes S31
     - Tests

@@ -21,6 +21,10 @@ Accepted blind spots (a syntactic scan of import statements): ``importlib.import
 a ``TYPE_CHECKING`` alias (``from typing import TYPE_CHECKING as TC``) and the negated guard
 (``if not TYPE_CHECKING:`` runs its body at run time, so its ``else`` branch is scanned as a run-time import;
 both err on the strict side); ``from pkg import *``, which is an edge to ``pkg`` only.
+
+The same file hosts the S31 scan (:func:`scan_moved_authz_imports`): no file under ``archon_search/`` or ``tests/`` imports a
+moved authz name from ``archon_search.server.authz``, and that module defines no ``__all__``. Its blind spots are listed
+in :func:`moved_authz_imports`.
 """
 from __future__ import annotations
 
@@ -36,6 +40,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PKG = "archon_search"
 _SCANNED_TREES = (f"{_PKG}/services", f"{_PKG}/server", f"{_PKG}/cli")
 _TYPE_CHECKING = "TYPE_CHECKING"
+_STAR = "*"
 
 
 class Scope(StrEnum):
@@ -72,7 +77,6 @@ class _ImportCollector(ast.NodeVisitor):
     def __init__(self, file: str, root: Path) -> None:
         self._file = file
         self._root = root
-        self._package = _package_of(file)
         self._stack: list[Scope] = []
         self.edges: set[Edge] = set()
 
@@ -112,20 +116,23 @@ class _ImportCollector(ast.NodeVisitor):
             self._add(alias.name)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        base = self._absolute_base(node)
+        base = _absolute_module(self._file, node)
         is_internal = base == _PKG or base.startswith(f"{_PKG}.")
         for alias in node.names:
             candidate = f"{base}.{alias.name}"
-            submodule = alias.name != "*" and is_internal and _module_exists(self._root, candidate)
+            submodule = alias.name != _STAR and is_internal and _module_exists(self._root, candidate)
             self._add(candidate if submodule else base)
 
-    def _absolute_base(self, node: ast.ImportFrom) -> str:
-        if node.level == 0:
-            return node.module or ""
-        kept = len(self._package) - (node.level - 1)
-        if kept < 1:
-            raise ValueError(f"{self._file}: relative import of level {node.level} climbs above its top-level package")
-        return ".".join([*self._package[:kept], *(node.module.split(".") if node.module else [])])
+
+def _absolute_module(file: str, node: ast.ImportFrom) -> str:
+    """The absolute module a `from` import of the repo-relative `file` names; a relative one is resolved, never guessed."""
+    if node.level == 0:
+        return node.module or ""
+    package = _package_of(file)
+    kept = len(package) - (node.level - 1)
+    if kept < 1:
+        raise ValueError(f"{file}: relative import of level {node.level} climbs above its top-level package")
+    return ".".join([*package[:kept], *(node.module.split(".") if node.module else [])])
 
 
 def scan_source(source: str, file: str, root: Path) -> set[Edge]:
@@ -135,6 +142,14 @@ def scan_source(source: str, file: str, root: Path) -> set[Edge]:
     return collector.edges
 
 
+def _python_files(root: Path, tree: str) -> list[Path]:
+    """Every ``.py`` file under `root`/`tree`; a tree with none (missing, misspelled or a wrong `root`) raises."""
+    paths = sorted((root / tree).rglob("*.py"))
+    if not paths:
+        raise FileNotFoundError(f"no Python file under {root / tree}: the scan would check nothing")
+    return paths
+
+
 def scan_tree(root: Path = _REPO_ROOT) -> set[Edge]:
     """Every import edge of every ``.py`` file in the scanned trees (services, server, cli) under `root`.
 
@@ -142,12 +157,98 @@ def scan_tree(root: Path = _REPO_ROOT) -> set[Edge]:
     """
     edges: set[Edge] = set()
     for tree in _SCANNED_TREES:
-        paths = sorted((root / tree).rglob("*.py"))
-        if not paths:
-            raise FileNotFoundError(f"no Python file under {root / tree}: the boundary scan would check nothing")
-        for path in paths:
+        for path in _python_files(root, tree):
             edges |= scan_source(path.read_text(encoding="utf-8"), path.relative_to(root).as_posix(), root)
     return edges
+
+
+# S31: the authz policy moved to `archon_search.services.authz`; `server/authz.py` keeps only the FastAPI half and
+# re-exports nothing, so every import of a moved name from it is a stale path (the names that stay are
+# `_STAYING_AUTHZ_NAMES`). The scan covers `archon_search/` and `tests/`.
+_SERVER_AUTHZ = f"{_PKG}.server.authz"
+_SERVER_AUTHZ_FILE = f"{_PKG}/server/authz.py"
+_SERVICES_AUTHZ_FILE = f"{_PKG}/services/authz.py"
+_MOVED_AUTHZ_NAMES = frozenset({
+    "AuthIdentity",
+    "ForbiddenError",
+    "FORBIDDEN_CODE",
+    "ADMIN_REQUIRED_DETAIL",
+    "ADMIN_KEY_GRANT_DETAIL",
+    "FOREIGN_NAMESPACE_DETAIL",
+    "require_admin",
+    "authorize_key_create",
+    "authorize_key_listing_namespace",
+    "can_manage_key",
+    "caller_may_revoke",
+})
+_STAYING_AUTHZ_NAMES = frozenset({"identity_of", "require_admin_dependency", "caller_identity", "ADMIN_ONLY_RESPONSES"})
+_AUTHZ_SCAN_TREES = (_PKG, "tests")
+_DUNDER_ALL = "__all__"
+
+
+class MovedAuthzImport(NamedTuple):
+    """One moved name (or ``*``) imported from ``archon_search.server.authz`` by the repo-relative `file`."""
+
+    file: str
+    name: str
+
+
+def moved_authz_imports(source: str, file: str) -> set[MovedAuthzImport]:
+    """Every moved authz name that `source` imports from ``archon_search.server.authz`` in any scope.
+
+    Absolute and relative `from` imports are covered, a name once per statement whatever its alias; a star import is
+    flagged too, because it would pull the moved names through the module. Blind spots (a syntactic scan of import
+    statements): ``import archon_search.server.authz`` or ``from archon_search.server import authz`` followed by
+    attribute access, and a dotted string target such as ``monkeypatch.setattr("archon_search.server.authz.<name>")``.
+    """
+    found: set[MovedAuthzImport] = set()
+    for node in ast.walk(ast.parse(source, filename=file)):
+        if not isinstance(node, ast.ImportFrom) or _absolute_module(file, node) != _SERVER_AUTHZ:
+            continue
+        found |= {MovedAuthzImport(file, a.name) for a in node.names if a.name in _MOVED_AUTHZ_NAMES or a.name == _STAR}
+    return found
+
+
+def scan_moved_authz_imports(root: Path = _REPO_ROOT) -> set[MovedAuthzImport]:
+    """:func:`moved_authz_imports` over every ``.py`` file of ``archon_search/`` and ``tests/`` under `root`.
+
+    A tree with no Python file raises instead of scanning nothing.
+    """
+    return {
+        found
+        for tree in _AUTHZ_SCAN_TREES
+        for path in _python_files(root, tree)
+        for found in moved_authz_imports(path.read_text(encoding="utf-8"), path.relative_to(root).as_posix())
+    }
+
+
+def defines_dunder_all(source: str) -> bool:
+    """Whether `source` mentions ``__all__`` as a name anywhere (assigned, unpacked, extended or in a branch)."""
+    return any(isinstance(node, ast.Name) and node.id == _DUNDER_ALL for node in ast.walk(ast.parse(source)))
+
+
+def top_level_names(source: str) -> set[str]:
+    """The names `source` defines at module level: functions, classes and plain or annotated assignments."""
+    names: set[str] = set()
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names
+
+
+def imported_names(source: str) -> set[str]:
+    """The names the module-level imports of `source` bind (`*` for a star import): what a re-export would use."""
+    names: set[str] = set()
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Import):
+            names |= {(a.asname or a.name.partition(".")[0]) for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            names |= {(a.asname or a.name) for a in node.names}
+    return names
 
 
 _SERVICES_DENIED_INTERNAL = (f"{_PKG}.server", f"{_PKG}.cli")
@@ -639,3 +740,100 @@ def test_stale_allowlist_entry_fails(tmp_path: Path) -> None:
     assert compare_to_allowlist(
         _tree_violations(tmp_path, {app: both}), {Edge(app, target, _MODULE): "composition root"}
     ) == (set(), {Edge(app, target, _MODULE)})
+
+
+_AUTHZ_SNIPPET_FILE = "archon_search/server/routes_x.py"
+
+
+def test_moved_authz_name_imported_from_server_authz_is_flagged() -> None:
+    """S31: plain, aliased, multi-name, function-local, relative and star imports of a moved name are all found."""
+    file = _AUTHZ_SNIPPET_FILE
+
+    def flagged(source: str, importer: str = file) -> set[MovedAuthzImport]:
+        return moved_authz_imports(source, importer)
+
+    def hit(name: str, importer: str = file) -> set[MovedAuthzImport]:
+        return {MovedAuthzImport(importer, name)}
+
+    # positive control: a scanner that matches nothing would pass every other test, so each moved name must be found
+    for name in sorted(_MOVED_AUTHZ_NAMES):
+        assert flagged(f"from {_SERVER_AUTHZ} import {name}\n") == hit(name), name
+    assert flagged(f"from {_SERVER_AUTHZ} import ForbiddenError as Refusal\n") == hit("ForbiddenError")
+    assert flagged(f"from {_SERVER_AUTHZ} import (\n    AuthIdentity,\n    identity_of,\n    require_admin,\n)\n") == (
+        hit("AuthIdentity") | hit("require_admin")
+    )
+    assert flagged(f"from {_SERVER_AUTHZ} import caller_identity, FORBIDDEN_CODE as C, can_manage_key\n") == (
+        hit("FORBIDDEN_CODE") | hit("can_manage_key")
+    )
+    assert flagged(f"from {_SERVER_AUTHZ} import *\n") == hit("*")
+    # every scope
+    statement = f"from {_SERVER_AUTHZ} import AuthIdentity"
+    for source, _ in _in_every_scope(statement):
+        assert flagged(source) == hit("AuthIdentity"), source
+    # a relative import is resolved against the importing file
+    assert flagged("from .authz import caller_may_revoke\n") == hit("caller_may_revoke")
+    other = "archon_search/services/search.py"
+    assert flagged("from ..server.authz import AuthIdentity\n", other) == hit("AuthIdentity", other)
+    assert flagged("from .authz import AuthIdentity\n", other) == set()  # `services.authz` is the new home
+
+
+def test_names_that_stay_in_server_authz_are_not_flagged() -> None:
+    file = _AUTHZ_SNIPPET_FILE
+    staying = sorted(_STAYING_AUTHZ_NAMES)
+    for name in staying:
+        assert moved_authz_imports(f"from {_SERVER_AUTHZ} import {name}\n", file) == set(), name
+    assert moved_authz_imports(f"from {_SERVER_AUTHZ} import {', '.join(staying)}\n", file) == set()
+    # the moved names taken from their new home, and unrelated modules that define the same names, are fine
+    assert moved_authz_imports("from archon_search.services.authz import AuthIdentity, require_admin\n", file) == set()
+    assert moved_authz_imports("from archon_search.services import authz\nimport archon_search.server.authz\n", file) == set()
+    assert moved_authz_imports("from other.authz import AuthIdentity\nfrom archon_search.server import authz\n", file) == set()
+    assert moved_authz_imports("from . import authz\n", file) == set()
+
+
+def test_no_code_or_test_imports_moved_authz_name_from_server_authz() -> None:
+    """S31: the real tree is clean and `server/authz.py` defines no `__all__` (which would re-export moved names)."""
+    # positive controls first, so neither check below can pass by matching nothing
+    for source in ('__all__ = ["identity_of"]\n', "__all__: list[str] = []\n", "__all__ += ['x']\n", "__all__, y = [], 1\n",
+                   "if True:\n    __all__ = []\n", "__all__.append('x')\n"):
+        assert defines_dunder_all(source), source
+    assert not defines_dunder_all("x = 1\n")
+    found = scan_moved_authz_imports()
+    assert not found, f"import these from archon_search.services.authz, never from server.authz: {sorted(found)}"
+    assert not defines_dunder_all((_REPO_ROOT / _SERVER_AUTHZ_FILE).read_text(encoding="utf-8"))
+
+
+def test_authz_name_sets_match_the_real_modules() -> None:
+    """The scan's name sets cannot drift: moved names live in `services/authz.py`, staying names in `server/authz.py`."""
+    spec = {
+        "AuthIdentity", "ForbiddenError", "FORBIDDEN_CODE", "ADMIN_REQUIRED_DETAIL", "ADMIN_KEY_GRANT_DETAIL",
+        "FOREIGN_NAMESPACE_DETAIL", "require_admin", "authorize_key_create", "authorize_key_listing_namespace",
+        "can_manage_key", "caller_may_revoke",
+    }  # the C3 contract's moved names, spelled out so that a dropped or renamed entry fails here
+    assert _MOVED_AUTHZ_NAMES == spec
+    server_source = (_REPO_ROOT / _SERVER_AUTHZ_FILE).read_text(encoding="utf-8")
+    services = top_level_names((_REPO_ROOT / _SERVICES_AUTHZ_FILE).read_text(encoding="utf-8"))
+    server = top_level_names(server_source) | imported_names(server_source)  # a re-export by import counts too
+    assert _MOVED_AUTHZ_NAMES <= services
+    assert _STAYING_AUTHZ_NAMES <= server
+    assert not _MOVED_AUTHZ_NAMES & server
+    assert _STAR not in server
+    # positive control: the re-export forms the guard exists for are seen
+    reexport = "from archon_search.services.authz import ForbiddenError, require_admin as ra\nfrom x import *\nimport y.z\n"
+    assert imported_names(reexport) == {"ForbiddenError", "ra", _STAR, "y"}
+
+
+def test_authz_scan_covers_both_trees_and_refuses_a_tree_without_python_files(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        scan_moved_authz_imports(tmp_path)
+    (tmp_path / "archon_search").mkdir()
+    (tmp_path / "archon_search" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    with pytest.raises(FileNotFoundError):  # tests/ is still missing
+        scan_moved_authz_imports(tmp_path)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "t.py").write_text(f"from {_SERVER_AUTHZ} import ForbiddenError\n", encoding="utf-8")
+    (tmp_path / "archon_search" / "deep").mkdir()
+    (tmp_path / "archon_search" / "deep" / "b.py").write_text(f"from {_SERVER_AUTHZ} import require_admin\n", encoding="utf-8")
+    assert scan_moved_authz_imports(tmp_path) == {
+        MovedAuthzImport("tests/t.py", "ForbiddenError"),
+        MovedAuthzImport("archon_search/deep/b.py", "require_admin"),
+    }
