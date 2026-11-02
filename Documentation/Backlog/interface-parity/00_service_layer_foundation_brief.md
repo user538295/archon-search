@@ -82,7 +82,7 @@ flowchart LR
 
 **C9 — Long-running work.** A feature that can run long exposes its core once. Whether an interface runs it inline or as a job is decided per feature in its brief (D1 for ingest) and implemented as two thin entry points over that one core, not as two implementations.
 
-**C10 — CLI.** A command follows the `cli/sync.py` pattern: `--api-url`, `--api-key`, `_server_connect_fail_msg` on connect failure, `--json` for machine output (`json.dumps(payload, indent=2, sort_keys=True)`), exit 1 on errors, exit 2 for an unsuccessful job where the command already uses it. Shared pieces live in `cli/_helpers.py`.
+**C10 — CLI.** A command follows the `cli/sync.py` pattern for connection and errors: `--api-url`, `--api-key`, `_server_connect_fail_msg` on connect failure, exit 1 on errors; exit 2 for an unsuccessful job where the command already uses it (`backup`, `export`, `import`, `maintenance`; `sync.py` itself exits 1). `--json` for machine output (`json.dumps(payload, indent=2, sort_keys=True)`) follows `status`, `backup status` and `maintenance status`, the only commands that have it today (`sync.py` has none). Shared pieces live in `cli/_helpers.py`.
 
 **C11 — Boundary enforcement.** An AST test asserts C1. Function-local and `TYPE_CHECKING` imports count like module-level ones. Current violations sit in an explicit allowlist keyed by (importing file, imported module, import scope: module-level, function-local or type-checking-only); the test fails on a new violation and on a stale allowlist entry. The two permanent exceptions (`server/app.py` as composition root, the `run_server` import in `cli/serve.py`) are hard-coded in the test, not allowlist entries. Each slice deletes the entries it resolves, so the list only shrinks.
 
@@ -93,7 +93,7 @@ flowchart LR
 - Characterization tests first (the repo's TDD rule); service logic is tested directly with fakes, without an HTTP or MCP stack; adapter tests check mapping only.
 - Tests pinned to behavior a slice intentionally changes are rewritten or deleted, never re-pinned.
 - OpenAPI snapshots (`tests/contract/openapi_snapshot.json`, `tests/server/openapi_snapshot.json`) and contract tests are updated in the slice that changes them.
-- Tests that patch `archon_search.server.mcp.*` or `archon_search.server._hyde.*` by string are re-pointed when the code moves.
+- Tests that patch `archon_search.server.mcp.*` by string, or an adapter module object by `monkeypatch.setattr`, stay valid as long as the patched name stays in that module; a string patch or logger-name assertion of a moved module is re-pointed when the code moves.
 - Coverage stays at or above 85%; `--cov=archon_search` already covers a new `services/` package.
 
 **C14 — Cutover and docs.** When a slice lands, every caller uses the service and the old code is deleted: no shims, re-exports or aliases. Each slice updates the docs it affects (`100`, `110`, `120`, `140`, `520`, `600` under `Documentation/Architecture/`, the user manual, `AGENTS.md` and `CLAUDE.md` where they describe layering), adds a `BREAKING.md` entry with its row in `MigrationGuide/03_breaking_changes_index.md`, and respects the doc-sync tests (`test_mcp_tool_count_docs.py`, `test_sanitized_wire_text_docs.py`).
@@ -103,14 +103,14 @@ flowchart LR
 S0 ships only what has a real consumer on day one:
 
 1. **`archon_search/services/` package** with the modules that search, search-with-context and explain all share, moved out of `server/` with every caller and test updated:
-   - `server/_search_budget.py` → `services/search_budget.py` (importers: `mcp.py`, `routes_search.py`, `routes_explain.py`, `routes_openai_shim.py`, `_hyde.py`).
-   - `server/_hyde.py` → `services/request_hyde.py` (the root `archon_search/hyde.py` already exists, hence the name).
-   - `server/_validators.py` → `services/validators.py`.
-   - The transport-free policy half of `server/authz.py` (`AuthIdentity`, `ForbiddenError`, `require_admin`, `authorize_key_create`, `authorize_key_listing_namespace`, `can_manage_key`, `caller_may_revoke`, the `*_DETAIL` constants and `FORBIDDEN_CODE`) → `services/authz.py`. The FastAPI-specific half (`identity_of(request)`, `require_admin_dependency`, `caller_identity`, `ADMIN_ONLY_RESPONSES`) stays in `server/authz.py` and imports from services.
-2. **Boundary test** implementing C11, with the allowlist seeded from today's violations (MCP importing route modules, route modules importing each other, and `_collection_job.py` importing `routes_jobs`; eight edges, listed in the team plan's C1), and `archon_search/services` added to `_GUARDED_DIRS` in `tests/test_no_wire_str_exc.py` (its allowlist entries for moved code are re-keyed; `test_every_allowlist_entry_still_matches` fails on stale ones).
+   - `server/_search_budget.py` → `services/search_budget.py` (importers: `mcp.py`, `routes_search.py`, `routes_explain.py`, `routes_openai_shim.py`, `services/request_hyde.py`). The OpenAI shim imports only this module, not HyDE or validators.
+   - `server/_hyde.py` → `services/request_hyde.py` (the root `archon_search/hyde.py` already exists, hence the name; importers: `mcp.py`, `routes_search.py`, `routes_explain.py`).
+   - `server/_validators.py` → `services/validators.py` (same three importers).
+   - The transport-free policy half of `server/authz.py` (`AuthIdentity`, `ForbiddenError`, `require_admin`, `authorize_key_create`, `authorize_key_listing_namespace`, `can_manage_key`, `caller_may_revoke`, the `*_DETAIL` constants and `FORBIDDEN_CODE`) → `services/authz.py`. The FastAPI-specific half (`identity_of(request)`, `require_admin_dependency`, `caller_identity`, `ADMIN_ONLY_RESPONSES`) stays in `server/authz.py` and imports from services. Importers that change: `middleware_auth.py`, `routes_keys.py` and `mcp.py` (which also imports `identity_of`, so its import splits); the other routes import only names that stay.
+2. **Boundary test** implementing C11, with the allowlist seeded from today's violations (MCP importing route modules, route modules importing each other, and `_collection_job.py` importing `routes_jobs`; eight edges, listed in the team plan's C1), and `archon_search/services` added to `_GUARDED_DIRS` in `tests/test_no_wire_str_exc.py`. That test has no allowlist entry for any moved module; the one entry about moved code that stays in `server/` (`require_admin_dependency` catching `ForbiddenError`) only changes its exception text to `policy.ForbiddenError`. The directory-existence check added to it fails on a missing or misspelled guarded directory.
 3. **Parity registry and test** implementing C12, seeded with every feature in the roadmap and its current REST, MCP and CLI surface, and the waivers from the roadmap.
-4. **CLI helper consolidation.** `_resolve_api_key` is copied in `collection.py`, `backup_cmd.py`, `export_cmd.py`, `key_cmd.py` and `maintenance_cmd.py` (`sync.py` imports it from `collection`), and `_DEFAULT_API_URL` is copied in `collection`, `status`, `backup_cmd`, `export_cmd`, `key_cmd` and `maintenance_cmd`. Both move to `cli/_helpers.py` and every module uses them. `tests/test_cli_260_connection_refused_ux.py` must stay green.
-5. **Docs:** a new ADR for the application-service layer and one-implementation-per-feature rule (ADRs are append-only; take the next number), the layer table and principles in `110` and the layering text in `100`, the status of ARCH-01 in `540`, and the layer map in `AGENTS.md` and `CLAUDE.md`. `BREAKING.md` is not touched: S0 changes no wire behavior.
+4. **CLI helper consolidation.** `_resolve_api_key` was copied in `collection.py`, `backup_cmd.py`, `export_cmd.py`, `key_cmd.py` and `maintenance_cmd.py`, and `_DEFAULT_API_URL` in `collection`, `status`, `backup_cmd`, `export_cmd`, `key_cmd` and `maintenance_cmd`; `sync.py`, `ingest.py`, `jobs_cmd.py` and `graph_cmd.py` imported both from `collection`, and `_helpers.py` held a seventh URL copy (`_LOCAL_DEFAULT_URL`). Both names now live once in `cli/_helpers.py` (`_resolve_api_key` wraps `key_manager.load_key`) and every module uses them. `tests/test_cli_260_connection_refused_ux.py` must stay green.
+5. **Docs:** a new ADR for the application-service layer and one-implementation-per-feature rule (ADRs are append-only; ADR 20), the layer table and principles in `110` and the layering text in `100`, the status of ARCH-01 in `540`, and the layer map in `AGENTS.md` and `CLAUDE.md`. `BREAKING.md` is not touched: S0 changes no wire behavior.
 
 ## Out of Scope
 
@@ -131,7 +131,7 @@ S0 ships only what has a real consumer on day one:
 
 ## Edge Cases & Constraints
 
-- **String patch targets.** Many tests patch `archon_search.server.mcp.*` and `archon_search.server._hyde.resolve_hyde_within_budget` by name (`tests/server/test_request_hyde.py:105` and others). Moving a module breaks them silently if the patch target is not updated.
+- **String patch targets.** Many tests patch `archon_search.server.mcp.*` by string and a few call `monkeypatch.setattr` on the module object; none patches a moved name except the adapters' `_SEARCH_TIMEOUT_SECONDS` alias and `routes_search._EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS`, which S0 keeps. Only one test patched a moved module by string (`archon_search.server._hyde.resolve_hyde_within_budget`, now `archon_search.services.request_hyde.resolve_hyde_within_budget` in `tests/services/test_request_hyde.py:104`), plus one logger-name assertion (`:221`). A stale patch target or logger name breaks silently, so both are re-pointed.
 - **`conftest.py` autouse fixture.** `_mcp_default_request_context` patches `archon_search.server.mcp.get_http_request` for every test; opt-out is `real_mcp_auth_context`. Slices must keep both working.
 - **`authz.py` is mixed.** Its policy functions have no transport coupling; `identity_of`, `require_admin_dependency` and `caller_identity` need FastAPI. Only the policy half moves.
 - **Wire-text constants.** `tests/test_sanitized_wire_text_docs.py` requires wire literals to appear in docs `600`, `110`, `120`, `140` and `BREAKING.md`. Moving a constant must not break that link.
@@ -144,7 +144,6 @@ S0 ships only what has a real consumer on day one:
 - Is `ServiceError` one class with a `kind` enum or a small hierarchy? Decided in S1 with the first real errors.
 - Where does the injected telemetry writer come from, and does the services container live on `app.state`, in a factory in `services/`, or both? Decided in S1.
 - Is field-level parity (every command field exposed on every interface) checkable without per-feature alias tables, given MCP and CLI flatten REST's nested `filters`? Evaluated in S1.
-- Which ADR number applies (the next free one at merge time).
 - Whether `warmup.py` and `readiness.py` belong to services or stay server-side; decided in the Status slice (S25).
 
 ## Future Iterations
@@ -165,7 +164,7 @@ Build S0 as specified, small and with only real consumers: it is the cheapest sl
 - `Documentation/Architecture/540_code_and_architecture_quality_audit.md` finding ARCH-01
 - `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` (layer principles and server table)
 - `Documentation/Architecture/140_error_handling_strategy.md`, `520_api_design_and_contracts.md`, `600_api_reference_or_public_interface.md`
-- `archon_search/server/_search_budget.py`, `_hyde.py`, `_validators.py`, `authz.py`
+- `archon_search/services/search_budget.py`, `request_hyde.py`, `validators.py`, `authz.py` and `archon_search/server/authz.py`
 - `archon_search/cli/_helpers.py`, `cli/sync.py`
 - `tests/test_no_wire_str_exc.py`, `tests/test_cli_260_connection_refused_ux.py`, `tests/conftest.py`
 - Roadmap: [roadmap.md](./roadmap.md); first consumer: [01_search_brief.md](./01_search_brief.md)

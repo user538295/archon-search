@@ -1,8 +1,8 @@
 **Purpose**: Ordered, trackable roadmap for making every application feature available through REST, MCP and CLI on one shared implementation  
 **Audience**: Maintainers and contributors working on the interface-parity slices  
 **Status**: Draft  
-**Last reviewed**: 2026-10-30  
-**Next review**: 2026-11-30
+**Last reviewed**: 2026-11-02  
+**Next review**: 2026-12-02
 
 # Interface parity roadmap
 
@@ -46,7 +46,7 @@ Legend: **converge** = the feature already exists on all three interfaces and mo
 
 ### Phase 0 — Foundation
 
-- [ ] **S0 Service-layer foundation**: contract, module moves, boundary test, parity registry, CLI helper consolidation. [Brief](./00_service_layer_foundation_brief.md)
+- [x] **S0 Service-layer foundation**: contract, module moves, boundary test, parity registry, CLI helper consolidation. [Brief](./00_service_layer_foundation_brief.md)
 
 ### Phase A — Retrieval
 

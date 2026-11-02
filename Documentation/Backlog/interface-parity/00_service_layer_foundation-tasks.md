@@ -261,7 +261,7 @@ flowchart LR
     - needs BE-9, BE-10, BE-15 · completes S24
     - Tests
         - #integration_test — `test_wire_text_matches_source_and_every_quoting_doc` — docs 110, 120, 140 and 600 stay correct after the edits
-- [ ] **BE-14** — Amend the rest of the brief to the plan's Documentation update list (importer lists, test-patch claims; K2 has already fixed the edge counts and exemptions) and tick S0 in `roadmap.md` in the landing commit #backend-role
+- [x] **BE-14** — Amend the rest of the brief to the plan's Documentation update list (importer lists, test-patch claims; K2 has already fixed the edge counts and exemptions) and tick S0 in `roadmap.md` in the landing commit #backend-role
     - — · 1.0h
     - needs BE-9 · completes S24
     - Tests
