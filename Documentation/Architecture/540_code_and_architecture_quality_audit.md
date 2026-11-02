@@ -70,7 +70,7 @@ Severity means:
 | SEC-02 | Medium | Archive validation lacks resource limits and blocks async request handlers | Availability, input bounds |
 | SEC-03 | Medium | Long-lived bearer credentials are accepted in URLs and embedded in HTML | Secret handling |
 | SEC-04 | Medium | Telemetry and export artifacts can be group/world readable | Least privilege |
-| TYPE-01 | Low | Core boundaries are weakly typed and no linter/type-checker gate exists | Interface safety |
+| TYPE-01 | Low | Core boundaries are weakly typed and no type-checker gate exists | Interface safety |
 | EXT-01 | Low | LLM provider metadata is distributed across multiple modules | OCP, registry pattern |
 | DUP-01 | Low | API-key resolution is copied across five CLI modules | DRY |
 
@@ -164,8 +164,8 @@ Add a lifespan test with blocked scheduler and maintenance children and assert n
 
 **Evidence**
 
-- `archon_search/server/mcp.py:2167-2214` snapshots the default key into the mounted Starlette middleware.
-- `archon_search/server/mcp.py:1734-1833` and `archon_search/server/routes_keys.py:191-311` implement separate rotation workflows under independent module locks.
+- `archon_search/server/mcp.py:2640-2647` snapshots the default key into the mounted Starlette middleware.
+- `archon_search/server/mcp.py:2132-2235` and `archon_search/server/routes_keys.py:191-311` implement separate rotation workflows under independent module locks.
 - `archon_search/key_manager.py:238-376` creates no revoked record for an unmanaged initial key when `grace_seconds == 0`.
 - `archon_search/server/middleware_auth.py:77-91,120-170` accepts the middleware's captured legacy fallback when no revoked record exists.
 - Existing MCP rotation tests call tool closures directly and do not verify HTTP authentication after rotation (`tests/test_keystore_be9.py:381-433`).
@@ -216,13 +216,15 @@ Route all fan-out modes through one executor and make the product contract expli
 
 ### ARCH-01 — Transport adapters duplicate application workflows
 
+**Status (2026-11-02, ADR 20 / roadmap slice S0): partly addressed.** `archon_search/services/` now holds the search budget, the HyDE resolution, the scope-filter validator and the transport-free authorization policy that REST and MCP share, and `tests/test_layer_import_boundary.py` enforces the dependency direction (a ratcheting allowlist in that test holds the `server/` imports of route modules that remain, `mcp.py`'s among them). The duplicated search, explain, collection-update and key-rotation workflows listed below are still open; each later roadmap slice moves one into a service. Every `mcp.py` line range in this audit and the `routes_search.py`, `routes_explain.py` and `routes_collections.py` ranges in this finding were refreshed on 2026-11-02; the other ranges keep the lines of the 2026-08-03 review.
+
 **Evidence**
 
-- `archon_search/server/mcp.py:260-2164` is a 1,905-line application factory containing the implementations of the MCP tools.
-- MCP search and explain (`archon_search/server/mcp.py:293-1120`) independently perform validation, query expansion, model resolution, pipeline orchestration, telemetry, error handling, and DTO mapping.
-- REST repeats the corresponding workflows in `archon_search/server/routes_search.py:157-434` and `archon_search/server/routes_explain.py:390-741`.
-- MCP collection updates (`archon_search/server/mcp.py:1341-1440`) and REST collection updates (`archon_search/server/routes_collections.py:533-682`) independently implement the same state machine.
-- MCP imports private REST symbols (`archon_search/server/mcp.py:39-45,1361`), while route modules import private helpers from each other.
+- `archon_search/server/mcp.py:457-2577` is a 2,121-line application factory (`create_app`) containing the implementations of the MCP tools.
+- MCP search and explain (`archon_search/server/mcp.py:513-1363`) independently perform validation, query expansion, model resolution, pipeline orchestration, telemetry, error handling, and DTO mapping.
+- REST repeats the corresponding workflows in `archon_search/server/routes_search.py:274-658` and `archon_search/server/routes_explain.py:420-779`.
+- MCP collection updates (`archon_search/server/mcp.py:1617-1729`) and REST collection updates (`archon_search/server/routes_collections.py:905-1012`) independently implement the same state machine.
+- MCP imports private REST symbols (`archon_search/server/mcp.py:121-128,1640`), while route modules import private helpers from each other.
 
 **Why this is architectural debt**
 
@@ -327,7 +329,7 @@ Return 503 when a required field cannot be loaded, or make the field nullable an
 
 - `validate_archive_members` validates member names but not uniqueness, regular-file type, compressed size, declared size, expansion ratio, line length, or record count (`archon_search/_path_safety.py:95-125`).
 - `ImportArchiveReader.read_manifest` performs an unbounded synchronous `f.read()` (`archon_search/jobs/export_archive.py:143-167`).
-- Async REST and MCP handlers call manifest inspection directly before queuing work (`archon_search/server/routes_export.py:477-499`, `archon_search/server/mcp.py:1528-1545`).
+- Async REST and MCP handlers call manifest inspection directly before queuing work (`archon_search/server/routes_export.py:1120-1133`, `archon_search/server/mcp.py:1832-1842`).
 
 **Required remediation**
 
@@ -368,12 +370,12 @@ Create new sensitive directories with `0700` and new telemetry, temp, and export
 **Evidence**
 
 - Production code contains 94 `type: ignore` comments, 175 `Any` tokens, and 244 `noqa` comments.
-- No Ruff, mypy, Pyright, or equivalent project configuration/dependency/CI gate is present.
+- Ruff is gated: the PR workflow runs `uvx ruff@0.17.3 check .` (zero findings) and `pyproject.toml [tool.ruff.lint]` pins the rule set; Ruff is not a declared dev dependency (CI fetches it with `uvx`). No mypy, Pyright, or equivalent type-checking configuration/dependency/CI gate is present.
 - Critical boundaries use `Any`, bare dictionaries, or private attributes, particularly `archon_search/server/routes_jobs.py`, `archon_search/server/mcp.py`, `archon_search/pipeline.py`, and the installer protocol.
 
 **Required remediation**
 
-Add Ruff and Pyright or mypy incrementally. Start with application-service interfaces, domain results, lifecycle ownership, key rotation, and new/changed code. Establish a ratchet in selected modules: no unexplained suppressions and no new `Any` at core boundaries. Do not block adoption on making all 48,825 lines strict in one change.
+Ruff is already a gate; add Pyright or mypy incrementally. Start with application-service interfaces, domain results, lifecycle ownership, key rotation, and new/changed code. Establish a ratchet in selected modules: no unexplained suppressions and no new `Any` at core boundaries. Do not block adoption on making all 48,825 lines strict in one change.
 
 ### EXT-01 — LLM providers need a registry
 
@@ -481,9 +483,9 @@ Exit criteria:
 
 ### Phase 4 — Add quality ratchets
 
-1. **TYPE-01**: add Ruff and incremental type checking to selected modules.
+1. **TYPE-01**: add incremental type checking to selected modules (Ruff is already a PR gate).
 2. Fail CI on warnings owned by the repository.
-3. Add architectural dependency tests for domain/application/adapter direction.
+3. Add architectural dependency tests for domain/application/adapter direction (started: `tests/test_layer_import_boundary.py` covers `services/`, `server/` and `cli/`).
 4. Add complexity and size budgets as review signals, not automatic design verdicts.
 
 Suggested initial review thresholds:

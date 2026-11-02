@@ -256,7 +256,7 @@ flowchart LR
     - Tests
         - #integration_test — `test_adr_numbers_are_unique_contiguous_and_every_adr_is_in_the_documentation_index` — numbering stays contiguous and every ADR is in doc 990 (it does not prove ADR 20 exists; T-4 does)
         - #integration_test — `test_claude_md_mentions_git_cliff` — the `CLAUDE.md` edit keeps the pinned mention
-- [ ] **BE-17** — Update the architecture docs for the finished layer contract: 100 (principle 1 and the auth-boundary path at `:157`), 110 (layer table, principle 5, the `services/` rows, and every mention of the moved modules at `:56`, `:72`, `:74`, `:130`, `:133`, `:143` to `:146`, `:149`, `:150`, `:154` and `:156`), 520 (the "share internal services" statement), 540 (ARCH-01 status, stale `mcp.py` line ranges, the "no Ruff gate" lines `:371`, `:376`, `:484`), 500 (the ruff merge-gate statement) and 510 (the ruff pin at `:143`) #backend-role
+- [x] **BE-17** — Update the architecture docs for the finished layer contract: 100 (principle 1 and the auth-boundary path at `:157`), 110 (layer table, principle 5, the `services/` rows, and every mention of the moved modules at `:56`, `:72`, `:74`, `:130`, `:133`, `:143` to `:146`, `:149`, `:150`, `:154` and `:156`), 520 (the "share internal services" statement), 540 (ARCH-01 status, stale `mcp.py` line ranges, the "no Ruff gate" lines `:371`, `:376`, `:484`), 500 (the ruff merge-gate statement) and 510 (the ruff pin at `:143`) #backend-role
     - — · 4.5h
     - needs BE-9, BE-10, BE-15 · completes S24
     - Tests
