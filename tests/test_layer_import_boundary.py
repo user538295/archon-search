@@ -12,7 +12,9 @@
 3. A ``cli/`` file imports no other ``cli/`` module except ``_helpers``; ``cli/main.py`` registers the commands.
 4. A ``cli/`` file imports nothing from ``archon_search.services`` or ``archon_search.server``.
 
-The permanent exceptions in :data:`_PERMANENT_EXCEPTIONS` are hard-coded and never go stale. The scan needs
+The permanent exceptions in :data:`_PERMANENT_EXCEPTIONS` are hard-coded and never go stale. :data:`_ALLOWLIST` holds the
+known rule 2 violations keyed by edge (file, module, scope); :func:`compare_to_allowlist` fails the real-tree test on a
+violation that is not listed and on a listed edge that is no longer a violation. The scan needs
 nothing from the repo conftest: the repo root comes from ``__file__`` and the unit tests build their own trees.
 
 Accepted blind spots (a syntactic scan of import statements): ``importlib.import_module`` and ``__import__``;
@@ -231,6 +233,25 @@ def broken_rule(edge: Edge) -> str | None:
 def violations(edges: set[Edge]) -> set[Edge]:
     """The edges that break a C1 rule and are not permanent exceptions."""
     return {edge for edge in edges if broken_rule(edge) is not None}
+
+
+_SERVER = f"{_PKG}/server"
+_ROUTES = f"{_PKG}.server.routes_"
+_ALLOWLIST: dict[Edge, str] = {
+    Edge(f"{_SERVER}/_collection_job.py", f"{_ROUTES}jobs", Scope.MODULE_LEVEL): "takes error details and `_persist_job_status` from the jobs route",
+    Edge(f"{_SERVER}/mcp.py", f"{_ROUTES}explain", Scope.MODULE_LEVEL): "takes the explain models and `EXPLAIN_FAILED_DETAIL` from the explain route",
+    Edge(f"{_SERVER}/mcp.py", f"{_ROUTES}export", Scope.MODULE_LEVEL): "takes `is_ingesting_cancel_leftover` from the export route",
+    Edge(f"{_SERVER}/mcp.py", f"{_ROUTES}collections", Scope.FUNCTION_LOCAL): "takes `_all_collection_paths` from the collections route",
+    Edge(f"{_SERVER}/routes_collections.py", f"{_ROUTES}jobs", Scope.MODULE_LEVEL): "takes job helpers and `IngestRequest` from the jobs route",
+    Edge(f"{_SERVER}/routes_graph.py", f"{_ROUTES}jobs", Scope.MODULE_LEVEL): "takes `_persist_job_status` and an error detail from the jobs route",
+    Edge(f"{_SERVER}/routes_sync.py", f"{_ROUTES}jobs", Scope.MODULE_LEVEL): "takes `_persist_job_status` and error details from the jobs route",
+    Edge(f"{_SERVER}/routes_status.py", f"{_ROUTES}collections", Scope.MODULE_LEVEL): "takes `_all_collection_paths` from the collections route",
+}  # the eight rule 2 violations of the current tree (plan C1); the list only shrinks, each slice deletes what it resolves
+
+
+def compare_to_allowlist(found: set[Edge], allowlist: dict[Edge, str]) -> tuple[set[Edge], set[Edge]]:
+    """(new, stale): violations not in the allowlist, and allowlist entries whose edge is no longer a violation."""
+    return found - allowlist.keys(), allowlist.keys() - found
 
 
 # Modules the snippets import as submodules: `from pkg import name` targets `pkg.name` only when the file exists.
@@ -575,5 +596,46 @@ def test_run_server_import_allowed_only_in_cli_serve(tmp_path: Path) -> None:
         Edge(_SERVE, "archon_search.server.app", _TYPE)
     }
 
-    # a permanent exception has no presence requirement (unlike an allowlist entry, BE-9): without the import nothing fails
+    # a permanent exception has no presence requirement (unlike an allowlist entry, which goes stale): without the import nothing fails
     assert _tree_violations(tmp_path, {_SERVE: "def serve():\n    pass\n"}) == set()
+
+
+def test_real_tree_has_no_unlisted_boundary_violation() -> None:
+    """S5: the real tree breaks rules 1-4 in exactly the allowlisted edges; a new one and a stale entry both fail (S7)."""
+    new, stale = compare_to_allowlist(violations(scan_tree()), _ALLOWLIST)
+    assert not (new or stale), (
+        f"new violations (fix the import; never extend the allowlist): {sorted(new)}; "
+        f"stale allowlist entries (the violation is fixed; delete the entry): {sorted((e, _ALLOWLIST[e]) for e in stale)}"
+    )
+
+
+def test_stale_allowlist_entry_fails(tmp_path: Path) -> None:
+    route, target = "archon_search/server/routes_a.py", "archon_search.server.routes_b"
+    module_entry, local_entry = Edge(route, target, _MODULE), Edge(route, target, _LOCAL)
+    allowlist = {module_entry: "module-level", local_entry: "function-local"}
+    both = "import archon_search.server.routes_b\n" + _local("import archon_search.server.routes_b")
+
+    def compare(source: str, listed: dict[Edge, str]) -> tuple[set[Edge], set[Edge]]:
+        return compare_to_allowlist(_tree_violations(tmp_path, {route: source}), listed)
+
+    # every violation listed: clean
+    assert compare(both, allowlist) == (set(), set())
+    # the module-level import is fixed, the function-local one stays: only the module-level entry is stale (scope counts)
+    assert compare(_local("import archon_search.server.routes_b"), allowlist) == (set(), {module_entry})
+    # the function-local import is fixed, the module-level one stays: only the function-local entry is stale
+    assert compare("import archon_search.server.routes_b\n", allowlist) == (set(), {local_entry})
+    # a type-only import is its own key: listed it is clean, and fixed it goes stale
+    type_entry = Edge(route, target, _TYPE)
+    type_only = _type_only("import archon_search.server.routes_b")
+    assert compare(type_only, {type_entry: "type-only"}) == (set(), set())
+    assert compare("x = 1\n", {type_entry: "type-only"}) == (set(), {type_entry})
+    # both fixed: both entries are stale
+    assert compare("x = 1\n", allowlist) == (set(), {module_entry, local_entry})
+    # a violation that is not listed is new, and a list that is empty keeps nothing stale
+    assert compare(both, {module_entry: "module-level"}) == ({local_entry}, set())
+    assert compare("x = 1\n", {}) == (set(), set())
+    # an entry whose edge is now allowed (a permanent exception) is stale too
+    app = "archon_search/server/app.py"
+    assert compare_to_allowlist(
+        _tree_violations(tmp_path, {app: both}), {Edge(app, target, _MODULE): "composition root"}
+    ) == (set(), {Edge(app, target, _MODULE)})

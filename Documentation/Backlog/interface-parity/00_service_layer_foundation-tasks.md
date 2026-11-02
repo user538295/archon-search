@@ -215,7 +215,7 @@ flowchart LR
         - #unit_test — `test_cli_importing_services_server_or_sibling_command_is_a_violation` — only `_helpers` is allowed; `cli/main.py` exempt
         - #unit_test — `test_function_local_type_checking_relative_and_from_package_imports_are_classified` — each form is an edge; `from pkg import mod` targets the submodule
         - #unit_test — `test_run_server_import_allowed_only_in_cli_serve` — the same import elsewhere fails, and the exception is never stale
-- [ ] **BE-9** — Run the scanner on the real tree: seed the allowlist keyed (file, module, scope) with the eight edges that exist (see Plan corrections) and fail on a new or stale entry #backend-role
+- [x] **BE-9** — Run the scanner on the real tree: seed the allowlist keyed (file, module, scope) with the eight edges that exist (see Plan corrections) and fail on a new or stale entry #backend-role
     - — · 2.5h
     - needs BE-4, BE-6, FE-2, BE-8 · completes C1, S5, S7
     - Tests
