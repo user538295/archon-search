@@ -12,10 +12,8 @@ Scenarios completed:
        - .rtf (Rich Text Format, new in BE-2) via minimal RTF text file — no external deps
   S2 — .tsv file routes to _parse_plain and its content is indexed as plain text
 
-Note on .xls: the test exists (test_office_xls_ingest_and_search) but skips gracefully when
-xlwt is not installed.  xlwt is not a declared dependency (markitdown[xls] only requires xlrd
-for reading); xls write capability depends on optional xlwt.  The test documents the intent and
-will execute when xlwt is available.
+Note on .xls: the test (test_office_xls_ingest_and_search) writes its workbook with xlwt, a dev dependency
+(pyproject.toml); markitdown[xls] only requires xlrd, for reading.  It skips gracefully when xlwt is absent.
 
 Note on .msg (Outlook): creating a real .msg file requires OLE2 binary structure (complex
 without extract-msg or olefile as a write-mode dep).  Real-file .msg integration testing is
@@ -412,12 +410,19 @@ def test_office_rtf_ingest_and_search(tmp_path, monkeypatch) -> None:
 # Test 6 — Office file round-trip (.xls)
 #
 # S1: A .xls file ingests without error via the markitdown path and its
-# content is searchable.  This test requires xlwt for file creation;
-# it skips gracefully when xlwt is not installed (xlwt is not a declared
-# dep — markitdown[xls] only pulls xlrd for reading).
+# content is searchable.  This test writes the workbook with xlwt (a dev
+# dependency; markitdown[xls] only pulls xlrd for reading) and skips
+# gracefully when xlwt is not installed.
 # ---------------------------------------------------------------------------
 
 
+# markitdown 0.1.9 (the latest release, capped `<0.2` in pyproject.toml) reads .xls with `pd.read_excel(..., engine="xlrd")`,
+# which pandas 3.1 flags with Pandas4Warning. The call is inside the third-party converter and archon cannot pick the
+# engine, so the one test that drives it ignores exactly that message from exactly that module (DEP-4 in doc 530).
+# Drop this mark when markitdown stops using the xlrd engine.
+@pytest.mark.filterwarnings(
+    "ignore:The xlrd engine is deprecated::markitdown.converters._xlsx_converter"
+)
 def test_office_xls_ingest_and_search(tmp_path, monkeypatch) -> None:
     """S1: .xls ingest round-trip — Excel 97 spreadsheet content indexed and searchable.
 
@@ -426,9 +431,8 @@ def test_office_xls_ingest_and_search(tmp_path, monkeypatch) -> None:
     cell value.  Proves the markitdown xls path works end-to-end for .xls,
     one of the new Office extensions added in BE-2.
 
-    xlwt is not a declared dependency (markitdown[xls] requires xlrd for read
-    only).  This test skips gracefully when xlwt is absent; it executes when
-    xlwt is available in the environment.
+    xlwt (a dev dependency; markitdown[xls] requires xlrd for reading only)
+    writes the workbook.  This test skips gracefully when xlwt is absent.
     """
     xlwt = pytest.importorskip("xlwt")
 

@@ -7,9 +7,15 @@ request so a test can assert what the wrapper sent.
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
+import socket
+import struct
+import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -19,6 +25,7 @@ from tests._fake_model_server import (
     FAKE_CHAT_CLOSE,
     FAKE_CHAT_FRAME_TOKENS,
     FAKE_CHAT_OPEN,
+    ClientDisconnectQuietHTTPServer,
     FakeModelServer,
     keep_loopback_out_of_proxies,
 )
@@ -30,6 +37,9 @@ _SHORT_HOLD_LIMIT_SECONDS = 0.05
 _UNAVAILABLE = 503
 _SECOND_REPLY = "a changed answer"
 _HELD_CHAT_TIMEOUT_SECONDS = 10.0
+_HANDLER_THREAD_MARK = "process_request_thread"  # the name of a ``ThreadingMixIn`` handler thread
+_LINGER_ZERO = struct.pack("ii", 1, 0)  # SO_LINGER on with a zero timeout: close() sends a reset instead of a FIN
+_LOOPBACK = "127.0.0.1"
 
 _PROMPT = "describe this collection please"
 _PROMPT_WORDS = 4
@@ -180,6 +190,59 @@ def test_two_requests_share_one_keep_alive_connection(server: FakeModelServer) -
 
     assert first.http_version == second.http_version == "HTTP/1.1"
     assert [recorded.path for recorded in server.requests] == ["/props", "/tokenize"]
+
+
+def test_a_client_that_resets_a_kept_alive_connection_leaves_no_trace(
+    server: FakeModelServer, capfd: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pooled client that is closed after the server answered resets the idle connection: not an error of the server.
+
+    The handler thread of a kept-alive connection outlives ``server_close``, so the reset lands in a later test, where
+    ``socketserver`` would print its traceback to a stderr that may be gone and pytest would report a thread exception.
+    """
+    seen: list[tuple[Any, type[BaseException]]] = []
+    original = ClientDisconnectQuietHTTPServer.handle_error
+
+    def recording(self: ClientDisconnectQuietHTTPServer, request: Any, client_address: Any) -> None:
+        seen.append((client_address, type(sys.exception())))
+        original(self, request, client_address)
+
+    monkeypatch.setattr(ClientDisconnectQuietHTTPServer, "handle_error", recording)
+    address = urlsplit(server.base_url)
+    handlers_before = _handler_threads()
+    connection = http.client.HTTPConnection(address.hostname, address.port, timeout=_HELD_CHAT_TIMEOUT_SECONDS)
+    try:
+        connection.request("GET", "/props")
+        connection.getresponse().read()  # the whole answer is out; the handler now waits for the next request
+        own_address = connection.sock.getsockname()
+        handlers = _handler_threads() - handlers_before
+        connection.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, _LINGER_ZERO)  # closing sends a reset
+    finally:
+        connection.close()
+    for handler in handlers:
+        handler.join(_HELD_CHAT_TIMEOUT_SECONDS)
+
+    assert handlers, "the connection had no handler thread"
+    assert not any(handler.is_alive() for handler in handlers)
+    # the reset of this connection did reach handle_error (a lingering handler of an earlier server may add entries)
+    assert [error for client, error in seen if client == own_address] == [ConnectionResetError]
+    assert capfd.readouterr().err == ""
+
+
+def _handler_threads() -> set[threading.Thread]:
+    return {thread for thread in threading.enumerate() if _HANDLER_THREAD_MARK in thread.name}
+
+
+def test_a_handler_error_that_is_not_a_client_disconnect_still_reaches_stderr(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    with ClientDisconnectQuietHTTPServer((_LOOPBACK, 0), BaseHTTPRequestHandler) as httpd:
+        try:
+            raise RuntimeError("a bug in a handler")
+        except RuntimeError:
+            httpd.handle_error(None, (_LOOPBACK, 0))
+
+    assert "RuntimeError: a bug in a handler" in capfd.readouterr().err
 
 
 def _wait_for_chats(server: FakeModelServer, count: int) -> None:

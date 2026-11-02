@@ -45,6 +45,11 @@ dependencies = [
     "pydantic>=2.14",
     "python-json-logger>=4.2,<5",
     "fastmcp>=4.1.4,<5",
+    # anyio arrives via httpx and httpx2 (their httpcore AnyIO backends open the connections), starlette and others;
+    # the runtime code never imports it. 4.16.0 is the first release whose connect_tcp closes a connected socket when
+    # the enclosing task is cancelled (anyio#1364): earlier ones could leak an unclosed transport when the server
+    # cancelled an in-flight HTTP call at shutdown (tests/server/test_http_cancel_leaks_no_transport.py).
+    "anyio>=4.16.0",
 ]
 
 [project.optional-dependencies]

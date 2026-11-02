@@ -5,9 +5,15 @@ from pathlib import Path
 
 import pytest
 from packaging.markers import Marker
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 PYPROJECT_PATH = Path(__file__).parent.parent / "pyproject.toml"
 UV_LOCK_PATH = Path(__file__).parent.parent / "uv.lock"
+
+# anyio#1364: 4.16.0 is the first release whose connect_tcp closes its socket when the enclosing task is cancelled.
+_ANYIO_LAST_LEAKING_RELEASE = Version("4.15.1")
+_ANYIO_CONNECT_LEAK_FIXED = Version("4.16.0")
 
 
 def _load_pyproject() -> dict:
@@ -153,3 +159,22 @@ def test_gliner_present():
     lock_packages = lock.get("package", [])
     gliner_lock_pkgs = [p for p in lock_packages if p.get("name") == "gliner"]
     assert gliner_lock_pkgs, "gliner must be present in uv.lock"
+
+
+def test_anyio_floor_excludes_the_releases_that_leak_a_cancelled_connection():
+    """anyio is transitive (httpx, httpx2, starlette): the floor keeps the leaking releases out of every install."""
+    requirements = [Requirement(dep) for dep in _load_pyproject()["project"]["dependencies"]]
+    floors = [requirement for requirement in requirements if requirement.name == "anyio"]
+    assert len(floors) == 1, "anyio must carry one floor in [project] dependencies"
+    assert not floors[0].specifier.contains(_ANYIO_LAST_LEAKING_RELEASE)
+    assert floors[0].specifier.contains(_ANYIO_CONNECT_LEAK_FIXED)
+
+
+def test_lock_resolves_anyio_past_the_connect_leak():
+    """The locked anyio is a release that closes the connected socket of a cancelled connection attempt."""
+    with open(UV_LOCK_PATH, "rb") as f:
+        lock = tomllib.load(f)
+    versions = {pkg["version"] for pkg in lock.get("package", []) if pkg.get("name") == "anyio"}
+    assert len(versions) == 1, f"anyio must converge to one version, got: {versions}"
+    (locked,) = versions
+    assert Version(locked) >= _ANYIO_CONNECT_LEAK_FIXED

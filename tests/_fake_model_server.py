@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextlib
 import json
 import socket
+import sys
 import threading
 import time
 from collections.abc import Iterator, Mapping
@@ -259,7 +260,23 @@ class FakeModelServer:
         }
 
 
-class _Server(ThreadingHTTPServer):
+class ClientDisconnectQuietHTTPServer(ThreadingHTTPServer):
+    """A threading HTTP server that stays silent when a client resets or drops a connection.
+
+    A kept-alive connection's handler thread outlives ``server_close``: it waits for the next request until the client
+    closes. A pooled client closed (or collected) in a later test resets that connection, and ``socketserver`` then
+    prints the traceback to a stderr that may be gone, which pytest reports against whatever test is running. A client
+    that leaves is not an error of a stand-in server; any other error still reaches ``handle_error``. ``socketserver``
+    calls it from inside its ``except`` block, which is what makes ``sys.exception()`` the exception being handled.
+    """
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        if isinstance(sys.exception(), ConnectionError):
+            return
+        super().handle_error(request, client_address)
+
+
+class _Server(ClientDisconnectQuietHTTPServer):
     """The HTTP server, holding the ``FakeModelServer`` its handlers record into and answer from."""
 
     def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler], fake: FakeModelServer) -> None:

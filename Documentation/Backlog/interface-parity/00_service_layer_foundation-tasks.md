@@ -1,7 +1,7 @@
 ---
 feature: Application-service layer foundation (the contract for interface parity)
 plan: 00_service_layer_foundation-team-plan.md
-status: draft        # draft → in-progress → done
+status: done        # draft → in-progress → done
 ---
 
 # S0 · Application-service layer foundation — Task Breakdown
@@ -277,7 +277,7 @@ flowchart LR
         - #manual_test — Old-name sweep — search `archon_search/`, `tests/` and the live docs for the old `server` budget, HyDE and validators modules (module and file names) and for `server.authz` mentions; only the exemptions in the plan remain (as K2 extends them) (non-automatable as a permanent test: a permanent name search would have to carry the long list of historical exemptions and adds nothing after the cutover, so the name half is a one-off search run in this task, and the `server.authz` half needs a human to judge whether a mention describes a moved name)
 
 ### Phase 8 · Close-out
-- [ ] **T-6** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-6** — Project close-out & acceptance fact-check #tester-role
     - — · 5.0h
     - needs K2, BE-7, T-1, T-2, T-3, BE-14, T-4, T-5 (and through them every other task) · completes S26 (acceptance gate)
     - Tests
