@@ -270,7 +270,7 @@ flowchart LR
     - needs BE-12 · completes S25
     - Tests
         - #manual_test — ADR 20 review — follows the ADR 17/18 format, exists, takes the next free number and is listed in doc 990 (non-automatable: content and format review is judgement; contiguity and the index row are already enforced by the docs test in BE-12)
-- [ ] **T-5** — Manual: sweep the repo for the old module names and for `server.authz` mentions that describe a moved name #tester-role
+- [x] **T-5** — Manual: sweep the repo for the old module names and for `server.authz` mentions that describe a moved name #tester-role
     - — · 2.0h
     - needs BE-12, BE-13, BE-16, BE-17 · completes S33
     - Tests

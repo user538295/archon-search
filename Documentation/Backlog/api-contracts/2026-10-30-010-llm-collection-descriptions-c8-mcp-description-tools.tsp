@@ -36,8 +36,8 @@ model CollectionDescriptionView {
   last_described?: utcDateTime;
 }
 
-/// The error vocabulary the collection tools already return (mcp.py lines 289-293 and 1725, authz.py
-/// line 31): `validation_error`, not `validation`.
+/// The error vocabulary the collection tools already return (mcp.py lines 289-293 and 1725, services/authz.py
+/// `FORBIDDEN_CODE`): `validation_error`, not `validation`.
 enum McpErrorCode {
   not_found,
   validation_error,
