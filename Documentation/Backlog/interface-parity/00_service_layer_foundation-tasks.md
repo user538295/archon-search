@@ -206,7 +206,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_every_guarded_directory_exists_and_holds_python_files` — new positive control for the directory list
         - #integration_test — `test_no_new_str_exc_of_a_caught_exception` — existing guard; now also scans the real files in `services/` and passes
-- [ ] **BE-8** — Write the import scanner and rules in `tests/test_layer_import_boundary.py`: stack-based visitor for module-level, function-local and `TYPE_CHECKING`-only scope; import forms (`from pkg import name` resolves to the submodule when it exists; relative imports resolved); rules 1–4 of C1; hard-coded exceptions (`app.py` for any `routes_*` and `server.mcp` in any scope; the single function-local `run_server` import in `cli/serve.py`); keep repo root derived from `__file__` and the scan free of repo-conftest dependencies (T-3 relies on it) #backend-role
+- [x] **BE-8** — Write the import scanner and rules in `tests/test_layer_import_boundary.py`: stack-based visitor for module-level, function-local and `TYPE_CHECKING`-only scope; import forms (`from pkg import name` resolves to the submodule when it exists; relative imports resolved); rules 1–4 of C1; hard-coded exceptions (`app.py` for any `routes_*` and `server.mcp` in any scope; the single function-local `run_server` import in `cli/serve.py`); keep repo root derived from `__file__` and the scan free of repo-conftest dependencies (T-3 relies on it) #backend-role
     - — · 4.5h
     - needs K1 · completes C1, S6, S8, S9, S32
     - Tests
