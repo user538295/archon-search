@@ -250,7 +250,7 @@ flowchart LR
         - #e2e_test — `test_smoke_parity_test_fails_in_a_real_pytest_run_on_a_deleted_registry_row` — the same lane for the parity test and a registry copy (with `tests/_mcp_tools.py` and the `tests/__init__.py` files it imports); the child gets the data dir and API key through its environment
 
 ### Phase 7 · Read the layer contract
-- [ ] **BE-12** — Write the new ADR `Documentation/ADRs/20_…` (format of ADR 17/18: Status, Date, Deciders, Supersedes, Context, Decision, Consequences, Cross-References); add its row and one Backlog row for the interface-parity roadmap, briefs, plan and task breakdown to doc 990; update the layer maps in `AGENTS.md` (`:61`, `:77`), `CLAUDE.md` (`:30`, `:50`) and `tests/CLAUDE.md` (suite layout gains `tests/services` and `tests/parity`); keep `git-cliff` in `CLAUDE.md` (pinned by `test_docs.py`) #backend-role
+- [x] **BE-12** — Write the new ADR `Documentation/ADRs/20_…` (format of ADR 17/18: Status, Date, Deciders, Supersedes, Context, Decision, Consequences, Cross-References); add its row and one Backlog row for the interface-parity roadmap, briefs, plan and task breakdown to doc 990; update the layer maps in `AGENTS.md` (`:61`, `:77`), `CLAUDE.md` (`:30`, `:50`) and `tests/CLAUDE.md` (suite layout gains `tests/services` and `tests/parity`); keep `git-cliff` in `CLAUDE.md` (pinned by `test_docs.py`) #backend-role
     - — · 3.0h
     - needs BE-9, BE-10, BE-15 · completes S24
     - Tests

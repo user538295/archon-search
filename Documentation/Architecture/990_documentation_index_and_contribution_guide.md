@@ -1,7 +1,7 @@
 Purpose: Single entry point to all `archon-search` documentation, plus the rules for adding and maintaining docs.
 Audience: Medior engineers contributing to or navigating the `archon-search` documentation set.
 Status: Draft
-Last reviewed: 2026-11-01 / Next review: 2027-11-01
+Last reviewed: 2026-11-02 / Next review: 2027-11-02
 
 # Documentation Index and Contribution Guide
 
@@ -134,6 +134,7 @@ Production-grade operations documentation for SREs and sysadmins running `archon
 | [`ADRs/C5-rag-fusion-external-llm-dependency.md`](../ADRs/C5-rag-fusion-external-llm-dependency.md) | RAG Fusion's external-LLM dependency, privacy tradeoffs, and mutual exclusion with HyDE. *Its "422 for a missing package" and its 2000-character query cut are superseded by [ADR 19](../ADRs/19_shared_llm_client_and_provider_based_collection_descriptions.md).* |
 | [`ADRs/C6-local-llm-provider.md`](../ADRs/C6-local-llm-provider.md) | Why `llama_cpp` is a fifth query-expansion provider (HyDE, RAG Fusion, graph enrichment) rather than a generic OpenAI-compatible provider. *Its adapters, enrichment factory and protocols, and the `claude_cli` graph deferral, are superseded by [ADR 19](../ADRs/19_shared_llm_client_and_provider_based_collection_descriptions.md).* |
 | [`ADRs/19_shared_llm_client_and_provider_based_collection_descriptions.md`](../ADRs/19_shared_llm_client_and_provider_based_collection_descriptions.md) | Why HyDE, RAG Fusion, graph enrichment and collection descriptions share one consumer-owned LLM client (five providers, per-feature context windows, locked-down `claude_cli`), and why descriptions are provider-based, off by default, manual-wins, lifecycle-managed, exported in manifest version 2 and written through one operation that also refreshes the routing vector (partially supersedes ADR C4, C5, C6, 12 and 07). *Later decisions are dated entries in its Amendments section.* |
+| [`ADRs/20_application_service_layer_with_enforced_boundaries_and_interface_parity.md`](../ADRs/20_application_service_layer_with_enforced_boundaries_and_interface_parity.md) | Why `archon_search/services/` is the application layer (search budget, request HyDE, validators and the authz policy moved out of `server/`), why two in-repo tests enforce it (an import-boundary scan with a ratcheting allowlist, and an interface-parity registry with waivers), and what is not enforced. |
 
 ## Security Guide
 
@@ -162,6 +163,7 @@ Security-focused documentation for security engineers, IT admins, and reviewers 
 | [`Completed/e0d-pdf-large-file-support-brief.md`](../Completed/e0d-pdf-large-file-support-brief.md) | E0d: PDF streaming ingest + configurable size guard. |
 | [`Completed/e0e-multi-collection-filters-brief.md`](../Completed/e0e-multi-collection-filters-brief.md) | E0e: lift multi-collection filter v1 restriction. |
 | [`Backlog/2026-10-30-010-llm-collection-descriptions-brief.md`](../Backlog/2026-10-30-010-llm-collection-descriptions-brief.md) | Provider-based collection descriptions and a shared LLM client (LCD): the brief, its [team plan](../Backlog/2026-10-30-010-llm-collection-descriptions-team-plan.md), [task breakdown](../Backlog/2026-10-30-010-llm-collection-descriptions-tasks.md) and `Backlog/api-contracts/*llm-collection-descriptions*` contracts. Delivered; each "Revised after implementation" note records where the shipped feature differs. Decision record: [ADR 19](../ADRs/19_shared_llm_client_and_provider_based_collection_descriptions.md). |
+| [`Backlog/interface-parity/roadmap.md`](../Backlog/interface-parity/roadmap.md) | Interface-parity roadmap: every feature on REST, MCP and CLI through one implementation in `services/`, as ordered slices S0-S33 with waivers and a decisions log. S0 (service-layer foundation): its [brief](../Backlog/interface-parity/00_service_layer_foundation_brief.md), [team plan](../Backlog/interface-parity/00_service_layer_foundation-team-plan.md) and [task breakdown](../Backlog/interface-parity/00_service_layer_foundation-tasks.md) and `Backlog/interface-parity/00_service_layer_foundation-c*.tsp` contracts; [S1 search brief](../Backlog/interface-parity/01_search_brief.md). Decision record: [ADR 20](../ADRs/20_application_service_layer_with_enforced_boundaries_and_interface_parity.md). |
 | [`Backlog/store_cleanup_plan.md`](../Backlog/store_cleanup_plan.md) | `store.py` clean-code remediation: work slices with a proposed dependency order and a per-slice doc checklist. Unowned, unscheduled. |
 | [`Backlog/pytorch-runtime-plan.md`](../Backlog/pytorch-runtime-plan.md) | RT1: replace fastembed/ONNX Runtime with PyTorch for the embedder and reranker, phase by phase, with its implementation status. |
 
