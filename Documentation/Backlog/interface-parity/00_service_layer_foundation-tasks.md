@@ -242,7 +242,7 @@ flowchart LR
     - needs K2, BE-11 · completes C4, S11, S15, S16
     - Tests
         - #integration_test — `test_parity_passes_on_live_surfaces` — every live surface is claimed or waived; the lazy `graph` group, nested groups, invokable `backup`, docs routes incl. `/docs/oauth2-redirect`, `/v1` routes and `HEAD` handling raise no false failure (T-6 checks the registry against the roadmap list, S16)
-- [ ] **T-3** — e2e: each guard fails in a real pytest process on a real violation #tester-role
+- [x] **T-3** — e2e: each guard fails in a real pytest process on a real violation #tester-role
     - — · 3.0h
     - needs BE-9, BE-10 · completes S29
     - Tests
