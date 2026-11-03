@@ -61,14 +61,22 @@ _SEARCH_RESULT_PUBLIC_FIELDS = {
     "reranker_score",
 }
 
+# The ``search`` tool items add the per-result ACL envelope (search-only schema); ``McpSearchResultSchema`` does not.
+_SEARCH_TOOL_RESULT_PUBLIC_FIELDS = _SEARCH_RESULT_PUBLIC_FIELDS | {"acl_gate"}
+
 _SEARCH_RESPONSE_PUBLIC_FIELDS = {
     "results",
     "acl_filtered",
     "excluded_collections",
+    "embedding_model",
     "hyde_applied",
+    "rag_fusion_applied",
+    "rag_fusion_queries_used",
+    "rag_fusion_attempted",
+    "graph_expansion_applied",
     "expansion_used",
     "expansion_warning",
-    "graph_expansion_applied",
+    "applied_filters",
     "ppr_entities_matched",
 }
 
@@ -343,7 +351,7 @@ async def test_e2e_mcp_search_tool_response_shape_after_real_ingest(
     - Response dict has exactly the McpSearchResponse public fields.
     - No extra keys, no missing required keys.
     - ``results`` is a non-empty list.
-    - Each result item has exactly the McpSearchResultSchema public fields.
+    - Each result item has exactly the search-only result public fields (the base fields plus ``acl_gate``).
     """
     doc = tmp_path / "e2e-mcp-doc.txt"
     doc.write_text("Fascinating document about the lifecycle of stars in galaxies. " * 6)
@@ -384,7 +392,7 @@ async def test_e2e_mcp_search_tool_response_shape_after_real_ingest(
         # Each result item must have exactly the public contract fields.
         for item in response["results"]:
             item_keys = set(item.keys())
-            missing_item = _SEARCH_RESULT_PUBLIC_FIELDS - item_keys
-            extra_item = item_keys - _SEARCH_RESULT_PUBLIC_FIELDS
+            missing_item = _SEARCH_TOOL_RESULT_PUBLIC_FIELDS - item_keys
+            extra_item = item_keys - _SEARCH_TOOL_RESULT_PUBLIC_FIELDS
             assert not missing_item, f"missing result fields: {missing_item}"
             assert not extra_item, f"extra result fields: {extra_item}"

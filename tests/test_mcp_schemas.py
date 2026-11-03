@@ -107,19 +107,35 @@ def test_mcp_search_result_schema_extra_forbid():
         )
 
 
-def test_mcp_search_response_fields():
+def test_mcp_search_response_fields_equal_rests():
     from archon_search.server.mcp_schemas import McpSearchResponse
+    from archon_search.server.routes_search import SearchResponse
 
     assert set(McpSearchResponse.model_fields.keys()) == {
         "results",
         "acl_filtered",
         "excluded_collections",
+        "embedding_model",
         "hyde_applied",
+        "rag_fusion_applied",
+        "rag_fusion_queries_used",
+        "rag_fusion_attempted",
+        "graph_expansion_applied",
         "expansion_used",
         "expansion_warning",
-        "graph_expansion_applied",
+        "applied_filters",
         "ppr_entities_matched",
     }
+    assert set(McpSearchResponse.model_fields) == set(SearchResponse.model_fields)
+
+
+def test_mcp_search_response_new_fields_default_to_rests_defaults():
+    from archon_search.server.mcp_schemas import McpSearchResponse
+    from archon_search.server.routes_search import SearchResponse
+
+    new_fields = ("embedding_model", "rag_fusion_applied", "rag_fusion_queries_used", "rag_fusion_attempted", "applied_filters")
+    for name in new_fields:
+        assert McpSearchResponse.model_fields[name].default == SearchResponse.model_fields[name].default, name
 
 
 def test_mcp_search_response_hyde_applied_defaults_false():
@@ -127,6 +143,107 @@ def test_mcp_search_response_hyde_applied_defaults_false():
 
     response = McpSearchResponse(results=[], acl_filtered=False, excluded_collections=[])
     assert response.hyde_applied is False
+
+
+def _search_result() -> SearchResult:
+    return SearchResult(
+        doc_id="d1",
+        chunk_id="d1-000000",
+        text="hello",
+        score=0.5,
+        source_path="/a.md",
+        file_type="md",
+        language="en",
+        indexed_at="2024-01-01T00:00:00.000000Z",
+        updated_at="2024-01-01T00:00:00.000000Z",
+        ingested_by="cli",
+        metadata={"k": "v"},
+        acl=None,
+        collection="col1",
+    )
+
+
+_BASE_RESULT_KEYS = {
+    "doc_id",
+    "chunk_id",
+    "text",
+    "score",
+    "source_path",
+    "file_type",
+    "language",
+    "indexed_at",
+    "updated_at",
+    "ingested_by",
+    "metadata",
+    "acl",
+    "collection",
+    "reranker_score",
+}
+
+
+def test_search_result_schema_adds_acl_gate_only_for_search():
+    from archon_search.server.mcp_schemas import (
+        McpSearchResultSchema,
+        McpSearchToolResultSchema,
+        SearchWithContextResponse,
+    )
+
+    assert set(McpSearchResultSchema.model_fields) == _BASE_RESULT_KEYS
+    assert set(McpSearchToolResultSchema.model_fields) == _BASE_RESULT_KEYS | {"acl_gate"}
+    assert issubclass(McpSearchToolResultSchema, McpSearchResultSchema)
+    assert set(SearchWithContextResponse.model_fields) == {
+        "results",
+        "hyde_applied",
+        "expansion_used",
+        "expansion_warning",
+    }
+    base = McpSearchResultSchema.from_result(_search_result())
+    assert set(base.model_dump()) == _BASE_RESULT_KEYS
+
+
+def test_search_tool_result_schema_calls_the_base_from_result():
+    from unittest.mock import patch
+
+    from archon_search.server.mcp_schemas import (
+        McpSearchResultSchema,
+        McpSearchToolResultSchema,
+    )
+
+    with (
+        patch.object(McpSearchResultSchema, "from_result", side_effect=ValueError("reached base")),
+        pytest.raises(ValueError, match="reached base"),
+    ):
+        McpSearchToolResultSchema.from_search_result(_search_result())
+
+
+def test_mcp_search_response_dumps_the_per_result_acl_gate():
+    from archon_search.server.mcp_schemas import (
+        McpSearchResponse,
+        McpSearchResultSchema,
+        McpSearchToolResultSchema,
+        SearchWithContextItemSchema,
+    )
+    from archon_search.server.schemas import AclGateSchema
+
+    gate = AclGateSchema(allowed_principals=["alice"], source="frontmatter", warnings=["w"])
+    item = McpSearchToolResultSchema.from_search_result(_search_result(), gate)
+    response = McpSearchResponse(results=[item], acl_filtered=False, excluded_collections=[])
+    dumped = response.model_dump(mode="json")["results"][0]
+    assert dumped["acl_gate"] == {
+        "allowed_principals": ["alice"],
+        "source": "frontmatter",
+        "sidecar_path": None,
+        "warnings": ["w"],
+    }
+    assert set(dumped) == _BASE_RESULT_KEYS | {"acl_gate"}
+
+    without_gate = McpSearchToolResultSchema.from_search_result(_search_result())
+    assert without_gate.model_dump(mode="json")["acl_gate"] is None
+
+    context_item = SearchWithContextItemSchema(
+        result=McpSearchResultSchema.from_result(_search_result()), context_before=[], context_after=[]
+    )
+    assert set(context_item.model_dump(mode="json")["result"]) == _BASE_RESULT_KEYS
 
 
 def test_mcp_search_response_extra_forbid():

@@ -118,6 +118,7 @@ from archon_search.server.mcp_schemas import (
     IngestResultSchema,
     McpSearchResponse,
     McpSearchResultSchema,
+    McpSearchToolResultSchema,
     SearchWithContextItemSchema,
     SearchWithContextResponse,
 )
@@ -702,7 +703,7 @@ def create_app(
             try:
                 result_schemas = []
                 for r in result_obj.results:
-                    rs = McpSearchResultSchema.from_result(r)
+                    rs = McpSearchToolResultSchema.from_search_result(r)
                     if not include_metadata:
                         rs.metadata = {}
                     result_schemas.append(rs)
@@ -805,7 +806,7 @@ def create_app(
             try:
                 result_schemas = []
                 for r in result_obj.results:
-                    rs = McpSearchResultSchema.from_result(r)
+                    rs = McpSearchToolResultSchema.from_search_result(r)
                     if not include_metadata:
                         rs.metadata = {}
                     result_schemas.append(rs)

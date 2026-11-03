@@ -1131,8 +1131,25 @@ def _get_search_tool_fn(pipeline, config=None):
     return stub_mcp_tool("search", pipeline, "col1", config=config)
 
 
-def test_search_returns_mcp_search_response_shape() -> None:
-    """search tool returns a dict with exactly McpSearchResponse keys (no embedding_model)."""
+_REST_SEARCH_RESPONSE_KEYS = {
+    "results",
+    "acl_filtered",
+    "excluded_collections",
+    "embedding_model",
+    "hyde_applied",
+    "rag_fusion_applied",
+    "rag_fusion_queries_used",
+    "rag_fusion_attempted",
+    "graph_expansion_applied",
+    "expansion_used",
+    "expansion_warning",
+    "applied_filters",
+    "ppr_entities_matched",
+}
+
+
+def test_mcp_search_tool_returns_exactly_the_rest_response_fields() -> None:
+    """search tool returns exactly REST's response field set, each item carrying ``acl_gate``."""
     import asyncio
 
     pipeline = _make_search_pipeline_with_result()
@@ -1140,7 +1157,8 @@ def test_search_returns_mcp_search_response_shape() -> None:
     result = asyncio.run(tool_fn(query="hello", collection="col1"))
 
     assert isinstance(result, dict)
-    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied", "expansion_used", "expansion_warning", "graph_expansion_applied", "ppr_entities_matched"}
+    assert set(result.keys()) == _REST_SEARCH_RESPONSE_KEYS
+    assert all("acl_gate" in item for item in result["results"])
 
 
 def test_search_include_metadata_false_clears_metadata() -> None:
@@ -1181,7 +1199,7 @@ def test_search_multi_collection_returns_mcp_search_response_shape() -> None:
     result = asyncio.run(tool_fn(query="hello", collections=["col1", "col2"]))
 
     assert isinstance(result, dict)
-    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied", "expansion_used", "expansion_warning", "graph_expansion_applied", "ppr_entities_matched"}
+    assert set(result.keys()) == _REST_SEARCH_RESPONSE_KEYS
 
 
 def test_search_acl_filtered_with_excluded_collections() -> None:

@@ -21,6 +21,8 @@ from archon_search.collection_meta import (
     DescriptionStatusOverlay,
     visible_description_status,
 )
+from archon_search.filters import SearchFilters
+from archon_search.server.schemas import AclGateSchema
 
 if TYPE_CHECKING:
     from archon_search._types import (
@@ -86,18 +88,38 @@ class McpSearchResultSchema(BaseModel):
         )
 
 
+class McpSearchToolResultSchema(McpSearchResultSchema):
+    """One result item of the ``search`` tool only: the base item plus its per-result ``acl_gate``.
+
+    ``search_with_context`` keeps :class:`McpSearchResultSchema`, so its response is unchanged.  ``from_result`` is not
+    overridden: the base builds the item, :meth:`from_search_result` adds the gate.
+    """
+
+    acl_gate: AclGateSchema | None = None
+
+    @classmethod
+    def from_search_result(cls, r: SearchResult, acl_gate: AclGateSchema | None = None) -> McpSearchToolResultSchema:
+        base = McpSearchResultSchema.from_result(r)
+        return cls(**dict(base), acl_gate=acl_gate)
+
+
 class McpSearchResponse(BaseModel):
-    """Top-level response for the ``search`` MCP tool."""
+    """Top-level response for the ``search`` MCP tool; its field set equals REST's ``SearchResponse``."""
 
     model_config = ConfigDict(extra="forbid")
 
-    results: list[McpSearchResultSchema]
+    results: list[McpSearchToolResultSchema]
     acl_filtered: bool
     excluded_collections: list[ExcludedCollectionMcpSchema]
+    embedding_model: str = ""
     hyde_applied: bool = False
+    rag_fusion_applied: bool = False
+    rag_fusion_queries_used: int = 0
+    rag_fusion_attempted: bool = False
     expansion_used: bool = False
     expansion_warning: str | None = None
     graph_expansion_applied: bool = False
+    applied_filters: SearchFilters | None = None
     ppr_entities_matched: int | None = None
 
 
