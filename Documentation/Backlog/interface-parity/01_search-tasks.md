@@ -507,7 +507,7 @@ REST, MCP and the CLI honour `top_k`; the shim ignores the request value and tak
 
 A field removed from one surface, or a forbidden import in an adapter, turns CI red.
 
-- [ ] **BE-29** — Add the field-level parity check (C9) beside `tests/parity/test_parity.py`: an explicit mapping of every command field to its REST property (nested versus flat filters), MCP parameter and CLI option, and of every result field to REST's and MCP's response fields; waivers with `waived_surfaces` and a reason; the two include-metadata flags mapped as C9 says; `--json`, `--api-url`, `--api-key` exempt #backend-role
+- [x] **BE-29** — Add the field-level parity check (C9) beside `tests/parity/test_parity.py`: an explicit mapping of every command field to its REST property (nested versus flat filters), MCP parameter and CLI option, and of every result field to REST's and MCP's response fields; waivers with `waived_surfaces` and a reason; the two include-metadata flags mapped as C9 says; `--json`, `--api-url`, `--api-key` exempt #backend-role
     - Use Cases · 4.5h
     - needs BE-26, FE-6 · completes C9, S41
     - Tests
