@@ -90,7 +90,6 @@ def _search_budget_never_ends_a_held_call(monkeypatch: pytest.MonkeyPatch) -> No
     """Without this a held call ends at the 30 s search budget and a missing cancel would only look slow, not wrong."""
     for module in (
         "archon_search.server.mcp",
-        "archon_search.server.routes_search",
         "archon_search.server.routes_explain",
         "archon_search.services.search_service",
     ):

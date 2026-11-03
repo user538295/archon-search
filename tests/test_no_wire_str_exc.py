@@ -191,7 +191,6 @@ _ALLOWLIST: frozenset[tuple[str, str, str, int]] = frozenset({
     (f"{_SERVER}/mcp.py", "search", "GraphCommunitiesNotBuiltError", 2),
     (f"{_SERVER}/mcp.py", "explain", "GraphCommunitiesNotBuiltError", 1),
     (f"{_SERVER}/mcp.py", "explain", "GraphCommunitiesNotBuiltError", 2),
-    (f"{_SERVER}/routes_search.py", "search", "GraphCommunitiesNotBuiltError", 1),
     (f"{_SERVER}/routes_explain.py", "explain_endpoint", "GraphCommunitiesNotBuiltError", 1),
     (f"{_SERVER}/routes_explain.py", "explain_endpoint", "GraphCommunitiesNotBuiltError", 2),
     # Fixed text: multi-collection explain needs rerank.

@@ -1509,10 +1509,10 @@ def create_app(
     async def _embedder_not_ready_handler(request: Request, exc: EmbedderNotReadyError) -> JSONResponse:
         """Map a wedged/slow model load to a uniform 503 across every HTTP route.
 
-        The single-collection ``routes_search.search`` branch maps ``EmbedderNotReadyError`` itself, through the
-        ``embedder_not_ready`` ``ServiceError`` of ``SearchService`` (the same 503 with ``Retry-After``); every
+        ``routes_search.search`` maps ``EmbedderNotReadyError`` itself, through the ``embedder_not_ready``
+        ``ServiceError`` of ``SearchService`` (the same 503 with ``Retry-After``); every
         other route that resolves an embedder via ``EmbedderCache.get_or_load``
-        without its own handling (``/explain``, ``/v1/chat/completions``, the multi-collection ``/search``) falls
+        without its own handling (``/explain``, ``/v1/chat/completions``) falls
         through to this one instead of surfacing as a 500.
 
         ``mcp.py`` is NOT covered here, for two independent reasons: (1) it is a

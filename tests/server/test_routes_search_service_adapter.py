@@ -318,3 +318,23 @@ def test_every_failing_field_is_reported_not_only_the_first() -> None:
     """Field-level rules accumulate: an empty query and a ``top_k`` of zero both appear in the one 422 list."""
     locations = [location for location, _ in _validation_errors({"collection": "col", "query": "", "top_k": 0})]
     assert sorted(locations) == [("body", "query"), ("body", "top_k")]
+
+
+def test_multi_collection_branch_hands_the_service_the_collections_command_and_caller(stub_service: MagicMock) -> None:
+    """BE-11: ``collections`` reaches the service as the multi-path command; the route holds no fan-out logic of its own."""
+    stub_service.search = AsyncMock(return_value=_outcome(_hit(metadata={"k": "v"}), include_metadata=True))
+
+    response = _client(_app()).post("/search", json={"collections": ["a", "b"], "query": "q", "acl_context": True})
+
+    assert response.status_code == 200
+    command, caller = stub_service.search.call_args.args
+    assert (command.collection, command.collections, command.acl_context) == (None, ("a", "b"), True)
+    assert caller == AuthIdentity(namespace=_NAMESPACE, admin=False)
+    assert response.json()["results"][0]["metadata"] == {"k": "v"}
+
+
+def test_route_module_keeps_no_pipeline_helpers_of_the_old_multi_branch() -> None:
+    """BE-11: the telemetry/failure helpers, the request's ``wants_metadata`` and the budget alias are gone."""
+    for name in ("_enqueue_error", "_report_pipeline_failure", "_hyde_failure_response", "_SEARCH_TIMEOUT_SECONDS"):
+        assert not hasattr(routes_search, name), name
+    assert not hasattr(routes_search.SearchRequest, "wants_metadata")
