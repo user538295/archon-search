@@ -34,11 +34,13 @@ from archon_search.pipeline import (
 )
 from archon_search.server.app import create_app
 from archon_search.server.schemas import (
-    GRAPH_COMMUNITIES_NOT_BUILT_CODE,
-    INVALID_SCOPE_FILTER_CODE,
     CodedErrorDetail,
     ErrorDetail,
     route_422_response,
+)
+from archon_search.services.service_error import (
+    GRAPH_COMMUNITIES_NOT_BUILT_CODE,
+    INVALID_SCOPE_FILTER_CODE,
 )
 from tests._hyde_stubs import rest_hyde_generating
 

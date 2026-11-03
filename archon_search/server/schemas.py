@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Literal
 
 from fastapi.openapi.constants import REF_PREFIX
 from pydantic import (
@@ -21,6 +21,7 @@ from pydantic import (
 from archon_search.collection_meta import DescriptionSource, DescriptionStatus
 from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
 from archon_search.description_write import check_description_text
+from archon_search.services.service_error import GRAPH_COMMUNITIES_NOT_BUILT_CODE
 
 # Inclusive valid range for TTL seconds — shared by IngestRequest and PatchCollectionBody.
 _TTL_MIN: int = 1
@@ -619,11 +620,6 @@ class CodedErrorDetail(BaseModel):
     """Error body whose `detail` is a `{code, message}` object (e.g. the POST /ingest 413)."""
 
     detail: CodedErrorMessage
-
-
-# ``CodedErrorDetail`` codes POST /search and POST /explain (and their MCP tools) answer with.
-INVALID_SCOPE_FILTER_CODE: Final[str] = "invalid_scope_filter"
-GRAPH_COMMUNITIES_NOT_BUILT_CODE: Final[str] = "graph_communities_not_built"
 
 
 def route_422_response() -> dict[str, Any]:

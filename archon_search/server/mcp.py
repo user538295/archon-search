@@ -130,10 +130,6 @@ from archon_search.server.routes_explain import (
     RoutingExplain,
 )
 from archon_search.server.routes_export import is_ingesting_cancel_leftover
-from archon_search.server.schemas import (
-    GRAPH_COMMUNITIES_NOT_BUILT_CODE,
-    INVALID_SCOPE_FILTER_CODE,
-)
 from archon_search.services.authz import (
     FORBIDDEN_CODE,
     AuthIdentity,
@@ -149,6 +145,16 @@ from archon_search.services.search_budget import (
     SearchBudgetExceeded,
     run_within_budget,
     warmup_for_search,
+)
+from archon_search.services.service_error import (
+    COLLECTION_NOT_FOUND_DETAIL,
+    GRAPH_COMMUNITIES_NOT_BUILT_CODE,
+    INTERNAL_ERROR_CODE,
+    INVALID_SCOPE_FILTER_CODE,
+    NOT_FOUND_CODE,
+    SEARCH_FAILED_DETAIL,
+    fanout_exceeded_detail,
+    top_k_exceeded_detail,
 )
 from archon_search.services.validators import (
     validate_scope_filter as _check_scope_filter,
@@ -227,19 +233,11 @@ class McpErrorResponse(TypedDict):
 
 
 _ERR_SCHEMA = "schema_validation_error"
-# Wire-safe error pair for an unexpected search / search_with_context failure. Never
-# str(exc): store and model errors embed internals (e.g. LanceDB's vector-dimension
-# message); the full exception is logged server-side by logger.exception.
-_SEARCH_FAILED_DETAIL = "search failed"
-_SEARCH_FAILED_CODE = "internal_error"
-# Same for search / search_with_context Pydantic failures: a ValidationError's text
+# Wire-safe text for search / search_with_context Pydantic failures: a ValidationError's text
 # embeds the rejected input values, so neither the filter nor the response-schema
 # failure is echoed (mirrors explain's "invalid explain request").
 _INVALID_SEARCH_FILTERS_DETAIL = "invalid search filters"
 _INVALID_SEARCH_RESPONSE_DETAIL = "search response failed schema validation"
-# Wire-safe error code for an unexpected explain failure (logged by logger.exception); its
-# detail is /explain's EXPLAIN_FAILED_DETAIL.
-_EXPLAIN_FAILED_CODE = "internal_error"
 # explain's response-schema failure, for the same reason as search's above.
 _INVALID_EXPLAIN_RESPONSE_DETAIL = "explain response failed schema validation"
 # E2a — ingest TTL and scope validation limits (same constraints as routes_jobs.py IngestRequest validators)
@@ -274,7 +272,6 @@ def _validate_scope_filter(scope_filter: str | None) -> McpErrorResponse | None:
     return McpErrorResponse(error=msg, code=INVALID_SCOPE_FILTER_CODE)
 
 
-_ERR_INTERNAL = "internal_error"
 _ERR_VALIDATION = "validation_error"
 # ``code`` of the refusal of a write to a collection name another namespace owns (the ``error`` is the store's fixed
 # COLLECTION_UNAVAILABLE_DETAIL, which names no owner).
@@ -292,7 +289,7 @@ DESCRIPTION_WRITER_NOT_CONFIGURED_DETAIL = "description writer not configured"
 def _internal_error(log_message: str) -> McpErrorResponse:
     """Log the exception being handled (with traceback) and return the sanitized error."""
     logger.exception(log_message)
-    return McpErrorResponse(error=INTERNAL_ERROR_DETAIL, code=_ERR_INTERNAL)
+    return McpErrorResponse(error=INTERNAL_ERROR_DETAIL, code=INTERNAL_ERROR_CODE)
 
 
 def _schema_error(tool: str) -> McpErrorResponse:
@@ -611,7 +608,7 @@ def create_app(
             _max_fanout = _cfg.max_fanout
             if len(deduped) > _max_fanout:
                 return McpErrorResponse(
-                    error=f"collections length exceeds maximum of {_max_fanout}",
+                    error=fanout_exceeded_detail(_max_fanout),
                     code="validation_error",
                 )
             # Build SearchFilters for multi-collection path (mirrors single-collection path
@@ -670,7 +667,7 @@ def create_app(
             except GraphCommunitiesNotBuiltError as exc:
                 return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
             except CollectionNotFoundError:
-                return McpErrorResponse(error="collection not found", code="not_found")
+                return McpErrorResponse(error=COLLECTION_NOT_FOUND_DETAIL, code=NOT_FOUND_CODE)
             except (FanoutTimeoutError, SearchBudgetExceeded):
                 logger.error(
                     "search pipeline timed out",
@@ -685,7 +682,7 @@ def create_app(
             except Exception:
                 _enqueue_internal_error(writer, "search", start)
                 logger.exception("multi-collection search failed")
-                return McpErrorResponse(error=_SEARCH_FAILED_DETAIL, code=_SEARCH_FAILED_CODE)
+                return McpErrorResponse(error=SEARCH_FAILED_DETAIL, code=INTERNAL_ERROR_CODE)
             if writer is not None:
                 try:
                     excluded_count = len(result_obj.excluded_collections)
@@ -851,7 +848,7 @@ def create_app(
         except Exception:
             _enqueue_internal_error(writer, "search", start)
             logger.exception("search failed")
-            return McpErrorResponse(error=_SEARCH_FAILED_DETAIL, code=_SEARCH_FAILED_CODE)
+            return McpErrorResponse(error=SEARCH_FAILED_DETAIL, code=INTERNAL_ERROR_CODE)
 
     @app.tool()
     async def search_with_context(
@@ -1034,7 +1031,7 @@ def create_app(
         except Exception:
             _enqueue_internal_error(writer, "search_with_context", start)
             logger.exception("search_with_context failed")
-            return McpErrorResponse(error=_SEARCH_FAILED_DETAIL, code=_SEARCH_FAILED_CODE)
+            return McpErrorResponse(error=SEARCH_FAILED_DETAIL, code=INTERNAL_ERROR_CODE)
 
     @app.tool()
     async def explain(
@@ -1073,7 +1070,7 @@ def create_app(
         _top_k_max = _explain_cfg.top_k_max
         if top_k > _top_k_max:
             return McpErrorResponse(
-                error=f"top_k {top_k} exceeds operator-configured maximum of {_top_k_max}",
+                error=top_k_exceeded_detail(top_k, _top_k_max),
                 code="validation_error",
             )
         if top_k < 1:
@@ -1151,7 +1148,7 @@ def create_app(
             _explain_max_fanout = _explain_cfg.max_fanout
             if len(deduped) > _explain_max_fanout:
                 return McpErrorResponse(
-                    error=f"collections length exceeds maximum of {_explain_max_fanout}",
+                    error=fanout_exceeded_detail(_explain_max_fanout),
                     code="validation_error",
                 )
             if rerank is False and len(deduped) > 1:
@@ -1178,7 +1175,7 @@ def create_app(
             except GraphCommunitiesNotBuiltError as exc:
                 return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
             except CollectionNotFoundError:
-                return McpErrorResponse(error="collection not found", code="not_found")
+                return McpErrorResponse(error=COLLECTION_NOT_FOUND_DETAIL, code=NOT_FOUND_CODE)
             except FanoutTimeoutError:
                 return McpErrorResponse(error="search timed out", code="timeout")
             except MetadataLookupError:
@@ -1190,12 +1187,12 @@ def create_app(
                 _enqueue_internal_error(writer, "explain", start)
                 logger.warning("explain stage %s failed: %s", exc.stage, exc.original, exc_info=exc.original)
                 return McpErrorResponse(
-                    error=f"{exc.stage} error: {type(exc.original).__name__}", code="internal_error"
+                    error=f"{exc.stage} error: {type(exc.original).__name__}", code=INTERNAL_ERROR_CODE
                 )
             except Exception:
                 _enqueue_internal_error(writer, "explain", start)
                 logger.exception("multi-collection explain failed")
-                return McpErrorResponse(error=EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE)
+                return McpErrorResponse(error=EXPLAIN_FAILED_DETAIL, code=INTERNAL_ERROR_CODE)
             try:
                 response = ExplainResponse.from_pipeline_result(
                     rerank=rerank, collection="", routing=None, result=result, stage_timings_ms=None,
@@ -1352,7 +1349,9 @@ def create_app(
             _enqueue_internal_error(writer, "explain", start)
             # Sanitize: the original message could echo the query (e.g. an FTS error).
             logger.warning("explain stage %s failed: %s", exc.stage, exc.original, exc_info=exc.original)
-            return McpErrorResponse(error=f"{exc.stage} error: {type(exc.original).__name__}", code="internal_error")
+            return McpErrorResponse(
+                error=f"{exc.stage} error: {type(exc.original).__name__}", code=INTERNAL_ERROR_CODE
+            )
         except EmbedderNotReadyError as exc:
             # The model is still loading (or its load is wedged) — retryable.
             logger.warning("explain: embedder not ready — %s", exc)
@@ -1360,7 +1359,7 @@ def create_app(
         except Exception:
             _enqueue_internal_error(writer, "explain", start)
             logger.exception("explain failed")
-            return McpErrorResponse(error=EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE)
+            return McpErrorResponse(error=EXPLAIN_FAILED_DETAIL, code=INTERNAL_ERROR_CODE)
 
     @app.tool()
     async def ingest_file(
@@ -1739,7 +1738,7 @@ def create_app(
         cannot be chosen.
         """
         if job_store is None:
-            return McpErrorResponse(error=JOB_STORE_NOT_CONFIGURED_DETAIL, code=_ERR_INTERNAL)
+            return McpErrorResponse(error=JOB_STORE_NOT_CONFIGURED_DETAIL, code=INTERNAL_ERROR_CODE)
 
         _export_ns = _get_request_namespace()
         resolved_dir = exports_dir(get_data_dir(), _export_ns)
@@ -1794,7 +1793,7 @@ def create_app(
         ``on_error`` must be ``"fail"`` (abort on corrupt line) or ``"skip"`` (skip corrupt lines).
         """
         if job_store is None:
-            return McpErrorResponse(error=JOB_STORE_NOT_CONFIGURED_DETAIL, code=_ERR_INTERNAL)
+            return McpErrorResponse(error=JOB_STORE_NOT_CONFIGURED_DETAIL, code=INTERNAL_ERROR_CODE)
 
         _import_ns = _get_request_namespace()
 
@@ -1899,7 +1898,7 @@ def create_app(
     ) -> dict[str, Any]:
         """Run the shared set-or-clear core for *ns* and map its outcome onto the MCP error vocabulary."""
         if description_writer is None:
-            return McpErrorResponse(error=DESCRIPTION_WRITER_NOT_CONFIGURED_DETAIL, code=_ERR_INTERNAL)
+            return McpErrorResponse(error=DESCRIPTION_WRITER_NOT_CONFIGURED_DETAIL, code=INTERNAL_ERROR_CODE)
         try:
             outcome = await apply_description_change(pipeline.store, description_writer, collection_name, ns, change)
             if outcome.status is DescriptionChangeStatus.STORE_BUSY:
@@ -2021,10 +2020,10 @@ def create_app(
                     admin=admin,
                 )
             except KeyStoreUnreadableError:
-                return McpErrorResponse(error=KEY_STORE_UNREADABLE_DETAIL, code=_ERR_INTERNAL)
+                return McpErrorResponse(error=KEY_STORE_UNREADABLE_DETAIL, code=INTERNAL_ERROR_CODE)
             except Exception:
                 logger.exception("create_key failed")
-                return McpErrorResponse(error=CREATE_KEY_FAILED_DETAIL, code=_ERR_INTERNAL)
+                return McpErrorResponse(error=CREATE_KEY_FAILED_DETAIL, code=INTERNAL_ERROR_CODE)
             return {
                 "id": created.id,
                 "token": created.token,
@@ -2123,7 +2122,7 @@ def create_app(
                     error=f"Key not found: {key_id!r}", code="not_found"
                 )
             except KeyStoreUnreadableError:
-                return McpErrorResponse(error=KEY_STORE_UNREADABLE_DETAIL, code=_ERR_INTERNAL)
+                return McpErrorResponse(error=KEY_STORE_UNREADABLE_DETAIL, code=INTERNAL_ERROR_CODE)
             except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
                 return _internal_error("revoke_key failed")
 
@@ -2199,15 +2198,15 @@ def create_app(
                     publish_new_token=publish_new_token,
                 )
             except BlankCurrentKeyError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_INTERNAL)
+                return McpErrorResponse(error=str(exc), code=INTERNAL_ERROR_CODE)
             except KeyRotationInputError as exc:
                 return McpErrorResponse(error=str(exc), code=_ERR_VALIDATION)
             except KeyStoreUnreadableError:
-                return McpErrorResponse(error=KEY_STORE_UNREADABLE_DETAIL, code=_ERR_INTERNAL)
+                return McpErrorResponse(error=KEY_STORE_UNREADABLE_DETAIL, code=INTERNAL_ERROR_CODE)
             except KeyFileWriteError:
-                return McpErrorResponse(error=ROTATE_WRITE_FAILED_DETAIL, code=_ERR_INTERNAL)
+                return McpErrorResponse(error=ROTATE_WRITE_FAILED_DETAIL, code=INTERNAL_ERROR_CODE)
             except RotationIncompleteError:
-                return McpErrorResponse(error=ROTATE_KEYS_JSON_FAILED_DETAIL, code=_ERR_INTERNAL)
+                return McpErrorResponse(error=ROTATE_KEYS_JSON_FAILED_DETAIL, code=INTERNAL_ERROR_CODE)
             except Exception:  # noqa: BLE001 — MCP tool boundary: any failure becomes a sanitized internal-error response
                 return _internal_error("rotate_key failed")
 

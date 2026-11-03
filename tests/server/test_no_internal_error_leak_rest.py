@@ -52,7 +52,7 @@ from archon_search.server.routes_explain import (
     ROUTING_UNAVAILABLE_CODE,
     ROUTING_UNAVAILABLE_DETAIL,
 )
-from archon_search.server.routes_search import SEARCH_FAILED_DETAIL
+from archon_search.services.service_error import SEARCH_FAILED_DETAIL
 from tests._install_hint_leak import (
     assert_install_hint_logged_not_sent,
     patch_install_hint,

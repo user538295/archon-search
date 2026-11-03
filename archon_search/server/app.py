@@ -106,6 +106,7 @@ from archon_search.server.middleware_context import RequestContextMiddleware
 from archon_search.server.provider_dependency import check_provider_package
 from archon_search.server.schemas import StartupSyncResult, WarmupResult
 from archon_search.server.warmup import run_model_warmup, run_warmup_recovery
+from archon_search.services.service_error import RETRY_AFTER_SECONDS
 from archon_search.store import SearchStore
 from archon_search.sync_suppression import (
     get_sync_suppressed_file,
@@ -1532,12 +1533,12 @@ def create_app(
         if request.url.path.startswith("/v1/"):
             from archon_search.server.routes_openai_shim import _openai_error
             response = _openai_error(503, "Service temporarily unavailable.", "server_error")
-            response.headers["Retry-After"] = "30"
+            response.headers["Retry-After"] = str(RETRY_AFTER_SECONDS)
             return response
         return JSONResponse(
             {"detail": EMBEDDER_NOT_READY_DETAIL, "code": EMBEDDER_NOT_READY_CODE},
             status_code=503,
-            headers={"Retry-After": "30"},
+            headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
         )
 
     app.include_router(collections_router)

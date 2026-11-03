@@ -38,8 +38,6 @@ from archon_search.pipeline import (
     MetadataLookupError,
 )
 from archon_search.server.schemas import (
-    GRAPH_COMMUNITIES_NOT_BUILT_CODE,
-    INVALID_SCOPE_FILTER_CODE,
     AclGateSchema,
     CodedErrorDetail,
     ErrorDetail,
@@ -52,6 +50,15 @@ from archon_search.services.search_budget import (
     SearchBudgetExceeded,
     run_within_budget,
     warmup_for_search,
+)
+from archon_search.services.service_error import (
+    COLLECTION_NOT_FOUND_DETAIL,
+    GRAPH_COMMUNITIES_NOT_BUILT_CODE,
+    INVALID_SCOPE_FILTER_CODE,
+    RETRY_AFTER_SECONDS,
+    SEARCH_FAILED_DETAIL,
+    fanout_exceeded_detail,
+    top_k_exceeded_detail,
 )
 from archon_search.services.validators import (
     validate_scope_filter as _check_scope_filter,
@@ -79,11 +86,6 @@ if TYPE_CHECKING:
 # to prevent). The load itself is shielded, so it keeps running and populates the
 # cache for later requests.
 _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = EMBEDDER_WARMUP_WAIT_SECONDS
-
-# ``500`` ``detail`` for a HyDE failure: the caught
-# exception's message may embed internals (model paths), so it goes to the server log
-# only. Same text as MCP ``search``'s ``_SEARCH_FAILED_DETAIL``.
-SEARCH_FAILED_DETAIL = "search failed"
 
 logger = logging.getLogger(__name__)
 
@@ -302,12 +304,12 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     # Config-wired fanout and top_k validation (moved from Pydantic layer).
     if body.collections is not None and len(body.collections) > config.max_fanout:
         return JSONResponse(
-            {"detail": f"collections length exceeds maximum of {config.max_fanout}"},
+            {"detail": fanout_exceeded_detail(config.max_fanout)},
             status_code=422,
         )
     if body.top_k > config.top_k_max:
         return JSONResponse(
-            {"detail": f"top_k {body.top_k} exceeds operator-configured maximum of {config.top_k_max}"},
+            {"detail": top_k_exceeded_detail(body.top_k, config.top_k_max)},
             status_code=422,
         )
 
@@ -394,7 +396,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422
             )
         except CollectionNotFoundError:
-            return JSONResponse({"detail": "collection not found"}, status_code=404)
+            return JSONResponse({"detail": COLLECTION_NOT_FOUND_DETAIL}, status_code=404)
         except MetadataLookupError:
             logger.exception("multi-collection search: metadata lookup failed")
             return JSONResponse(
@@ -470,7 +472,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         )
 
     if meta is None:
-        return JSONResponse({"detail": "collection not found"}, status_code=404)
+        return JSONResponse({"detail": COLLECTION_NOT_FOUND_DETAIL}, status_code=404)
 
     with ExitStack() as stack:
         recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
@@ -639,7 +641,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             return JSONResponse(
                 {"detail": EMBEDDER_NOT_READY_DETAIL, "code": EMBEDDER_NOT_READY_CODE},
                 status_code=503,
-                headers={"Retry-After": "30"},
+                headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
             )
         except GraphCommunitiesNotBuiltError as exc:
             _emit_timings()

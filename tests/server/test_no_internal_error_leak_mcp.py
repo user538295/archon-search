@@ -59,7 +59,6 @@ from archon_search.server.mcp import (
     _INVALID_EXPLAIN_RESPONSE_DETAIL,
     _INVALID_SEARCH_FILTERS_DETAIL,
     _INVALID_SEARCH_RESPONSE_DETAIL,
-    _SEARCH_FAILED_DETAIL,
     CREATE_KEY_FAILED_DETAIL,
     INTERNAL_ERROR_DETAIL,
     SCHEMA_VALIDATION_DETAIL,
@@ -73,6 +72,7 @@ from archon_search.server.mcp_schemas import (
     McpSearchResultSchema,
 )
 from archon_search.server.routes_explain import EXPLAIN_FAILED_DETAIL, ExplainResponse
+from archon_search.services.service_error import SEARCH_FAILED_DETAIL
 from archon_search.store import StoreBusyError
 from tests._collection_lock_stub import with_locked_collection_meta
 from tests._docling_stubs import reset_parser_worker_globals  # noqa: F401 — autouse fixture
@@ -188,10 +188,10 @@ class _CatchAllCase(NamedTuple):
 _CATCH_ALL_CASES: list[_CatchAllCase] = [
     # search / search_with_context / explain answer their own fixed text, not INTERNAL_ERROR_DETAIL.
     _CatchAllCase("search-multi", "search", {"query": "q", "collections": ["a", "b"]}, "search_many", False,
-                  _SEARCH_FAILED_DETAIL),
-    _CatchAllCase("search", "search", {"query": "q", "collection": "col"}, "search", False, _SEARCH_FAILED_DETAIL),
+                  SEARCH_FAILED_DETAIL),
+    _CatchAllCase("search", "search", {"query": "q", "collection": "col"}, "search", False, SEARCH_FAILED_DETAIL),
     _CatchAllCase("search_with_context", "search_with_context", {"query": "q", "collection": "col"},
-                  "search_with_context", False, _SEARCH_FAILED_DETAIL),
+                  "search_with_context", False, SEARCH_FAILED_DETAIL),
     _CatchAllCase("explain-multi", "explain", {"query": "q", "collections": ["a", "b"]}, "explain", False,
                   EXPLAIN_FAILED_DETAIL),
     _CatchAllCase("explain", "explain", {"query": "q", "collection": "col"}, "explain", False, EXPLAIN_FAILED_DETAIL),
@@ -475,8 +475,8 @@ def _hyde_pipeline() -> MagicMock:
 
 # Each tool answers like its REST counterpart's HyDE catch-all (/search, /explain).
 _HYDE_TOOLS: list[tuple[str, str]] = [
-    ("search", _SEARCH_FAILED_DETAIL),
-    ("search_with_context", _SEARCH_FAILED_DETAIL),
+    ("search", SEARCH_FAILED_DETAIL),
+    ("search_with_context", SEARCH_FAILED_DETAIL),
     ("explain", EXPLAIN_FAILED_DETAIL),
 ]
 
