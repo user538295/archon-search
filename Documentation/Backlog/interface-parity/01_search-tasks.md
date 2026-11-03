@@ -363,7 +363,7 @@ An MCP agent now gets REST's validation, REST's response fields, `acl_context`, 
         - #integration_test — `test_breaking_md_headings_have_index_rows` — (existing, `tests/test_removed_engine_repo_guard.py`) heading-to-index parity
         - #integration_test — (existing, file-level) `tests/test_s343_reranker_503_doc_gap.py`, `tests/test_s344_reranker_504_doc_gap.py`, `tests/test_s444_reranker_warmup_503_doc_gap.py` and `tests/test_s27_ready_warmup_doc_gap.py` — scan `BREAKING.md` and stay green
         - #integration_test — (existing, file-level) `tests/test_mcp_tool_count_docs.py` stays green; `tests/test_s391_mcp_search_reranker_score_doc_gap.py` does not stay as it is: BE-16 rewrites it (the source assertion at ≈163)
-- [ ] **T-2** — e2e: HyDE and RAG Fusion fields through the CLI and MCP against a real server with a fake LLM; manual: a live provider #tester-role
+- [x] **T-2** — e2e: HyDE and RAG Fusion fields through the CLI and MCP against a real server with a fake LLM; manual: a live provider #tester-role
     - — · 3.5h
     - needs BE-15, FE-5 · completes S70
     - Tests

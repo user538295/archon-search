@@ -10,6 +10,9 @@ Helper functions (``_free_port``, ``_start_server``, ``_poll_health_and_ready``,
 ``_seed_corpus``) are module-level so they can be exercised directly by
 ``tests/smoke/test_conftest.py`` without going through the fixture.
 
+``smoke_server`` writes ``[hyde]`` and ``[rag_fusion]`` pointing at the session-scoped ``smoke_fake_llm``
+(a loopback ``FakeModelServer``), so the expansion path runs without a live provider (T-2).
+
 ``smoke_server_graph_enabled`` (BE-9) is a second, separate session-scoped
 fixture for tests needing ``[graph] enabled = true`` (e.g. the S3
 ``graph build-communities --wait`` e2e test) — kept off ``smoke_server``
@@ -37,6 +40,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+
+from tests._fake_model_server import FakeModelServer
 
 # --- Timing budgets (seconds) ---
 # /ready stays 503 until model warm-up AND the background model validation finish (S631);
@@ -95,18 +100,55 @@ def _free_port() -> int:
     return port
 
 
+#: What the session fake LLM answers by default: two lines, so RAG Fusion reads two query variants and HyDE embeds
+#: the whole text as its hypothetical document.
+FAKE_LLM_HYDE_AND_VARIANTS_REPLY: str = (
+    "cross-encoder reranker scoring of retrieved chunks\n"
+    "hybrid retrieval combining keyword and vector search"
+)
+FAKE_LLM_VARIANT_COUNT: int = len(FAKE_LLM_HYDE_AND_VARIANTS_REPLY.splitlines())
+_FAKE_LLM_MODEL: str = "fake-model"
+
+
+@pytest.fixture(scope="session")
+def smoke_fake_llm() -> Iterator[FakeModelServer]:
+    """Session-scoped loopback fake LLM that ``smoke_server``'s ``[hyde]``/``[rag_fusion]`` config points at.
+
+    Started before ``smoke_server`` (which depends on it) so its port is known when the TOML is written.
+    """
+    with FakeModelServer(reply_text=FAKE_LLM_HYDE_AND_VARIANTS_REPLY) as server:
+        yield server
+
+
+def _write_fake_llm_config(data_dir: Path, llm_base_url: str) -> None:
+    """Write ``[hyde]`` and ``[rag_fusion]`` pointing at the fake LLM to the path ``_subprocess_env`` points the
+    subprocess at (``{data_dir}/archon-search.toml``), before the server starts."""
+    section = f'enabled = true\nprovider = "ollama"\nmodel = "{_FAKE_LLM_MODEL}"\nollama_base_url = "{llm_base_url}"\n'
+    (data_dir / "archon-search.toml").write_text(
+        f"[hyde]\n{section}\n[rag_fusion]\n{section}num_queries = {FAKE_LLM_VARIANT_COUNT}\n"
+    )
+
+
+def _loopback_no_proxy(existing: str) -> str:
+    """``existing`` with loopback appended, keeping the developer's own no-proxy hosts."""
+    return ",".join(part for part in (existing, "127.0.0.1") if part)
+
+
 def _subprocess_env(*, port: int, data_dir: Path, api_key: str) -> dict[str, str]:
     env = {
         **os.environ,
         "ARCHON_SEARCH_PORT": str(port),
         "ARCHON_SEARCH_DATA_DIR": str(data_dir),
-        # Pin the (non-existent) config under the isolated data dir so an
+        # Pin the config under the isolated data dir so an
         # ARCHON_SEARCH_CONFIG exported in the developer's shell never reaches the
         # subprocess (load_config() treats a missing file as "use defaults") —
         # without this, an operator TOML enabling e.g. [database].multilingual =
         # true with fasttext-predict uninstalled would make the smoke server fail
         # to start on that machine.
         "ARCHON_SEARCH_CONFIG": str(data_dir / "archon-search.toml"),
+        # A developer's HTTP(S)_PROXY must not capture the server's calls to the loopback fake LLM.
+        "NO_PROXY": _loopback_no_proxy(os.environ.get("NO_PROXY", "")),
+        "no_proxy": _loopback_no_proxy(os.environ.get("no_proxy", "")),
         "ARCHON_SEARCH_API_KEY": api_key,
         "PYTEST_ADDOPTS": "",
     }
@@ -326,12 +368,13 @@ def _seed_corpus(
 
 
 @pytest.fixture(scope="session")
-def smoke_server(tmp_path_factory) -> Iterator[SmokeServer]:
+def smoke_server(tmp_path_factory, smoke_fake_llm) -> Iterator[SmokeServer]:
     """Start a real ``archon-search serve`` subprocess, seed it, yield a handle.
 
     Session-scoped: one server subprocess is shared by every test in
     ``tests/smoke/`` (serialised via the ``xdist_group("smoke_e2e")`` marker
-    each test module carries).
+    each test module carries). Its config enables ``[hyde]`` and ``[rag_fusion]``
+    against the session ``smoke_fake_llm`` (``_write_fake_llm_config``).
 
     Teardown: SIGTERM, wait up to 10s, escalate to SIGKILL and fail the test
     if the process does not exit cleanly.
@@ -346,6 +389,7 @@ def smoke_server(tmp_path_factory) -> Iterator[SmokeServer]:
     api_key = secrets.token_hex(32)
 
     _write_corpus(corpus_dir)
+    _write_fake_llm_config(data_dir, smoke_fake_llm.base_url)
 
     proc = _start_server(port=port, data_dir=data_dir, api_key=api_key)
     base_url = f"http://127.0.0.1:{port}"

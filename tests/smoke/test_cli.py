@@ -833,8 +833,8 @@ def test_e2e_sync_wait_all_result_fields_against_server(smoke_server) -> None:
     fields: ``added``, ``removed``, ``unchanged``, ``errors``, ``skipped``,
     ``updated`` (S7, C2).
 
-    Note: the smoke server's ``ARCHON_SEARCH_CONFIG`` points at a non-existent
-    file so ``load_config()`` uses defaults, where both ``pinned_collections``
+    Note: the smoke server's ``ARCHON_SEARCH_CONFIG`` file holds only ``[hyde]``
+    and ``[rag_fusion]``, so ``load_config()`` uses defaults elsewhere, where both ``pinned_collections``
     and ``collections`` are empty lists. ``POST /sync`` therefore calls
     ``SearchCollectionSync.sync([])`` which produces an all-empty
     ``SyncResult`` (nothing to add/remove/update). This test proves the
