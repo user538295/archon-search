@@ -410,7 +410,7 @@ A chat client keeps its envelope, streaming and model-name routing, and gains de
         - #integration_test — `test_rest_mcp_and_cli_return_the_same_ordered_results_and_derived_fields` — results, `embedding_model`, `rag_fusion_*`, `applied_filters`, per-result `acl_gate`
         - #integration_test — `test_error_codes_agree_across_rest_mcp_cli_and_shim_for_not_found_and_validation` — same kind, each adapter's wire form
         - #integration_test — `test_shim_returns_the_same_ordered_sources_in_its_chat_text` — source order matches REST
-- [ ] **T-3** — e2e: the same query through REST, MCP, the shim and the CLI `--json` against a real server #tester-role
+- [x] **T-3** — e2e: the same query through REST, MCP, the shim and the CLI `--json` against a real server #tester-role
     - — · 3.5h
     - needs BE-22, T-2 · completes S66
     - Tests

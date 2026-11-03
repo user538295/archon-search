@@ -11,7 +11,8 @@ Helper functions (``_free_port``, ``_start_server``, ``_poll_health_and_ready``,
 ``tests/smoke/test_conftest.py`` without going through the fixture.
 
 ``smoke_server`` writes ``[hyde]`` and ``[rag_fusion]`` pointing at the session-scoped ``smoke_fake_llm``
-(a loopback ``FakeModelServer``), so the expansion path runs without a live provider (T-2).
+(a loopback ``FakeModelServer``), so the expansion path runs without a live provider (T-2), and enables
+``[openai_shim]`` so the shim answers on the same server (T-3).
 
 ``smoke_server_graph_enabled`` (BE-9) is a second, separate session-scoped
 fixture for tests needing ``[graph] enabled = true`` (e.g. the S3
@@ -121,11 +122,11 @@ def smoke_fake_llm() -> Iterator[FakeModelServer]:
 
 
 def _write_fake_llm_config(data_dir: Path, llm_base_url: str) -> None:
-    """Write ``[hyde]`` and ``[rag_fusion]`` pointing at the fake LLM to the path ``_subprocess_env`` points the
-    subprocess at (``{data_dir}/archon-search.toml``), before the server starts."""
+    """Write ``[hyde]`` and ``[rag_fusion]`` pointing at the fake LLM, and ``[openai_shim] enabled = true``, to the path
+    ``_subprocess_env`` points the subprocess at (``{data_dir}/archon-search.toml``), before the server starts."""
     section = f'enabled = true\nprovider = "ollama"\nmodel = "{_FAKE_LLM_MODEL}"\nollama_base_url = "{llm_base_url}"\n'
     (data_dir / "archon-search.toml").write_text(
-        f"[hyde]\n{section}\n[rag_fusion]\n{section}num_queries = {FAKE_LLM_VARIANT_COUNT}\n"
+        f"[hyde]\n{section}\n[rag_fusion]\n{section}num_queries = {FAKE_LLM_VARIANT_COUNT}\n\n[openai_shim]\nenabled = true\n"
     )
 
 
@@ -374,7 +375,7 @@ def smoke_server(tmp_path_factory, smoke_fake_llm) -> Iterator[SmokeServer]:
     Session-scoped: one server subprocess is shared by every test in
     ``tests/smoke/`` (serialised via the ``xdist_group("smoke_e2e")`` marker
     each test module carries). Its config enables ``[hyde]`` and ``[rag_fusion]``
-    against the session ``smoke_fake_llm`` (``_write_fake_llm_config``).
+    against the session ``smoke_fake_llm`` and ``[openai_shim]`` (``_write_fake_llm_config``).
 
     Teardown: SIGTERM, wait up to 10s, escalate to SIGKILL and fail the test
     if the process does not exit cleanly.
