@@ -14,7 +14,6 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from archon_search.cli import search as search_mod
 from archon_search.cli.search import search
 from archon_search.services.request_hyde import HYDE_EXPANSION_FAILED_WARNING
 from tests._cli_testclient_bridge import cli_against_app
@@ -120,8 +119,8 @@ def test_cli_search_prints_the_not_run_step_and_skipped_collection_notes_on_stde
 ) -> None:
     """TQ1, option D, through the real app.
 
-    The CLI has no ``--hyde`` option until FE-5, so the request carries ``hyde: true`` through a wrapper around the
-    bridged ``post`` (the app, the service and the notes are all real). A model-mismatched collection is skipped.
+    ``--hyde`` has no usable generator here, so the server answers with the standard warning (the app, the service
+    and the notes are all real). A model-mismatched collection is skipped.
     """
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         _seed(client, api_key, _ALPHA, _BETA)
@@ -130,14 +129,8 @@ def test_cli_search_prints_the_not_run_step_and_skipped_collection_notes_on_stde
         client.portal.call(store.update_collection_meta, replace(beta, active_embedding_model=_OTHER_MODEL))
 
         with rest_hyde_generating(client.app, return_value=None), cli_against_app(client, api_key, monkeypatch) as cli:
-            bridged_post = search_mod.httpx.post
-            monkeypatch.setattr(
-                search_mod.httpx,
-                "post",
-                lambda url, *, json, **kwargs: bridged_post(url, json={**json, "hyde": True}, **kwargs),
-            )
-            noted = cli.invoke(search, [_QUERY, "--collection", _ALPHA, "--collection", _BETA])
-            as_json = cli.invoke(search, [_QUERY, "--collection", _ALPHA, "--collection", _BETA, "--json"])
+            noted = cli.invoke(search, [_QUERY, "--collection", _ALPHA, "--collection", _BETA, "--hyde"])
+            as_json = cli.invoke(search, [_QUERY, "--collection", _ALPHA, "--collection", _BETA, "--hyde", "--json"])
 
     assert noted.exit_code == 0, noted.output
     result_lines = noted.stdout.splitlines()

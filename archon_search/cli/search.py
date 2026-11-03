@@ -14,7 +14,10 @@ from archon_search.cli._helpers import (
     _send_or_exit,
     _server_message,
 )
-from archon_search.constants import CLI_SEARCH_REQUEST_TIMEOUT_SECONDS
+from archon_search.constants import (
+    CLI_SEARCH_REQUEST_TIMEOUT_SECONDS,
+    VALID_GRAPH_MODES,
+)
 
 # Longest excerpt, in characters, printed per result line (after whitespace is collapsed).
 _EXCERPT_MAX_CHARS = 200
@@ -72,6 +75,11 @@ def _echo_notes(payload: dict) -> None:
         click.echo(f"Note: collection '{name}' skipped: {reason}", err=True)
 
 
+def _given(**options: object) -> dict[str, object]:
+    """The options the caller gave: a value of ``None`` means "not given" and is left out of the request body."""
+    return {name: value for name, value in options.items() if value is not None}
+
+
 @click.command("search")
 @click.argument("query")
 @click.option(
@@ -80,6 +88,36 @@ def _echo_notes(payload: dict) -> None:
     multiple=True,
     required=True,
     help="Collection to search (repeat for several).",
+)
+@click.option("--file-type", default=None, help="Only files of this type.")
+@click.option("--source-path-prefix", default=None, help="Only sources whose path starts with this prefix.")
+@click.option("--source-path-glob", default=None, help="Only sources whose path matches this glob.")
+@click.option("--indexed-after", default=None, help="Only documents indexed after this date or timestamp.")
+@click.option("--indexed-before", default=None, help="Only documents indexed before this date or timestamp.")
+@click.option("--language", default=None, help="Only documents in this language code.")
+@click.option(
+    "--include-metadata",
+    is_flag=True,
+    default=False,
+    help="Include each result's metadata (visible with --json).",
+)
+@click.option("--hyde", is_flag=True, default=False, help="Expand the query with a hypothetical document (HyDE).")
+@click.option("--rag-fusion", is_flag=True, default=False, help="Fuse the results of several rewritten queries.")
+@click.option(
+    "--graph-mode",
+    default=None,
+    help=f"Graph retrieval mode: {', '.join(VALID_GRAPH_MODES)} (the server validates the value).",
+)
+@click.option(
+    "--scope-filter",
+    default=None,
+    help="Scope tag to match, exact ('user:alice') or one trailing-'*' prefix ('user:alice*'); not with --graph-mode.",
+)
+@click.option(
+    "--acl-context",
+    is_flag=True,
+    default=False,
+    help="Include the ACL gate on every result (visible with --json).",
 )
 @click.option("--json", "json_flag", is_flag=True, default=False, help="Print the full response as JSON.")
 @click.option(
@@ -93,7 +131,25 @@ def _echo_notes(payload: dict) -> None:
     default=None,
     help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
 )
-def search(query: str, collections: tuple[str, ...], json_flag: bool, api_url: str, api_key: str | None) -> None:
+def search(
+    query: str,
+    collections: tuple[str, ...],
+    file_type: str | None,
+    source_path_prefix: str | None,
+    source_path_glob: str | None,
+    indexed_after: str | None,
+    indexed_before: str | None,
+    language: str | None,
+    include_metadata: bool,
+    hyde: bool,
+    rag_fusion: bool,
+    graph_mode: str | None,
+    scope_filter: str | None,
+    acl_context: bool,
+    json_flag: bool,
+    api_url: str,
+    api_key: str | None,
+) -> None:
     """Search collections (proxies POST /search; requires server running)."""
     key = _resolve_api_key(api_key)
     base_url = api_url.rstrip("/")
@@ -102,6 +158,24 @@ def search(query: str, collections: tuple[str, ...], json_flag: bool, api_url: s
         body["collection"] = collections[0]
     else:
         body["collections"] = list(collections)
+    filters = _given(
+        file_type=file_type,
+        source_path_prefix=source_path_prefix,
+        source_path_glob=source_path_glob,
+        indexed_after=indexed_after,
+        indexed_before=indexed_before,
+        language=language,
+    )
+    if filters:
+        body["filters"] = filters
+    body |= _given(
+        include_metadata=include_metadata or None,
+        hyde=hyde or None,
+        rag_fusion=rag_fusion or None,
+        acl_context=acl_context or None,
+        graph_mode=graph_mode,
+        scope_filter=scope_filter,
+    )
 
     resp = _send_or_exit(
         base_url,
