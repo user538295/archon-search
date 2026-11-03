@@ -421,7 +421,7 @@ A chat client keeps its envelope, streaming and model-name routing, and gains de
 
 REST, MCP and the CLI honour `top_k`; the shim ignores the request value and takes its count from `[openai_shim].top_k` or `top_k_return`. BE-23, BE-24 and BE-25 prepare the change and have no client-visible effect until the cutover BE-26, which lands in one commit with the snapshot regeneration BE-27; BE-12 is independent cleanup.
 
-- [ ] **BE-12** — Delete the dead `max_fanout` parameter of `SearchPipeline` (constructor, stored attribute, `create_pipeline`, the `app.py` pass-through) and its assertions and arguments: `tests/pipeline/test_pipeline_ingest.py` (≈967, 971, 993, 1021), `tests/server/test_app.py` (the test `test_create_app_wires_fanout_config_into_pipeline`: docstring ≈300-315, assertion and message ≈339-341; `tests/test_app.py` also exists and holds no `max_fanout`), `tests/integration/test_multi_collection_search.py` (≈68); the default `8` then lives once in `config.py` #backend-role
+- [x] **BE-12** — Delete the dead `max_fanout` parameter of `SearchPipeline` (constructor, stored attribute, `create_pipeline`, the `app.py` pass-through) and its assertions and arguments: `tests/pipeline/test_pipeline_ingest.py` (≈967, 971, 993, 1021), `tests/server/test_app.py` (the test `test_create_app_wires_fanout_config_into_pipeline`: docstring ≈300-315, assertion and message ≈339-341; `tests/test_app.py` also exists and holds no `max_fanout`), `tests/integration/test_multi_collection_search.py` (≈68); the default `8` then lives once in `config.py` #backend-role
     - Frameworks & Drivers · 2.0h
     - needs K1 · completes S58, S61
     - Tests

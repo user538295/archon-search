@@ -65,7 +65,6 @@ def _make_pipeline(store) -> SearchPipeline:  # type: ignore[no-untyped-def]
         parser=MagicMock(),
         top_k_retrieve=10,
         top_k_return=5,
-        max_fanout=8,
         fanout_leg_trim=40,
         fanout_timeout_seconds=30.0,
     )

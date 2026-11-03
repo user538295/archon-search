@@ -294,14 +294,14 @@ class TestCreateAppPipelineWiring:
         assert generator._store is store
         assert lifecycle._writer is writer
 
-    def test_create_app_wires_fanout_config_into_pipeline(self, tmp_path):
+    def test_create_app_builds_the_pipeline_without_a_max_fanout_argument(self, tmp_path):
         """S443 regression: [search] fan-out knobs must reach the SearchPipeline.
 
-        ``create_app`` built ``SearchPipeline`` without passing ``max_fanout`` /
+        ``create_app`` built ``SearchPipeline`` without passing
         ``fanout_leg_trim`` / ``fanout_timeout_seconds``, so every configured
         value was silently replaced by the ``SearchPipeline.__init__`` defaults
-        (8 / 40 / 30.0).  The routes read ``config.max_fanout`` for the
-        collection-count guard, but the actual ``asyncio.timeout`` in
+        (40 / 30.0).  The breadth guard reads ``config.max_fanout``,
+        but the actual ``asyncio.timeout`` in
         ``_fanout_merge_acl`` used the stale 30.0 s default, so an
         operator-configured timeout never fired.
 
@@ -309,10 +309,8 @@ class TestCreateAppPipelineWiring:
         ``[search]`` keys map onto the ``SearchConfig`` attributes ``create_app``
         reads.
 
-        Note: ``_max_fanout`` is currently write-only on ``SearchPipeline`` — the
-        fan-out breadth cap is enforced in the route/MCP handlers from
-        ``config.max_fanout`` directly.  It is asserted here for wiring parity
-        with ``create_pipeline``, not as a behavioral guarantee.
+        ``max_fanout`` is no pipeline argument: the breadth cap is read from ``config.max_fanout`` by the
+        adapters and the service, so the pipeline holds no copy of it.
         """
         from archon_search.config import load_config
         from archon_search.jobs import JobStore
@@ -336,10 +334,7 @@ class TestCreateAppPipelineWiring:
             "create_app did not pass fanout_timeout_seconds to SearchPipeline; "
             f"pipeline uses {pipeline._fanout_timeout_seconds!r} instead of 0.75"
         )
-        assert pipeline._max_fanout == 3, (
-            "create_app did not pass max_fanout to SearchPipeline; "
-            f"pipeline uses {pipeline._max_fanout!r} instead of 3"
-        )
+        assert not hasattr(pipeline, "_max_fanout"), "SearchPipeline must not carry a max_fanout of its own"
         assert pipeline._fanout_leg_trim == 7, (
             "create_app did not pass fanout_leg_trim to SearchPipeline; "
             f"pipeline uses {pipeline._fanout_leg_trim!r} instead of 7"

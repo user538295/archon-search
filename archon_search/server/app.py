@@ -1432,7 +1432,6 @@ def create_app(
         parser=DocumentParser.from_config(config.ingest),
         top_k_retrieve=config.top_k_retrieve,
         top_k_return=config.top_k_return,
-        max_fanout=config.max_fanout,
         fanout_leg_trim=config.fanout_leg_trim,
         fanout_timeout_seconds=config.fanout_timeout_seconds,
         language_detector=_lang_detector,

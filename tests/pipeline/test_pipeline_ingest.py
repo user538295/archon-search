@@ -964,13 +964,21 @@ def test_pipeline_stores_fanout_params() -> None:
         parser=MagicMock(),
         top_k_retrieve=10,
         top_k_return=5,
-        max_fanout=3,
         fanout_leg_trim=7,
         fanout_timeout_seconds=2.5,
     )
-    assert pipeline._max_fanout == 3
+    assert not hasattr(pipeline, "_max_fanout")
     assert pipeline._fanout_leg_trim == 7
     assert pipeline._fanout_timeout_seconds == 2.5
+
+
+def test_pipeline_constructor_has_no_max_fanout_parameter() -> None:
+    """The fan-out breadth cap lives once, in ``SearchConfig.max_fanout``; the pipeline takes no such parameter."""
+    import inspect
+
+    from archon_search.pipeline import SearchPipeline
+
+    assert "max_fanout" not in inspect.signature(SearchPipeline.__init__).parameters
 
 
 def test_pipeline_default_fanout_params_match_config() -> None:
@@ -990,7 +998,7 @@ def test_pipeline_default_fanout_params_match_config() -> None:
         top_k_return=5,
     )
     cfg = SearchConfig()
-    assert pipeline._max_fanout == cfg.max_fanout
+    assert not hasattr(pipeline, "_max_fanout")
     assert pipeline._fanout_leg_trim == cfg.fanout_leg_trim
     assert pipeline._fanout_timeout_seconds == cfg.fanout_timeout_seconds
 
@@ -1018,7 +1026,7 @@ async def test_create_pipeline_passes_fanout_config() -> None:
     ):
         pipeline = create_pipeline(cfg)
 
-    assert pipeline._max_fanout == 6
+    assert not hasattr(pipeline, "_max_fanout")
     assert pipeline._fanout_leg_trim == 25
     assert pipeline._fanout_timeout_seconds == 12.5
 
