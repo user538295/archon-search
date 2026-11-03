@@ -374,7 +374,7 @@ An MCP agent now gets REST's validation, REST's response fields, `acl_context`, 
 
 A chat client keeps its envelope, streaming and model-name routing, and gains defined failure behaviour, stripped names and telemetry.
 
-- [ ] **BE-19** — Write the shim characterization tests first: the all-collections list lookup failure (plain 500), embedder-not-ready (503 with `Retry-After: 30` from the app handler), the unbounded single-path embedder wait, the empty collection name against a real store #backend-role
+- [x] **BE-19** — Write the shim characterization tests first: the all-collections list lookup failure (plain 500), embedder-not-ready (503 with `Retry-After: 30` from the app handler), the unbounded single-path embedder wait, the empty collection name against a real store #backend-role
     - Interface Adapters · 2.5h
     - needs K1 · completes S60
     - Tests
