@@ -154,7 +154,7 @@ An operator runs `archon-search search "q" --collection docs` and reads ranked r
         - #integration_test — `test_embedder_not_ready_503_carries_retry_after_from_the_single_constant` — the app-level handler and the REST route emit the same header value
         - #integration_test — `test_coded_error_bodies_carry_their_code` — (existing, `tests/server/test_search_explain_error_contract.py`, re-pointed imports) the wire codes are unchanged
         - #integration_test — (existing, file-level) `tests/server/test_no_internal_error_leak_rest.py` and `tests/server/test_no_internal_error_leak_mcp.py` — stay green with the re-pointed imports of the moved `"search failed"` constants
-- [ ] **BE-3** — Expose the `GraphCommunitiesNotBuiltError` message as a class-constant template built from the typed `exc.collection`, wire text byte-identical #backend-role
+- [x] **BE-3** — Expose the `GraphCommunitiesNotBuiltError` message as a class-constant template built from the typed `exc.collection`, wire text byte-identical #backend-role
     - Frameworks & Drivers · 1.5h
     - needs K1 · completes S76
     - Tests

@@ -219,12 +219,15 @@ class ExplainStageError(Exception):
 class GraphCommunitiesNotBuiltError(Exception):
     """Raised when global graph mode is requested but no communities have been built."""
 
+    #: Wire text, rendered from the typed ``collection`` (``!r`` keeps the quoting of today's text).
+    MESSAGE_TEMPLATE: Final[str] = (
+        "No community representatives found for collection {collection!r}. "
+        "Run community detection first."
+    )
+
     def __init__(self, collection: str) -> None:
         self.collection = collection
-        super().__init__(
-            f"No community representatives found for collection {collection!r}. "
-            "Run community detection first."
-        )
+        super().__init__(self.MESSAGE_TEMPLATE.format(collection=collection))
 
 
 #: The rrf_score of every graph-sourced candidate: graph paths have no retrieval rank to fuse.
