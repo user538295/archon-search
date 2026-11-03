@@ -7,11 +7,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search._types import SearchResult
+from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.pipeline import SearchPipelineResult
 from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 from tests._fastmcp_stub import stubbed_fastmcp
+
+_COLLECTION = "docs"
 
 # ---------------------------------------------------------------------------
 # Helper: build a stub pipeline
@@ -52,9 +55,9 @@ async def test_search_tool_logs_entry_on_success() -> None:
     with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
-        app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=writer, config=SearchConfig())  # type: ignore[call-arg]
         search_fn = app.tools["search"]  # type: ignore[attr-defined]
-        await search_fn(query="hello world", collection=None)
+        await search_fn(query="hello world", collection=_COLLECTION)
 
     writer.enqueue.assert_called_once()
     entry: TelemetryEntry = writer.enqueue.call_args[0][0]
@@ -74,11 +77,11 @@ async def test_search_tool_logs_error_entry_on_exception(caplog: pytest.LogCaptu
     with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
-        app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=writer, config=SearchConfig())  # type: ignore[call-arg]
         search_fn = app.tools["search"]  # type: ignore[attr-defined]
 
         with caplog.at_level(logging.ERROR, logger="archon.search"):
-            await search_fn(query="boom test", collection=None)
+            await search_fn(query="boom test", collection=_COLLECTION)
 
     writer.enqueue.assert_called_once()
     entry: TelemetryEntry = writer.enqueue.call_args[0][0]
@@ -108,7 +111,7 @@ async def test_fan_out_failure_enqueues_an_internal_error_entry(
     with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
-        app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=writer, config=SearchConfig())  # type: ignore[call-arg]
         result = await app.tools[tool_name](query="boom test", collections=["a", "b"])  # type: ignore[attr-defined]
 
     assert result["code"] == "internal_error"
@@ -136,10 +139,11 @@ async def test_search_tool_query_text_never_in_factory_args() -> None:
     with stubbed_fastmcp(), patch.object(TelemetryEntry, "from_search_tool_result", side_effect=recording_factory):
         from archon_search.server import mcp as mcp_module
 
-        app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=writer, config=SearchConfig())  # type: ignore[call-arg]
         search_fn = app.tools["search"]  # type: ignore[attr-defined]
-        await search_fn(query=sentinel, collection=None)
+        await search_fn(query=sentinel, collection=_COLLECTION)
 
+    assert recorded_kwargs, "the telemetry factory was never called: the leak check would pass vacuously"
     for value in recorded_kwargs.values():
         assert sentinel not in str(value), f"Sentinel found in factory kwarg value: {value!r}"
 
@@ -155,10 +159,10 @@ async def test_search_tool_does_not_log_when_writer_none() -> None:
     with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())  # type: ignore[call-arg]
         search_fn = app.tools["search"]  # type: ignore[attr-defined]
         # Should not raise
-        output = await search_fn(query="anything", collection=None)
+        output = await search_fn(query="anything", collection=_COLLECTION)
 
     assert isinstance(output, dict)
     assert "results" in output
@@ -287,9 +291,9 @@ async def test_mcp_search_returns_results_and_acl_filtered() -> None:
     with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())  # type: ignore[call-arg]
         search_fn = app.tools["search"]  # type: ignore[attr-defined]
-        output = await search_fn(query="hello", collection=None)
+        output = await search_fn(query="hello", collection=_COLLECTION)
 
     assert isinstance(output, dict)
     assert "results" in output
@@ -312,9 +316,9 @@ async def test_mcp_search_acl_filtered_propagated() -> None:
     with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())  # type: ignore[call-arg]
         search_fn = app.tools["search"]  # type: ignore[attr-defined]
-        output = await search_fn(query="secret", collection=None)
+        output = await search_fn(query="secret", collection=_COLLECTION)
 
     assert output["acl_filtered"] is True
 
@@ -327,9 +331,9 @@ async def test_mcp_search_error_returns_dict_not_list() -> None:
     with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())  # type: ignore[call-arg]
         search_fn = app.tools["search"]  # type: ignore[attr-defined]
-        output = await search_fn(query="fail", collection=None)
+        output = await search_fn(query="fail", collection=_COLLECTION)
 
     assert isinstance(output, dict)
     assert not isinstance(output, list)
@@ -376,12 +380,12 @@ async def test_mcp_search_telemetry_has_correlation_id() -> None:
     with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
-        app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=writer, config=SearchConfig())  # type: ignore[call-arg]
         search_fn = app.tools["search"]  # type: ignore[attr-defined]
 
         token = _correlation_id.set(cid)
         try:
-            await search_fn(query="hello", collection=None)
+            await search_fn(query="hello", collection=_COLLECTION)
         finally:
             _correlation_id.reset(token)
 
@@ -400,9 +404,9 @@ async def test_mcp_search_telemetry_correlation_id_none_when_unset() -> None:
     with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
-        app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=writer, config=SearchConfig())  # type: ignore[call-arg]
         search_fn = app.tools["search"]  # type: ignore[attr-defined]
-        await search_fn(query="hello", collection=None)
+        await search_fn(query="hello", collection=_COLLECTION)
 
     entry: TelemetryEntry = writer.enqueue.call_args[0][0]
     assert entry.correlation_id is None

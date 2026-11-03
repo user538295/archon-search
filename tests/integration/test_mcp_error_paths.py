@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from archon_search.config import SearchConfig
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
 pytestmark = pytest.mark.integration
@@ -35,7 +36,7 @@ def _make_mcp_app(
     rag_fusion_generator: Any = None,
     config: Any = None,
 ) -> StubFastMCP:
-    """Create an MCP app with a real-ish pipeline and stub FastMCP."""
+    """Create an MCP app with a real-ish pipeline, a real config (``search`` needs one) and stub FastMCP."""
     with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
 
@@ -43,7 +44,7 @@ def _make_mcp_app(
             pipeline,
             "default",
             writer=None,
-            config=config,
+            config=SearchConfig() if config is None else config,
             hyde_generator=hyde_generator,
             rag_fusion_generator=rag_fusion_generator,
         )
@@ -98,10 +99,9 @@ async def test_mcp_search_both_collection_fields_returns_validation_error() -> N
 async def test_mcp_search_missing_collection_returns_not_found_code() -> None:
     """MCP search with a nonexistent collection returns is_error with not_found code.
 
-    The multi-collection fan-out path explicitly maps CollectionNotFoundError to
-    code='not_found'. The single-collection path falls through to the generic
-    Exception handler (code='internal_error') — that is a separate, expected behavior
-    difference and is not tested here. This test targets the explicit not_found mapping.
+    The ``SearchService`` maps CollectionNotFoundError to code='not_found' (fixed text
+    "collection not found") on both the single-collection and the fan-out path; this
+    test targets the fan-out path.
     """
     from archon_search.pipeline import CollectionNotFoundError
 

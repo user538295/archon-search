@@ -76,7 +76,7 @@ async def test_mcp_search_emits_stage_timings_record(caplog: pytest.LogCaptureFi
     app = _make_app(pipeline)
 
     with caplog.at_level(logging.INFO, logger="archon_search"):
-        result = await app.tools["search"](query="hello", collection=None)
+        result = await app.tools["search"](query="hello", collection="docs")
 
     assert isinstance(result, dict), f"Expected dict result, got {type(result)}"
     assert "error" not in result, f"Expected success, got error: {result}"
@@ -96,7 +96,7 @@ async def test_mcp_search_stage_timings_disabled_no_log(caplog: pytest.LogCaptur
     app = _make_app(pipeline, timings_enabled=False)
 
     with caplog.at_level(logging.DEBUG, logger="archon_search"):
-        await app.tools["search"](query="hello", collection=None)
+        await app.tools["search"](query="hello", collection="docs")
 
     records = _get_stage_timing_records(caplog)
     assert len(records) == 0, f"Expected 0 stage_timings records when disabled, got {len(records)}"
@@ -116,7 +116,7 @@ async def test_mcp_header_correlation_id_matches_log_record(caplog: pytest.LogCa
     token = _correlation_id.set(test_id)
     try:
         with caplog.at_level(logging.INFO, logger="archon_search"):
-            await app.tools["search"](query="hello", collection=None)
+            await app.tools["search"](query="hello", collection="docs")
     finally:
         _correlation_id.reset(token)
 

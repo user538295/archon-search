@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Callable
 from contextlib import AsyncExitStack, ExitStack
+from dataclasses import asdict
 from datetime import UTC
 from time import monotonic
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypedDict
@@ -131,6 +132,7 @@ from archon_search.server.routes_explain import (
     RoutingExplain,
 )
 from archon_search.server.routes_export import is_ingesting_cancel_leftover
+from archon_search.server.schemas import AclGateSchema
 from archon_search.services.authz import (
     FORBIDDEN_CODE,
     AuthIdentity,
@@ -141,12 +143,9 @@ from archon_search.services.authz import (
     can_manage_key,
     require_admin,
 )
+from archon_search.services.container import build_search_service
 from archon_search.services.request_hyde import RequestHyDE
-from archon_search.services.search_budget import (
-    SearchBudgetExceeded,
-    run_within_budget,
-    warmup_for_search,
-)
+from archon_search.services.search_command import SearchCommand, build_search_filters
 from archon_search.services.service_error import (
     COLLECTION_NOT_FOUND_DETAIL,
     GRAPH_COMMUNITIES_NOT_BUILT_CODE,
@@ -155,6 +154,7 @@ from archon_search.services.service_error import (
     INVALID_SEARCH_FILTERS_DETAIL,
     NOT_FOUND_CODE,
     SEARCH_FAILED_DETAIL,
+    ServiceError,
     fanout_exceeded_detail,
     top_k_exceeded_detail,
 )
@@ -178,6 +178,7 @@ if TYPE_CHECKING:
     from archon_search.hyde import HyDEGenerator
     from archon_search.jobs.store import JobStore
     from archon_search.rag_fusion import RAGFusionGenerator
+    from archon_search.services.search_service import SearchOutcome, SearchService
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +297,33 @@ def _schema_error(tool: str) -> McpErrorResponse:
     """Log the response-schema ValidationError being handled and return the sanitized error."""
     logger.exception("%s: response schema validation failed", tool)
     return McpErrorResponse(error=SCHEMA_VALIDATION_DETAIL, code=_ERR_SCHEMA)
+
+
+def _render_search_outcome(outcome: SearchOutcome) -> dict[str, Any]:
+    """Render the service outcome as the ``search`` response; ``metadata`` is blanked unless the outcome's ORed flag is set."""
+    results = []
+    for hit in outcome.results:
+        gate = None if hit.acl_gate is None else AclGateSchema(**asdict(hit.acl_gate))
+        schema = McpSearchToolResultSchema.from_search_result(hit.result, acl_gate=gate)
+        if not outcome.include_metadata:
+            schema.metadata = {}
+        results.append(schema)
+    response = McpSearchResponse(
+        results=results,
+        acl_filtered=outcome.acl_filtered,
+        excluded_collections=[ExcludedCollectionMcpSchema(name=e.name, reason=e.reason) for e in outcome.excluded_collections],
+        embedding_model=outcome.embedding_model,
+        hyde_applied=outcome.hyde_applied,
+        rag_fusion_applied=outcome.rag_fusion_applied,
+        rag_fusion_queries_used=outcome.rag_fusion_queries_used,
+        rag_fusion_attempted=outcome.rag_fusion_attempted,
+        expansion_used=outcome.expansion_used,
+        expansion_warning=outcome.expansion_warning,
+        graph_expansion_applied=outcome.graph_expansion_applied,
+        applied_filters=outcome.applied_filters,
+        ppr_entities_matched=outcome.ppr_entities_matched,
+    )
+    return response.model_dump(mode="json")
 
 
 def _validate_context_window(context_window: int, context_window_max: int) -> McpErrorResponse | None:
@@ -470,9 +498,11 @@ def create_app(
 ) -> FastMCP:
     """Create a FastMCP app with 18 RAG tools + up to 4 optional key-management tools.
 
-    ``config`` is required only for the collectionless ``explain`` routing path;
-    when omitted, ``explain`` without a collection falls back to
-    ``default_collection`` (mirroring the ``search`` tool).
+    ``config`` is required by the ``search`` tool (without one it answers
+    ``search failed`` / ``internal_error`` and logs ``search_service_unavailable``)
+    and by the collectionless ``explain`` routing path. Without a config,
+    ``explain`` without a collection falls back to ``default_collection``;
+    ``search`` has no default and requires ``collection`` or ``collections``.
 
     ``job_store`` is required for the ``update_collection`` tool's 409 guard
     (active reindex check).
@@ -507,6 +537,10 @@ def create_app(
         else ingest_path_policy(config) if config is not None else IngestPathPolicy()
     )
 
+    # Built on the first ``search`` call from this factory's arguments (not at app creation), so an app without a
+    # configuration still serves every other tool.
+    search_service: SearchService | None = None
+
     @app.tool()
     async def search(
         query: str,
@@ -523,13 +557,18 @@ def create_app(
         rag_fusion: bool = False,
         graph_mode: str | None = None,
         scope_filter: str | None = None,
+        acl_context: bool = False,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search.
+
+        Supply exactly one of ``collection`` (one collection) or ``collections`` (a multi-collection fan-out);
+        neither has a default.
 
         ``graph_mode`` controls graph-aware retrieval:
         - ``"naive"`` — entity n-gram expansion (E1a).
         - ``"local"`` — community-scoped retrieval for the matched community (E1b).
         - ``"global"`` — corpus-wide synthesis over all community representatives (E1b).
+        - ``"ppr"`` — personalised PageRank over the entity graph (single collection only).
         Requires ``[graph] enabled = true`` in the server config.
 
         ``scope_filter`` restricts results to chunks whose scope tags match:
@@ -541,314 +580,58 @@ def create_app(
 
         Invalid forms (bare ``*``, leading ``*``, mid-string ``*``, multiple ``*``,
         or empty string) return ``code="invalid_scope_filter"``.
+
+        ``acl_context=true`` adds each result's ``acl_gate`` (its ACL provenance envelope).
         """
-        ns = _get_request_namespace()
-        timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
-        start = monotonic()
-
-        # graph_mode validation — must be None, "naive", "local", or "global".
-        if graph_mode not in (None, *VALID_GRAPH_MODES):
-            return McpErrorResponse(error=f"graph_mode must be one of {list(VALID_GRAPH_MODES)!r}", code="invalid_graph_mode")
-        _graph_config = getattr(config, "graph", None)
-        _graph_enabled = getattr(_graph_config, "enabled", False) if _graph_config is not None else False
-        if graph_mode is not None and not _graph_enabled:
-            return McpErrorResponse(error="graph_mode requires [graph] enabled=true", code="graph_disabled")
-
-        # scope_filter syntax validation
-        _sf_err = _validate_scope_filter(scope_filter)
-        if _sf_err is not None:
-            return _sf_err
-        # scope_filter and graph_mode are mutually exclusive
-        if scope_filter is not None and graph_mode is not None:
-            return McpErrorResponse(
-                error="scope_filter is not supported with graph_mode; use scope_filter without graph_mode or use graph_mode without scope_filter",
-                code="scope_filter_graph_mode_incompatible",
-            )
-
-        _rf_config = getattr(config, "rag_fusion", None)
-        if _rf_config is None:
-            from archon_search.config import RAGFusionConfig
-            _rf_config = RAGFusionConfig()
-
-        _request_hyde = RequestHyDE.for_request(
-            query,
-            requested=hyde,
-            rag_fusion=rag_fusion,
-            rag_fusion_enabled=_rf_config.enabled,
-            graph_mode=graph_mode,
-            generator=hyde_generator,
-            config=getattr(config, "hyde", None),
-            timeout=_SEARCH_TIMEOUT_SECONDS,
-        )
-
-        # Multi-collection fan-out path (B3). The single-collection path below is
-        # unchanged; when neither field is set it falls back to default_collection.
-        if collection is not None and collections is not None:
-            return McpErrorResponse(
-                error="supply either collection or collections, not both",
-                code="validation_error",
-            )
-        if collections is not None:
-            if len(collections) == 0:
-                return McpErrorResponse(error="collections must not be empty", code="validation_error")
-            deduped: list[str] = []
-            for name in collections:
-                stripped = name.strip()
-                if not stripped:
-                    return McpErrorResponse(
-                        error="collection names must not be whitespace", code="validation_error"
-                    )
-                if stripped not in deduped:
-                    deduped.append(stripped)
-            if config is not None:
-                _cfg = config
-            else:
-                from archon_search.config import SearchConfig as _SearchConfig
-                _cfg = _SearchConfig()
-            _max_fanout = _cfg.max_fanout
-            if len(deduped) > _max_fanout:
-                return McpErrorResponse(
-                    error=fanout_exceeded_detail(_max_fanout),
-                    code="validation_error",
-                )
-            # Build SearchFilters for multi-collection path (mirrors single-collection path
-            # below). Pass filters=None when all filter args are None to preserve the
-            # None-vs-all-defaults distinction required by the search_many() contract.
-            _any_filter = any(
-                v is not None
-                for v in (
-                    file_type, source_path_prefix, source_path_glob,
-                    indexed_after, indexed_before, language,
-                )
-            )
-            if _any_filter:
-                try:
-                    _multi_filters: SearchFilters | None = SearchFilters(
-                        file_type=file_type,
-                        source_path_prefix=source_path_prefix,
-                        source_path_glob=source_path_glob,
-                        indexed_after=indexed_after,
-                        indexed_before=indexed_before,
-                        language=language,
-                    )
-                except ValidationError:
-                    return McpErrorResponse(error=INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
-            else:
-                _multi_filters = None
-            # Same warm-up as the REST fan-out route: the global embedder (which
-            # search_many embeds with) and the shared reranker, both bounded, so no
-            # cold model build can block this tool call for its whole duration — it
-            # degrades to the fused ranking (S288) or the FTS leg alone (S290).
-            _warmup = await warmup_for_search(pipeline)
-            try:
-                # search_many embeds with the global embedder and excludes every
-                # collection pinned to another model (embedding_model_mismatch), so
-                # HyDE embeds with it too.
-                hyde_outcome = await _request_hyde.resolve(
-                    pipeline.global_embedder, embedder_warm=not _warmup.fts_only
-                )
-                # search_many's own _fanout_timeout_seconds bounds the per-collection
-                # leg gathers only — the meta lookup, embed_one, graph-store calls and
-                # the global rerank pass sit outside it, so bound the whole call.
-                result_obj = await run_within_budget(
-                    pipeline.search_many(
-                        query, deduped, namespace=ns, query_vector=hyde_outcome.vector,
-                        rag_fusion=rag_fusion,
-                        rag_fusion_generator=rag_fusion_generator,
-                        rag_fusion_config=_rf_config,
-                        filters=_multi_filters,
-                        graph_mode=graph_mode,
-                        scope_filter=scope_filter,
-                        rerank=_warmup.rerank,
-                        fts_only=_warmup.fts_only,
-                    ),
-                    timeout=_SEARCH_TIMEOUT_SECONDS,
-                )
-            except GraphCommunitiesNotBuiltError as exc:
-                return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
-            except CollectionNotFoundError:
-                return McpErrorResponse(error=COLLECTION_NOT_FOUND_DETAIL, code=NOT_FOUND_CODE)
-            except (FanoutTimeoutError, SearchBudgetExceeded):
+        nonlocal search_service
+        # Refused before the service and before any validation: a call without an authenticated identity is never served.
+        identity = _get_request_identity()
+        if search_service is None:
+            if config is None:
                 logger.error(
-                    "search pipeline timed out",
-                    extra={"event_type": "search_timeout", "collections": list(deduped)},
+                    "search is unavailable: the MCP app was built without a configuration",
+                    extra={"event_type": "search_service_unavailable"},
                 )
-                return McpErrorResponse(error="search timed out", code="timeout")
-            except MetadataLookupError:
-                # Transient infrastructure error (store unavailable); mirror REST's
-                # 503 semantics with a clean message rather than leaking the cause.
-                logger.exception("multi-collection search: metadata lookup failed")
-                return McpErrorResponse(error=METADATA_STORE_UNAVAILABLE_DETAIL, code=METADATA_STORE_UNAVAILABLE_CODE)
-            except Exception:
-                _enqueue_internal_error(writer, "search", start)
-                logger.exception("multi-collection search failed")
                 return McpErrorResponse(error=SEARCH_FAILED_DETAIL, code=INTERNAL_ERROR_CODE)
-            if writer is not None:
-                try:
-                    excluded_count = len(result_obj.excluded_collections)
-                    writer.enqueue(
-                        TelemetryEntry.from_search_multi_result(
-                            collections=deduped,
-                            fanout_count=len(deduped) - excluded_count,
-                            result_count=len(result_obj.results),
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            excluded_count=excluded_count,
-                            correlation_id=_correlation_id.get(),
-                            rag_fusion_applied=result_obj.rag_fusion_applied,
-                            rag_fusion_queries_used=result_obj.rag_fusion_queries_used,
-                        )
-                    )
-                except Exception:
-                    logger.warning("telemetry: search_multi entry enqueue failed", exc_info=True)
-            try:
-                result_schemas = []
-                for r in result_obj.results:
-                    rs = McpSearchToolResultSchema.from_search_result(r)
-                    if not include_metadata:
-                        rs.metadata = {}
-                    result_schemas.append(rs)
-                _multi_expansion_warning = hyde_outcome.expansion_warning or result_obj.rag_fusion_warning
-                _multi_graph_expansion_applied = result_obj.graph_expansion_applied
-                response = McpSearchResponse(
-                    results=result_schemas,
-                    acl_filtered=result_obj.acl_filtered,
-                    excluded_collections=[
-                        ExcludedCollectionMcpSchema(name=e.name, reason=e.reason)
-                        for e in result_obj.excluded_collections
-                    ],
-                    hyde_applied=hyde_outcome.applied,
-                    expansion_used=hyde_outcome.applied or result_obj.rag_fusion_applied or _multi_graph_expansion_applied,
-                    expansion_warning=_multi_expansion_warning,
-                    graph_expansion_applied=_multi_graph_expansion_applied,
-                    ppr_entities_matched=result_obj.ppr_entities_matched,
-                )
-                return response.model_dump(mode="json")
-            except ValidationError:
-                # The ValidationError text embeds the rejected values: log it, never send it.
-                logger.exception("search: response schema validation failed")
-                return McpErrorResponse(error=_INVALID_SEARCH_RESPONSE_DETAIL, code=_ERR_SCHEMA)
-
+            search_service = build_search_service(
+                pipeline,
+                config,
+                embedder_cache=embedder_cache,
+                hyde_generator=hyde_generator,
+                rag_fusion_generator=rag_fusion_generator,
+                telemetry_writer=writer,
+                doc_id_hasher=doc_id_hasher,
+            )
         try:
-            try:
-                filters = SearchFilters(
+            command = SearchCommand(
+                query=query,
+                collection=collection,
+                collections=None if collections is None else tuple(collections),
+                filters=build_search_filters(
                     file_type=file_type,
                     source_path_prefix=source_path_prefix,
                     source_path_glob=source_path_glob,
                     indexed_after=indexed_after,
                     indexed_before=indexed_before,
                     language=language,
-                    include_metadata=include_metadata,
-                )
-            except ValidationError:
-                return McpErrorResponse(error=INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
-            _col = collection or default_collection
-            # Namespace gate: collection must exist in the caller's namespace.
-            # Mirrors the REST search route's get_collection_meta check (routes_search.py)
-            # which returns 404 when the collection is owned by a different namespace.
-            _col_meta = await pipeline.get_collection_meta(_col, namespace=ns)
-            if _col_meta is None:
-                return McpErrorResponse(error=f"collection {_col!r} not found", code="not_found")
-            _search_embedder = await _resolve_embedder(pipeline, embedder_cache, _col, config, namespace=ns, meta=_col_meta)
-            # Outside the budget below by design (S184/S288/S290): a cold cross-encoder
-            # built inside rerank_candidates — or a cold embedder built inside
-            # embed_one — would park this tool call for the whole model build.
-            # rerank=False degrades to the fused vector+FTS ranking, fts_only=True to
-            # the FTS leg alone.
-            _warmup = await warmup_for_search(pipeline, _search_embedder)
-            # Resolved only now that the collection's embedder is known, so the
-            # hypothesis lands in that collection's vector space.
-            hyde_outcome = await _request_hyde.resolve(_search_embedder, embedder_warm=not _warmup.fts_only)
-            with ExitStack() as stack:
-                recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
-                t0 = time.perf_counter()
-                result_obj = await run_within_budget(
-                    pipeline.search(
-                        query, _col, ns, embedder=_search_embedder, filters=filters, query_vector=hyde_outcome.vector,
-                        rag_fusion=rag_fusion,
-                        rag_fusion_generator=rag_fusion_generator,
-                        rag_fusion_config=_rf_config,
-                        graph_mode=graph_mode,
-                        scope_filter=scope_filter,
-                        rerank=_warmup.rerank,
-                        fts_only=_warmup.fts_only,
-                    ),
-                    timeout=_SEARCH_TIMEOUT_SECONDS,
-                )
-                if recorder is not None:
-                    recorder.record_total(t0)
-                    logger.info(
-                        "stage timings",
-                        extra={
-                            "event_type": "stage_timings",
-                            "correlation_id": _correlation_id.get(),
-                            "endpoint": "search",
-                            "collection": _col,
-                            "stage_timings_ms": recorder.stage_timings_ms,
-                        },
-                    )
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_search_tool_result(
-                            endpoint="search",
-                            collection=_col,
-                            result_doc_ids=[r.doc_id for r in result_obj.results],
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            filter_flags=FilterFlags.from_search_filters(filters),
-                            correlation_id=_correlation_id.get(),
-                            rag_fusion_applied=result_obj.rag_fusion_applied,
-                            rag_fusion_queries_used=result_obj.rag_fusion_queries_used,
-                            doc_id_hasher=doc_id_hasher,
-                        )
-                    )
-                except Exception:
-                    logger.warning("telemetry: search entry enqueue failed", exc_info=True)
-            try:
-                result_schemas = []
-                for r in result_obj.results:
-                    rs = McpSearchToolResultSchema.from_search_result(r)
-                    if not include_metadata:
-                        rs.metadata = {}
-                    result_schemas.append(rs)
-                _single_expansion_warning = hyde_outcome.expansion_warning or result_obj.rag_fusion_warning
-                _single_graph_expansion_applied = result_obj.graph_expansion_applied
-                response = McpSearchResponse(
-                    results=result_schemas,
-                    acl_filtered=result_obj.acl_filtered,
-                    excluded_collections=[
-                        ExcludedCollectionMcpSchema(name=e.name, reason=e.reason)
-                        for e in result_obj.excluded_collections
-                    ],
-                    hyde_applied=hyde_outcome.applied,
-                    expansion_used=hyde_outcome.applied or result_obj.rag_fusion_applied or _single_graph_expansion_applied,
-                    expansion_warning=_single_expansion_warning,
-                    graph_expansion_applied=_single_graph_expansion_applied,
-                    ppr_entities_matched=result_obj.ppr_entities_matched,
-                )
-                return response.model_dump(mode="json")
-            except ValidationError:
-                # The ValidationError text embeds the rejected values: log it, never send it.
-                logger.exception("search: response schema validation failed")
-                return McpErrorResponse(error=_INVALID_SEARCH_RESPONSE_DETAIL, code=_ERR_SCHEMA)
-        except GraphCommunitiesNotBuiltError as exc:
-            return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
-        except EmbedderNotReadyError as exc:
-            # The model is still loading (or its load is wedged) — retryable.
-            logger.warning("search: embedder not ready — %s", exc)
-            return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
-        except SearchBudgetExceeded:
-            # Not asyncio.TimeoutError: since 3.11 that is the builtin TimeoutError (an
-            # OSError), so catching it here would also swallow a socket ETIMEDOUT from
-            # the store and report it as a timeout instead of an internal error.
-            logger.error(
-                "search pipeline timed out",
-                extra={"event_type": "search_timeout", "collection": _col},
+                ),
+                include_metadata=include_metadata,
+                hyde=hyde,
+                rag_fusion=rag_fusion,
+                graph_mode=graph_mode,
+                scope_filter=scope_filter,
+                acl_context=acl_context,
             )
-            return McpErrorResponse(error="search timed out", code="timeout")
-        except Exception:
-            _enqueue_internal_error(writer, "search", start)
-            logger.exception("search failed")
-            return McpErrorResponse(error=SEARCH_FAILED_DETAIL, code=INTERNAL_ERROR_CODE)
+            outcome = await search_service.search(command, identity)
+        except ServiceError as error:
+            # The one error table: every kind answers with the service's fixed, sanitized detail and its wire code.
+            return McpErrorResponse(error=error.detail, code=error.code)
+        try:
+            return _render_search_outcome(outcome)
+        except ValidationError:
+            # The ValidationError text embeds the rejected values: log it, never send it.
+            logger.exception("search: response schema validation failed")
+            return McpErrorResponse(error=_INVALID_SEARCH_RESPONSE_DETAIL, code=_ERR_SCHEMA)
 
     @app.tool()
     async def search_with_context(
@@ -1238,7 +1021,7 @@ def create_app(
                     chosen = req.collection
                     _explain_active_model = resolve_active_model(meta, config)
                 elif config is None:
-                    # No routing config — fall back to the default collection (like search).
+                    # No routing config — fall back to the default collection.
                     chosen = default_collection
                 else:
                     all_meta = await pipeline.get_all_collections_meta(namespace=ns)

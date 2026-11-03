@@ -468,10 +468,10 @@ async def test_live_mcp_search_rag_fusion(
     live_models_dir: Path,
 ) -> None:
     """MCP search tool with rag_fusion=True and real generator returns
-    expansion_used=True (the "search" MCP tool folds hyde/rag_fusion/graph
-    expansion into a single expansion_used flag — see its docstring in
-    archon_search/server/mcp.py; the more granular rag_fusion_* fields are
-    exposed by the HTTP /search route and pipeline.search(), not this tool).
+    expansion_used=True (the "search" MCP tool answers REST's response fields:
+    the single expansion_used flag folds hyde/rag_fusion/graph expansion, and the
+    granular rag_fusion_applied/rag_fusion_queries_used/rag_fusion_attempted
+    fields ride alongside it, as on the HTTP /search route).
 
     Uses the shared ``stub_mcp_tool`` helper (tests/_fastmcp_stub.py)
     to avoid relying on FastMCP private internals.

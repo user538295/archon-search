@@ -458,10 +458,8 @@ async def test_search_rag_fusion_telemetry_entry_written(tmp_path: Path) -> None
 def test_mcp_search_rag_fusion_true_applied_in_result(tmp_path: Path) -> None:
     """MCP search tool with rag_fusion=True returns results without error.
 
-    The MCP search response schema (McpSearchResponse) does not expose
-    rag_fusion_applied/rag_fusion_queries_used/rag_fusion_attempted in the
-    response dict — those fields are internal to the pipeline and written to
-    telemetry only. This test verifies the call succeeds, returns results, and actually
+    The MCP search response carries REST's ``rag_fusion_applied`` / ``rag_fusion_queries_used`` /
+    ``rag_fusion_attempted`` fields. This test verifies the call succeeds, returns results, and actually
     awaited the variant generator (so a skipped fusion branch cannot pass silently).
     """
     asyncio.run(_ingest_chunk(tmp_path))
@@ -496,8 +494,7 @@ def test_mcp_search_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path) -
     """MCP search tool with rag_fusion=True and hyde=True → rag_fusion wins, hyde_applied=False.
 
     Verifies mutual exclusion via hyde_applied field: when rag_fusion=True suppresses HyDE,
-    the response reports hyde_applied=False. rag_fusion_applied is not part of the MCP
-    response schema (McpSearchResponse) — it is tracked in telemetry only.
+    the response reports hyde_applied=False; rag_fusion_applied is part of the MCP response too.
     """
     asyncio.run(_ingest_chunk(tmp_path))
     app = _make_app(tmp_path, rag_fusion_enabled=True)

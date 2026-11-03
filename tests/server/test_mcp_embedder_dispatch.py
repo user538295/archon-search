@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
@@ -60,7 +61,7 @@ async def test_mcp_search_calls_embedder_cache_get_or_load() -> None:
     pipeline.warmup_models = AsyncMock(return_value=True)
 
     cache, _resolved = _make_embedder_cache("model-X")
-    app = _make_mcp_app(pipeline, embedder_cache=cache)
+    app = _make_mcp_app(pipeline, config=SearchConfig(), embedder_cache=cache)
 
     await app.tools["search"](query="q", collection="col")
 
@@ -79,7 +80,7 @@ async def test_mcp_search_passes_resolved_embedder_to_pipeline() -> None:
     pipeline.warmup_models = AsyncMock(return_value=True)
 
     cache, resolved = _make_embedder_cache("model-X")
-    app = _make_mcp_app(pipeline, embedder_cache=cache)
+    app = _make_mcp_app(pipeline, config=SearchConfig(), embedder_cache=cache)
 
     await app.tools["search"](query="q", collection="col")
 

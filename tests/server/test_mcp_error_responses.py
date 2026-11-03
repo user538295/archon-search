@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 
@@ -14,10 +15,10 @@ from tests._fastmcp_stub import StubFastMCP, stubbed_fastmcp
 # ---------------------------------------------------------------------------
 
 
-def _make_app(pipeline: MagicMock) -> StubFastMCP:
+def _make_app(pipeline: MagicMock, config: SearchConfig | None = None) -> StubFastMCP:
     with stubbed_fastmcp():
         from archon_search.server import mcp as mcp_module
-        return mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        return mcp_module.create_app(pipeline, "default", writer=None, config=config)  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------
@@ -32,8 +33,8 @@ async def test_search_error_returns_structured_error() -> None:
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(side_effect=RuntimeError("boom"))
     pipeline.warmup_models = AsyncMock(return_value=True)
-    app = _make_app(pipeline)
-    result = await app.tools["search"](query="q", collection=None)
+    app = _make_app(pipeline, config=SearchConfig())
+    result = await app.tools["search"](query="q", collection="col")
     assert isinstance(result, dict)
     assert set(result.keys()) == {"error", "code"}
     assert result["code"] == "internal_error"

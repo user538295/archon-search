@@ -121,8 +121,11 @@ def _mcp_module() -> Any:
     return importlib.import_module("archon_search.server.mcp")
 
 
-def _tools(pipeline: MagicMock, **kwargs: Any) -> dict[str, Any]:
+def _tools(pipeline: MagicMock, *, tool: str | None = None, **kwargs: Any) -> dict[str, Any]:
     kwargs.setdefault("writer", None)
+    if tool == "search":
+        # ``search`` is unavailable (``internal_error``) on an app built without a configuration.
+        kwargs.setdefault("config", SearchConfig())
     return stub_mcp_tools(pipeline, "default", **kwargs)
 
 
@@ -234,7 +237,7 @@ async def test_catch_all_internal_error_does_not_echo_exception(
     writer = MagicMock()
 
     with caplog.at_level(logging.ERROR):
-        result, wire = await _wire(_tools(pipeline, writer=writer, **extra), case.tool, **case.kwargs)
+        result, wire = await _wire(_tools(pipeline, tool=case.tool, writer=writer, **extra), case.tool, **case.kwargs)
 
     raiser.assert_awaited()
     _assert_error_without_leak(result, wire, _INTERNAL_ERROR_CODE, case.detail)
@@ -296,7 +299,7 @@ async def test_multi_collection_metadata_lookup_error_does_not_echo_store_error(
     setattr(pipeline, pipeline_method, raiser)
 
     with caplog.at_level(logging.ERROR):
-        result, wire = await _wire(_tools(pipeline), tool, query="q", collections=["a", "b"])
+        result, wire = await _wire(_tools(pipeline, tool=tool), tool, query="q", collections=["a", "b"])
 
     raiser.assert_awaited_once()
     _assert_error_without_leak(result, wire, METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL)
@@ -420,7 +423,7 @@ async def test_schema_validation_error_does_not_echo_input_value(
     module = _mcp_module()
     with patch.object(module, "validate_embedding_model", AsyncMock(return_value=_EMBEDDING_DIM)), \
             case.patcher() as hook, caplog.at_level(logging.ERROR):
-        result, wire = await _wire(_tools(pipeline), case.tool, **case.kwargs)
+        result, wire = await _wire(_tools(pipeline, tool=case.tool), case.tool, **case.kwargs)
 
     assert hook.called, "the response-schema construction must have been reached"
     _assert_error_without_leak(result, wire, _SCHEMA_ERROR_CODE, case.detail)
@@ -448,7 +451,7 @@ async def test_filter_validation_error_does_not_echo_input_value(tool: str, kwar
     _setup_search_many(pipeline)
     _setup_search_with_context(pipeline)
 
-    result, wire = await _wire(_tools(pipeline), tool, indexed_after=_BAD_FILTER_VALUE, **kwargs)
+    result, wire = await _wire(_tools(pipeline, tool=tool), tool, indexed_after=_BAD_FILTER_VALUE, **kwargs)
 
     _assert_error_without_leak(result, wire, "validation_error", INVALID_SEARCH_FILTERS_DETAIL)
     pipeline.search.assert_not_awaited()
@@ -522,7 +525,9 @@ async def test_hyde_runtime_error_with_failing_telemetry_still_answers_sanitized
     embed_one.assert_awaited()
     writer.enqueue.assert_called_once()
     _assert_error_without_leak(result, wire, _INTERNAL_ERROR_CODE, detail)
-    assert f"telemetry: {tool} error entry enqueue failed" in caplog.text
+    # ``search`` records through the service (its own warning); the other tools log their own entry.
+    expected = "telemetry enqueue failed: RuntimeError" if tool == "search" else f"telemetry: {tool} error entry enqueue failed"
+    assert expected in caplog.text
 
 
 # ---------------------------------------------------------------------------

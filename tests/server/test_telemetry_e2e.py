@@ -96,6 +96,7 @@ def _make_ok_pipeline(results: list[SearchResult]) -> MagicMock:
 
     pipeline = MagicMock()
     pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=results, acl_filtered=False))
     swc_items = [{"result": r, "context_before": [], "context_after": []} for r in results]
@@ -110,6 +111,7 @@ def _make_ok_pipeline(results: list[SearchResult]) -> MagicMock:
 def _make_error_pipeline(exc: Exception) -> MagicMock:
     pipeline = MagicMock()
     pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.search = AsyncMock(side_effect=exc)
     pipeline.search_with_context = AsyncMock(side_effect=exc)
@@ -159,13 +161,13 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
         with stubbed_fastmcp():
             from archon_search.server import mcp as mcp_module
 
-            ok_mcp = mcp_module.create_app(ok_pipeline, "col1", writer=writer)
-            err_mcp = mcp_module.create_app(err_pipeline, "col1", writer=writer)
+            ok_mcp = mcp_module.create_app(ok_pipeline, "col1", writer=writer, config=SearchConfig())
+            err_mcp = mcp_module.create_app(err_pipeline, "col1", writer=writer, config=SearchConfig())
 
             # search ok → provides: collection, result_count, result_doc_ids
-            await ok_mcp.tools["search"](query="q1", collection=None)
+            await ok_mcp.tools["search"](query="q1", collection="col1")
             # search error → provides: error_kind
-            await err_mcp.tools["search"](query="q2", collection=None)
+            await err_mcp.tools["search"](query="q2", collection="col1")
             # search_with_context ok → provides: endpoint="search_with_context"
             await ok_mcp.tools["search_with_context"](query="q3", collection=None)
             # search_with_context error
@@ -319,8 +321,8 @@ def test_handler_does_not_leak_query_text_into_log(
         with stubbed_fastmcp():
             from archon_search.server import mcp as mcp_module
 
-            mcp_app = mcp_module.create_app(ok_pipeline, "col1", writer=writer)
-            await mcp_app.tools["search"](query=SENTINEL, collection=None)
+            mcp_app = mcp_module.create_app(ok_pipeline, "col1", writer=writer, config=SearchConfig())
+            await mcp_app.tools["search"](query=SENTINEL, collection="col1")
             await mcp_app.tools["search_with_context"](query=SENTINEL, collection=None)
 
     with caplog.at_level(logging.WARNING, logger="archon.search"):
@@ -404,11 +406,11 @@ def test_handler_does_not_leak_query_text_via_exception_message(
         with stubbed_fastmcp():
             from archon_search.server import mcp as mcp_module
 
-            mcp_app = mcp_module.create_app(err_pipeline, "col1", writer=writer)
+            mcp_app = mcp_module.create_app(err_pipeline, "col1", writer=writer, config=SearchConfig())
 
             with caplog.at_level(logging.ERROR, logger="archon.search"):
                 # Raises internally; tool catches and enqueues an error entry
-                await mcp_app.tools["search"](query=SENTINEL, collection=None)
+                await mcp_app.tools["search"](query=SENTINEL, collection="col1")
                 await mcp_app.tools["search_with_context"](query=SENTINEL, collection=None)
 
         await writer.drain_and_stop()

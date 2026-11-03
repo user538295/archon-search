@@ -18,7 +18,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import archon_search.services.search_service as search_service_mod
 from archon_search._types import SearchResult
+from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.pipeline import (
     METADATA_STORE_UNAVAILABLE_CODE,
@@ -27,6 +29,9 @@ from archon_search.pipeline import (
 )
 from tests._fastmcp_stub import stubbed_fastmcp
 from tests._hyde_stubs import hyde_enabled_config, stub_hyde_generator
+
+_TINY_BUDGET_SECONDS = 0.05
+_CALL_GUARD_SECONDS = 5.0
 
 
 def _make_result(metadata: dict[str, str] | None = None, language: str = "") -> SearchResult:
@@ -43,20 +48,26 @@ def _make_result(metadata: dict[str, str] | None = None, language: str = "") -> 
     )
 
 
+def _build_app(pipeline: Any, **kwargs: Any) -> Any:
+    """The MCP app the ``search`` tool needs: a real config, since the service is built from it on the first call."""
+    kwargs.setdefault("config", SearchConfig())
+    kwargs.setdefault("writer", None)
+    with stubbed_fastmcp():
+        from archon_search.server import mcp as mcp_module
+
+        return mcp_module.create_app(pipeline, "default", **kwargs)
+
+
 async def _call_mcp_search(pipeline_result: SearchPipelineResult, include_metadata: bool | None = None) -> dict[str, Any]:
     pipeline = MagicMock()
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(return_value=pipeline_result)
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with stubbed_fastmcp():
-        from archon_search.server import mcp as mcp_module
-
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
-        fn = app.tools["search"]
-        if include_metadata is None:
-            return await fn(query="hello", collection=None)
-        return await fn(query="hello", collection=None, include_metadata=include_metadata)
+    fn = _build_app(pipeline).tools["search"]
+    if include_metadata is None:
+        return await fn(query="hello", collection="col")
+    return await fn(query="hello", collection="col", include_metadata=include_metadata)
 
 
 @pytest.mark.asyncio
@@ -111,7 +122,6 @@ async def test_mcp_search_tool_schema_advertises_language_field() -> None:
 @pytest.mark.asyncio
 async def test_mcp_search_forwards_filters_to_pipeline() -> None:
     """All filter kwargs hydrate a SearchFilters instance and reach pipeline.search."""
-    import archon_search.server.mcp as mcp_module
     from archon_search.filters import SearchFilters
 
     result = _make_result(metadata={"k": "v"})
@@ -121,19 +131,17 @@ async def test_mcp_search_forwards_filters_to_pipeline() -> None:
     pipeline.search = AsyncMock(return_value=pipeline_result)
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with stubbed_fastmcp():
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
-        fn = fake_app.tools["search"]
-        await fn(
-            query="hello",
-            collection=None,
-            file_type="md",
-            source_path_prefix="/docs/",
-            source_path_glob="*.md",
-            indexed_after="2025-01-01",
-            indexed_before="2025-12-31",
-            include_metadata=True,
-        )
+    fn = _build_app(pipeline).tools["search"]
+    payload = await fn(
+        query="hello",
+        collection="col",
+        file_type="md",
+        source_path_prefix="/docs/",
+        source_path_glob="*.md",
+        indexed_after="2025-01-01",
+        indexed_before="2025-12-31",
+        include_metadata=True,
+    )
 
     pipeline.search.assert_called_once()
     _args, kwargs = pipeline.search.call_args
@@ -145,7 +153,9 @@ async def test_mcp_search_forwards_filters_to_pipeline() -> None:
     assert filters_obj.source_path_glob == "*.md"
     assert filters_obj.indexed_after is not None
     assert filters_obj.indexed_before is not None
-    assert filters_obj.include_metadata is True
+    # ``include_metadata`` is a command field, not a filter: it blanks (or keeps) the response metadata.
+    assert filters_obj.include_metadata is False
+    assert payload["results"][0]["metadata"] == {"k": "v"}
 
 
 @pytest.mark.asyncio
@@ -184,19 +194,15 @@ async def test_mcp_search_with_context_forwards_filters_to_pipeline() -> None:
 @pytest.mark.asyncio
 async def test_mcp_search_invalid_filter_surfaces_validator_error() -> None:
     """An invalid filter value must return a structured error dict, not raise."""
-    import archon_search.server.mcp as mcp_module
-
     pipeline = MagicMock()
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with stubbed_fastmcp():
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
-        fn = fake_app.tools["search"]
-        # empty file_type is rejected by the validator
-        result = await fn(query="hello", collection=None, file_type="")
-        # Same on the fan-out branch, which builds its own SearchFilters.
-        fanout_result = await fn(query="hello", collections=["a", "b"], file_type="")
+    fn = _build_app(pipeline).tools["search"]
+    # empty file_type is rejected by the validator
+    result = await fn(query="hello", collection="col", file_type="")
+    # Same text on the fan-out path.
+    fanout_result = await fn(query="hello", collections=["a", "b"], file_type="")
 
     # Fixed text: a pydantic ValidationError embeds the rejected input values.
     assert result == {"error": "invalid search filters", "code": "validation_error"}
@@ -258,36 +264,48 @@ async def test_mcp_search_includes_metadata_when_include_metadata_true_task42() 
     assert payload["results"][0]["metadata"] == {"secret": "value"}
 
 
+async def _published_tools() -> dict[str, Any]:
+    """The real (unstubbed) app's published tools by name, so list_tools() reflects actual type annotations."""
+    import archon_search.server.mcp as mcp_module
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.warmup_models = AsyncMock(return_value=True)
+    pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
+
+    real_app = mcp_module.create_app(pipeline, "default", writer=None)
+    return {t.name: t for t in await real_app.list_tools()}
+
+
 @pytest.mark.asyncio
 async def test_mcp_search_tool_input_schema_is_superset_of_search_filters() -> None:
     """Every field on SearchFilters must appear in the published MCP tool input schema
     for both ``search`` and ``search_with_context``.  This is the compile-time guard
     against REST↔MCP drift."""
     from archon_search.filters import SearchFilters
-    from archon_search.pipeline import SearchPipelineResult
 
-    pipeline = MagicMock()
-    pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
-    pipeline.warmup_models = AsyncMock(return_value=True)
-    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
-    pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
-
-    # Use the real FastMCP so list_tools() reflects actual type annotations
-    import archon_search.server.mcp as mcp_module
-    real_app = mcp_module.create_app(pipeline, "default", writer=None)
-
-    tools_list = await real_app.list_tools()
-    schema_by_name = {t.name: t.to_mcp_tool().input_schema for t in tools_list}
-
+    tools = await _published_tools()
     filter_fields = set(SearchFilters.model_fields.keys())
 
     for tool_name in ("search", "search_with_context"):
-        assert tool_name in schema_by_name, f"Tool {tool_name!r} not found in MCP app"
-        tool_props = set(schema_by_name[tool_name].get("properties", {}).keys())
+        assert tool_name in tools, f"Tool {tool_name!r} not found in MCP app"
+        tool_props = set(tools[tool_name].to_mcp_tool().input_schema.get("properties", {}).keys())
         missing = filter_fields - tool_props
         assert not missing, (
             f"Tool {tool_name!r} input schema is missing SearchFilters fields: {missing}"
         )
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_tool_input_schema_has_acl_context() -> None:
+    """S40: ``search`` publishes ``acl_context`` (``top_k`` joins in BE-26) and documents ``ppr``; ``search_with_context`` takes no ``acl_context``."""
+    tools = await _published_tools()
+    schema_by_name = {name: tool.to_mcp_tool().input_schema for name, tool in tools.items()}
+
+    assert "acl_context" in schema_by_name["search"]["properties"]
+    assert "acl_context" not in schema_by_name["search_with_context"]["properties"]
+    assert "ppr" in (tools["search"].description or "")
 
 
 # ---------------------------------------------------------------------------
@@ -315,12 +333,8 @@ async def _call_mcp_search_multi(
     pipeline.warmup_models = AsyncMock(return_value=rerank_available)
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
 
-    with stubbed_fastmcp():
-        from archon_search.server import mcp as mcp_module
-
-        app = mcp_module.create_app(pipeline, "default", writer=None)
-        fn = app.tools["search"]
-        result = await fn(query="hello", collection=collection, collections=collections)
+    fn = _build_app(pipeline).tools["search"]
+    result = await fn(query="hello", collection=collection, collections=collections)
     return pipeline, result
 
 
@@ -412,7 +426,7 @@ async def _call_mcp_search_hyde(*, embedder_is_warm: bool):
     pipeline.warmup_models = AsyncMock(return_value=True)
     # No embedder cache: the global embedder serves the collection, so it is the
     # one HyDE embeds with and the one whose warmth gates it.
-    pipeline._global_embedder.is_warm = embedder_is_warm
+    pipeline.global_embedder.is_warm = embedder_is_warm
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
 
     config = SearchConfig()
@@ -420,13 +434,8 @@ async def _call_mcp_search_hyde(*, embedder_is_warm: bool):
     generator = MagicMock(spec=HyDEGenerator)
     generator.generate = AsyncMock(return_value=[0.1, 0.2, 0.3])
 
-    with stubbed_fastmcp():
-        from archon_search.server import mcp as mcp_module
-
-        app = mcp_module.create_app(
-            pipeline, "default", writer=None, config=config, hyde_generator=generator
-        )
-        result = await app.tools["search"](query="hello", collection="col", hyde=True)
+    app = _build_app(pipeline, config=config, hyde_generator=generator)
+    result = await app.tools["search"](query="hello", collection="col", hyde=True)
     return pipeline, generator, result
 
 
@@ -465,7 +474,6 @@ async def test_mcp_search_hyde_is_skipped_when_the_collection_embedder_is_cold_b
     pipeline = MagicMock()
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
     pipeline.warmup_models = AsyncMock(return_value=True)
-    pipeline._global_embedder.is_warm = True
     pipeline.global_embedder.is_warm = True
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock(active_embedding_model="other/model"))
     cold_collection_embedder = MagicMock(is_warm=False)
@@ -476,14 +484,8 @@ async def test_mcp_search_hyde_is_skipped_when_the_collection_embedder_is_cold_b
     generator = MagicMock(spec=HyDEGenerator)
     generator.generate = AsyncMock(return_value=[0.1, 0.2, 0.3])
 
-    with stubbed_fastmcp():
-        from archon_search.server import mcp as mcp_module
-
-        app = mcp_module.create_app(
-            pipeline, "default", writer=None, config=config, hyde_generator=generator,
-            embedder_cache=embedder_cache,
-        )
-        result = await app.tools["search"](query="hello", collection="col", hyde=True)
+    app = _build_app(pipeline, config=config, hyde_generator=generator, embedder_cache=embedder_cache)
+    result = await app.tools["search"](query="hello", collection="col", hyde=True)
 
     generator.generate.assert_not_awaited()
     assert result["hyde_applied"] is False
@@ -504,8 +506,6 @@ async def test_mcp_search_bounds_hyde_by_the_search_budget(
     ``[hyde].timeout_seconds`` is unclamped and unrelated to the server budget, so
     without the ``resolve_hyde_within_budget`` wrap the tool waits out the provider.
     """
-    import archon_search.server.mcp as mcp_module
-
     generation_started = asyncio.Event()
 
     async def _never_answers(*_args: Any, **_kwargs: Any) -> list[float] | None:
@@ -520,19 +520,17 @@ async def test_mcp_search_bounds_hyde_by_the_search_budget(
     )
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    monkeypatch.setattr(mcp_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
-    with stubbed_fastmcp():
-        fake_app = mcp_module.create_app(
-            pipeline, "default", writer=None, config=hyde_enabled_config(),
-            hyde_generator=stub_hyde_generator(side_effect=_never_answers),
-        )
-        started = time.monotonic()
-        result = await fake_app.tools["search"](query="hello", collection="col", hyde=True)
-        elapsed = time.monotonic() - started
+    monkeypatch.setattr(search_service_mod, "_SEARCH_TIMEOUT_SECONDS", _TINY_BUDGET_SECONDS)
+    fake_app = _build_app(
+        pipeline, config=hyde_enabled_config(), hyde_generator=stub_hyde_generator(side_effect=_never_answers)
+    )
+    started = time.monotonic()
+    result = await fake_app.tools["search"](query="hello", collection="col", hyde=True)
+    elapsed = time.monotonic() - started
 
     # Presence anchor: the budget cut a generation that started, not a skipped one.
     assert generation_started.is_set(), "HyDE generation never started"
-    assert elapsed < 5.0, f"the MCP search tool waited {elapsed:.1f}s on the HyDE call"
+    assert elapsed < _CALL_GUARD_SECONDS, f"the MCP search tool waited {elapsed:.1f}s on the HyDE call"
     assert result["expansion_used"] is False
     assert result["expansion_warning"] == "HyDE expansion failed"
 
@@ -600,13 +598,21 @@ async def test_mcp_search_missing_collection_returns_not_found() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_search_fanout_timeout_returns_timeout() -> None:
+async def test_mcp_search_fanout_timeout_returns_timeout_and_records_it() -> None:
+    """The fan-out's own timeout answers the ``timeout`` code and enqueues a ``timeout`` telemetry entry."""
     from archon_search.pipeline import FanoutTimeoutError
 
-    _pipeline, result = await _call_mcp_search_multi(
-        collections=["a", "b"], search_many_raises=FanoutTimeoutError()
-    )
-    assert result["code"] == "timeout"
+    pipeline = MagicMock()
+    pipeline.search_many = AsyncMock(side_effect=FanoutTimeoutError("fan-out"))
+    pipeline.warmup_models = AsyncMock(return_value=True)
+    writer = MagicMock()
+
+    result = await _build_app(pipeline, writer=writer).tools["search"](query="hello", collections=["a", "b"])
+
+    assert result == {"error": "search timed out", "code": "timeout"}
+    writer.enqueue.assert_called_once()
+    entry = writer.enqueue.call_args.args[0]
+    assert (entry.endpoint, entry.status) == ("search", "timeout")
 
 
 @pytest.mark.asyncio
@@ -627,11 +633,7 @@ async def test_mcp_search_multi_emits_search_multi_telemetry() -> None:
     pipeline.warmup_models = AsyncMock(return_value=True)
     writer = MagicMock()
 
-    with stubbed_fastmcp():
-        from archon_search.server import mcp as mcp_module
-
-        app = mcp_module.create_app(pipeline, "default", writer=writer)
-        await app.tools["search"](query="q", collections=["a", "b", "c"])
+    await _build_app(pipeline, writer=writer).tools["search"](query="q", collections=["a", "b", "c"])
 
     writer.enqueue.assert_called_once()
     entry = writer.enqueue.call_args.args[0]
@@ -694,17 +696,13 @@ async def test_search_with_context_tool_language_param_described() -> None:
 async def test_mcp_search_invalid_language_returns_error() -> None:
     """MCP search tool must return a validation_error for language codes that are
     too long (> 3 chars) rather than an unhandled exception."""
-    import archon_search.server.mcp as mcp_module
-
     pipeline = MagicMock()
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with stubbed_fastmcp():
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
-        fn = fake_app.tools["search"]
-        # "english" is 7 chars — fails ^[a-z]{2,3}$ validator
-        result = await fn(query="hello", collection=None, language="english")
+    fn = _build_app(pipeline).tools["search"]
+    # "english" is 7 chars — fails ^[a-z]{2,3}$ validator
+    result = await fn(query="hello", collection="col", language="english")
 
     assert isinstance(result, dict)
     assert result.get("code") == "validation_error", (
@@ -719,16 +717,12 @@ async def test_mcp_search_language_with_collections_is_now_accepted() -> None:
     Pre-BE-4 the tool returned validation_error. After BE-4 the restriction is lifted:
     the language filter is forwarded to search_many() per-leg.
     """
-    import archon_search.server.mcp as mcp_module
-
     pipeline = MagicMock()
     pipeline.search_many = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with stubbed_fastmcp():
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
-        fn = fake_app.tools["search"]
-        result = await fn(query="hello", collections=["col1", "col2"], language="fr")
+    fn = _build_app(pipeline).tools["search"]
+    result = await fn(query="hello", collections=["col1", "col2"], language="fr")
 
     assert isinstance(result, dict)
     # Must NOT be a validation_error after BE-4
@@ -803,7 +797,6 @@ async def test_mcp_search_tool_expansion_used_true_on_hyde_success() -> None:
 @pytest.mark.asyncio
 async def test_mcp_search_tool_no_expansion_by_default() -> None:
     """MCP search tool returns expansion_used=False and expansion_warning=null when no expansion requested."""
-    import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
@@ -812,10 +805,8 @@ async def test_mcp_search_tool_no_expansion_by_default() -> None:
     )
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with stubbed_fastmcp():
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
-        fn = fake_app.tools["search"]
-        result = await fn(query="hello", collection="col")
+    fn = _build_app(pipeline).tools["search"]
+    result = await fn(query="hello", collection="col")
 
     assert isinstance(result, dict)
     assert result.get("expansion_used") is False
@@ -851,7 +842,6 @@ async def test_mcp_search_multi_collection_expansion_warning_on_hyde_failure() -
 @pytest.mark.asyncio
 async def test_mcp_search_multi_collection_expansion_used_true_on_rag_fusion_success() -> None:
     """MCP search multi-collection path: expansion_used=True when RAG Fusion succeeds."""
-    import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
     pipeline.search_many = AsyncMock(
@@ -861,10 +851,8 @@ async def test_mcp_search_multi_collection_expansion_used_true_on_rag_fusion_suc
     )
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with stubbed_fastmcp():
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
-        fn = fake_app.tools["search"]
-        result = await fn(query="hello", collections=["col1", "col2"], rag_fusion=True)
+    fn = _build_app(pipeline).tools["search"]
+    result = await fn(query="hello", collections=["col1", "col2"], rag_fusion=True)
 
     assert isinstance(result, dict)
     assert result.get("expansion_used") is True

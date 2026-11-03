@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from archon_search.config import SearchConfig
 from archon_search.pipeline import SearchPipelineResult
 from tests._fastmcp_stub import stubbed_fastmcp
 
@@ -53,7 +54,7 @@ async def test_mcp_search_multi_collection_language_filter_no_longer_rejected() 
     pipeline = _make_pipeline()
 
     with stubbed_fastmcp():
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())  # type: ignore[call-arg]
         fn = app.tools["search"]
         result = await fn(query="hello", collections=["col1", "col2"], language="fr")
 
@@ -81,7 +82,7 @@ async def test_mcp_search_multi_collection_file_type_filter_passed_to_pipeline()
     pipeline = _make_pipeline()
 
     with stubbed_fastmcp():
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())  # type: ignore[call-arg]
         fn = app.tools["search"]
         await fn(query="hello", collections=["col1", "col2"], file_type=".py")
 
@@ -113,7 +114,7 @@ async def test_mcp_search_multi_collection_no_filters_passes_none() -> None:
     pipeline = _make_pipeline()
 
     with stubbed_fastmcp():
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())  # type: ignore[call-arg]
         fn = app.tools["search"]
         await fn(query="hello", collections=["col1", "col2"])
 
@@ -144,7 +145,7 @@ async def test_mcp_search_multi_collection_all_filter_params_forwarded() -> None
     pipeline = _make_pipeline()
 
     with stubbed_fastmcp():
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())  # type: ignore[call-arg]
         fn = app.tools["search"]
         await fn(
             query="hello",
@@ -195,7 +196,7 @@ async def test_mcp_search_multi_collection_invalid_filter_returns_validation_err
     pipeline = _make_pipeline()
 
     with stubbed_fastmcp():
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())  # type: ignore[call-arg]
         fn = app.tools["search"]
         # file_type="" is rejected by SearchFilters validator
         result = await fn(query="hello", collections=["col1", "col2"], file_type="")
@@ -227,7 +228,7 @@ async def test_mcp_search_multi_collection_explicit_none_filters_passes_none() -
     pipeline = _make_pipeline()
 
     with stubbed_fastmcp():
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())  # type: ignore[call-arg]
         fn = app.tools["search"]
         await fn(
             query="hello",
@@ -260,7 +261,7 @@ async def test_mcp_search_multi_collection_include_metadata_not_in_filters() -> 
     flag handled at response serialization, not a retrieval filter for search_many().
 
     This test pins the intentional asymmetry so it cannot be accidentally 'fixed'
-    by adding include_metadata to the _multi_filters constructor.
+    by adding include_metadata to the filters the service builds.
     """
     import archon_search.server.mcp as mcp_module
     from archon_search.filters import SearchFilters
@@ -268,9 +269,9 @@ async def test_mcp_search_multi_collection_include_metadata_not_in_filters() -> 
     pipeline = _make_pipeline()
 
     with stubbed_fastmcp():
-        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())  # type: ignore[call-arg]
         fn = app.tools["search"]
-        # Pass include_metadata=True alongside a real filter to trigger _multi_filters construction
+        # Pass include_metadata=True alongside a real filter so a filters object is built
         await fn(
             query="hello",
             collections=["col1", "col2"],
@@ -286,7 +287,7 @@ async def test_mcp_search_multi_collection_include_metadata_not_in_filters() -> 
         f"Expected SearchFilters, got {type(filters)}"
     )
     # include_metadata must NOT be set on the filters forwarded to search_many().
-    # It is a presentation-layer flag, handled at response serialization (mcp.py line ~377).
+    # It is a command field of the service (the response blanks metadata), never a retrieval filter.
     assert filters.include_metadata is False, (
         f"include_metadata must not be forwarded to search_many() (it is a presentation flag); "
         f"got filters.include_metadata={filters.include_metadata!r}"

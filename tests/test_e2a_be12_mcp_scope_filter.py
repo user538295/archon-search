@@ -89,10 +89,11 @@ def _make_search_pipeline() -> Any:
 
 
 def _make_mcp_app(pipeline: Any) -> StubFastMCP:
-    """Build a stub-backed MCP app and return it."""
+    """Build a stub-backed MCP app with a real config (``search`` is unavailable without one) and return it."""
     with stubbed_fastmcp():
+        from archon_search.config import SearchConfig
         from archon_search.server import mcp as mcp_mod
-        app = mcp_mod.create_app(pipeline, "col1")
+        app = mcp_mod.create_app(pipeline, "col1", config=SearchConfig())
     return app  # type: ignore[return-value]
 
 

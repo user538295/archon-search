@@ -9,8 +9,8 @@ Wire truth (derived from code, never hardcoded):
   API reference documented the REST field; the MCP developer guide and the user manual did not.
   The REST schema is the MCP one plus ``acl_gate``; ``search_with_context`` items wrap an
   ``McpSearchResultSchema``.
-* The registered ``search`` tool runs the bounded ``warmup_for_search``; the registered
-  ``search_with_context`` tool does not, so it waits for a cold cross-encoder.
+* The registered ``search_with_context`` tool does not run the bounded ``warmup_for_search``, so it
+  waits for a cold cross-encoder (``search`` delegates to the search service instead).
 * The input schemas the real ``FastMCP`` app advertises (``tools/list``) carry no ``rerank``
   property on ``search`` / ``search_with_context``, only on ``explain``; REST ``SearchRequest`` has
   no ``rerank`` field either.
@@ -160,7 +160,6 @@ def test_searching_mcp_section_documents_reranker_score_null_semantics(
     swc_result = SearchWithContextItemSchema.model_fields[_SWC_RESULT_FIELD].annotation
     assert swc_result is McpSearchResultSchema, "wire-truth drift: search_with_context item result schema changed"
     assert _RERANK_PARAM not in base_tools[_SWC_TOOL], "wire-truth drift: search_with_context takes rerank"
-    assert _WARMUP_HELPER in _tool_source(tools[_SEARCH_TOOL]), "wire-truth drift: search lost its bounded warm-up"
     assert _WARMUP_HELPER not in _tool_source(tools[_SWC_TOOL]), (
         "wire-truth drift: search_with_context now bounds its warm-up, so it no longer waits for a cold cross-encoder"
     )

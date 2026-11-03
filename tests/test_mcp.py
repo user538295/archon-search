@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import archon_search.server.mcp as mcp_module
+from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.progress import (
     CollectionProgress,
@@ -264,7 +265,9 @@ def test_mcp_search_tool_maps_embedder_not_ready_to_embedder_not_ready_code() ->
         side_effect=EmbedderNotReadyError("model still loading")
     )
 
-    tool_fn = stub_mcp_tool("search", pipeline, "col1", embedder_cache=embedder_cache)
+    tool_fn = stub_mcp_tool(
+        "search", pipeline, "col1", config=SearchConfig(), embedder_cache=embedder_cache
+    )
 
     result = asyncio.run(tool_fn(query="test", collection="col1"))
 
@@ -319,15 +322,11 @@ def _make_hyde_pipeline_mock(search_result=None, search_many_result=None, swc_re
 
 
 def _make_config_with_hyde(enabled: bool = True):
-    """Return a SearchConfig-like MagicMock with hyde.enabled set."""
-    config = MagicMock()
+    """Return a real SearchConfig with hyde.enabled set (and graph.enabled=True)."""
+    config = SearchConfig()
     config.hyde.enabled = enabled
     config.embedding_model = "test-model"
-    config.observability.stage_timings_enabled = False
-    config.routing_shortlist_size = 5
-    config.routing_confidence_threshold = 0.5
-    config.max_fanout = 8
-    config.top_k_max = 100
+    config.graph.enabled = True
     return config
 
 
@@ -610,8 +609,15 @@ def test_mcp_hyde_on_swc_and_explain_still_runs_while_the_embedder_is_cold(tool_
     pipeline.warmup_models.assert_not_awaited()
 
 
-@pytest.mark.parametrize("kwargs", [{"collection": "col1"}, {"collections": ["col1", "col2"]}])
-@pytest.mark.parametrize("graph_mode", ["naive", "local", "global", "ppr"])
+@pytest.mark.parametrize(
+    ("graph_mode", "kwargs"),
+    [
+        (mode, where)
+        for mode in ("naive", "local", "global", "ppr")
+        for where in ({"collection": "col1"}, {"collections": ["col1", "col2"]})
+        if (mode, "collections" in where) != ("ppr", True)  # rejected before HyDE: see the ppr-with-collections test
+    ],
+)
 def test_mcp_search_graph_mode_suppresses_hyde(graph_mode: str, kwargs: dict) -> None:
     """C2-A-1: graph_mode wins over HyDE (most graph paths drop the vector), so the LLM is never called.
 
@@ -620,16 +626,14 @@ def test_mcp_search_graph_mode_suppresses_hyde(graph_mode: str, kwargs: dict) ->
     """
     import asyncio
 
-    if graph_mode == "ppr" and "collections" in kwargs:
-        pytest.skip("ppr + collections is rejected before HyDE")
     pipeline = _make_hyde_pipeline_mock()
     gen = _make_hyde_generator_mock(vector=[0.5] * 5)
     tool_fn = _get_hyde_tool_fn("search", pipeline, config=_make_config_with_hyde(enabled=True), hyde_generator=gen)
 
     result = asyncio.run(tool_fn(query="test query", hyde=True, graph_mode=graph_mode, **kwargs))
 
-    assert "error" not in result, result
     gen.generate.assert_not_awaited()
+    assert "error" not in result, result
     assert result["hyde_applied"] is False
     assert result["expansion_warning"] is None
     called = pipeline.search_many if "collections" in kwargs else pipeline.search
@@ -888,16 +892,12 @@ def _make_rag_fusion_pipeline_mock(
 
 
 def _make_config_with_rag_fusion(enabled: bool = True):
-    """Return a SearchConfig-like MagicMock with rag_fusion.enabled set."""
-    config = MagicMock()
+    """Return a real SearchConfig with rag_fusion.enabled set (HyDE off, graph.enabled=True)."""
+    config = SearchConfig()
     config.hyde.enabled = False
     config.rag_fusion.enabled = enabled
     config.embedding_model = "test-model"
-    config.observability.stage_timings_enabled = False
-    config.routing_shortlist_size = 5
-    config.routing_confidence_threshold = 0.5
-    config.max_fanout = 8
-    config.top_k_max = 100
+    config.graph.enabled = True
     return config
 
 
@@ -956,10 +956,10 @@ def test_mcp_search_tool_rag_fusion_applied_in_result() -> None:
     result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True))
 
     assert isinstance(result, dict)
-    # After migration to McpSearchResponse, rag_fusion_* fields are not in the search response.
-    # The search response is narrowed to: results, acl_filtered, excluded_collections, hyde_applied.
+    # The search response carries REST's field set, the rag_fusion_* fields included.
     assert "results" in result
     assert "acl_filtered" in result
+    assert result["rag_fusion_attempted"] is True
 
 
 def test_mcp_search_tool_rag_fusion_true_skips_hyde() -> None:
@@ -1127,8 +1127,8 @@ def _make_search_pipeline_with_result(result=None, acl_filtered=False, excluded=
 
 
 def _get_search_tool_fn(pipeline, config=None):
-    """Build a stub-backed MCP app and return the search tool function."""
-    return stub_mcp_tool("search", pipeline, "col1", config=config)
+    """Build a stub-backed MCP app (a real ``SearchConfig`` unless given one) and return the search tool function."""
+    return stub_mcp_tool("search", pipeline, "col1", config=SearchConfig() if config is None else config)
 
 
 _REST_SEARCH_RESPONSE_KEYS = {
@@ -1194,7 +1194,7 @@ def test_search_multi_collection_returns_mcp_search_response_shape() -> None:
     )
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    tool_fn = stub_mcp_tool("search", pipeline, "col1")
+    tool_fn = _get_search_tool_fn(pipeline)
 
     result = asyncio.run(tool_fn(query="hello", collections=["col1", "col2"]))
 

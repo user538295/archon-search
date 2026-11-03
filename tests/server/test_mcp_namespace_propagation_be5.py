@@ -23,6 +23,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
+from archon_search.services.authz import AuthIdentity
 from tests._collection_lock_stub import with_locked_collection_meta
 from tests._fastmcp_stub import stubbed_fastmcp
 
@@ -48,6 +49,11 @@ def _patch_namespace(ns: str):
     which is the single call site tested by all tool closures.
     """
     return patch("archon_search.server.mcp._get_request_namespace", return_value=ns)
+
+
+def _patch_identity(ns: str):
+    """Patch _get_request_identity() in the mcp module (the ``search`` tool's caller resolution) to an admin of ns."""
+    return patch("archon_search.server.mcp._get_request_identity", return_value=AuthIdentity(namespace=ns, admin=True))
 
 
 # ---------------------------------------------------------------------------
@@ -80,8 +86,9 @@ def _make_search_result() -> Any:
 
 @pytest.mark.asyncio
 async def test_search_tool_uses_resolved_namespace() -> None:
-    """search tool calls pipeline.search with namespace from _get_request_namespace()."""
+    """search tool calls pipeline.search with namespace from _get_request_identity()."""
     import archon_search.server.mcp as mcp_module
+    from archon_search.config import SearchConfig
 
     pipeline = MagicMock()
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
@@ -90,15 +97,15 @@ async def test_search_tool_uses_resolved_namespace() -> None:
     pipeline._global_embedder = MagicMock()
 
     with stubbed_fastmcp():
-        app = mcp_module.create_app(pipeline, "default", writer=None)
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())
         fn = app.tools["search"]
 
-    with _patch_namespace("ns-a"):
+    with _patch_identity("ns-a"):
         await fn(query="hello", collection="col1")
 
     pipeline.search.assert_called_once()
     call_kwargs = pipeline.search.call_args
-    assert call_kwargs.args[2] == "ns-a" or call_kwargs.kwargs.get("namespace") == "ns-a", (
+    assert call_kwargs.kwargs["namespace"] == "ns-a", (
         f"pipeline.search must be called with namespace='ns-a', got args={call_kwargs}"
     )
 
@@ -875,9 +882,10 @@ def test_fastmcp_get_http_request_raises_runtime_error_outside_request(real_mcp_
 
 @pytest.mark.asyncio
 async def test_search_tool_multi_collection_uses_resolved_namespace() -> None:
-    """search tool calls pipeline.search_many with namespace from _get_request_namespace()
+    """search tool calls pipeline.search_many with namespace from _get_request_identity()
     when the collections parameter (multi-collection fan-out path) is provided."""
     import archon_search.server.mcp as mcp_module
+    from archon_search.config import SearchConfig
     from archon_search.pipeline import SearchPipelineResult
 
     pipeline = MagicMock()
@@ -888,10 +896,10 @@ async def test_search_tool_multi_collection_uses_resolved_namespace() -> None:
     pipeline._global_embedder = MagicMock()
 
     with stubbed_fastmcp():
-        app = mcp_module.create_app(pipeline, "default", writer=None)
+        app = mcp_module.create_app(pipeline, "default", writer=None, config=SearchConfig())
         fn = app.tools["search"]
 
-    with _patch_namespace("ns-fanout"):
+    with _patch_identity("ns-fanout"):
         await fn(query="hello", collections=["col1", "col2"])
 
     pipeline.search_many.assert_called_once()

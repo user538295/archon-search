@@ -206,8 +206,8 @@ def test_namespace_isolation_via_mcp(tmp_path, monkeypatch) -> None:
         )
 
         # Search in col-b (belongs to ns-b) with ns-a token — must be rejected as not_found.
-        # The namespace gate added to the MCP search tool returns McpErrorResponse(code="not_found")
-        # when the collection doesn't exist in the caller's namespace.
+        # The search service resolves the collection within the caller's namespace and answers
+        # the fixed not_found error when it doesn't exist there.
         result_b = _mcp_call_tool(client, ns_a_token, session_id, "search", {
             "query": "namespace-b",
             "collection": "col-b",
@@ -220,8 +220,8 @@ def test_namespace_isolation_via_mcp(tmp_path, monkeypatch) -> None:
         assert tool_text_b, f"Expected non-empty text in response content: {content_b!r}"
         parsed_b = json.loads(tool_text_b)
         assert isinstance(parsed_b, dict), f"Expected dict response, got: {type(parsed_b)!r}: {parsed_b!r}"
-        assert "error" in parsed_b or (isinstance(parsed_b.get("results"), list) and parsed_b["results"] == []), (
-            f"ns-a token searching col-b (ns-b) must return not_found error or empty results. "
+        assert parsed_b == {"error": "collection not found", "code": "not_found"}, (
+            f"ns-a token searching col-b (ns-b) must return exactly not_found. "
             f"Got: {parsed_b!r}. Namespace isolation broken."
         )
 

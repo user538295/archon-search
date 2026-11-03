@@ -186,9 +186,7 @@ _ALLOWLIST: frozenset[tuple[str, str, str, int]] = frozenset({
     (f"{_SERVER}/routes_keys.py", "create_key", "ForbiddenError", 1),
     (f"{_SERVER}/routes_keys.py", "list_keys", "ForbiddenError", 1),
     # "No community representatives found for collection ..." — names the caller's collection.
-    # search / explain each have a single-collection and a multi-collection handler.
-    (f"{_SERVER}/mcp.py", "search", "GraphCommunitiesNotBuiltError", 1),
-    (f"{_SERVER}/mcp.py", "search", "GraphCommunitiesNotBuiltError", 2),
+    # explain has a single-collection and a multi-collection handler.
     (f"{_SERVER}/mcp.py", "explain", "GraphCommunitiesNotBuiltError", 1),
     (f"{_SERVER}/mcp.py", "explain", "GraphCommunitiesNotBuiltError", 2),
     (f"{_SERVER}/routes_explain.py", "explain_endpoint", "GraphCommunitiesNotBuiltError", 1),
