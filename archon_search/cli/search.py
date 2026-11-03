@@ -9,13 +9,39 @@ import httpx
 from archon_search.cli._helpers import (
     _DEFAULT_API_URL,
     _clean,
+    _json_body,
     _resolve_api_key,
     _send_or_exit,
+    _server_message,
 )
 from archon_search.constants import CLI_SEARCH_REQUEST_TIMEOUT_SECONDS
 
 # Longest excerpt, in characters, printed per result line (after whitespace is collapsed).
 _EXCERPT_MAX_CHARS = 200
+
+
+# What a bare 401 (the API-key middleware answers it with no body) and any other body-less error say.
+_BARE_401_MESSAGE = (
+    "the server rejected the API key. Check --api-key, ARCHON_SEARCH_API_KEY or the key file."
+)
+_UNEXPLAINED_ERROR_MESSAGE = "the server answered {status} without an error message."
+
+
+def _retry_after_note(resp: httpx.Response) -> str:
+    """``" (retry after Ns)"`` for a ``Retry-After`` of whole seconds, else ``""`` (never echoes the raw header)."""
+    seconds = resp.headers.get("Retry-After", "").strip()
+    return f" (retry after {seconds}s)" if seconds.isascii() and seconds.isdigit() else ""
+
+
+def _error_message(resp: httpx.Response) -> str:
+    """The ``Error: ...`` line for a non-200 answer: the server's detail (any REST shape), cleaned of controls."""
+    empty_text = (
+        _BARE_401_MESSAGE
+        if resp.status_code == 401
+        else _UNEXPLAINED_ERROR_MESSAGE.format(status=resp.status_code)
+    )
+    message = _server_message(_json_body(resp).get("detail"), resp.text, empty_text=empty_text)
+    return f"Error: {message.strip()}{_retry_after_note(resp)}"
 
 
 def _excerpt(text: str) -> str:
@@ -87,7 +113,7 @@ def search(query: str, collections: tuple[str, ...], json_flag: bool, api_url: s
         ),
     )
     if resp.status_code != 200:
-        click.echo(f"Error: server returned {resp.status_code}: {_clean(resp.text)}", err=True)
+        click.echo(_error_message(resp), err=True)
         raise SystemExit(1)
 
     try:
