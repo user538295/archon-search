@@ -270,7 +270,7 @@ An operator runs `archon-search search "q" --collection docs` and reads ranked r
     - Tests
         - #integration_test — `test_breaking_md_headings_have_index_rows` — (existing, `tests/test_removed_engine_repo_guard.py`) every new heading has its `NR-n` row
         - #integration_test — `test_wire_text_matches_source_and_every_quoting_doc` — (existing, `tests/test_sanitized_wire_text_docs.py`) `BREAKING.md` quotes no metadata-store literal
-- [ ] **T-1** — e2e: the CLI against a real server, human and `--json`; manual: terminal readability #tester-role
+- [x] **T-1** — e2e: the CLI against a real server, human and `--json`; manual: terminal readability #tester-role
     - — · 2.5h
     - needs FE-4, FE-5 · completes S67, S69
     - Tests
