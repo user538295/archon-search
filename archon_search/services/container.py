@@ -1,9 +1,9 @@
 """The services container: the one factory that builds a :class:`SearchService` for every adapter.
 
-There is no lifespan instance.  REST builds the service per request from ``request.app.state``
+There is no lifespan instance.  REST and the OpenAI shim build the service per request from ``request.app.state``
 (:func:`build_search_service_from_state`, so an object swapped on the state is seen by the next request).  The MCP
-factory (lazy build on its first ``search`` call, BE-15) and the OpenAI shim (BE-20) call the same factory from their own
-arguments (:func:`build_search_service`).  Every caller builds the same class, so there is one code path.
+factory (lazy build on its first ``search`` call, BE-15) calls the same factory from its own arguments
+(:func:`build_search_service`).  Every caller builds the same class, so there is one code path.
 """
 
 from __future__ import annotations

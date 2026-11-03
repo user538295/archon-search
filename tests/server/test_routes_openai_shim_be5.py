@@ -470,9 +470,9 @@ class TestDirectSearchTimeoutReturnsOpenAI504:
         ``TimeoutError`` raised *by the pipeline* is an ``OSError`` from the
         store and keeps its own 503/500 mapping.
         """
-        import archon_search.server.routes_openai_shim as shim_module
+        import archon_search.services.search_service as service_module
 
-        monkeypatch.setattr(shim_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr(service_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
         app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
 
         meta = _make_collection_meta("col")

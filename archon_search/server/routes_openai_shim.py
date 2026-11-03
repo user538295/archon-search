@@ -7,7 +7,7 @@ middleware are added — the existing REST surface is untouched.
 Design:
 - ``GET /v1/models`` delegates entirely to ``SearchPipeline.get_all_collections_meta``
   (the Use Cases layer) and maps results to ``ModelList`` (Entities).
-- ``POST /v1/chat/completions`` implements the non-streaming retrieval path.
+- ``POST /v1/chat/completions`` implements retrieval (streaming and non-streaming) as an adapter over ``SearchService``.
   The ``model`` field drives collection routing: ``archon-search`` fans out
   across all namespace collections; ``archon-search/{col}`` queries one.
 - ``OpenAI401Middleware`` is a thin Starlette middleware that rewrites any bodyless
@@ -33,15 +33,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response, StreamingResponse
 
-from archon_search.config import resolve_active_model
-from archon_search.constants import (
-    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
-)
-from archon_search.pipeline import (
-    CollectionNotFoundError,
-    FanoutTimeoutError,
-    MetadataLookupError,
-)
+from archon_search.server.authz import identity_of
 from archon_search.server.schemas_openai import (
     ChatCompletionChoice,
     ChatCompletionChunk,
@@ -55,11 +47,9 @@ from archon_search.server.schemas_openai import (
     OpenAIError,
     OpenAIErrorResponse,
 )
-from archon_search.services.search_budget import (
-    SearchBudgetExceeded,
-    run_within_budget,
-    warmup_for_search,
-)
+from archon_search.services.container import build_search_service_from_state
+from archon_search.services.search_command import SearchCommand
+from archon_search.services.service_error import ServiceError, ServiceErrorKind
 
 logger = logging.getLogger(__name__)
 
@@ -68,16 +58,58 @@ router = APIRouter()
 # The catch-all model ID — returned regardless of how many collections exist.
 _CATCH_ALL_MODEL_ID = "archon-search"
 
+_UNAVAILABLE_MESSAGE = "Service temporarily unavailable."
+
 
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 
 
-def _openai_error(status: int, message: str, error_type: str, *, code: str | None = None) -> JSONResponse:
+def _openai_error(
+    status: int,
+    message: str,
+    error_type: str,
+    *,
+    code: str | None = None,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
     """Return a JSON response in the OpenAI error envelope shape."""
     body = OpenAIErrorResponse(error=OpenAIError(message=message, type=error_type, code=code))
-    return JSONResponse(status_code=status, content=body.model_dump())
+    return JSONResponse(status_code=status, content=body.model_dump(), headers=headers)
+
+
+def _unauthorized() -> JSONResponse:
+    """The 401 envelope: for a request the API-key middleware refused, and for one that reaches the adapter with no identity."""
+    return _openai_error(
+        401, "Incorrect API key.", "authentication_error", headers={"WWW-Authenticate": "Bearer"}
+    )
+
+
+def _service_unavailable(*, headers: dict[str, str] | None = None) -> JSONResponse:
+    # Intentionally the OpenAI envelope, not REST's coded ``metadata_store_error`` (a different contract).
+    return _openai_error(503, _UNAVAILABLE_MESSAGE, "server_error", headers=headers)
+
+
+def _model_not_found(model: str) -> JSONResponse:
+    return _openai_error(404, f"The model '{model}' does not exist.", "invalid_request_error")
+
+
+def _error_response(error: ServiceError, *, model: str, is_fanout: bool) -> JSONResponse:
+    """Render a ``ServiceError`` in the shim's envelopes; no exception text ever reaches the wire."""
+    match error.kind:
+        case ServiceErrorKind.NOT_FOUND:
+            if is_fanout:
+                return _openai_error(404, "Collection not found.", "invalid_request_error")
+            return _model_not_found(model)
+        case ServiceErrorKind.TIMEOUT:
+            return _openai_error(504, "Request timeout.", "server_error")
+        case ServiceErrorKind.EMBEDDER_NOT_READY:
+            return _service_unavailable(headers={"Retry-After": str(error.retry_after_seconds)})
+        case _:
+            # Every other kind: metadata-store, internal and HyDE failures.  The request-shape kinds (validation, graph
+            # mode, scope filter) cannot arise: the shim sends no filter or graph mode and checks the query and name first.
+            return _service_unavailable()
 
 
 def _format_chunk(r: SearchResult, *, inject_citations: bool) -> str:
@@ -167,9 +199,11 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
     JSON, not a broken SSE stream), then a ``StreamingResponse`` is returned that
     yields one SSE ``data:`` frame per chunk.
     """
+    identity = identity_of(request)
+    if identity is None:
+        return _unauthorized()
     pipeline = request.app.state.pipeline
     config = request.app.state.config
-    ns: str = request.state.namespace
 
     # --- Extract last user message as query ---
     query: str | None = None
@@ -179,7 +213,8 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
             break
     if query is None:
         return _openai_error(422, "messages must contain at least one user message", "invalid_request_error")
-    if query.strip() == "":
+    query = query.strip()
+    if query == "":
         return _openai_error(400, "No user message provided", "invalid_request_error", code="no_user_message")
 
     # --- Parse model field ---
@@ -195,25 +230,16 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
         )
 
     is_fanout = len(parts) == 1  # exactly "archon-search"
-    collection = parts[1] if len(parts) == 2 else None
-
     inject_citations: bool = config.openai_shim.inject_citations
-    content: str = ""
 
-    # --- Resolve embedder (single-collection path) ---
-    async def _resolve_embedder(meta):
-        embedder_cache = getattr(request.app.state, "embedder_cache", None)
-        active_model = resolve_active_model(meta, config)
-        if embedder_cache is not None:
-            return await embedder_cache.get_or_load(active_model)
-        logger.warning("chat_completions: embedder_cache absent from app.state — falling back to global embedder")
-        return pipeline._global_embedder
-
-    # -------------------------------------------------------------------------
-    # Fanout path — model = "archon-search"
-    # -------------------------------------------------------------------------
     if is_fanout:
-        all_meta = await pipeline.get_all_collections_meta(ns)
+        # Fanout path — model = "archon-search": the names come from the namespace listing, truncated here (adapter policy).
+        try:
+            all_meta = await pipeline.get_all_collections_meta(identity.namespace)
+        except Exception:
+            # The listing is the shim's own call (the service only searches the names it is given), so it logs this failure.
+            logger.exception("chat_completions: collection list lookup failed")
+            return _service_unavailable()
 
         col_names = [m.name for m in all_meta]
 
@@ -229,114 +255,44 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
                 omitted,
             )
 
-        # Same warm-up as the REST fan-out route: the global embedder (which
-        # search_many embeds with) and the shared reranker, both bounded, so no cold
-        # model build can block this request for its whole duration — it degrades to
-        # the fused ranking (S288) or the FTS leg alone (S290).
-        warmup = await warmup_for_search(pipeline)
-
-        try:
-            # search_many's own _fanout_timeout_seconds bounds the per-collection leg
-            # gathers only — the meta lookup, embed_one and the global rerank pass sit
-            # outside it, so the whole call gets the same budget as the direct path.
-            result = await run_within_budget(
-                pipeline.search_many(
-                    query, col_names, namespace=ns,
-                    rerank=warmup.rerank, fts_only=warmup.fts_only,
-                ),
-                timeout=_SEARCH_TIMEOUT_SECONDS,
-            )
-        except CollectionNotFoundError as exc:
-            logger.warning("chat_completions: collection not found during fanout: %s", exc)
-            return _openai_error(404, "Collection not found.", "invalid_request_error")
-        except (FanoutTimeoutError, SearchBudgetExceeded):
-            # SearchBudgetExceeded, not asyncio.TimeoutError: since 3.11 the latter is
-            # the builtin TimeoutError (an OSError), so catching it here would also
-            # swallow a socket ETIMEDOUT from the store and mis-map it to a 504.
-            logger.error(
-                "chat_completions: search timed out",
-                extra={"event_type": "search_timeout", "collections": list(col_names)},
-            )
-            return _openai_error(504, "Request timeout.", "server_error")
-        except MetadataLookupError:
-            logger.exception("chat_completions: metadata lookup failed during search")
-            # Intentionally uses OpenAI error envelope — not ErrorDetail/metadata_store_error (different contract).
-            return _openai_error(503, "Service temporarily unavailable.", "server_error")
-
-        for excl in result.excluded_collections:
-            logger.warning(
-                "chat_completions: collection '%s' excluded from fanout: %s",
-                excl.name,
-                excl.reason,
-            )
-
-        if not body.stream:
-            content = _format_content(result.results, inject_citations=inject_citations)
-
-    # -------------------------------------------------------------------------
-    # Direct single-collection path — model = "archon-search/{col}"
-    # -------------------------------------------------------------------------
+        command = SearchCommand(query=query, collections=tuple(col_names))
     else:
-        # Empty collection name (model="archon-search/") → treat as not found
-        try:
-            meta = await pipeline.get_collection_meta(collection, namespace=ns)
-        except Exception:
-            logger.exception("chat_completions: meta lookup failed for collection %r", collection)
-            return _openai_error(503, "Service temporarily unavailable.", "server_error")
+        # Direct single-collection path — model = "archon-search/{col}".  An empty or whitespace-only name is not a model;
+        # an invalid one is answered ``not_found`` by the service before any store call.
+        collection = parts[1].strip()
+        if not collection:
+            return _model_not_found(model)
+        command = SearchCommand(query=query, collection=collection)
 
-        if meta is None:
-            return _openai_error(
-                404,
-                f"The model '{model}' does not exist.",
-                "invalid_request_error",
-            )
+    # The service logs and records every failure (S29, S30, S34); the shim only renders it in its own envelopes.
+    service = build_search_service_from_state(request.app.state)
+    try:
+        outcome = await service.search(command, identity)
+    except ServiceError as error:
+        return _error_response(error, model=model, is_fanout=is_fanout)
 
-        embedder = await _resolve_embedder(meta)
-        # Outside the budget below by design (S184/S288/S290): a cold cross-encoder
-        # built inside rerank_candidates — or a cold embedder built inside embed_one —
-        # would park this request for the whole model build. rerank=False degrades to
-        # the fused vector+FTS ranking, fts_only=True to the FTS leg alone.
-        warmup = await warmup_for_search(pipeline, embedder)
-
-        try:
-            # run_within_budget, not a bare asyncio.wait_for: since 3.11
-            # asyncio.TimeoutError *is* the builtin TimeoutError (an OSError), so a
-            # socket ETIMEDOUT raised inside the store would otherwise be mis-mapped
-            # to a 504 instead of the 500 its own handler gives it. Only a genuine
-            # budget overrun raises SearchBudgetExceeded — matching the fan-out
-            # branch above and both REST/MCP single-collection paths.
-            result = await run_within_budget(
-                pipeline.search(
-                    query, collection, namespace=ns, embedder=embedder,
-                    rerank=warmup.rerank, fts_only=warmup.fts_only,
-                ),
-                timeout=_SEARCH_TIMEOUT_SECONDS,
-            )
-        except SearchBudgetExceeded:
-            logger.error(
-                "chat_completions: search timed out",
-                extra={"event_type": "search_timeout", "collection": collection},
-            )
-            return _openai_error(504, "Request timeout.", "server_error")
-        except Exception:
-            logger.exception("chat_completions: search failed for collection %r", collection)
-            return _openai_error(503, "Service temporarily unavailable.", "server_error")
-
-        if not body.stream:
-            content = _format_content(result.results, inject_citations=inject_citations)
+    results = [hit.result for hit in outcome.results]
+    for excl in outcome.excluded_collections:
+        logger.warning(
+            "chat_completions: collection '%s' excluded from fanout: %s",
+            excl.name,
+            excl.reason,
+        )
 
     # Streaming path — results are already materialized above so errors (404/504)
     # are returned as plain JSON before StreamingResponse is opened.
     if body.stream:
         return StreamingResponse(
             _stream_completion(
-                result.results,
+                results,
                 completion_id=f"chatcmpl-{uuid4()}",
                 model=model,
                 inject_citations=inject_citations,
             ),
             media_type="text/event-stream",
         )
+
+    content = _format_content(results, inject_citations=inject_citations)
 
     # --- Build response ---
     response_obj = ChatCompletionResponse(
@@ -399,16 +355,6 @@ class OpenAI401Middleware(BaseHTTPMiddleware):
         response = await call_next(request)
 
         if response.status_code == 401 and request.url.path.startswith("/v1/"):
-            error_body = OpenAIErrorResponse(
-                error=OpenAIError(
-                    message="Incorrect API key.",
-                    type="authentication_error",
-                )
-            )
-            return JSONResponse(
-                status_code=401,
-                content=error_body.model_dump(),
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            return _unauthorized()
 
         return response

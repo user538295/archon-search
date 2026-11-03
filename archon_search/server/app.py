@@ -1509,11 +1509,10 @@ def create_app(
     async def _embedder_not_ready_handler(request: Request, exc: EmbedderNotReadyError) -> JSONResponse:
         """Map a wedged/slow model load to a uniform 503 across every HTTP route.
 
-        ``routes_search.search`` maps ``EmbedderNotReadyError`` itself, through the ``embedder_not_ready``
-        ``ServiceError`` of ``SearchService`` (the same 503 with ``Retry-After``); every
-        other route that resolves an embedder via ``EmbedderCache.get_or_load``
-        without its own handling (``/explain``, ``/v1/chat/completions``) falls
-        through to this one instead of surfacing as a 500.
+        ``routes_search.search`` and the OpenAI shim's ``chat_completions`` map ``EmbedderNotReadyError`` themselves,
+        through the ``embedder_not_ready`` ``ServiceError`` of ``SearchService`` (the same 503 with ``Retry-After``);
+        every other route that resolves an embedder via ``EmbedderCache.get_or_load`` without its own handling
+        (``/explain``) falls through to this one instead of surfacing as a 500.
 
         ``mcp.py`` is NOT covered here, for two independent reasons: (1) it is a
         mounted Starlette sub-app (``app.mount("/mcp", mcp_starlette)``), which
@@ -1527,13 +1526,7 @@ def create_app(
         """
         logger.warning("embedder not ready: %s", exc)
         # Retry-After matches every other retryable 503 in the server
-        # (_ingest_lock.py, routes_collections.py) — same condition, same hint,
-        # regardless of which surface (REST, OpenAI shim) maps it.
-        if request.url.path.startswith("/v1/"):
-            from archon_search.server.routes_openai_shim import _openai_error
-            response = _openai_error(503, "Service temporarily unavailable.", "server_error")
-            response.headers["Retry-After"] = str(RETRY_AFTER_SECONDS)
-            return response
+        # (_ingest_lock.py, routes_collections.py) — same condition, same hint.
         return JSONResponse(
             {"detail": EMBEDDER_NOT_READY_DETAIL, "code": EMBEDDER_NOT_READY_CODE},
             status_code=503,

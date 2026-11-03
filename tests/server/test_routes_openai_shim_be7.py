@@ -340,9 +340,9 @@ class TestStreamDirectTimeoutReturns504:
         """
         import asyncio
 
-        import archon_search.server.routes_openai_shim as shim_module
+        import archon_search.services.search_service as service_module
 
-        monkeypatch.setattr(shim_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr(service_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
         app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
 
         meta = _make_collection_meta("col")

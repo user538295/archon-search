@@ -43,6 +43,7 @@ def _make_pipeline_result(results=None, excluded_collections=None):
     pr = MagicMock(spec=SearchPipelineResult)
     pr.results = results if results is not None else []
     pr.excluded_collections = excluded_collections if excluded_collections is not None else []
+    pr.acl_filtered = False  # the service reads it; a spec'd mock has no value for a field without a default
     return pr
 
 
