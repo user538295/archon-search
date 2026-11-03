@@ -6,7 +6,8 @@ collection up in the caller's namespace, select the collection's embedder throug
 Fusion, run the pipeline under the search budget and derive the response fields once.  Every failure is a
 :class:`ServiceError` (a multi-collection command is the one exception until that path lands: ``NotImplementedError``);
 nothing transport-specific is accepted or raised (``CancelledError`` is never swallowed, so a client abort still cancels
-the search and its provider call).
+the search and its provider call).  Each outcome is recorded once through the existing ``TelemetryEntry`` factories, and each
+failure is logged here with its exception, because a :class:`ServiceError` carries none.
 
 The service returns raw pipeline hits plus the derived fields in a :class:`SearchOutcome`; each adapter renders its own
 wire schema from it.
@@ -15,8 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 from archon_search._types import ExcludedCollection, SearchResult
 from archon_search.config import resolve_active_model
@@ -24,6 +27,8 @@ from archon_search.constants import SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SE
 from archon_search.constants import VALID_ACL_SOURCES
 from archon_search.embedder_cache import EmbedderNotReadyError
 from archon_search.filters import SearchFilters
+from archon_search.observability import StageRecorder, bind_stage_recorder
+from archon_search.observability import correlation_id as _correlation_id
 from archon_search.pipeline import GraphCommunitiesNotBuiltError
 from archon_search.services.authz import AuthIdentity
 from archon_search.services.request_hyde import RequestHyDE
@@ -39,8 +44,11 @@ from archon_search.services.search_command import (
 )
 from archon_search.services.service_error import ServiceError, ServiceErrorKind
 from archon_search.store import is_valid_collection_name
+from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
     from archon_search.embedder import Embedder
@@ -48,6 +56,7 @@ if TYPE_CHECKING:
     from archon_search.hyde import HyDEGenerator
     from archon_search.pipeline import SearchPipeline, SearchPipelineResult
     from archon_search.rag_fusion import RAGFusionGenerator
+    from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +73,10 @@ logger = logging.getLogger(__name__)
 # answering 503 is the very cold-connection parking the S290 policy exists to prevent).  The load itself is shielded, so it
 # keeps running and populates the cache for later requests; this bound never cancels it or touches its registration.
 _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = EMBEDDER_WARMUP_WAIT_SECONDS
+
+# The telemetry label and the stage-timings ``endpoint`` of every search, on every interface.
+_ENDPOINT: Final = "search"
+_MILLISECONDS_PER_SECOND = 1000.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,12 +138,16 @@ class SearchService:
         embedder_cache: EmbedderCache | None = None,
         hyde_generator: HyDEGenerator | None = None,
         rag_fusion_generator: RAGFusionGenerator | None = None,
+        telemetry_writer: TelemetryWriter | None = None,
+        doc_id_hasher: Callable[[str], str] | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._config = config
         self._embedder_cache = embedder_cache
         self._hyde_generator = hyde_generator
         self._rag_fusion_generator = rag_fusion_generator
+        self._telemetry_writer = telemetry_writer
+        self._doc_id_hasher = doc_id_hasher
 
     async def search(self, command: SearchCommand, caller: AuthIdentity) -> SearchOutcome:
         """Search the single collection *command* names inside *caller*'s namespace.
@@ -138,7 +155,12 @@ class SearchService:
         Raises :class:`ServiceError` for every failure; the exception that caused it is attached as ``__cause__`` and never
         copied into the error's detail.  Raises ``NotImplementedError`` for a ``collections`` command until the multi path
         is served by this class.
+
+        The outcome is recorded once: a success, a timeout and every internal failure become a telemetry entry (when a writer
+        is wired), and each failure is logged here with its exception, never with the query.  Validation-class kinds and
+        ``not_found`` are neither recorded nor logged as failures.
         """
+        request_start = time.monotonic()
         normalized = normalize_search_command(
             command,
             max_fanout=self._config.max_fanout,
@@ -148,9 +170,37 @@ class SearchService:
         collection = normalized.collection
         if collection is None:
             raise NotImplementedError("the multi-collection path is not served by SearchService yet")
-        meta = await self._lookup_collection(collection, caller.namespace)
         try:
-            return await self._search_collection(normalized, collection, caller.namespace, meta)
+            meta = await self._lookup_collection(collection, caller.namespace)
+            outcome = await self._search_with_stage_timings(normalized, collection, caller.namespace, meta)
+        except ServiceError as error:
+            self._report_failure(error, collection, _elapsed_ms(request_start))
+            raise
+        self._record_success(normalized, collection, outcome, _elapsed_ms(request_start))
+        return outcome
+
+    async def _search_with_stage_timings(
+        self, command: SearchCommand, collection: str, namespace: str, meta: CollectionMeta
+    ) -> SearchOutcome:
+        """Run the search stages, logging their timings (flag permitting) on success and on every ``Exception`` branch."""
+        with ExitStack() as stack:
+            recorder = (
+                stack.enter_context(bind_stage_recorder()) if self._config.observability.stage_timings_enabled else None
+            )
+            stages_start = time.perf_counter()
+            try:
+                outcome = await self._map_failures(command, collection, namespace, meta)
+            except Exception:
+                _log_stage_timings(recorder, stages_start, collection)
+                raise
+            _log_stage_timings(recorder, stages_start, collection)
+            return outcome
+
+    async def _map_failures(
+        self, command: SearchCommand, collection: str, namespace: str, meta: CollectionMeta
+    ) -> SearchOutcome:
+        try:
+            return await self._search_collection(command, collection, namespace, meta)
         except ServiceError:
             raise
         except EmbedderNotReadyError as exc:
@@ -164,6 +214,70 @@ class SearchService:
             raise ServiceError(ServiceErrorKind.TIMEOUT) from exc
         except Exception as exc:
             raise ServiceError(ServiceErrorKind.INTERNAL) from exc
+
+    def _report_failure(self, error: ServiceError, collection: str, latency_ms: float) -> None:
+        """Log *error* where its cause is in hand and enqueue its error entry when the kind is recorded."""
+        cause = error.__cause__
+        kind = error.kind
+        if kind in (ServiceErrorKind.INTERNAL, ServiceErrorKind.HYDE_FAILED):
+            logger.error(
+                "search pipeline failed: %s",
+                type(cause).__name__,
+                extra={"event_type": "search_pipeline_failure"},
+                exc_info=cause,
+            )
+        elif kind is ServiceErrorKind.TIMEOUT:
+            logger.error(
+                "search pipeline timed out",
+                extra={"event_type": "search_timeout", "collection": collection},
+            )
+        elif kind is ServiceErrorKind.METADATA_STORE_ERROR:
+            logger.error("search: meta lookup failed for collection %r", collection, exc_info=cause)
+        elif kind is ServiceErrorKind.EMBEDDER_NOT_READY:
+            logger.warning("search: embedder not ready — %s", cause)
+        recorded = error.telemetry
+        if recorded is None:
+            return
+        self._enqueue(
+            lambda: TelemetryEntry.from_error(
+                endpoint=_ENDPOINT,
+                status=recorded.status,
+                error_kind=recorded.error_kind,
+                latency_ms=latency_ms,
+                correlation_id=_correlation_id.get(),
+            )
+        )
+
+    def _record_success(
+        self, command: SearchCommand, collection: str, outcome: SearchOutcome, latency_ms: float
+    ) -> None:
+        def build() -> TelemetryEntry:
+            flags = FilterFlags.from_search_filters(command.filters) if command.filters is not None else FilterFlags()
+            if outcome.include_metadata and not flags.include_metadata:
+                flags = flags.model_copy(update={"include_metadata": True})
+            return TelemetryEntry.from_search_tool_result(
+                endpoint=_ENDPOINT,
+                collection=collection,
+                result_doc_ids=[hit.result.doc_id for hit in outcome.results],
+                latency_ms=latency_ms,
+                filter_flags=flags,
+                correlation_id=_correlation_id.get(),
+                rag_fusion_applied=outcome.rag_fusion_applied,
+                rag_fusion_queries_used=outcome.rag_fusion_queries_used,
+                doc_id_hasher=self._doc_id_hasher,
+            )
+
+        self._enqueue(build)
+
+    def _enqueue(self, build_entry: Callable[[], TelemetryEntry]) -> None:
+        """Build and enqueue one entry; telemetry never breaks a request, a failure is logged by its exception type only."""
+        writer = self._telemetry_writer
+        if writer is None:
+            return
+        try:
+            writer.enqueue(build_entry())
+        except Exception as exc:  # noqa: BLE001 — telemetry must never break the request
+            logger.warning("telemetry enqueue failed: %s", type(exc).__name__)
 
     async def _lookup_collection(self, collection: str, namespace: str) -> CollectionMeta:
         """The collection's metadata in *namespace*; an invalid name or an unknown collection is ``not_found``.
@@ -289,6 +403,26 @@ class _SelectedEmbedder(NamedTuple):
     embedder: Embedder
     model: str
     cold: bool
+
+
+def _elapsed_ms(start: float) -> float:
+    return (time.monotonic() - start) * _MILLISECONDS_PER_SECOND
+
+
+def _log_stage_timings(recorder: StageRecorder | None, started: float, collection: str) -> None:
+    if recorder is None:
+        return
+    recorder.record_total(started)
+    logger.info(
+        "stage timings",
+        extra={
+            "event_type": "stage_timings",
+            "correlation_id": _correlation_id.get(),
+            "endpoint": _ENDPOINT,
+            "collection": collection,
+            "stage_timings_ms": recorder.stage_timings_ms,
+        },
+    )
 
 
 def _discard_abandoned_load(task: asyncio.Future[object]) -> None:
