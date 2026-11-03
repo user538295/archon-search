@@ -39,7 +39,7 @@ model SearchLine {
 }
 
 // Notes the human output writes to stderr after the result lines (TQ1, decided D), so stdout stays exactly one line per result and a script that counts or parses it is unaffected.
-// One note carries the server's `expansion_warning` when present (a requested HyDE or RAG Fusion step did not run); one note per entry of the response's `excluded_collections` carries the collection name and its reason. No note is printed when neither is present.
+// One note `Note: <expansion_warning>` carries the server's `expansion_warning` when present (a requested HyDE or RAG Fusion step did not run); one note `Note: collection '<name>' skipped: <reason>` per entry of the response's `excluded_collections`. No note is printed when neither is present. The notes are also printed after `No results found.` (every collection skipped).
 // A keyword-only answer (cold embedder) prints no note: no response field reports it (an accepted limitation, plan Q2). `--json` does not print notes.
 model StderrNotes {
   expansion_warning?: string;
@@ -67,11 +67,11 @@ model CliSearchOutcome {
   lines?: SearchLine[];
   // Human mode, stderr, after the results: the notes above.
   notes?: StderrNotes;
-  // Error text to stderr: connection-refused message, or the server's detail rendered from its string, list or coded shape (a bare 401 with an empty body prints the command's own fixed text).
+  // Error text to stderr, exit 1: the connection-refused message, `Error: <detail>` with the server's detail rendered from its string, list or coded shape (a whole-second `Retry-After` appends ` (retry after Ns)`), the command's own fixed text for a body-less error (a bare 401: the server rejected the API key; any other status: the server answered N without an error message), or `Error: server returned unexpected response: <problem>` for a 200 body that is not JSON or not a JSON object (both modes) or, in the human mode only, whose `results` / `excluded_collections` / a score has the wrong shape.
   stderr?: string;
 }
 
-// The request timeout is one named constant in constants.py above the sum of the HyDE bound and the search budget, which are both SEARCH_TIMEOUT_SECONDS (30 s); that constant moves from services/search_budget.py to constants.py because the CLI cannot import services/. The CLI therefore reports the server's 504 rather than its own timeout.
+// The request timeout is the named constant CLI_SEARCH_REQUEST_TIMEOUT_SECONDS in constants.py: twice SEARCH_TIMEOUT_SECONDS plus a 5 s margin (65 s), because HyDE (its own bound) and the search budget are both SEARCH_TIMEOUT_SECONDS (30 s) and the warm-up bounds add 0.5 s each; SEARCH_TIMEOUT_SECONDS moved from services/search_budget.py to constants.py because the CLI cannot import services/. The CLI therefore reports the server's 504 rather than its own timeout.
 interface CliSearch {
   run(options: CliSearchOptions): CliSearchOutcome;
 }

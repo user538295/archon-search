@@ -5,7 +5,7 @@ namespace McpSearchToolContract;
 // Flat filter parameters stay flat on MCP (REST nests the same fields under `filters`); both build the same SearchFilters in the service.
 model McpSearchInput {
   query: string;
-  // Exactly one of collection / collections. No configured default and no literal "default" any more (brief Q2).
+  // Exactly one of collection / collections. No configured default and no literal "default" any more (brief Q2). The tool signature defaults both to null; the service answers a `validation_error` when none or both is given.
   collection?: string;
   collections?: string[];
   // NEW. Same bounds as REST; omitted = the configured `top_k_return`.
@@ -50,6 +50,7 @@ model McpSearchResult {
   indexed_at: string;
   updated_at: string;
   ingested_by: string;
+  // `{}` unless the ORed include-metadata flag is set: the adapter blanks it from `SearchOutcome.include_metadata` (the service carries the hit's metadata untouched).
   metadata: Record<string>;
   acl?: string[];
   collection: string;
@@ -99,7 +100,7 @@ enum McpSearchErrorCode {
   embedder_not_ready,
   timeout,
   internal_error,
-  // Adapter-level: the built response failed its own schema; unchanged by this slice.
+  // Adapter-level: the built response failed its own schema (the text is the fixed `search response failed schema validation`); unchanged by this slice.
   schema_validation_error,
 }
 

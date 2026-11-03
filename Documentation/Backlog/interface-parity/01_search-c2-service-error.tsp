@@ -1,7 +1,7 @@
 // C2 — ServiceError and the per-adapter error tables (Use Cases <-> Interface Adapters).
 // One translation inside the service; each adapter owns one table that renders a ServiceError to its wire form.
 // Wire text is fixed and never an exception's text (tests/test_no_wire_str_exc.py guards services/).
-// A ServiceError carries no exception, so the service (not the adapters) logs the failure events where the exception is in hand, for every interface and both paths: ERROR `search_pipeline_failure` with exc_info for internal and hyde_failed, ERROR `search_timeout` with the collection(s) in extra, the traceback of a metadata_store_error and a warning for embedder_not_ready; never the query. The adapters log nothing for these kinds.
+// A ServiceError's wire fields (kind, code, detail) carry no exception text; the exception that caused it is only chained as `__cause__`, so the service (not the adapters) logs the failure events where that exception is in hand, for every interface and both paths: ERROR `search_pipeline_failure` with exc_info for internal and hyde_failed, ERROR `search_timeout` with the collection(s) in extra, the traceback of a metadata_store_error and a warning for embedder_not_ready; never the query. The adapters log nothing for these kinds. Validation-class kinds and not_found are neither logged as failures nor recorded.
 namespace SearchServiceErrorContract;
 
 // Closed set. Each kind keeps the wire code the interfaces use today; kinds with no code today use `validation_error`.
@@ -29,9 +29,9 @@ model ServiceError {
   kind: ServiceErrorKind;
   // The stable machine code (for example "metadata_store_error"); one constant per code, defined once next to this type.
   code: string;
-  // Fixed, sanitized text; never `str(exc)`.
+  // Fixed, sanitized text; never `str(exc)`. A kind with a fixed detail (not_found, metadata_store_error, embedder_not_ready, timeout, hyde_failed, internal) refuses a caller-supplied one; every other kind requires the caller's text, which the service builds from typed data only.
   detail: string;
-  // Set only for embedder_not_ready: the single constant behind every `Retry-After` header (30 seconds today).
+  // Set only for embedder_not_ready: the single constant behind every `Retry-After` header (RETRY_AFTER_SECONDS, 30 seconds).
   retry_after_seconds?: int32;
 }
 
@@ -86,7 +86,7 @@ model ShimRendering {
   retry_after_header: boolean;
 }
 
-// The CLI is an HTTP client and has no service table: it renders REST statuses and the three REST `detail` shapes (string, list, coded object).
+// The CLI is an HTTP client and has no service table: it renders REST statuses and the three REST `detail` shapes (string, list, coded object), and shows a whole-second `Retry-After` of a 503 as ` (retry after Ns)` (C8).
 interface AdapterErrorTables {
   rest(error: ServiceError): RestRendering;
   mcp(error: ServiceError): McpRendering;
