@@ -264,7 +264,7 @@ An operator runs `archon-search search "q" --collection docs` and reads ranked r
         - #unit_test — `test_search_include_metadata_sets_the_top_level_flag_only` — the one CLI waiver of the field check
         - #unit_test — `test_search_omits_unset_flags_and_sends_graph_mode_as_given` — no `hyde: false`, no client-side `graph_mode` list
         - #integration_test — `test_cli_search_filters_and_feature_flags_reach_the_service` — a real app returns `applied_filters` and, with `--acl-context`, `acl_gate`
-- [ ] **BE-9** — Write the Phase 1 `BREAKING.md` entries and their migration-index rows: REST invalid collection name now 404 (it was a 503; REST only here, the shim's entry is written by BE-21 with the shim change), the metadata-store failure now recorded in telemetry (REST single path only in this phase; BE-11 extends the entry to the multi path), REST timeout and internal errors as today (no entry); keep the heading-to-index parity and the sanitized-wire-text guards green #backend-role
+- [x] **BE-9** — Write the Phase 1 `BREAKING.md` entries and their migration-index rows: REST invalid collection name now 404 (it was a 503; REST only here, the shim's entry is written by BE-21 with the shim change), the metadata-store failure now recorded in telemetry (REST single path only in this phase; BE-11 extends the entry to the multi path), REST timeout and internal errors as today (no entry); keep the heading-to-index parity and the sanitized-wire-text guards green #backend-role
     - Use Cases · 1.5h
     - needs BE-8 · completes S62, S63
     - Tests

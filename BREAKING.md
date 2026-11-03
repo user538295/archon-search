@@ -8,6 +8,37 @@
 
 ## Changelog
 
+### [next release] — REST `POST /search` with a `collection` that is not a valid collection name answers `404 collection not found`, not `503` (2026-11-03)
+
+**Surface**: REST `POST /search` with the single-collection field `collection`; the server log. Clients that send a name that is not a valid collection name (a space or `!`, a leading `_` or `-`, non-ASCII, more than 64 characters: the rule is `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`), and any alert or retry rule keyed on the `503` this produced. The `collections` list (the multi-collection path), `POST /explain` (still `503` for an invalid `collection`), the MCP `search` tool and the OpenAI-compatible shim are unchanged in this release.
+
+**What changed:**
+
+- **Before**: the route handed the name to the store, which refuses an invalid name with a `ValueError`; the route read that as a metadata-store outage, logged an ERROR `search: meta lookup failed for collection ...` with a traceback, and answered `503` with `code: "metadata_store_error"`. A client that retried on `503` retried a name that can never exist.
+- **New**: `SearchService` checks the name with `is_valid_collection_name` before any store call and answers the same `404` with `{"detail": "collection not found"}` as for a valid name no collection of the caller's namespace holds. Nothing is recorded in telemetry and no failure is logged for it (pinned by `test_search_unknown_and_invalid_collection_name_is_404_against_the_real_store` in `tests/integration/test_be8_rest_search_single_path.py`, `test_invalid_collection_name_is_not_found_without_a_store_call` in `tests/services/test_search_service.py` and the no-record tests in `tests/services/test_search_service_telemetry.py`).
+- **Unchanged**: timeout (`504`) and internal-error (`500`) answers of the single path, their bodies and their telemetry entries.
+
+**Migration**: treat `404` as "no such collection" for every name, valid or not, and stop retrying it. A client that read the `503` of an invalid name as an outage signal gets no such signal any more; a real metadata-store failure is still `503` with `code: "metadata_store_error"`.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — REST `POST /search` single-collection: a failed collection-metadata lookup is recorded in telemetry as an `internal_error` entry (2026-11-03)
+
+**Surface**: the telemetry JSONL and the consumers that count its entries (error rates, dashboards) for REST `POST /search` with the single-collection field `collection`, when telemetry is enabled. The HTTP answer is unchanged. The `collections` list (the multi-collection path) keeps its old behaviour in this release.
+
+**What changed:**
+
+- **Before**: when the store failed while the route looked up the collection's metadata, the route answered `503` with `code: "metadata_store_error"` and wrote no telemetry entry, so the failure was invisible to anything that reads the telemetry file.
+- **New**: the same `503` body and `code`, plus one error entry per request with endpoint `search`, status `internal_error` and error kind `other`, written by `SearchService` through the same factory as the timeout and internal-failure entries (pinned by `test_search_metadata_failure_is_one_recorded_internal_error_entry` in `tests/integration/test_be8_rest_search_single_path.py`). The failure is still logged once at ERROR with its traceback, now by the logger `archon_search.services.search_service` (it was `archon_search.server.routes_search`; the same move applies to the timeout, internal and HyDE failure logs of the single path). The entry carries no query text, as for every telemetry entry.
+
+**Migration**: nothing to change for a client. A dashboard or alert that counts `internal_error` entries of `search` now includes metadata-store outages; no entry field tells them apart from the other internal failures (embedder not ready, HyDE, unexpected pipeline errors), so keep the server log for the cause. A log filter keyed on the old logger name of these records must follow the move.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — `/mcp`: a session answers only the credential that created it, another key gets `404` (2026-11-01)
 
 **Surface**: MCP on `/mcp` (Streamable HTTP, the session protocol): every request that carries an `Mcp-Session-Id`, including `notifications/cancelled`. Clients that use more than one API key, or keep a session across a key rotation. REST and the MCP tools themselves are unchanged.
