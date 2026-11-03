@@ -18,7 +18,7 @@ model SearchFilters {
   indexed_after?: string;
   indexed_before?: string;
   language?: string;
-  // Response-shaping flag that lives inside the filters on REST; the command resolves the REST OR-rule once (see includeMetadataRule).
+  // Response-shaping flag that lives inside the filters on REST; the service ORs it with the top-level command flag (REST's rule) once.
   include_metadata?: boolean;
 }
 
@@ -35,10 +35,10 @@ model SearchCommand {
   // Exactly one of `collection` (single path) or `collections` (multi path). The service strips, de-duplicates and rejects empty names.
   collection?: string;
   collections?: string[];
-  // Per-request result count (brief Q1). Omitted = the server default (`top_k_return`). Bounds: 1 <= top_k <= top_k_max. The default semantics are Q16 in the plan.
+  // Per-request result count (brief Q1). Omitted = the configured `top_k_return` exactly as today (no schema default on any interface). Bounds: 1 <= top_k <= top_k_max. When given, the candidate pool is at least top_k (C3).
   top_k?: int32;
   filters?: SearchFilters;
-  // True when the top-level flag OR `filters.include_metadata` is set (REST's rule, applied once in the service).
+  // The top-level flag as the caller sent it. The service ORs it with `filters.include_metadata` (REST's rule) once, so both raw flags are carried.
   include_metadata: boolean;
   hyde: boolean;
   rag_fusion: boolean;
@@ -51,6 +51,14 @@ enum AclSource {
   frontmatter,
   sidecar,
   collection_default,
+}
+
+// The ACL provenance envelope, built ONCE by the service for each hit, and only when `acl_context` was requested; adapters only render it. The source is sanitised against the valid set here, which replaces the `_VALID_ACL_SOURCES` copies in routes_search.py and routes_explain.py.
+model AclGate {
+  allowed_principals?: string[];
+  source?: AclSource;
+  sidecar_path?: string;
+  warnings: string[];
 }
 
 // One ranked chunk: the core per-chunk hit (archon_search/_types.SearchResult), carried raw. Adapters render their own wire schema from it.
@@ -70,10 +78,8 @@ model ChunkHit {
   acl?: string[];
   collection: string;
   reranker_score?: float64;
-  // Raw ACL provenance; adapters build the `acl_gate` object from these only when `acl_context` was requested.
-  acl_source?: AclSource;
-  acl_sidecar_path?: string;
-  acl_warning: string[];
+  // Built once in the service, only when `acl_context` was requested (absent otherwise); adapters render it, they never rebuild it from raw ACL fields.
+  acl_gate?: AclGate;
 }
 
 model ExcludedCollection {
@@ -81,9 +87,9 @@ model ExcludedCollection {
   reason: string;
 }
 
-// The service result. The type name is an open question (Q3 in the plan): the core entity already uses `SearchResult`.
+// The service result, named SearchOutcome because the core entity already uses `SearchResult`: the raw pipeline hits plus the derived fields.
 // Every derived field is computed once here, never again by an adapter.
-model SearchServiceResult {
+model SearchOutcome {
   results: ChunkHit[];
   acl_filtered: boolean;
   excluded_collections: ExcludedCollection[];
@@ -98,7 +104,7 @@ model SearchServiceResult {
   expansion_used: boolean;
   // The HyDE warning, else the RAG Fusion warning, else absent.
   expansion_warning?: string;
-  // Echo of the filters in force; the none-versus-all-null rule for flat callers is Q5 in the plan.
+  // `null` on the wire (REST: present with a null value) when no filter was given, else the filters as parsed: the SearchFilters after validation (file_type lower-cased and stripped of leading dots, dates coerced), a nested `filters.include_metadata` included (REST echoes the parsed `body.filters`, output unchanged); the top-level `include_metadata` flag is not part of it.
   applied_filters?: SearchFilters;
   ppr_entities_matched?: int32;
 }
@@ -106,6 +112,7 @@ model SearchServiceResult {
 // Orchestration order is fixed (brief Core Flow): normalise + validate, resolve collections, select embedder (single path), warm models,
 // resolve HyDE / RAG Fusion, run under the budget, derive fields once, record telemetry, return.
 // Failures are raised as ServiceError (C2); nothing transport-specific (no request object, no HTTP exception, no FastMCP context) is accepted or raised.
+// Composition: REST reads app.state per request; the MCP factory keeps its signature and builds the service lazily on the first `search` call from its arguments (with no config `search` answers the fixed internal error, `search failed` / `internal_error`, and the other tools are unaffected).
 interface SearchService {
-  search(command: SearchCommand, caller: Caller): SearchServiceResult;
+  search(command: SearchCommand, caller: Caller): SearchOutcome;
 }

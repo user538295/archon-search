@@ -14,11 +14,11 @@ model ChatMessage {
 }
 
 model ChatCompletionRequest {
-  // "archon-search" searches all of the caller's collections (capped at max_fanout, the rest dropped with a warning); "archon-search/<collection>" searches one.
+  // "archon-search" searches all of the caller's collections (capped at max_fanout, the rest dropped with a warning); "archon-search/<collection>" searches one (the name is stripped; an empty, whitespace-only or invalid collection name answers 404).
   `model`: string;
   messages: ChatMessage[];
   stream?: boolean = false;
-  // Real from this slice on (forwarded to the pipeline). Bounds and the error for an out-of-range value are Q11 in the plan.
+  // Accepted and ignored, as today (decided): the shim ignores a request top_k, so no value (in or out of range) gets a 4xx or changes the result count; the field stays only for protocol compatibility. REST, MCP and the CLI honour top_k; the shim ignores the request field by decision. The result count is the `[openai_shim].top_k` key when set and `[database].top_k_return` otherwise (decided: the key becomes `int | None`, unset by default).
   top_k?: int32;
 }
 
@@ -67,7 +67,7 @@ model CompletionStream {
   @body body: string;
 }
 
-// 400 no_user_message (blank last user message), unchanged.
+// 400 no_user_message (blank last user message), unchanged. There is no out-of-range top_k 400: the shim ignores a request top_k by decision.
 @error
 model BadRequest {
   @statusCode _: 400;
@@ -94,7 +94,7 @@ model Unprocessable {
   @body body: OpenAIErrorEnvelope;
 }
 
-// "Service temporarily unavailable." NEW: also for a failed collection-list lookup on the all-collections model (a plain 500 today).
+// "Service temporarily unavailable." NEW: also for a failed collection-list lookup on the all-collections model (a plain 500 today) and for an unexpected failure on the fan-out branch (an unhandled 500 today).
 // Embedder not ready answers it with Retry-After from the one constant (30 seconds), through the service instead of the app-level handler.
 @error
 model ServiceUnavailable {

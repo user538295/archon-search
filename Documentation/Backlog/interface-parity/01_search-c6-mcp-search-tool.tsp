@@ -8,8 +8,9 @@ model McpSearchInput {
   // Exactly one of collection / collections. No configured default and no literal "default" any more (brief Q2).
   collection?: string;
   collections?: string[];
-  // NEW. Same bounds as REST; omitted = server default (semantics: Q16 in the plan).
+  // NEW. Same bounds as REST; omitted = the configured `top_k_return`.
   top_k?: int32;
+  // The one MCP flag: it fills the command's top-level include_metadata. `filters.include_metadata` exists on REST only and is waived here (C9).
   include_metadata: boolean;
   file_type?: string;
   source_path_prefix?: string;
@@ -53,10 +54,11 @@ model McpSearchResult {
   acl?: string[];
   collection: string;
   reranker_score?: float64;
-  // NEW. Present (null) on every result like REST; the per-result placement and the effect on search_with_context are Q4 in the plan.
+  // NEW. Present (null) on every result like REST, built once by the service and rendered here through a search-only result schema; search_with_context's result is unchanged.
   acl_gate?: McpAclGate;
 }
 
+// The echo of the request's filters as parsed (the SearchFilters after validation), like REST's `applied_filters` (REST echoes the parsed `body.filters`): a nested include_metadata stays in it. The top-level include_metadata parameter is not part of the echo.
 model McpAppliedFilters {
   file_type?: string;
   source_path_prefix?: string;
@@ -108,6 +110,7 @@ model McpSearchError {
 }
 
 // A call with no authenticated identity is refused with a fixed ToolError before any validation and before the service is called.
+// The tool builds or fetches the service lazily from the factory arguments; with no config it answers McpSearchError {error: "search failed", code: internal_error} and the other tools are unaffected.
 interface McpSearchTool {
   search(input: McpSearchInput): McpSearchResponse | McpSearchError;
 }

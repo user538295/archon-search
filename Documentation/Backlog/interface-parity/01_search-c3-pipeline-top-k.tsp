@@ -1,11 +1,14 @@
 // C3 — Per-request top_k on the core pipeline (Use Cases <-> core SearchPipeline).
-// The one core change allowed in this slice (brief Q1). Retrieval, reranking, fusion and graph algorithms are unchanged.
+// The only retrieval-behaviour change allowed in this slice (brief Q1). Retrieval, reranking, fusion and graph algorithms are unchanged. (The slice also edits pipeline.py for the ppr guard, the exception message constant and the deleted max_fanout parameter; none changes retrieval.)
 namespace PipelineTopKContract;
 
 // Rules the pipeline honours when top_k is present:
-// - every result cutoff on the single path (standard, RAG Fusion, graph local / global, PPR) and on the multi path (standard, graph, local, hybrid fallback) uses top_k instead of top_k_return;
-// - the candidate depth is at least what top_k needs ("retrieve at least top_k candidates"); the exact rule above the default depth is Q16 in the plan;
-// - the reranker already takes a top_k and needs no change.
+// - every site that uses the configured return count (single path: standard, RAG Fusion, graph local / global, PPR, hybrid fallback and the shortfall warning in the standard path; multi path: standard, hybrid fallback, graph, RAG Fusion and global graph cutoffs) uses top_k instead of top_k_return; all of them are in search, search_many and their helpers, none in explain;
+// - the candidate pool max(top_k_retrieve * 3, 20) (45 at the default) appears at 13 sites in pipeline.py: the 8 sites of search and search_many are at least top_k (small top_k keeps today's pool), the 5 sites in explain code stay unchanged (a test gates them); the multi-path per-leg trim (max(fanout_leg_trim, 1), default 40) sits at four sites: the three in search_many become max(trim, top_k), and the one in the shared helper _fanout_merge_acl (also called by explain) takes an optional top_k that only search_many passes;
+// - one rule for the pool: it is raised to at least top_k, so up to top_k results return, all from the ranked pool, and exactly top_k when enough chunks survive the ACL, glob and wildcard-scope post-filters (which run after the pool is fetched) and no fts_only degrade limits the search;
+// - the pool depth feeds each leg's limit and the reranker's candidate set, so the ranking may change when top_k exceeds the pool: prefix stability (results(N)[:M] == results(M)) holds only while N and M fit the same pool (45 on the single path; 40 on the multi path, where the trim becomes max(40, top_k));
+// - the reranker already takes a top_k and needs no change, but it scores every candidate, so latency grows with top_k under the fixed 30 s search budget;
+// - search_many asserts that graph_mode "ppr" is not combined with any collections (REST rejects even one name), like its scope_filter asserts.
 // Callers that must stay byte-identical pass nothing: the eval harness and search_with_context (until roadmap S2 decides otherwise).
 // Added to BOTH pipeline entry points. Omitted (null) = today's behaviour exactly: the result count is `[database].top_k_return`.
 model PipelineSearchOptions {

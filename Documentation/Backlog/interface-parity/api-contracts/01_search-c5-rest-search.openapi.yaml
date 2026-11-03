@@ -182,6 +182,7 @@ components:
         top_k:
           type: integer
           format: int32
+          nullable: true
           minimum: 1
         filters:
           $ref: '#/components/schemas/SearchFilters'

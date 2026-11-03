@@ -32,9 +32,9 @@ model SearchRequest {
   query: string;
 
   // Per-request result count. Real from this slice on: validated (>= 1 here, <= the operator's top_k_max in the service) and forwarded to the pipeline.
-  // The default when omitted is open (Q16 in the plan); today's schema default is 5.
+  // Omitted (or null) means the configured `top_k_return`: there is no schema default (it was 5). The field is nullable (`int | None` in the request model) because "omitted means configured" needs an absent value, so `top_k: null` becomes valid.
   @minValue(1)
-  top_k?: int32;
+  top_k?: int32 | null;
 
   filters?: SearchFilters;
   hyde?: boolean = false;
@@ -91,6 +91,7 @@ model SearchResponse {
   graph_expansion_applied?: boolean = false;
   expansion_used?: boolean = false;
   expansion_warning?: string | null;
+  // `null` when no filter was given (the field is present with a null value), else the request's `filters` as parsed (the SearchFilters after validation: file_type normalised, dates coerced; a nested include_metadata included).
   applied_filters?: SearchFilters | null;
   ppr_entities_matched?: int32 | null;
 }
@@ -146,7 +147,7 @@ model Unprocessable {
   @body body: HttpValidationList | ErrorDetail | CodedErrorDetail;
 }
 
-// A HyDE failure answers {"detail": "search failed"}; a pipeline failure answers a plain-text 500. Whether the two merge is Q15 in the plan.
+// A HyDE failure answers {"detail": "search failed"}; a pipeline failure answers a plain-text 500. The two shapes stay distinct.
 @error
 model SearchFailed {
   @statusCode _: 500;

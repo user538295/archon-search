@@ -46,11 +46,11 @@ Legend: **converge** = the feature already exists on all three interfaces and mo
 
 ### Phase 0 — Foundation
 
-- [x] **S0 Service-layer foundation**: contract, module moves, boundary test, parity registry, CLI helper consolidation. [Brief](./00_service_layer_foundation_brief.md)
+- [x] **S0 Service-layer foundation**: contract, module moves, boundary test, parity registry, CLI helper consolidation. [Brief](./00_service_layer_foundation_brief.md), [Plan](./00_service_layer_foundation-team-plan.md), [Tasks](./00_service_layer_foundation-tasks.md)
 
 ### Phase A — Retrieval
 
-- [ ] **S1 Search (pilot)**: CLI new; MCP gains `acl_context` (and `top_k` per brief decision); OpenAI shim moves onto the service. [Brief](./01_search_brief.md)
+- [ ] **S1 Search (pilot)**: CLI new; MCP gains `acl_context` (and `top_k` per brief decision); OpenAI shim moves onto the service. [Brief](./01_search_brief.md), [Plan](./01_search-team-plan.md), [Tasks](./01_search-tasks.md)
 - [ ] **S2 Search with context**: REST new; CLI new.
 - [ ] **S3 Explain**: CLI new.
 - [ ] **S4 Route**: MCP new; CLI new.
