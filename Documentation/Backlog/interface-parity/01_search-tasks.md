@@ -515,7 +515,7 @@ A field removed from one surface, or a forbidden import in an adapter, turns CI 
         - #unit_test — `test_field_parity_fails_on_a_field_missing_from_a_surface` — a fake surface without `top_k`
         - #unit_test — `test_field_parity_fails_on_a_surface_field_that_maps_to_nothing` — except the exempt transport options
         - #unit_test — `test_field_parity_fails_on_an_invalid_waiver` — no `waived_surfaces` or no reason
-- [ ] **BE-30** — Add the adapter-thinness AST test: whole-module scan for `routes_search.py` and the shim's search path, the `search` tool body only for `mcp.py`; forbidden: `archon_search.services.validators`, `.request_hyde`, `.search_budget`, `archon_search.telemetry.entry`; the boundary allowlist (eight edges) is unchanged #backend-role
+- [x] **BE-30** — Add the adapter-thinness AST test: whole-module scan for `routes_search.py` and the shim's search path, the `search` tool body only for `mcp.py`; forbidden: `archon_search.services.validators`, `.request_hyde`, `.search_budget`, `archon_search.telemetry.entry`; the boundary allowlist (eight edges) is unchanged #backend-role
     - Use Cases · 3.0h
     - needs BE-11, BE-15, BE-20 · completes S56, S57, S77
     - Tests
