@@ -351,7 +351,7 @@ An MCP agent now gets REST's validation, REST's response fields, `acl_context`, 
         - #integration_test — `test_mcp_search_ppr_with_collections_is_rejected_before_hyde` — replaces the skipped branch with the real assertion
         - #integration_test — `test_mcp_search_pipeline_overrun_answers_the_timeout_code_through_the_service_alias` — scope distinct from BE-15's telemetry test: it proves a patched budget in the existing test files reaches the service (never a silent no-op) and that the answer is the `timeout` code
         - #integration_test — `test_mcp_namespace_isolation_through_the_identity_helper` — a collection of another namespace is `not_found`
-- [ ] **BE-17** — Add the `ppr`-with-any-`collections` assert in `SearchPipeline.search_many`, like the existing `scope_filter` asserts #backend-role
+- [x] **BE-17** — Add the `ppr`-with-any-`collections` assert in `SearchPipeline.search_many`, like the existing `scope_filter` asserts #backend-role
     - Frameworks & Drivers · 1.0h
     - needs BE-15 · completes S75
     - Tests

@@ -2016,3 +2016,22 @@ async def test_explain_rag_fusion_partial_search_failure() -> None:
     assert 0 in indices  # original
     assert 1 not in indices  # failed variant omitted
     assert 2 in indices  # successful variant
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("collections", [["A"], ["A", "B"]])
+@pytest.mark.parametrize("degrade", [{}, {"fts_only": True}, {"query_vector": [0.1] * 4}])
+async def test_search_many_ppr_with_collections_asserts(
+    collections: list[str], degrade: dict
+) -> None:
+    """S75: ``graph_mode="ppr"`` with any ``collections`` trips the pipeline's own guard.
+
+    Without it the call would quietly return ``ppr_entities_matched=0``. The cold-embedder
+    degrade (``fts_only``) resets ``graph_mode``, so the guard must run before it.
+    """
+    pipeline, store, _embedder, _reranker = _search_many_pipeline()
+
+    with pytest.raises(AssertionError, match="single-collection only"):
+        await pipeline.search_many("q", collections, graph_mode="ppr", **degrade)
+
+    store.hybrid_search_with_trace.assert_not_awaited()

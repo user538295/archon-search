@@ -3163,7 +3163,15 @@ class SearchPipeline:
         ``fts_only=True`` degrades one stage earlier: the query is never embedded and
         every leg fuses its FTS results alone, for a caller whose embedder is still
         cold (S290).  RAG Fusion and graph expansion exist only to embed something, so
-        they are skipped in that mode; an already-computed ``query_vector`` cancels it."""
+        they are skipped in that mode; an already-computed ``query_vector`` cancels it.
+
+        ``graph_mode="ppr"`` is single-collection only: passing it here fails an assertion."""
+        # Belt-and-suspenders like the scope_filter asserts: PPR is single-collection only
+        # and the service validation keeps it unreachable from every interface; a caller
+        # that skipped it would otherwise get a silent ``ppr_entities_matched=0``.
+        assert graph_mode != "ppr", (
+            "graph_mode='ppr' is single-collection only — search_many must not receive it"
+        )
         # One binding for every rerank call site below, so a future site cannot forget
         # the flag: `None` means "do not rerank", exactly as a pipeline built without a
         # reranker does.
@@ -3735,7 +3743,6 @@ class SearchPipeline:
             acl_filtered=acl_filtered,
             excluded_collections=excluded_collections,
             fanout_timings=fanout_timings,
-            ppr_entities_matched=0 if graph_mode == "ppr" else None,
         )
 
     async def _fanout_merge_acl(
