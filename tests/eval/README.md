@@ -169,6 +169,8 @@ Default unmarked eval units (contract / fixture / metric tests, fast):
 uv run pytest --no-cov tests/eval/ -q
 ```
 
+One measurement, several sets of thresholds: `measure_eval_suite` ingests the corpus and runs every query (10-20 s over the committed corpus) and returns a report without thresholds or baseline; `attach_gates(report, thresholds_path, baseline_path)` returns a copy carrying them, ready for `assert_thresholds`. `run_eval_suite` does both, and loads the thresholds and the baseline before it starts measuring, so a bad file fails at once. Tests that only read a report take the shared `measured_eval_report` or `measured_graph_eval_report` fixture (`conftest.py`), measured once per run on the worker of the `eval_report` xdist group.
+
 ## Live eval lane
 
 The `live_eval` pytest marker runs the eval corpus through real PyTorch embedder and cross-encoder model weights. It is separate from the deterministic `eval` marker — use it for CI quality checks on tag push and for calibrating the live baseline.

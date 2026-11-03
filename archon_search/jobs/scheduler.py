@@ -17,7 +17,7 @@ DISPATCH_FAILED_DETAIL = "dispatch_failed; see the server log for details"
 
 
 class JobScheduler:
-    """5-second tick scheduler for bulk (export/import) jobs.
+    """Tick scheduler for bulk (export/import/migration) jobs: one tick every ``tick_seconds`` (5 s by default).
 
     On each tick it promotes up to ``max_concurrent`` QUEUED bulk jobs to
     RUNNING and calls ``dispatch_fn`` for each promoted job. The caller is
@@ -31,9 +31,11 @@ class JobScheduler:
         store: JobStore,
         max_concurrent: int,
         dispatch_fn: Callable[[ExportJob | ImportJob | MigrationJob], None],
+        tick_seconds: float = _SCHEDULER_TICK_SECONDS,
     ) -> None:
         self._store = store
         self._max_concurrent = max_concurrent
+        self._tick_seconds = tick_seconds
         # ``dispatch_fn`` is a public, reassignable attribute so the FastAPI
         # lifespan can install the real export/import dispatch closure once
         # ``app.state`` (search_store, pipeline, embedder_cache) is ready.
@@ -62,7 +64,7 @@ class JobScheduler:
         """Infinite tick loop; exits cleanly on CancelledError."""
         try:
             while True:
-                await asyncio.sleep(_SCHEDULER_TICK_SECONDS)
+                await asyncio.sleep(self._tick_seconds)
                 self._tick()
         except asyncio.CancelledError:
             logger.debug("JobScheduler: cancelled, stopping tick loop")

@@ -14,11 +14,11 @@ are not meaningful (the blob it points at is checked).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import stat
 import subprocess
-import threading
 from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -46,6 +46,7 @@ from archon_search.paths import (
     get_graph_models_dir,
     get_models_dir,
 )
+from tests._threaded_http import serving_in_thread
 
 _LOOSE_UMASK = 0o022
 _WORLD_READABLE_DIR = 0o755
@@ -116,27 +117,23 @@ def serve_hub(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[Callable[[str, str, tuple[str, ...]], None]]:
     """Point the real ``huggingface_hub`` at a local server that serves *files* of *repo* at *revision*."""
-    servers: list[ThreadingHTTPServer] = []
+    with contextlib.ExitStack() as running:
 
-    def serve(repo: str, revision: str, files: tuple[str, ...]) -> None:
-        handler = type("Hub", (_FakeHub,), {"repo": repo, "revision": revision, "files": files})
-        server = ThreadingHTTPServer((_LOOPBACK, 0), handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        servers.append(server)
-        endpoint = f"http://{_LOOPBACK}:{server.server_port}"
-        monkeypatch.setattr(hub_constants, "ENDPOINT", endpoint)
-        monkeypatch.setattr(
-            hub_constants,
-            "HUGGINGFACE_CO_URL_TEMPLATE",
-            endpoint + "/{repo_id}/resolve/{revision}/{filename}",
-        )
+        def serve(repo: str, revision: str, files: tuple[str, ...]) -> None:
+            handler = type("Hub", (_FakeHub,), {"repo": repo, "revision": revision, "files": files})
+            server = ThreadingHTTPServer((_LOOPBACK, 0), handler)
+            running.enter_context(serving_in_thread(server))
+            endpoint = f"http://{_LOOPBACK}:{server.server_port}"
+            monkeypatch.setattr(hub_constants, "ENDPOINT", endpoint)
+            monkeypatch.setattr(
+                hub_constants,
+                "HUGGINGFACE_CO_URL_TEMPLATE",
+                endpoint + "/{repo_id}/resolve/{revision}/{filename}",
+            )
 
-    monkeypatch.setenv("NO_PROXY", _LOOPBACK)
-    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
-    yield serve
-    for server in servers:
-        server.shutdown()
-        server.server_close()
+        monkeypatch.setenv("NO_PROXY", _LOOPBACK)
+        monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+        yield serve
 
 
 @pytest.fixture(autouse=True)

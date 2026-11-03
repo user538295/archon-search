@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
@@ -30,6 +29,7 @@ from archon_search.constants import ASSUMED_CONTEXT_TOKENS
 from archon_search.model_validation import EXTRACTION_MODEL_PROBE_ERROR_WARNING
 from tests._fake_model_server import keep_loopback_out_of_proxies, unreachable_port
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests._threaded_http import serving_in_thread
 from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
@@ -93,14 +93,8 @@ class _LiveLlamaHandler(BaseHTTPRequestHandler):
 @contextmanager
 def _live_llama_server() -> Iterator[_LiveLlamaServer]:
     server = _LiveLlamaServer()
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with serving_in_thread(server):
         yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
 
 
 def _section(name: str, server: str, *, enabled: bool = True, extra: str = "") -> str:

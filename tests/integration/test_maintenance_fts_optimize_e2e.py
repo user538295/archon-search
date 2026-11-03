@@ -21,7 +21,6 @@ from pathlib import Path
 
 import pytest
 
-import archon_search.jobs.scheduler as _scheduler_module
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
@@ -50,8 +49,6 @@ def test_fts_optimized_at_appears_in_health(
 
     Completes: S5 (FTS optimize runs; fts_optimized_at appears in health state).
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     col = "maint-fts-test"
 
     # Write a small text document for ingestion.

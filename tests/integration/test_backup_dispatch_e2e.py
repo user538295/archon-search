@@ -25,7 +25,6 @@ from pathlib import Path
 import pytest
 
 import archon_search.jobs.backup_loop as _backup_loop_module
-import archon_search.jobs.scheduler as _scheduler_module
 from archon_search.types import ExportJob, JobStatus
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
@@ -113,7 +112,6 @@ def test_backup_trigger_queued_jobs_eventually_complete(
     """
     # Must be patched before make_real_app so the completion loop starts with 0.1s.
     monkeypatch.setattr(_backup_loop_module, "_BACKUP_COMPLETION_POLL_SECONDS", 0.1)
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
 
     col = "test-backup-trigger-done"
     doc = tmp_path / "backup_trigger_test.md"
@@ -225,7 +223,6 @@ def test_backup_trigger_post_status_reflects_completion(
     """
     # Must be patched before make_real_app so the completion loop starts with 0.1s.
     monkeypatch.setattr(_backup_loop_module, "_BACKUP_COMPLETION_POLL_SECONDS", 0.1)
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
 
     col = "test-backup-status-reflect"
     doc = tmp_path / "backup_status_test.md"

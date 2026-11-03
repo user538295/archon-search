@@ -21,7 +21,6 @@ from unittest.mock import patch
 import pytest
 
 import archon_search.constants as _constants
-import archon_search.jobs.scheduler as _scheduler_module
 from archon_search.types import JobStatus, MigrationJob
 from tests._job_store_faults import JOB_WRITE_FAILURES
 from tests.integration.conftest import make_real_app
@@ -60,8 +59,6 @@ def test_migration_job_dispatched_and_reaches_done(
       - the route creates the job RUNNING → DONE (task) — no scheduler involvement
       - job.result contains migrated_chunks
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     from archon_search.types import MigrationKind, MigrationSpec
 
     dummy_spec = MigrationSpec(
@@ -134,8 +131,6 @@ def test_migration_job_progress_written_every_100_chunks(
     should be called at processed=100 and processed=150 (final batch).
     We verify that the job's progress dict is non-None after DONE.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     from archon_search.types import MigrationKind, MigrationSpec
 
     dummy_spec = MigrationSpec(
@@ -220,8 +215,6 @@ def test_migration_job_dispatched_via_scheduler_reaches_done(
     to create the job; instead we inject a QUEUED MigrationJob directly into
     job_store and let the scheduler's _tick() promote it and call _real_dispatch.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     from archon_search.types import MigrationKind, MigrationSpec
 
     dummy_spec = MigrationSpec(
@@ -295,8 +288,6 @@ def test_migration_job_resume_from_failed_state_reaches_done(
     3. POST /jobs/{id}/resume → 202, job back in QUEUED.
     4. Scheduler picks up the job and dispatches it; job reaches DONE.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     from archon_search.types import MigrationKind, MigrationSpec
 
     dummy_spec = MigrationSpec(
@@ -395,8 +386,6 @@ def test_rewrite_migration_full_lifecycle_e2e(
     5. Poll job_store until DONE; assert ``result["migrated_chunks"] == 5``.
     6. GET /collections/{name}/migrations/pending → assert ``pending == []``.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     from archon_search.sync import path_to_collection_name
     from archon_search.types import MigrationKind, MigrationSpec
 
@@ -498,7 +487,6 @@ def test_concurrent_ingest_503_during_rewrite_e2e(
        lock and returns.
     5. Poll migration job to DONE.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
     # Lower the lock-acquisition timeout so the ingest 503s quickly.
     monkeypatch.setattr(_constants, "INGEST_LOCK_TIMEOUT_S", 0.05)
 
@@ -620,8 +608,6 @@ def test_list_jobs_kind_migration_filter(
       - After a successful rewrite migration, total >= 1 and all returned items are
         MigrationJobs (kind field present on the JobResponse).
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     from archon_search.sync import path_to_collection_name
     from archon_search.types import MigrationKind, MigrationSpec
 
@@ -708,8 +694,6 @@ def test_empty_collection_rewrite_completes_immediately_e2e(
     created on first ingest).  The test verifies that the route → job dispatch
     path handles zero chunks correctly end-to-end.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     from archon_search.sync import path_to_collection_name
     from archon_search.types import MigrationKind, MigrationSpec
 

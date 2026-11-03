@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-import threading
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
@@ -22,6 +21,7 @@ from archon_search.llm_client.claude_cli_client import ClaudeCliClient
 from archon_search.llm_client.protocol import LlmCallRequest
 from tests import _fake_claude
 from tests._fake_model_server import keep_loopback_out_of_proxies
+from tests._threaded_http import serving_in_thread
 
 pytestmark = [
     pytest.mark.integration,
@@ -94,14 +94,8 @@ def proxy_url(
     fake = _fake_claude.install(tmp_path / "host-bin", reply=_REPLY)
     monkeypatch.setattr(proxy_module, "CLAUDE", str(fake.path))
     httpd = proxy_module.make_server("127.0.0.1", 0, _PROXY_TOKEN)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with serving_in_thread(httpd):
         yield f"http://127.0.0.1:{httpd.server_address[1]}", fake
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-        thread.join()
 
 
 async def test_container_wrapper_forwards_stdin_and_proxy_variables_through_the_allowlist(

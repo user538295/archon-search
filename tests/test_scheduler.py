@@ -26,8 +26,9 @@ from tests._job_store_faults import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-#: Upper bound for run() to dispatch a job once its writes succeed again (normally a few 10 ms ticks).
+#: Upper bound for run() to dispatch a job once its writes succeed again (normally a few ticks).
 _RUN_DISPATCH_TIMEOUT_SECONDS = 30.0
+_FAST_TICK_SECONDS = 0.01
 
 
 def _make_store(tmp_path: Path) -> JobStore:
@@ -328,17 +329,12 @@ def test_claim_failure_after_a_successful_claim_logs_traceback_again(
     assert record.exc_info is not None
 
 
-def test_run_survives_transition_write_failure_and_dispatches_on_a_later_tick(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_survives_transition_write_failure_and_dispatches_on_a_later_tick(tmp_path: Path) -> None:
     """One failed claim write must neither kill the run() loop (nothing restarts it — every QUEUED bulk job
     would then wait forever) nor strand the job: once writes succeed again, a later tick dispatches it."""
-    import archon_search.jobs.scheduler as scheduler_module
-
     store = _make_store(tmp_path)
     job = _make_export_job(store, "col1")
     dispatched: list[ExportJob | ImportJob] = []
-    monkeypatch.setattr(scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.01)
 
     async def _run() -> asyncio.Task:
         dispatched_event = asyncio.Event()
@@ -347,7 +343,9 @@ def test_run_survives_transition_write_failure_and_dispatches_on_a_later_tick(
             dispatched.append(j)
             dispatched_event.set()
 
-        scheduler = JobScheduler(store=store, max_concurrent=1, dispatch_fn=_dispatch)
+        scheduler = JobScheduler(
+            store=store, max_concurrent=1, dispatch_fn=_dispatch, tick_seconds=_FAST_TICK_SECONDS
+        )
         task = asyncio.create_task(scheduler.run())
         # Generous cap: a contended CI worker may be slow; the wait ends as soon as the dispatch happens. If
         # run() died instead, the wait times out and the assertions below report the loop's exception.

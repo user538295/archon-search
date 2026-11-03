@@ -29,6 +29,7 @@ import httpx
 import pytest
 
 from archon_search.cli._helpers import _TERMINAL_STATUSES
+from tests._fake_model_server import unreachable_port
 
 pytestmark = pytest.mark.xdist_group("smoke_e2e")
 
@@ -641,13 +642,10 @@ def test_add_without_server(smoke_server) -> None:
     """``archon-search collection add`` against a closed port must exit 1 and
     print the approved connect-error string to stderr (S4).
 
-    Binds a socket to a random port and holds it bound while the subprocess
-    runs — connection is refused without binding a server (socket-hold pattern).
+    The port comes from ``unreachable_port()``: reserved, and a connection to it is refused at once.
     Takes ``smoke_server`` to inherit ``xdist_group("smoke_e2e")`` serialisation.
     """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        dead_port = sock.getsockname()[1]
+    with unreachable_port() as dead_port:
         result = subprocess.run(
             [
                 "uv",

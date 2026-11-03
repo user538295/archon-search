@@ -70,8 +70,6 @@ def test_migration_crash_inject_and_resume_e2e(
     7. Scheduler picks up QUEUED job, dispatches _migration_task, job reaches DONE.
     8. Assert final job: status=DONE, result["migrated_chunks"]==3.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     from archon_search.sync import path_to_collection_name
 
     dummy_spec = MigrationSpec(
@@ -206,8 +204,6 @@ def test_migration_cancel_schema_version_not_updated_e2e(
     8. POST /jobs/{id}/resume -> 202 (QUEUED); scheduler dispatches; poll to DONE.
     9. Verify schema_version is now STORE_SCHEMA_VERSION (0).
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     from archon_search.sync import path_to_collection_name
 
     dummy_spec = MigrationSpec(

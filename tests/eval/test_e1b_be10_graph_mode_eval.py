@@ -24,10 +24,9 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.eval.runner import render_report, run_eval_suite
+from archon_search.eval.runner import EvalReport, render_report
 
 CORPUS_ROOT = Path(__file__).resolve().parent
-RUNTIME_CONFIG_PATH = CORPUS_ROOT / "runtime.toml"
 
 _VALID_GRAPH_MODES = {"naive", "local", "global", "ppr"}  # ppr added in BE-9
 
@@ -117,17 +116,13 @@ def test_eval_fixture_graph_query_schema() -> None:
 
 
 @pytest.mark.eval
-async def test_eval_suite_graph_mode_smoke() -> None:
+@pytest.mark.xdist_group("eval_report")
+async def test_eval_suite_graph_mode_smoke(measured_eval_report: EvalReport) -> None:
     """Eval suite runs without --thresholds-path; report contains
     graph_local_mrr and graph_global_mrr as separate metric keys (not merged
     into a single graph_mrr metric).
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=None,
-        baseline_path=None,
-    )
+    report = measured_eval_report
 
     # Both new metrics must exist as attributes on EvalMetrics
     assert hasattr(report.metrics, "graph_local_mrr"), (

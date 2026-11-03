@@ -1,6 +1,8 @@
 """Tests for BE-8: local/global recall computation and backend wiring."""
+from __future__ import annotations
+
 import inspect
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -9,9 +11,8 @@ from archon_search.eval.runner import (
     run_eval_suite,
 )
 
-CORPUS_ROOT = Path(__file__).resolve().parent
-RUNTIME_CONFIG_PATH = CORPUS_ROOT / "runtime.toml"
-BASELINE_JSON = CORPUS_ROOT / "baselines" / "baseline.json"
+if TYPE_CHECKING:
+    from tests.eval.conftest import GraphEvalMeasurement
 
 
 # Unit test: run_eval_suite accepts lancedb_root parameter
@@ -70,24 +71,15 @@ def test_existing_graph_collection_stub_unaffected():
 
 # Eval test: run_eval_suite reports local/global recall at 5
 @pytest.mark.eval
-async def test_eval_suite_reports_local_global_recall_at_5(
-    thresholds_path: Path,
-    build_communities_for_eval: tuple,
-    eval_tmp_lancedb_root: Path,
-):
-    """run_eval_suite produces non-None graph_local_recall_at_5 and graph_global_recall_at_5.
+@pytest.mark.xdist_group("eval_report")
+async def test_eval_suite_reports_local_global_recall_at_5(measured_graph_eval: GraphEvalMeasurement):
+    """The eval suite produces non-None graph_local_recall_at_5 and graph_global_recall_at_5.
 
-    Passes lancedb_root=eval_tmp_lancedb_root so the pipeline reads the real
-    Leiden communities built by build_communities_for_eval. This is the wiring
+    The shared measurement passes a lancedb_root, so the pipeline reads the real
+    Leiden communities built over the graph fixture. This is the wiring
     smoke (metrics are populated at all); the floor-enforcing variants live in
     test_e2e_graph_eval_gate_v2.py.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-        lancedb_root=eval_tmp_lancedb_root,
-    )
-    assert report.metrics.graph_local_recall_at_5 is not None
-    assert report.metrics.graph_global_recall_at_5 is not None
+    metrics = measured_graph_eval.report.metrics
+    assert metrics.graph_local_recall_at_5 is not None
+    assert metrics.graph_global_recall_at_5 is not None

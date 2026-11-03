@@ -38,7 +38,6 @@ from pathlib import Path
 
 import pytest
 
-import archon_search.jobs.scheduler as _scheduler_module
 from tests._cold_model_builds import install_cold_embedder_build
 from tests.integration.conftest import (
     REAL_APP_DATA_SUBDIR,
@@ -58,7 +57,6 @@ _DOCS: dict[str, str] = {
     "/s288/gamma.md": "# Gamma\nReranking reorders candidate chunks by relevance to the query.\n",
 }
 _GAMMA_MARKER = "# Gamma"
-_SCHEDULER_TICK_SECONDS: float = 0.1
 # Per-embedder cold build time. Startup builds the global embedder, then the
 # cached per-collection one (server/warmup.py), so the latter stays cold for about
 # twice this — far longer than a 3-doc import takes — yet the build still finishes.
@@ -76,7 +74,6 @@ def test_s288_imported_collection_search_matches_source(
     target_dir = tmp_path / "target"
     source_dir.mkdir()
     target_dir.mkdir()
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", _SCHEDULER_TICK_SECONDS)
 
     # --- source: ingest, search, export ---
     with make_real_app(source_dir, monkeypatch) as (client, _cfg, api_key):

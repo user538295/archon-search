@@ -37,10 +37,12 @@ pytest.importorskip("tree_sitter_python")
 from archon_search.eval.fixtures import build_doc_collection_map, load_eval_corpus
 from archon_search.eval.metrics import compute_recall_at_k
 from archon_search.eval.runner import (
+    EvalReport,
     _build_code_lane_pipeline,
     _execute_graph_retrieval_query,
     assert_thresholds,
-    run_eval_suite,
+    attach_gates,
+    measure_eval_suite,
 )
 
 CORPUS_ROOT = Path(__file__).resolve().parent
@@ -525,18 +527,19 @@ def test_twoCorpora_areDisjoint() -> None:
 
 
 @pytest.mark.eval
-async def test_twoCorpora_attributeIndependently(tmp_path: Path) -> None:
+@pytest.mark.xdist_group("eval_report")
+async def test_twoCorpora_attributeIndependently(tmp_path: Path, measured_eval_report: EvalReport) -> None:
     """code_chunking_recall_at_5 and code_defref_recall_at_5 are independent fields.
 
     Verifies: (1) they are distinct ``EvalMetrics`` fields, (2) both populate
-    (non-``None``) from a single ``run_eval_suite`` pass over the committed
+    (non-``None``) from a single eval suite pass over the committed
     corpus using the default deterministic backend, and (3) varying only the
     code-chunking fixture's chunking mode does not move
     ``code_defref_recall_at_5`` — the two metrics are computed from disjoint
     trace sets (partitioned by collection), so one can never conflate the
     other.
     """
-    report = await run_eval_suite(CORPUS_ROOT, RUNTIME_CONFIG_PATH)
+    report = measured_eval_report
 
     # C1-14: real structural check (not a tautological string-literal
     # comparison) — both are genuinely distinct fields on the EvalMetrics
@@ -579,7 +582,7 @@ async def test_twoCorpora_attributeIndependently(tmp_path: Path) -> None:
     # this run's def/ref recall is independent of whatever chunking mode is
     # used elsewhere — re-running the full suite's code_chunking_recall_at_5
     # is unaffected by the value just computed above.
-    report_again = await run_eval_suite(CORPUS_ROOT, RUNTIME_CONFIG_PATH)
+    report_again = await measure_eval_suite(CORPUS_ROOT, RUNTIME_CONFIG_PATH)
     assert (
         report_again.metrics.code_chunking_recall_at_5
         == report.metrics.code_chunking_recall_at_5
@@ -592,10 +595,11 @@ async def test_twoCorpora_attributeIndependently(tmp_path: Path) -> None:
 
 
 @pytest.mark.eval
-async def test_existingQualityFloors_holdWithDefrefEdges(thresholds_path: Path) -> None:
+@pytest.mark.xdist_group("eval_report")
+async def test_existingQualityFloors_holdWithDefrefEdges(thresholds_path: Path, measured_eval_report: EvalReport) -> None:
     """Negative control: adding the BE-10 fixtures/edges/chunking causes no regression.
 
-    Runs the FULL existing eval suite (default deterministic backend, which
+    Uses the FULL existing eval suite (default deterministic backend, which
     now also ingests the two new BE-10 collections and computes the two new
     metrics) and asserts every PRE-EXISTING floor in thresholds.toml still
     holds — not just that the two new floors pass. Mirrors the BE-8 negative-
@@ -614,12 +618,7 @@ async def test_existingQualityFloors_holdWithDefrefEdges(thresholds_path: Path) 
     mechanism (``test_recall_at_5_multilingual_fr`` in ``test_eval_suite.py``)
     that ``EvalQualityFloors``/``_QUALITY_FLOOR_FIELDS`` do not cover at all.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-    )
+    report = attach_gates(measured_eval_report, thresholds_path, BASELINE_JSON)
     # synonym_bridge_recall_at_5 and code_defref_recall_at_5 both require
     # lancedb_root (synonym edges / real DefRefExtractor wiring visible to
     # the expander); skip here — mirrors test_eval_suite_gated_smoke's

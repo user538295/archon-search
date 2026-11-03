@@ -23,7 +23,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import archon_search.jobs.scheduler as _scheduler_module
 from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
@@ -52,8 +51,6 @@ def test_maintenance_trigger_and_status_reflect_run(
 
     Completes: S17 (202 + async pass), S20 (GET /status maintenance block).
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     with make_real_app(tmp_path, monkeypatch, maintenance_enabled=True) as (
         client,
         _cfg,
@@ -119,8 +116,6 @@ def test_maintenance_trigger_already_triggered(
     Uses MagicMock to set _trigger_event.is_set() = True without racing the real loop,
     mirroring the pattern from test_trigger_while_busy_returns_202 in test_routes_maintenance.py.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     with make_real_app(tmp_path, monkeypatch, maintenance_enabled=True) as (
         client,
         _cfg,

@@ -22,7 +22,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import archon_search.cli.export_cmd as export_cmd_module
-import archon_search.jobs.scheduler as scheduler_module
 from archon_search.cli.collection import collection as collection_command
 from archon_search.cli.export_cmd import import_cmd
 from archon_search.collection_meta import (
@@ -64,7 +63,6 @@ _CONFIGURED_WINDOW = 8192
 _PROVIDER_TIMEOUT_SECONDS = 120
 _WAIT_SECONDS = 30.0
 _POLL_SECONDS = 0.05
-_SCHEDULER_TICK_SECONDS = 0.1
 _CLI_POLL_SECONDS = 1  # an int: the CLI divides its timeout by it; the default is 2
 _SOURCE_DOCUMENTS = 5
 _GROWN_DOCUMENTS = 10
@@ -98,9 +96,8 @@ _DESCRIPTION_STARTUP_TASKS = ("_description_probe_task", "_description_backfill_
 
 
 @pytest.fixture(autouse=True)
-def _fast_scheduler_and_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+def _fast_cli_poll_and_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
     keep_loopback_out_of_proxies(monkeypatch)
-    monkeypatch.setattr(scheduler_module, "_SCHEDULER_TICK_SECONDS", _SCHEDULER_TICK_SECONDS)
     monkeypatch.setattr(export_cmd_module, "_POLL_INTERVAL_SECONDS", _CLI_POLL_SECONDS)
 
 

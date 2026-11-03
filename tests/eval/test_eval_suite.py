@@ -17,8 +17,11 @@ import pytest
 from archon_search.eval.fixtures import load_eval_corpus
 from archon_search.eval.runner import (
     EvalQualityFloors,
+    EvalReport,
     assert_thresholds,
+    attach_gates,
     load_thresholds,
+    measure_eval_suite,
     render_report,
     run_eval_suite,
 )
@@ -73,47 +76,25 @@ def test_eval_determinism_includes_new_recall_fields() -> None:
 
 
 @pytest.mark.eval
-async def test_eval_suite_report_only_smoke() -> None:
-    """Full eval suite runs end-to-end against the committed corpus and renders
-    a non-empty report — without calling ``assert_thresholds``."""
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=None,
-        baseline_path=None,
-    )
-
-    rendered = render_report(report)
-    assert rendered and rendered.strip(), (
-        f"render_report returned empty output.\nReport:\n{rendered!r}"
-    )
-
-
-@pytest.mark.eval
-async def test_eval_suite_report_only_does_not_assert_thresholds() -> None:
+@pytest.mark.xdist_group("eval_report")
+async def test_eval_suite_report_only_does_not_assert_thresholds(measured_eval_report: EvalReport) -> None:
     """Calibration mode (thresholds=None) never raises from missing floors:
-    the suite executes, the report renders, and ``report.thresholds`` is None."""
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=None,
-        baseline_path=None,
-    )
-
-    assert report.thresholds is None, (
+    the measured report carries no thresholds and renders a non-empty report."""
+    assert measured_eval_report.thresholds is None, (
         f"Expected report.thresholds to be None in calibration mode, "
-        f"got {report.thresholds!r}"
+        f"got {measured_eval_report.thresholds!r}"
     )
 
-    rendered = render_report(report)
+    rendered = render_report(measured_eval_report)
     assert rendered and rendered.strip(), (
         f"render_report returned empty output.\nReport:\n{rendered!r}"
     )
 
 
 @pytest.mark.eval
-async def test_eval_suite_is_deterministic_except_latency() -> None:
-    """Two fresh runs of the eval suite produce identical quality metrics and
+@pytest.mark.xdist_group("eval_report")
+async def test_eval_suite_is_deterministic_except_latency(measured_eval_report: EvalReport) -> None:
+    """Two runs of the eval suite produce identical quality metrics and
     identical ranked result orderings. Latency percentiles are excluded from
     the comparison because they are wall-clock measurements.
 
@@ -123,18 +104,8 @@ async def test_eval_suite_is_deterministic_except_latency() -> None:
     (~0.40-0.43 range for graph_negative_control_recall_at_5). These metrics are
     still included in _QUALITY_METRIC_FIELDS for coverage and baseline reporting.
     """
-    report1 = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=None,
-        baseline_path=None,
-    )
-    report2 = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=None,
-        baseline_path=None,
-    )
+    report1 = measured_eval_report
+    report2 = await measure_eval_suite(CORPUS_ROOT, RUNTIME_CONFIG_PATH)
 
     rendered1 = render_report(report1)
     rendered2 = render_report(report2)
@@ -194,7 +165,10 @@ def _write_baseline(path: Path, base: dict, **overrides) -> Path:
 @pytest.mark.eval
 async def test_eval_suite_gated_smoke(thresholds_path: Path) -> None:
     """Gated suite runs end-to-end against committed thresholds + baseline and
-    ``assert_thresholds`` does not raise."""
+    ``assert_thresholds`` does not raise.
+
+    The one test here that measures through ``run_eval_suite`` itself; the others gate the shared measurement.
+    """
     report = await run_eval_suite(
         CORPUS_ROOT,
         RUNTIME_CONFIG_PATH,
@@ -208,25 +182,23 @@ async def test_eval_suite_gated_smoke(thresholds_path: Path) -> None:
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("eval_report")
 async def test_eval_suite_gated_smoke_reports_baseline_deltas(
-    thresholds_path: Path,
+    thresholds_path: Path, measured_eval_report: EvalReport
 ) -> None:
     """Rendered report contains baseline delta lines."""
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-    )
+    report = attach_gates(measured_eval_report, thresholds_path, BASELINE_JSON)
     rendered = render_report(report).lower()
     assert "baseline" in rendered
     assert "delta" in rendered
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("eval_report")
 async def test_eval_suite_gated_smoke_rejects_stale_benchmark_or_threshold_hashes(
     thresholds_path: Path,
     tmp_path: Path,
+    measured_eval_report: EvalReport,
 ) -> None:
     """A baseline with a stale ``thresholds_hash`` (mismatching the current
     thresholds.toml) fails gating with an explicit refresh message."""
@@ -236,20 +208,17 @@ async def test_eval_suite_gated_smoke_rejects_stale_benchmark_or_threshold_hashe
         base,
         thresholds_hash="0" * 64,  # obviously wrong
     )
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=stale,
-    )
+    report = attach_gates(measured_eval_report, thresholds_path, stale)
     with pytest.raises(AssertionError, match="(?i)stale|refresh|hash"):
         assert_thresholds(report)
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("eval_report")
 async def test_eval_suite_gated_smoke_rejects_calibration_only_baseline(
     thresholds_path: Path,
     tmp_path: Path,
+    measured_eval_report: EvalReport,
 ) -> None:
     """Baseline with ``thresholds_hash: null`` fails gating with refresh message."""
     base = json.loads(BASELINE_JSON.read_text())
@@ -258,22 +227,19 @@ async def test_eval_suite_gated_smoke_rejects_calibration_only_baseline(
         base,
         thresholds_hash=None,
     )
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=calibration_only,
-    )
+    report = attach_gates(measured_eval_report, thresholds_path, calibration_only)
     with pytest.raises(AssertionError, match="(?i)calibration|refresh"):
         assert_thresholds(report)
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("eval_report")
 async def test_eval_suite_report_only_accepts_calibration_baseline_without_thresholds(
     tmp_path: Path,
+    measured_eval_report: EvalReport,
 ) -> None:
     """In report-only mode (no thresholds), a calibration-only baseline is
-    accepted: ``run_eval_suite`` succeeds and renders deltas; we do NOT call
+    accepted: attaching it succeeds and renders deltas; we do NOT call
     ``assert_thresholds``."""
     base = json.loads(BASELINE_JSON.read_text())
     calibration_only = _write_baseline(
@@ -281,12 +247,7 @@ async def test_eval_suite_report_only_accepts_calibration_baseline_without_thres
         base,
         thresholds_hash=None,
     )
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=None,
-        baseline_path=calibration_only,
-    )
+    report = attach_gates(measured_eval_report, None, calibration_only)
     assert report.thresholds is None
     assert report.baseline is not None
     assert report.baseline.thresholds_hash is None
@@ -296,9 +257,11 @@ async def test_eval_suite_report_only_accepts_calibration_baseline_without_thres
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("eval_report")
 async def test_eval_suite_gated_smoke_rejects_stale_eval_hash(
     thresholds_path: Path,
     tmp_path: Path,
+    measured_eval_report: EvalReport,
 ) -> None:
     """A baseline with an obviously-wrong ``eval_hash`` fails gating."""
     base = json.loads(BASELINE_JSON.read_text())
@@ -307,12 +270,7 @@ async def test_eval_suite_gated_smoke_rejects_stale_eval_hash(
         base,
         eval_hash="0" * 64,
     )
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=stale,
-    )
+    report = attach_gates(measured_eval_report, thresholds_path, stale)
     with pytest.raises(AssertionError, match="(?i)stale|refresh|hash"):
         assert_thresholds(report)
 
@@ -323,10 +281,11 @@ async def test_eval_suite_gated_smoke_rejects_stale_eval_hash(
 
 
 @pytest.mark.eval
-async def test_e2e_eval_graph_mrr_passes() -> None:
+@pytest.mark.xdist_group("eval_report")
+async def test_e2e_eval_graph_mrr_passes(measured_eval_report: EvalReport) -> None:
     """T-5 e2e: full eval suite with graph fixtures; verify graph_mrr is computed.
 
-    Runs the full eval suite against the committed corpus (which includes the
+    Uses the full eval suite measured against the committed corpus (which includes the
     graph collection fixtures added by BE-9: auth_service.md, token_validator.md,
     and two graph_mode=naive queries q-graph-01, q-graph-02).
 
@@ -340,12 +299,7 @@ async def test_e2e_eval_graph_mrr_passes() -> None:
     calibration data from real corpora is required first. The test passes as long
     as the metric is computed (not None), regardless of the numeric value.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=None,
-        baseline_path=None,
-    )
+    report = measured_eval_report
 
     assert report.metrics.graph_mrr is not None, (
         "graph_mrr was None after running eval suite with graph fixtures. "
@@ -377,10 +331,11 @@ async def test_e2e_eval_graph_mrr_passes() -> None:
 
 
 @pytest.mark.eval
-async def test_recall_at_5_multilingual_fr(thresholds_path: Path) -> None:
+@pytest.mark.xdist_group("eval_report")
+async def test_recall_at_5_multilingual_fr(thresholds_path: Path, measured_eval_report: EvalReport) -> None:
     """Eval harness asserts recall@5 on French (fr-docs) fixtures >= threshold.
 
-    Runs the full eval suite, filters traces to the fr-docs collection, computes
+    Takes the measured eval suite, filters traces to the fr-docs collection, computes
     recall@5 on that sub-corpus, and asserts it meets the floor from
     thresholds.toml [multilingual].recall_at_5_fr.
 
@@ -422,13 +377,8 @@ async def test_recall_at_5_multilingual_fr(thresholds_path: Path) -> None:
         f"Expected at least 5 French retrieval queries, got {len(fr_queries)}"
     )
 
-    # Run the eval suite and compute per-collection recall@5 for fr-docs
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-    )
+    # Compute per-collection recall@5 for fr-docs from the measured suite
+    report = measured_eval_report
 
     # Filter retrieval traces to fr-docs collection only
     fr_traces = [
@@ -454,18 +404,14 @@ async def test_recall_at_5_multilingual_fr(thresholds_path: Path) -> None:
 
 
 @pytest.mark.eval
-async def test_multilingual_fr_fixtures_load_cleanly(thresholds_path: Path) -> None:
-    """Full eval suite runs end-to-end with multilingual fr-docs fixtures.
+@pytest.mark.xdist_group("eval_report")
+async def test_multilingual_fr_fixtures_load_cleanly(thresholds_path: Path, measured_eval_report: EvalReport) -> None:
+    """The eval suite measures the corpus with the multilingual fr-docs fixtures in it.
 
     Verifies the fixtures are consistent and the eval harness produces a
     non-empty report that includes fr-docs metrics.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-    )
+    report = attach_gates(measured_eval_report, thresholds_path, BASELINE_JSON)
     rendered = render_report(report)
     assert rendered and rendered.strip(), "render_report returned empty output"
 
@@ -1449,8 +1395,9 @@ def test_ingest_latency_p95_single_file_on_large_corpus(tmp_path_factory) -> Non
 
 
 @pytest.mark.eval
-async def test_eval_suite_reports_graph_naive_recall_at_5() -> None:
-    """run_eval_suite on MuSiQue fixture produces the expected graph_naive_recall_at_5.
+@pytest.mark.xdist_group("eval_report")
+async def test_eval_suite_reports_graph_naive_recall_at_5(measured_eval_report: EvalReport) -> None:
+    """The eval suite on the MuSiQue fixture produces the expected graph_naive_recall_at_5.
 
     Pinned value: the single MuSiQue query (q-musique-001) has 2 positive labels
     (musique-001 grade 2, musique-004 grade 1). The deterministic backend retrieves 1
@@ -1459,11 +1406,7 @@ async def test_eval_suite_reports_graph_naive_recall_at_5() -> None:
     Pinning catches wrong-trace bugs (e.g. source is naive_graph_traces instead of
     naive_multihop_traces) — wrong traces produce a different value, not just 0.0.
     """
-    report = await run_eval_suite(
-        corpus_root=CORPUS_ROOT,
-        runtime_config_path=RUNTIME_CONFIG_PATH,
-        backend="deterministic",
-    )
+    report = measured_eval_report
 
     assert report.metrics.graph_naive_recall_at_5 == pytest.approx(0.5)
 

@@ -1071,7 +1071,8 @@ def _make_report(
     )
 
 
-from archon_search.eval.runner import assert_thresholds, render_report
+from archon_search.eval._hashing import compute_thresholds_hash
+from archon_search.eval.runner import assert_thresholds, attach_gates, render_report
 
 
 def test_run_eval_suite_report_only_without_thresholds() -> None:
@@ -1092,6 +1093,20 @@ def test_assert_thresholds_passes_on_synthetic_passing_report() -> None:
     thresholds = EvalThresholds(quality_floors=_make_quality_floors())
     report = _make_report(thresholds=thresholds)
     assert_thresholds(report)  # should not raise
+
+
+def test_attach_gates_gates_a_copy_and_leaves_the_measured_report_as_it_was(tmp_path: Path) -> None:
+    """One measurement is checked by many tests: checking a gated copy must not leak into the measured report."""
+    thresholds_path = _write_toml(tmp_path, _FULL_QUALITY)
+    measured = _make_report()
+
+    gated = attach_gates(measured, thresholds_path)
+    assert_thresholds(gated)  # notes every metric it skips
+
+    assert gated.thresholds == load_thresholds(thresholds_path)
+    assert gated.current_thresholds_hash == compute_thresholds_hash(thresholds_path)
+    assert gated.notes, "assert_thresholds noted no skipped metric, so the copy is not exercised"
+    assert (measured.thresholds, measured.current_thresholds_hash, measured.notes) == (None, None, [])
 
 
 def test_assert_thresholds_reports_quality_floor_regressions() -> None:
@@ -1923,20 +1938,10 @@ def test_graph_naive_recall_is_none_when_multihop_traces_empty() -> None:
 
 
 @pytest.mark.eval
-async def test_standard_metrics_unaffected_by_multihop_corpus() -> None:
+@pytest.mark.xdist_group("eval_report")
+async def test_standard_metrics_unaffected_by_multihop_corpus(measured_eval_report: EvalReport) -> None:
     """recall_at_5/mrr/ndcg are unaffected by multi-hop corpus addition (graph queries excluded)."""
-    from pathlib import Path
-
-    from archon_search.eval.runner import run_eval_suite
-
-    corpus_root = Path(__file__).resolve().parent
-    runtime_config_path = corpus_root / "runtime.toml"
-
-    report = await run_eval_suite(
-        corpus_root=corpus_root,
-        runtime_config_path=runtime_config_path,
-        backend="deterministic",
-    )
+    report = measured_eval_report
 
     # Standard metrics are computed over retrieval_traces only (non-graph, non-multihop
     # queries). Pinned values guard against partition leakage: if a multihop-musique
@@ -1971,8 +1976,9 @@ def test_negative_control_collection_constant_is_not_in_multihop_collections() -
 
 
 @pytest.mark.eval
-async def test_eval_suite_reports_negative_control_recall_at_5() -> None:
-    """run_eval_suite on HotpotQA fixture produces a meaningful graph_negative_control_recall_at_5.
+@pytest.mark.xdist_group("eval_report")
+async def test_eval_suite_reports_negative_control_recall_at_5(measured_eval_report: EvalReport) -> None:
+    """The eval suite on the HotpotQA fixture produces a meaningful graph_negative_control_recall_at_5.
 
     100 HotpotQA queries each have 1 positive doc out of 100 docs. The SHA-256
     backend's ANN index has tie-breaking non-determinism on the synthetic corpus
@@ -1981,18 +1987,7 @@ async def test_eval_suite_reports_negative_control_recall_at_5() -> None:
     failure modes: None (hotpotqa traces routed to wrong partition), or 0.0 (ANN
     returning no results or all scores zero).
     """
-    from pathlib import Path
-
-    from archon_search.eval.runner import run_eval_suite
-
-    corpus_root = Path(__file__).resolve().parent
-    runtime_config_path = corpus_root / "runtime.toml"
-
-    report = await run_eval_suite(
-        corpus_root=corpus_root,
-        runtime_config_path=runtime_config_path,
-        backend="deterministic",
-    )
+    report = measured_eval_report
 
     v = report.metrics.graph_negative_control_recall_at_5
     assert v is not None, "graph_negative_control_recall_at_5 is None — hotpotqa traces not routed"

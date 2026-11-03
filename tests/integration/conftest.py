@@ -52,6 +52,9 @@ JOBS_FILE_NAME = "jobs.json"
 #: Private data-dir subdirectory of ``make_real_app``: ingest refuses paths under the data dir, so corpora live beside it.
 REAL_APP_DATA_SUBDIR = "data"
 
+#: Job scheduler tick of a ``make_real_app`` app, in seconds (production: 5).
+REAL_APP_SCHEDULER_TICK_SECONDS = 0.1
+
 
 def _reuse_shared_graph_model_cache(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Symlink the pre-downloaded GLiNER checkpoint into a graph-enabled test's
@@ -203,6 +206,8 @@ def _assemble_real_app(
         store=job_store,
         max_concurrent=cfg.jobs.max_concurrent_bulk,
         dispatch_fn=lambda job: None,  # replaced in lifespan startup
+        # A queued job (export, import, migration, ...) starts on the next tick, 5 s apart in production.
+        tick_seconds=REAL_APP_SCHEDULER_TICK_SECONDS,
     )
 
     return create_app(cfg, job_store, scheduler=scheduler), cfg, api_key

@@ -2995,6 +2995,9 @@ def test_eviction_only_load_leaves_crashed_flag_false(tmp_path: Path) -> None:
 # lifespan and read the resulting job back out of the job store — the same
 # object ``GET /jobs`` serializes via ``job_to_dict``.
 # --------------------------------------------------------------------------- #
+_LIFESPAN_STEP_TIMEOUT_SECONDS = 30.0
+
+
 async def _boot_and_get_sole_startup_sync_job(
     tmp_path: Path,
     job_store: JobStore,
@@ -3002,11 +3005,13 @@ async def _boot_and_get_sole_startup_sync_job(
     *,
     dial_down_timeouts: bool = False,
     monkeypatch: pytest.MonkeyPatch | None = None,
-    wait_for=None,
+    shut_down_on=None,
 ):
-    """Boot the real lifespan with a patched ``SearchCollectionSync.sync``,
-    wait for ``wait_for`` (an ``asyncio.Event``) if given, then shut down and
-    return the single job the startup sync created.
+    """Boot the real lifespan with a patched ``SearchCollectionSync.sync``, shut it down and return the single job the
+    startup sync created.
+
+    The shutdown comes once ``shut_down_on`` (an ``asyncio.Event``) is set, the sync possibly still running; without one,
+    once the startup sync has ended (the test fails if it has not within the bound).
     """
     from archon_search.server import app as app_module
     from archon_search.server.app import create_app
@@ -3040,15 +3045,14 @@ async def _boot_and_get_sole_startup_sync_job(
 
         lifespan_task = asyncio.create_task(run_lifespan())
         try:
-            await asyncio.wait_for(startup_done.wait(), timeout=30.0)
-            if wait_for is not None:
-                await asyncio.wait_for(wait_for.wait(), timeout=30.0)
-            sync_task = app.state._startup_sync_task
-            if sync_task is not None:
-                for _ in range(3000):
-                    if sync_task.done():
-                        break
-                    await asyncio.sleep(0.01)
+            await asyncio.wait_for(startup_done.wait(), timeout=_LIFESPAN_STEP_TIMEOUT_SECONDS)
+            if shut_down_on is not None:
+                await asyncio.wait_for(shut_down_on.wait(), timeout=_LIFESPAN_STEP_TIMEOUT_SECONDS)
+            else:
+                sync_task = app.state._startup_sync_task
+                if sync_task is not None:
+                    await asyncio.wait({sync_task}, timeout=_LIFESPAN_STEP_TIMEOUT_SECONDS)
+                    assert sync_task.done(), "the startup sync did not end"
         finally:
             shutdown.set()
             await lifespan_task
@@ -3081,10 +3085,7 @@ async def test_startup_sync_timeout_records_sanitized_job_error(
     from archon_search.server.app import _STARTUP_SYNC_ERROR_TIMEOUT
     from archon_search.sync import SearchCollectionSync
 
-    sync_entered = asyncio.Event()
-
     async def parked_sync(self: SearchCollectionSync, collections: list[str], progress_cb=None):
-        sync_entered.set()
         await asyncio.Event().wait()  # never resolves; asyncio.timeout() cuts it off
 
     job = await _boot_and_get_sole_startup_sync_job(
@@ -3093,7 +3094,6 @@ async def test_startup_sync_timeout_records_sanitized_job_error(
         parked_sync,
         dial_down_timeouts=True,
         monkeypatch=monkeypatch,
-        wait_for=sync_entered,
     )
     assert job.error == _STARTUP_SYNC_ERROR_TIMEOUT, (
         f"expected job.error == {_STARTUP_SYNC_ERROR_TIMEOUT!r}; got {job.error!r}"
@@ -3124,9 +3124,7 @@ async def test_startup_sync_cancelled_during_shutdown_records_cancelled_not_fail
         await release.wait()  # kept alive until shutdown cancels it
         return SyncResult()
 
-    job = await _boot_and_get_sole_startup_sync_job(
-        tmp_path, job_store, parked_sync, wait_for=sync_entered
-    )
+    job = await _boot_and_get_sole_startup_sync_job(tmp_path, job_store, parked_sync, shut_down_on=sync_entered)
     assert job.status == JobStatus.CANCELLED, (
         "a clean shutdown mid-startup-sync must leave the job CANCELLED, not FAILED — "
         f"GET /jobs filtering and monitoring key on status; got {job.status!r}"

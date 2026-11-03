@@ -25,14 +25,14 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import socket
-import threading
 from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import huggingface_hub.constants as hub_constants
+import huggingface_hub.utils._http as hub_http
 import pytest
 
 from archon_search.chunker import DocumentChunker
@@ -45,6 +45,8 @@ from archon_search.model_validation import validate_device, validate_models_asyn
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
 from archon_search.reranker import ModelReranker, Reranker
+from tests._fake_model_server import unreachable_port
+from tests._threaded_http import serving_in_thread
 
 # The embedder / reranker construct their real backends; the failing download aborts before torch is imported.
 pytestmark = pytest.mark.real_torch_backends
@@ -84,11 +86,14 @@ def point_hub_at(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[[s
     """Make the real ``huggingface_hub`` talk to *endpoint*, as ``HF_ENDPOINT=<endpoint>`` does at process start.
 
     The data dir is fresh and empty: a model another test left in the shared per-worker data dir would be a cache
-    hit, and no download would fail.
+    hit, and no download would fail. The hub's retry loop still runs every attempt (a 500 and a refused connection
+    are retried five times) and logs each one, but without its backoff sleeps (1 + 2 + 4 + 8 + 8 = 23 s): the module's
+    ``time`` is used for nothing else.
     """
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("NO_PROXY", _LOOPBACK)
     monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.setattr(hub_http, "time", SimpleNamespace(sleep=lambda _seconds: None))
 
     def point(endpoint: str) -> None:
         monkeypatch.setenv("HF_ENDPOINT", endpoint)
@@ -103,19 +108,15 @@ def point_hub_at(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[[s
 @pytest.fixture
 def failing_hub(point_hub_at: Callable[[str], None]) -> Iterator[Callable[[int, str], None]]:
     """Point the hub at ``http://<userinfo>@127.0.0.1:<port>``, a server answering every request with HTTP *status*."""
-    servers: list[ThreadingHTTPServer] = []
+    with contextlib.ExitStack() as running:
 
-    def serve(status: int, userinfo: str) -> None:
-        handler = type("FailingHub", (_AlwaysFails,), {"status": status})
-        server = ThreadingHTTPServer((_LOOPBACK, 0), handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        servers.append(server)
-        point_hub_at(f"http://{userinfo}@{_LOOPBACK}:{server.server_port}")
+        def serve(status: int, userinfo: str) -> None:
+            handler = type("FailingHub", (_AlwaysFails,), {"status": status})
+            server = ThreadingHTTPServer((_LOOPBACK, 0), handler)
+            running.enter_context(serving_in_thread(server))
+            point_hub_at(f"http://{userinfo}@{_LOOPBACK}:{server.server_port}")
 
-    yield serve
-    for server in servers:
-        server.shutdown()
-        server.server_close()
+        yield serve
 
 
 #: ``[logging].level`` and ``[logging].format`` combinations the server can run with.
@@ -340,14 +341,12 @@ def test_refused_connection_logs_no_endpoint_credentials(
     point_hub_at: Callable[[str], None], server_logs: ServerLogs
 ) -> None:
     """A refused connection puts no URL in the hub error, so it keeps logging no credentials (guards over-fixing)."""
-    with socket.socket() as sock:  # reserve a port, then close it: nothing listens there
-        sock.bind((_LOOPBACK, 0))
-        port = sock.getsockname()[1]
     userinfo, secrets = _USERINFO_AND_SECRETS["user-and-password"]
-    point_hub_at(f"http://{userinfo}@{_LOOPBACK}:{port}")
+    with unreachable_port() as port:
+        point_hub_at(f"http://{userinfo}@{_LOOPBACK}:{port}")
 
-    with server_logs.running(), pytest.raises(ModelDownloadError):
-        ensure_model(_EMBEDDER)
+        with server_logs.running(), pytest.raises(ModelDownloadError):
+            ensure_model(_EMBEDDER)
 
     assert server_logs.warnings_named("archon_search.model_store", "model download failed"), "the failure was not logged"
     _assert_no_leak(server_logs, secrets)

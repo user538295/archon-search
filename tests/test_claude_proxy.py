@@ -14,13 +14,13 @@ import json
 import os
 import subprocess
 import sys
-import threading
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from tests import _fake_claude
+from tests._threaded_http import serving_in_thread
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROXY_PATH = REPO_ROOT / "scripts" / "claude-proxy.py"
@@ -41,14 +41,8 @@ def proxy_module():
 def server(proxy_module, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, int]]:
     monkeypatch.setattr(proxy_module, "CLAUDE", ECHO)
     httpd = proxy_module.make_server("127.0.0.1", 0, TOKEN)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with serving_in_thread(httpd):
         yield httpd.server_address
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-        thread.join()
 
 
 def _post(address, body: bytes, headers: dict[str, str], host: str | None = None):

@@ -6,9 +6,9 @@ asserts that passing ``filters=None`` (the default) does not regress the
 committed baseline.
 
 Why filters=None is tested implicitly:
-    ``run_eval_suite`` calls ``_hybrid_search_with_trace`` without any filter
+    The eval suite calls ``_hybrid_search_with_trace`` without any filter
     argument throughout the pipeline — there is no ``filters`` parameter on
-    ``run_eval_suite`` itself.  The entire eval harness therefore always runs
+    ``run_eval_suite`` / ``measure_eval_suite``.  The entire eval harness therefore always runs
     with ``filters=None`` semantics.  This test verifies that code changes in
     the A2 filter stack have not accidentally altered the unfiltered code path.
 
@@ -22,15 +22,15 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.eval.runner import run_eval_suite
+from archon_search.eval.runner import EvalReport
 
 CORPUS_ROOT = Path(__file__).resolve().parent
-RUNTIME_CONFIG_PATH = CORPUS_ROOT / "runtime.toml"
 BASELINE_JSON = CORPUS_ROOT / "baselines" / "baseline.json"
 
 
 @pytest.mark.eval
-async def test_unfiltered_eval_matches_baseline_metrics() -> None:
+@pytest.mark.xdist_group("eval_report")
+async def test_unfiltered_eval_matches_baseline_metrics(measured_eval_report: EvalReport) -> None:
     """Unfiltered eval run must produce metrics bit-identical to baseline.json.
 
     The eval harness uses deterministic backends (SHA-256 embedder, BM25
@@ -41,15 +41,10 @@ async def test_unfiltered_eval_matches_baseline_metrics() -> None:
     baseline_data = json.loads(BASELINE_JSON.read_text())
     baseline_metrics: dict[str, float | None] = baseline_data["metrics"]
 
-    # Run without thresholds or baseline_path — report-only, no staleness check.
-    # filters=None is implicit: run_eval_suite has no filter parameter; the
+    # The shared measurement: report-only (no thresholds, no baseline), no staleness check.
+    # filters=None is implicit: the suite has no filter parameter; the
     # harness always searches without filters (the unfiltered code path).
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=None,
-        baseline_path=None,
-    )
+    report = measured_eval_report
 
     report_metrics_dict = dataclasses.asdict(report.metrics)
 

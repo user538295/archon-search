@@ -12,7 +12,7 @@ import os
 import tempfile
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -340,7 +340,7 @@ def validate_routing_contract(
 
 
 # ---------------------------------------------------------------------------
-# Task 3.3 — run_eval_suite + EvalReport + EvalBaseline + load_baseline
+# Task 3.3 — run_eval_suite / measure_eval_suite + EvalReport + EvalBaseline + load_baseline
 # ---------------------------------------------------------------------------
 
 
@@ -479,7 +479,7 @@ def load_baseline(path: Path) -> EvalBaseline:
 
 @dataclass
 class EvalReport:
-    """Full in-memory eval report for a single ``run_eval_suite`` invocation."""
+    """Full in-memory eval report of one ``measure_eval_suite`` run; ``run_eval_suite`` / ``attach_gates`` add the gates."""
 
     metrics: EvalMetrics
     traces: list[QueryEvalTrace]
@@ -493,16 +493,17 @@ class EvalReport:
     query_count: int = 0
     document_count: int = 0
     generated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    # Hashes of the current inputs used to produce this report. Populated by
-    # ``run_eval_suite`` and compared against ``baseline`` in
-    # ``assert_thresholds`` to detect stale baselines.
+    # Hashes of the current inputs used to produce this report, compared against
+    # ``baseline`` in ``assert_thresholds`` to detect stale baselines. The eval and
+    # runtime-config hashes come from ``measure_eval_suite``, the thresholds hash
+    # from ``run_eval_suite`` / ``attach_gates``.
     current_eval_hash: str | None = None
     current_runtime_config_hash: str | None = None
     current_thresholds_hash: str | None = None
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers for run_eval_suite
+# Internal helpers for measure_eval_suite
 # ---------------------------------------------------------------------------
 
 
@@ -851,7 +852,7 @@ async def _build_code_lane_pipeline(
 
 
 async def _build_code_lane_ingest_pipeline(db_path: Path, graph_store) -> SearchPipeline:  # type: ignore[name-defined]
-    """Build the real code-lane ingest pipeline for use FROM WITHIN ``run_eval_suite``.
+    """Build the real code-lane ingest pipeline for use FROM WITHIN ``measure_eval_suite``.
 
     Delegates to :func:`_build_code_lane_pipeline` (C2-4: single source of
     truth for the calibrated ``chunk_size=65`` and pipeline-construction
@@ -890,7 +891,7 @@ async def _ingest_corpus(
         pipeline: The shared eval pipeline (stub/default chunker) used for
             every collection EXCEPT the BE-10 code-lane collections.
         code_lane_graph_store: When not ``None`` (i.e. ``lancedb_root`` is
-            active in ``run_eval_suite``), ``code-chunking``/``code-defref``
+            active in ``measure_eval_suite``), ``code-chunking``/``code-defref``
             are ingested through a SEPARATE real pipeline
             (``_build_code_lane_ingest_pipeline``, real ``ASTChunker`` at the
             calibrated ``chunk_size=65`` + real ``DefRefExtractor`` wired to
@@ -1014,8 +1015,41 @@ _COMMUNITY_EVAL_COLLECTIONS = ("multihop-musique", "multihop-2wiki")
 # _build_pipeline_with_eval_backends for the AST chunker / DefRefExtractor
 # wiring these collections require.
 _CODE_LANE_EVAL_COLLECTIONS = ("code-chunking", "code-defref")
-# Deterministic Leiden seed used by both the eval fixture and run_eval_suite.
+# Deterministic Leiden seed used by both the eval fixture and measure_eval_suite.
 _EVAL_LEIDEN_SEED: int = 42
+
+
+@dataclass(frozen=True)
+class _Gates:
+    """What a measured report is checked against: the thresholds, the baseline and the hash of the thresholds file."""
+
+    thresholds: EvalThresholds | None
+    baseline: EvalBaseline | None
+    thresholds_hash: str | None
+
+
+def _load_gates(
+    runtime_cfg: EvalRuntimeConfig, thresholds_path: Path | None, baseline_path: Path | None
+) -> _Gates:
+    thresholds: EvalThresholds | None = None
+    thresholds_hash: str | None = None
+    if thresholds_path is not None:
+        thresholds = load_thresholds(Path(thresholds_path))
+        validate_routing_contract(runtime_cfg, thresholds)
+        thresholds_hash = compute_thresholds_hash(Path(thresholds_path))
+    baseline = load_baseline(Path(baseline_path)) if baseline_path is not None else None
+    return _Gates(thresholds=thresholds, baseline=baseline, thresholds_hash=thresholds_hash)
+
+
+def _with_gates(report: EvalReport, gates: _Gates) -> EvalReport:
+    # ``assert_thresholds`` appends to ``notes``: the copy gets its own list, so *report* stays as it was.
+    return replace(
+        report,
+        thresholds=gates.thresholds,
+        baseline=gates.baseline,
+        current_thresholds_hash=gates.thresholds_hash,
+        notes=list(report.notes),
+    )
 
 
 async def run_eval_suite(
@@ -1027,13 +1061,47 @@ async def run_eval_suite(
     backend: Literal["deterministic", "live"] = "deterministic",
     lancedb_root: Path | None = None,
 ) -> EvalReport:
-    """Execute the trace-enabled eval suite over the corpus.
+    """Measure the eval suite over the corpus and attach the thresholds and the baseline to the report.
 
     Args:
         corpus_root: Root directory containing eval fixtures (corpus/, documents.jsonl, etc.)
         runtime_config_path: Path to eval runtime config TOML
         thresholds_path: Optional path to thresholds.toml for gated eval
         baseline_path: Optional path to baseline.json for staleness checks
+        backend: Eval backend type ("deterministic" or "live")
+        lancedb_root: see :func:`measure_eval_suite`
+
+    The thresholds and the baseline are loaded, and the routing contract checked, before the measurement starts, so a
+    bad file fails before the corpus is ingested.
+    """
+    runtime_cfg = load_runtime_config(Path(runtime_config_path))
+    gates = _load_gates(runtime_cfg, thresholds_path, baseline_path)
+    report = await _measure(corpus_root, runtime_config_path, runtime_cfg, backend=backend, lancedb_root=lancedb_root)
+    return _with_gates(report, gates)
+
+
+def attach_gates(
+    report: EvalReport, thresholds_path: Path | None = None, baseline_path: Path | None = None
+) -> EvalReport:
+    """A copy of the measured *report* carrying the thresholds and the baseline, as :func:`run_eval_suite` returns it.
+
+    *report* is left unchanged, so one measurement can be checked against several thresholds and baselines.
+    """
+    return _with_gates(report, _load_gates(report.runtime_config, thresholds_path, baseline_path))
+
+
+async def measure_eval_suite(
+    corpus_root: Path,
+    runtime_config_path: Path,
+    *,
+    backend: Literal["deterministic", "live"] = "deterministic",
+    lancedb_root: Path | None = None,
+) -> EvalReport:
+    """Execute the trace-enabled eval suite over the corpus; the report carries no thresholds and no baseline.
+
+    Args:
+        corpus_root: Root directory containing eval fixtures (corpus/, documents.jsonl, etc.)
+        runtime_config_path: Path to eval runtime config TOML
         backend: Eval backend type ("deterministic" or "live")
         lancedb_root: Optional LanceDB root path. When supplied, uses this path
             instead of creating a temporary directory. Allows sharing a pre-built
@@ -1042,6 +1110,18 @@ async def run_eval_suite(
 
     See the eval harness specification for full details.
     """
+    runtime_cfg = load_runtime_config(Path(runtime_config_path))
+    return await _measure(corpus_root, runtime_config_path, runtime_cfg, backend=backend, lancedb_root=lancedb_root)
+
+
+async def _measure(
+    corpus_root: Path,
+    runtime_config_path: Path,
+    runtime_cfg: EvalRuntimeConfig,
+    *,
+    backend: Literal["deterministic", "live"],
+    lancedb_root: Path | None,
+) -> EvalReport:
     from archon_search.constants import DEFAULT_ROUTING_DESCRIPTION_WEIGHT
     from archon_search.eval.metrics import (
         compute_latency_percentiles,
@@ -1055,16 +1135,6 @@ async def run_eval_suite(
     )
 
     corpus_root = Path(corpus_root)
-    runtime_cfg = load_runtime_config(Path(runtime_config_path))
-
-    thresholds: EvalThresholds | None = None
-    if thresholds_path is not None:
-        thresholds = load_thresholds(Path(thresholds_path))
-        validate_routing_contract(runtime_cfg, thresholds)
-
-    baseline: EvalBaseline | None = None
-    if baseline_path is not None:
-        baseline = load_baseline(Path(baseline_path))
 
     corpus = load_eval_corpus(corpus_root)
     _validate_queries(corpus, runtime_cfg)
@@ -1475,19 +1545,14 @@ async def run_eval_suite(
 
     current_eval_hash = compute_eval_hash(corpus_root)
     current_runtime_config_hash = compute_runtime_config_hash(Path(runtime_config_path))
-    current_thresholds_hash = (
-        compute_thresholds_hash(Path(thresholds_path))
-        if thresholds_path is not None
-        else None
-    )
 
     return EvalReport(
         metrics=metrics,
         traces=traces,
         corpus_root=corpus_root,
         runtime_config=runtime_cfg,
-        thresholds=thresholds,
-        baseline=baseline,
+        thresholds=None,
+        baseline=None,
         notes=notes,
         routing_disabled_queries=routing_disabled_queries,
         routing_bypassed_queries=routing_bypassed_queries,
@@ -1495,7 +1560,6 @@ async def run_eval_suite(
         document_count=len(corpus.documents),
         current_eval_hash=current_eval_hash,
         current_runtime_config_hash=current_runtime_config_hash,
-        current_thresholds_hash=current_thresholds_hash,
     )
 
 

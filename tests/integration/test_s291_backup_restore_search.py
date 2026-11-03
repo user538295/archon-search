@@ -22,7 +22,6 @@ from pathlib import Path
 import pytest
 
 import archon_search.jobs.backup_loop as _backup_loop_module
-import archon_search.jobs.scheduler as _scheduler_module
 from tests.integration.conftest import (
     ingest_file_via_path,
     make_real_app,
@@ -52,7 +51,6 @@ def test_s291_offsite_backup_archive_can_be_restored_and_searched(
     5. The same search must return the same ``doc_id`` set.
     """
     monkeypatch.setattr(_backup_loop_module, "_BACKUP_COMPLETION_POLL_SECONDS", 0.1)
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
 
     # Off-tree backup root: a sibling of the data dir, exactly like the runbook's
     # /mnt/nfs/... example. Deliberately NOT under tmp_path (= the data dir).

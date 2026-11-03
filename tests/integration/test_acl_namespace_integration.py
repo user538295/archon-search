@@ -26,7 +26,6 @@ from pathlib import Path
 
 import pytest
 
-import archon_search.jobs.scheduler as _scheduler_module
 from archon_search.types import JobStatus
 from tests.integration.conftest import make_real_app
 
@@ -207,8 +206,6 @@ def test_acl_field_survives_export_import_round_trip(
     Note: chunks with ``acl=['ns-a']`` are filtered out for any namespace other
     than 'ns-a', so the test must search as namespace-A to get results.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     key_a = secrets.token_hex(32)
     namespaces = {key_a: "ns-a"}
 

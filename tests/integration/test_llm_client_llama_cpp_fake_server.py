@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import socket
-
 import pytest
 
 from archon_search.constants import (
@@ -28,6 +26,7 @@ from tests._fake_model_server import (
     FAKE_CHAT_OPEN,
     FakeModelServer,
     keep_loopback_out_of_proxies,
+    unreachable_port,
 )
 
 pytestmark = pytest.mark.integration
@@ -131,10 +130,8 @@ async def test_llama_cpp_wrapper_probe_failure_against_fake_server_assumes_4096(
 
 
 async def test_llama_cpp_wrapper_reports_unreachable_server() -> None:
-    # A bound socket that never listens refuses every connection, and keeps its port from being handed to another test.
-    with socket.socket() as refusing:
-        refusing.bind((_LOOPBACK, 0))
-        client = LlamaCppClient(model=_MODEL, base_url=f"http://{_LOOPBACK}:{refusing.getsockname()[1]}")
+    with unreachable_port() as port:
+        client = LlamaCppClient(model=_MODEL, base_url=f"http://{_LOOPBACK}:{port}")
 
         with pytest.raises(LlmCallFailure) as raised:
             await client.call(_request())

@@ -34,6 +34,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, Self
 from urllib.parse import urlsplit
 
+from tests._threaded_http import serving_in_thread
+
 if TYPE_CHECKING:
     import pytest
 
@@ -55,7 +57,6 @@ _DEFAULT_OLLAMA_CONTEXT_LENGTH = 8192
 _DEFAULT_LLAMA_N_CTX = 4096
 _OLLAMA_ARCHITECTURE = "llama"
 _MODEL_NAME = "fake-model"
-_POLL_INTERVAL_SECONDS = 0.01  # how soon ``shutdown`` is noticed; the default 0.5 s would slow every test
 
 # llama-server nests its errors as {"error": {"code", "message", "type"}}; Ollama answers {"error": "<text>"}.
 _LLAMA_PATHS = frozenset({"/props", "/v1/models", "/tokenize", "/apply-template", "/v1/chat/completions"})
@@ -74,16 +75,20 @@ def is_fake_server_port(port: int) -> bool:
 
 @contextlib.contextmanager
 def unreachable_port() -> Iterator[int]:
-    """A loopback port nothing answers on, for the test of a server that is down.
+    """A loopback port nothing answers on, for the test of a server that is down: a connection to it is refused at once.
 
-    A bound socket that never listens keeps its port from being handed to another test. On macOS a connection attempt to
-    it is dropped instead of refused (measured: the connect attempt ends after about 8 s), so a call to it ends at the
-    caller's own timeout or that connect timeout, whichever is first. The session guard counts the port as a fake
-    server's, so an SDK client may be built for it.
+    The port is held by the client end of an established loopback connection, which keeps it from being handed to
+    another socket while no listener exists for it. A port that is only bound (never listening) would not do: on macOS
+    a connection attempt to it is dropped instead of refused and ends after about 8 s (measured). The session guard
+    counts the port as a fake server's, so an SDK client may be built for it.
     """
-    with socket.socket() as refusing:
-        refusing.bind((_LOOPBACK, 0))
-        port = refusing.getsockname()[1]
+    with contextlib.ExitStack() as held:
+        with socket.socket() as listener:
+            listener.bind((_LOOPBACK, 0))
+            listener.listen(1)
+            holder = held.enter_context(socket.create_connection(listener.getsockname()))
+            held.enter_context(listener.accept()[0])
+        port = holder.getsockname()[1]
         with _listening_lock:
             _listening_ports.add(port)
         try:
@@ -118,7 +123,7 @@ class FakeModelServer:
     """
 
     _httpd: _Server  # bound by ``__enter__``, so a server that is never entered holds no socket
-    _thread: threading.Thread
+    _serving: contextlib.ExitStack
 
     def __init__(
         self,
@@ -155,13 +160,8 @@ class FakeModelServer:
 
     def __enter__(self) -> Self:
         self._httpd = _Server((_LOOPBACK, 0), _Handler, self)
-        self._thread = threading.Thread(
-            target=self._httpd.serve_forever,
-            kwargs={"poll_interval": _POLL_INTERVAL_SECONDS},
-            name="fake-model-server",
-            daemon=True,
-        )
-        self._thread.start()
+        self._serving = contextlib.ExitStack()
+        self._serving.enter_context(serving_in_thread(self._httpd, name="fake-model-server"))
         with _listening_lock:
             _listening_ports.add(self._httpd.server_address[1])
         return self
@@ -170,9 +170,7 @@ class FakeModelServer:
         self.release()  # let a held handler finish promptly (it is a daemon thread; ``server_close`` does not join it)
         with _listening_lock:
             _listening_ports.discard(self._httpd.server_address[1])
-        self._httpd.shutdown()
-        self._httpd.server_close()
-        self._thread.join()
+        self._serving.close()
 
     def hold(self) -> None:
         """Hold every chat request that arrives from now on, until :meth:`release`."""

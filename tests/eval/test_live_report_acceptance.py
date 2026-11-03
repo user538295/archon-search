@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 
 PYPROJECT_PATH = Path(__file__).resolve().parents[2] / "pyproject.toml"
 CORPUS_ROOT = Path(__file__).resolve().parent
-RUNTIME_CFG_PATH = CORPUS_ROOT / "runtime.toml"
 
 
 @pytest.mark.eval
@@ -75,16 +74,6 @@ async def test_live_backend_guard_fires_when_eval_env_set(
     monkeypatch.setenv("ARCHON_SEARCH_EVAL_BACKENDS", "1")
     with pytest.raises(RuntimeError, match="ARCHON_SEARCH_EVAL_BACKENDS"):
         await _build_pipeline_with_eval_backends(tmp_path, backend="live")
-
-
-@pytest.mark.eval
-async def test_run_eval_suite_default_backend_is_deterministic() -> None:
-    """run_eval_suite() with no backend kwarg uses deterministic backend and returns EvalReport."""
-    from archon_search.eval.runner import EvalReport, run_eval_suite
-
-    report = await run_eval_suite(CORPUS_ROOT, RUNTIME_CFG_PATH)
-    assert isinstance(report, EvalReport)
-    assert report.metrics.recall_at_1 >= 0.0
 
 
 _LIVE_THRESHOLDS_TOML = CORPUS_ROOT / "live_thresholds.toml"

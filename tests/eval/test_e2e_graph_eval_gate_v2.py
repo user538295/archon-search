@@ -19,16 +19,19 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
-from archon_search.eval.runner import assert_thresholds, run_eval_suite
+from archon_search.eval.runner import EvalReport, assert_thresholds, attach_gates
+
+if TYPE_CHECKING:
+    from tests.eval.conftest import GraphEvalMeasurement
 
 # Require leidenalg for all tests in this module; skip the entire module if absent.
 pytest.importorskip("leidenalg")
 
 CORPUS_ROOT = Path(__file__).resolve().parent
-RUNTIME_CONFIG_PATH = CORPUS_ROOT / "runtime.toml"
 BASELINE_JSON = CORPUS_ROOT / "baselines" / "baseline.json"
 
 
@@ -38,19 +41,15 @@ BASELINE_JSON = CORPUS_ROOT / "baselines" / "baseline.json"
 
 
 @pytest.mark.eval
-async def test_eval_gate_graph_naive_recall_at_5(thresholds_path: Path) -> None:
+@pytest.mark.xdist_group("eval_report")
+async def test_eval_gate_graph_naive_recall_at_5(thresholds_path: Path, measured_eval_report: EvalReport) -> None:
     """Gated: graph_naive_recall_at_5 meets the floor configured in thresholds.toml (T-4).
 
     Measures naive-mode multi-hop recall on MuSiQue-Ans queries.  Verifies that
     graph entity expansion (without community-detection) improves or maintains recall
     on multi-hop questions.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-    )
+    report = attach_gates(measured_eval_report, thresholds_path, BASELINE_JSON)
     # Enforce the full production gate contract first: staleness checks, floor-drop policy,
     # calibration-only baseline rejection.
     # synonym_bridge_recall_at_5 and code_defref_recall_at_5 both require
@@ -79,10 +78,10 @@ async def test_eval_gate_graph_naive_recall_at_5(thresholds_path: Path) -> None:
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("eval_report")
 async def test_eval_gate_graph_local_recall_at_5(
     thresholds_path: Path,
-    build_communities_for_eval: tuple,
-    eval_tmp_lancedb_root: Path,
+    measured_graph_eval: GraphEvalMeasurement,
 ) -> None:
     """Gated: graph_local_recall_at_5 meets the floor configured in thresholds.toml (T-2).
 
@@ -91,13 +90,7 @@ async def test_eval_gate_graph_local_recall_at_5(
     corpus. Verifies that community-local representatives improve recall on
     multi-hop bridge/comparison questions.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-        lancedb_root=eval_tmp_lancedb_root,
-    )
+    report = attach_gates(measured_graph_eval.report, thresholds_path, BASELINE_JSON)
     # Enforce the full production gate contract first: staleness checks, floor-drop policy,
     # calibration-only baseline rejection.
     assert_thresholds(report)
@@ -121,10 +114,10 @@ async def test_eval_gate_graph_local_recall_at_5(
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("eval_report")
 async def test_eval_gate_graph_global_recall_at_5(
     thresholds_path: Path,
-    build_communities_for_eval: tuple,
-    eval_tmp_lancedb_root: Path,
+    measured_graph_eval: GraphEvalMeasurement,
 ) -> None:
     """Gated: graph_global_recall_at_5 meets the floor configured in thresholds.toml (T-2).
 
@@ -133,13 +126,7 @@ async def test_eval_gate_graph_global_recall_at_5(
     corpus. Verifies that global aggregation of top-N communities improves recall
     on multi-hop bridge/comparison questions.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-        lancedb_root=eval_tmp_lancedb_root,
-    )
+    report = attach_gates(measured_graph_eval.report, thresholds_path, BASELINE_JSON)
     # Enforce the full production gate contract first: staleness checks, floor-drop policy,
     # calibration-only baseline rejection.
     assert_thresholds(report)
@@ -163,7 +150,10 @@ async def test_eval_gate_graph_global_recall_at_5(
 
 
 @pytest.mark.eval
-async def test_eval_gate_graph_negative_control_recall_at_5(thresholds_path: Path) -> None:
+@pytest.mark.xdist_group("eval_report")
+async def test_eval_gate_graph_negative_control_recall_at_5(
+    thresholds_path: Path, measured_eval_report: EvalReport
+) -> None:
     """Gated: graph_negative_control_recall_at_5 meets the floor configured in thresholds.toml (T-3).
 
     Measures naive-mode on HotpotQA distractor questions (negative control).  This is a
@@ -173,12 +163,7 @@ async def test_eval_gate_graph_negative_control_recall_at_5(thresholds_path: Pat
 
     Note: this metric has ~0.40-0.43 variance; the floor is set conservatively.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-    )
+    report = attach_gates(measured_eval_report, thresholds_path, BASELINE_JSON)
     # Enforce the full production gate contract first: staleness checks, floor-drop policy,
     # calibration-only baseline rejection.
     # synonym_bridge_recall_at_5 and code_defref_recall_at_5 both require
@@ -207,14 +192,14 @@ async def test_eval_gate_graph_negative_control_recall_at_5(thresholds_path: Pat
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("eval_report")
 async def test_eval_gate_hotpotqa_negative_control_unchanged(
     thresholds_path: Path,
-    build_communities_for_eval: tuple,
-    eval_tmp_lancedb_root: Path,
+    measured_graph_eval: GraphEvalMeasurement,
 ) -> None:
     """Gated: graph_negative_control_recall_at_5 does not regress when synonym edges are active (BE-8 / S9).
 
-    Runs the eval suite with ``lancedb_root`` wired (synonym edges and real graph
+    Uses the eval suite measured with ``lancedb_root`` wired (synonym edges and real graph
     expander active) and asserts that the HotpotQA distractor recall floor still
     holds.  This confirms that adding synonym expansion to the pipeline does not
     hurt recall on simple single-hop queries (negative control).
@@ -223,13 +208,7 @@ async def test_eval_gate_hotpotqa_negative_control_unchanged(
     should neither help nor hurt.  Any drop below the floor signals a regression in
     the baseline retrieval path caused by synonym-expansion interference.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-        lancedb_root=eval_tmp_lancedb_root,
-    )
+    report = attach_gates(measured_graph_eval.report, thresholds_path, BASELINE_JSON)
     # Enforce the full production gate contract first.
     assert_thresholds(report)
 
@@ -252,10 +231,10 @@ async def test_eval_gate_hotpotqa_negative_control_unchanged(
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("eval_report")
 async def test_eval_gate_synonym_bridge_recall_at_5(
     thresholds_path: Path,
-    build_communities_for_eval: tuple,
-    eval_tmp_lancedb_root: Path,
+    measured_graph_eval: GraphEvalMeasurement,
 ) -> None:
     """Gated: synonym_bridge_recall_at_5 meets the floor configured in thresholds.toml (BE-8 / S8).
 
@@ -264,9 +243,8 @@ async def test_eval_gate_synonym_bridge_recall_at_5(
     Queries using one term should also retrieve documents that use the synonymous term
     when synonym edges (relationship_type="synonym_of") are present in the graph.
 
-    Uses ``RealGraphExpander`` wired to the shared eval LanceDB root so that any synonym
-    edges written by the ``build_communities_for_eval`` fixture are visible.  The
-    ``lancedb_root`` parameter ensures the pipeline shares the same store as the fixture.
+    Uses ``RealGraphExpander`` over the shared measurement's LanceDB root, which holds the
+    synonym edges ``_write_eval_graph`` writes before the corpus ingest.
 
     Non-vacuity: the gate is discriminating because of three combined factors:
     1. Measured no-expansion baseline of 0.5, recorded in baseline.json from a run
@@ -281,13 +259,7 @@ async def test_eval_gate_synonym_bridge_recall_at_5(
     With synonym_of edges + RealGraphExpander (this test): the expander bridges
     K8s↔Kubernetes and ML↔machine learning, boosting recall@5 to 1.0.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-        lancedb_root=eval_tmp_lancedb_root,
-    )
+    report = attach_gates(measured_graph_eval.report, thresholds_path, BASELINE_JSON)
     # Enforce the full production gate contract first: staleness checks, floor-drop policy,
     # calibration-only baseline rejection.
     assert_thresholds(report)
@@ -325,15 +297,15 @@ async def test_eval_gate_synonym_bridge_recall_at_5(
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("eval_report")
 async def test_eval_gate_code_chunking_recall_at_5_reportOnly(
     thresholds_path: Path,
-    build_communities_for_eval: tuple,
-    eval_tmp_lancedb_root: Path,
+    measured_graph_eval: GraphEvalMeasurement,
 ) -> None:
     """Report-only: code_chunking_recall_at_5 computes on the gated code-lane path (BE-10).
 
     Measures naive-mode recall on the code-chunking collection.  With
-    ``lancedb_root`` wired, ``run_eval_suite`` ingests this collection through
+    ``lancedb_root`` wired, ``measure_eval_suite`` ingests this collection through
     a dedicated real code-lane pipeline (real ``ASTChunker`` at the
     calibrated ``chunk_size=65`` — see ``_build_code_lane_ingest_pipeline``),
     not the stub/default-chunker path used by every other eval collection.
@@ -350,13 +322,7 @@ async def test_eval_gate_code_chunking_recall_at_5_reportOnly(
     ``thresholds.toml``'s ``code_chunking_recall_at_5`` comment for the full
     rationale.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-        lancedb_root=eval_tmp_lancedb_root,
-    )
+    report = attach_gates(measured_graph_eval.report, thresholds_path, BASELINE_JSON)
     # Enforce the full production gate contract first: staleness checks, floor-drop policy,
     # calibration-only baseline rejection. code_chunking_recall_at_5 itself has
     # no floor (report-only) so it is a no-op inside this call.
@@ -370,15 +336,15 @@ async def test_eval_gate_code_chunking_recall_at_5_reportOnly(
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("eval_report")
 async def test_eval_gate_code_defref_recall_at_5(
     thresholds_path: Path,
-    build_communities_for_eval: tuple,
-    eval_tmp_lancedb_root: Path,
+    measured_graph_eval: GraphEvalMeasurement,
 ) -> None:
     """Gated: code_defref_recall_at_5 meets the floor configured in thresholds.toml (BE-10).
 
     Measures naive-mode recall on the code-defref collection.  With
-    ``lancedb_root`` wired, ``run_eval_suite`` ingests this collection through
+    ``lancedb_root`` wired, ``measure_eval_suite`` ingests this collection through
     a dedicated real code-lane pipeline (real ``DefRefExtractor`` +
     ``GraphStore`` + ``RealGraphExpander`` — see
     ``_build_code_lane_ingest_pipeline``), not the stub/no-graph path used by
@@ -405,13 +371,7 @@ async def test_eval_gate_code_defref_recall_at_5(
     the real ``calls`` edge, since aggregate recall@5 alone can pass (2/3)
     without ever finding it.
     """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-        lancedb_root=eval_tmp_lancedb_root,
-    )
+    report = attach_gates(measured_graph_eval.report, thresholds_path, BASELINE_JSON)
     # Enforce the full production gate contract first: staleness checks, floor-drop policy,
     # calibration-only baseline rejection.
     assert_thresholds(report)
@@ -478,7 +438,7 @@ async def test_eval_gate_code_defref_recall_at_5(
     # recall mismatch below the floor.
     from archon_search.graph_store import GraphStore
 
-    _defref_graph_store = GraphStore(db_path=str(eval_tmp_lancedb_root))
+    _defref_graph_store = GraphStore(db_path=str(measured_graph_eval.lancedb_root))
     await _defref_graph_store.connect()
     try:
         edge_count = await _defref_graph_store.edge_count("code-defref", ns="default")

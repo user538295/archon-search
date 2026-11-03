@@ -31,7 +31,6 @@ from pathlib import Path
 
 import pytest
 
-import archon_search.jobs.scheduler as _scheduler_module
 from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION
 from archon_search.types import ImportJob, IngestJob, JobStatus
 from tests.integration.conftest import (
@@ -103,8 +102,6 @@ def test_export_job_reaches_done_with_archive_on_disk(
     5. Open the archive and assert manifest.json is valid JSON with the correct
        'collection' key.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     doc = tmp_path / "export_test.md"
     doc.write_text("# Export integration\n\nContent for export dispatch test.\n" * 4)
 
@@ -182,8 +179,6 @@ def test_import_job_reaches_done_and_restores_searchable_collection(
     3. POST /collections/B/import with archive_path.  Poll until DONE.
     4. POST /search against collection B.  Assert non-empty results.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     doc = tmp_path / "import_test.md"
     doc.write_text(
         "# Import integration\n\nContent for export-import round-trip test.\n" * 4
@@ -247,16 +242,13 @@ def test_user_job_precedes_backup_source_job(
     """User-sourced export reaches RUNNING before backup-sourced export.
 
     Strategy:
-    1. Reduce scheduler tick to 0.1s for fast dispatch.
-    2. Use make_real_app to get a TestClient with a real scheduler.
-    3. Freeze dispatch by setting scheduler._max_concurrent = 0.
-    4. Enqueue backup job first, then user job (via job_store directly).
-    5. Unfreeze (set _max_concurrent = 1).
-    6. Poll job_store until both jobs have left QUEUED.
-    7. Assert the user job transitioned out of QUEUED at or before the backup job.
+    1. Use make_real_app to get a TestClient with a real scheduler (0.1 s tick).
+    2. Freeze dispatch by setting scheduler._max_concurrent = 0.
+    3. Enqueue backup job first, then user job (via job_store directly).
+    4. Unfreeze (set _max_concurrent = 1).
+    5. Poll job_store until both jobs have left QUEUED.
+    6. Assert the user job transitioned out of QUEUED at or before the backup job.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     col = "test-priority-col"
     doc = tmp_path / "priority_test.md"
     doc.write_text("# Priority test\n\nContent for priority ordering test.\n" * 4)
@@ -369,8 +361,6 @@ def test_post_import_unsafe_tar_member_returns_422(
     An archive with a '../../evil.txt' member must be rejected with 422 and no
     file must be written outside the tmp directory.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     # Build the unsafe archive in the caller's own export directory so the namespace path check passes.
     exports_dir = tmp_path / REAL_APP_DATA_SUBDIR / "exports" / "default"
     exports_dir.mkdir(parents=True, exist_ok=True)

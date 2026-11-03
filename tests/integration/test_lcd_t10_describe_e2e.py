@@ -7,11 +7,8 @@ a test must act while a generation is in flight (a second caller, a manual set, 
 
 Run with: ``uv run pytest tests/integration/test_lcd_t10_describe_e2e.py -m integration``.
 
-Two things to know when reading a failure here: the bridged CLI runs on the caller's thread while the app runs on the
-TestClient's portal thread, so a CLI call that waits for a held model call is run on a worker thread; and the
-``unreachable_port()`` of a "provider down" test is a socket that never listens: on macOS a connection attempt to it is
-dropped instead of refused, so each failing call lasts about 8 s (measured) and those arms keep the number of failing
-calls small.
+A thing to know when reading a failure here: the bridged CLI runs on the caller's thread while the app runs on the
+TestClient's portal thread, so a CLI call that waits for a held model call is run on a worker thread.
 """
 
 from __future__ import annotations

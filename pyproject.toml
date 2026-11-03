@@ -82,7 +82,12 @@ archon-search = "archon_search.cli.main:main"
 
 [dependency-groups]
 dev = [
-    "pytest>=9.2",
+    # Below 9.2: pytest 9.2 made Node.nodeid read-only, and pytest-xdist 3.8.0 (the latest
+    # release, checked 2026-11-03) then ignores every xdist_group under --dist=loadgroup
+    # (pytest-xdist #1386). Its unreleased fix (merge 4616feb) crashes once -m deselects a test
+    # (pytest-xdist #1399), which the addopts filter always does. Lift the cap with the first
+    # pytest-xdist release that fixes both; tests/test_xdist_loadgroup.py fails while grouping is off.
+    "pytest>=9.1.1,<9.2",
     "pytest-asyncio>=1.4",
     "pytest-cov>=7.1",
     "pytest-xdist>=3.8",
@@ -242,6 +247,13 @@ markers = [
     "runtime_parity: real-weights parity of the PyTorch embedder/reranker against the frozen fastembed outputs in tests/fixtures/runtime_parity/; excluded from the default run via norecursedirs + the -m filter; needs ARCHON_RUNTIME_PARITY_DATA_DIR (weights are downloaded there once); see the tests/runtime_parity module docstrings for the exact invocation",
     "real_torch_backends: opt out of the autouse stub of ModelEmbedder.encode / ModelReranker.predict (tests/conftest.py _stub_model_backends); the test runs the real PyTorch backends or their loader seam. Apply as a module-level `pytestmark`.",
 ]
+
+[tool.coverage.run]
+# sys.monitoring (PEP 669) instead of the C tracer coverage.py picks by default before Python 3.14.
+# Measured 2026-11-03 on the default suite: 371 s -> 333 s wall, xdist collection 31 s -> 15 s,
+# coverage total 96.30 % both ways. Line coverage only: on 3.13 sysmon cannot measure branches,
+# and coverage.py falls back to the C tracer (with a warning) if branch coverage is turned on.
+core = "sysmon"
 
 [tool.uv]
 package = true

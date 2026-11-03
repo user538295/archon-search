@@ -20,7 +20,6 @@ from pathlib import Path
 
 import pytest
 
-import archon_search.jobs.scheduler as _scheduler_module
 from archon_search.jobs.model import JobStatus
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
@@ -71,8 +70,6 @@ def test_s476_only_keep_archives_remain(
 
     S476-only_keep_archives_remain: assert len(remaining) == keep.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     doc = tmp_path / "s476_doc.md"
     doc.write_text("# S476 rotation test\n\n" + "content " * 50)
 
@@ -140,8 +137,6 @@ def test_s476_oldest_archives_are_deleted(
     S476-the_oldest_archives_are_the_ones_deleted: the oldest two must be gone;
     the newest pre-existing archive and the new backup must survive.
     """
-    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
-
     doc = tmp_path / "s476_doc.md"
     doc.write_text("# S476 rotation test\n\n" + "content " * 50)
 
