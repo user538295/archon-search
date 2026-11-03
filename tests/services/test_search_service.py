@@ -358,11 +358,6 @@ async def test_padded_names_are_stripped_before_the_lookup() -> None:
     assert pipeline.search.await_args.args == ("q", _COLLECTION)
 
 
-async def test_multi_path_command_is_refused_until_the_multi_path_lands() -> None:
-    with pytest.raises(NotImplementedError):
-        await _service().search(_command(collection=None, collections=("a", "b")), _CALLER)
-
-
 # --- HyDE and RAG Fusion ------------------------------------------------------------------------------
 
 

@@ -282,7 +282,7 @@ An operator runs `archon-search search "q" --collection docs` and reads ranked r
 
 An API client or operator searches `collections=[a, b]` (or repeats `--collection`) and gets the same rules, errors and telemetry as the single path.
 
-- [ ] **BE-10** — Add `SearchService.search` for the multi path: global embedder, `excluded_collections` with reasons (all excluded is an empty result, no error), `collection not found`, `MetadataLookupError`, fan-out timeout and the budget mapped to `ServiceError`, HyDE and RAG Fusion suppression, `search_multi` telemetry on success and `search` on every error entry (the multi-path factory is unchanged: no doc ids, no filter flags) #backend-role
+- [x] **BE-10** — Add `SearchService.search` for the multi path: global embedder, `excluded_collections` with reasons (all excluded is an empty result, no error), `collection not found`, `MetadataLookupError`, fan-out timeout and the budget mapped to `ServiceError`, HyDE and RAG Fusion suppression, `search_multi` telemetry on success and `search` on every error entry (the multi-path factory is unchanged: no doc ids, no filter flags) #backend-role
     - Use Cases · 5.5h
     - needs BE-7 · completes S3, S4, S10, S12, S16, S29, S30, S31, S33, S34
     - Tests

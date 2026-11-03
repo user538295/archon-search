@@ -1,13 +1,15 @@
-"""``SearchService``: the one implementation of a search that every interface shares (single-collection path).
+"""``SearchService``: the one implementation of a search that every interface shares (single and multi collection).
 
-A search runs the canonical flow once: normalise and validate the command, check the collection name and look the
-collection up in the caller's namespace, select the collection's embedder through the cache (waiting at most
-:data:`_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS`, then degrading to full-text-only), warm the models, resolve HyDE and RAG
-Fusion, run the pipeline under the search budget and derive the response fields once.  Every failure is a
-:class:`ServiceError` (a multi-collection command is the one exception until that path lands: ``NotImplementedError``);
-nothing transport-specific is accepted or raised (``CancelledError`` is never swallowed, so a client abort still cancels
-the search and its provider call).  Each outcome is recorded once through the existing ``TelemetryEntry`` factories, and each
-failure is logged here with its exception, because a :class:`ServiceError` carries none.
+A search runs the canonical flow once: normalise and validate the command, then either check the collection name and look
+the collection up in the caller's namespace and select its embedder through the cache (waiting at most
+:data:`_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS`, then degrading to full-text-only) -- the single path -- or fan out over
+``collections`` with the pipeline's global embedder (a model-mismatched collection is excluded with its reason, never an
+error) -- the multi path.  Both then warm the models, resolve HyDE and RAG Fusion, run the pipeline under the search budget
+and derive the response fields once.  Every failure is a :class:`ServiceError`; nothing transport-specific is accepted or
+raised (``CancelledError`` is never swallowed, so a client abort still cancels the search and its provider call).  Each
+outcome is recorded once through the existing ``TelemetryEntry`` factories (``search`` for a single success and for every
+error, ``search_multi`` for a multi success), and each failure is logged here with its exception, because a
+:class:`ServiceError` carries none.
 
 The service returns raw pipeline hits plus the derived fields in a :class:`SearchOutcome`; each adapter renders its own
 wire schema from it.
@@ -29,7 +31,12 @@ from archon_search.embedder_cache import EmbedderNotReadyError
 from archon_search.filters import SearchFilters
 from archon_search.observability import StageRecorder, bind_stage_recorder
 from archon_search.observability import correlation_id as _correlation_id
-from archon_search.pipeline import GraphCommunitiesNotBuiltError
+from archon_search.pipeline import (
+    CollectionNotFoundError,
+    FanoutTimeoutError,
+    GraphCommunitiesNotBuiltError,
+    MetadataLookupError,
+)
 from archon_search.services.authz import AuthIdentity
 from archon_search.services.request_hyde import RequestHyDE
 from archon_search.services.search_budget import (
@@ -47,7 +54,7 @@ from archon_search.store import is_valid_collection_name
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
@@ -56,6 +63,7 @@ if TYPE_CHECKING:
     from archon_search.hyde import HyDEGenerator
     from archon_search.pipeline import SearchPipeline, SearchPipelineResult
     from archon_search.rag_fusion import RAGFusionGenerator
+    from archon_search.services.request_hyde import HyDEOutcome
     from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger(__name__)
@@ -74,7 +82,7 @@ logger = logging.getLogger(__name__)
 # keeps running and populates the cache for later requests; this bound never cancels it or touches its registration.
 _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = EMBEDDER_WARMUP_WAIT_SECONDS
 
-# The telemetry label and the stage-timings ``endpoint`` of every search, on every interface.
+# The telemetry label and the stage-timings ``endpoint`` of every search (a multi-path success is labelled ``search_multi``).
 _ENDPOINT: Final = "search"
 _MILLISECONDS_PER_SECOND = 1000.0
 
@@ -106,7 +114,7 @@ class SearchOutcome:
     """What a search leaves the adapter with: the raw hits and every derived field, each computed once.
 
     ``embedding_model`` is the collection's active model on the single path (the configured model when the app has no
-    embedder cache).  ``include_metadata`` is the two request flags
+    embedder cache) and the configured global model on the multi path.  ``include_metadata`` is the two request flags
     ORed once: the hits carry their metadata untouched, and the adapter blanks it unless this is set.  ``applied_filters`` is
     ``None`` when no filter was given, else the filters as parsed.
     """
@@ -150,11 +158,12 @@ class SearchService:
         self._doc_id_hasher = doc_id_hasher
 
     async def search(self, command: SearchCommand, caller: AuthIdentity) -> SearchOutcome:
-        """Search the single collection *command* names inside *caller*'s namespace.
+        """Search the collection (single path) or the ``collections`` (multi path) *command* names inside *caller*'s namespace.
 
         Raises :class:`ServiceError` for every failure; the exception that caused it is attached as ``__cause__`` and never
-        copied into the error's detail.  Raises ``NotImplementedError`` for a ``collections`` command until the multi path
-        is served by this class.
+        copied into the error's detail.  The multi path runs with the pipeline's global embedder: its ``embedding_model`` is
+        the configured one, and a collection pinned to another model is listed in ``excluded_collections`` (all of them
+        excluded is an empty result, not an error).
 
         The outcome is recorded once: a success, a timeout and every internal failure become a telemetry entry (when a writer
         is wired), and each failure is logged here with its exception, never with the query.  Validation-class kinds and
@@ -167,16 +176,34 @@ class SearchService:
             top_k_max=self._config.top_k_max,
             graph_enabled=self._config.graph.enabled,
         )
-        collection = normalized.collection
-        if collection is None:
-            raise NotImplementedError("the multi-collection path is not served by SearchService yet")
+        collection, collections = normalized.collection, normalized.collections
+        if collection is not None:
+            return await self._search_single(normalized, collection, caller.namespace, request_start)
+        if collections is not None:
+            return await self._search_multi(normalized, collections, caller.namespace, request_start)
+        raise AssertionError("normalize_search_command guarantees one selection")
+
+    async def _search_single(
+        self, command: SearchCommand, collection: str, namespace: str, request_start: float
+    ) -> SearchOutcome:
         try:
-            meta = await self._lookup_collection(collection, caller.namespace)
-            outcome = await self._search_with_stage_timings(normalized, collection, caller.namespace, meta)
+            meta = await self._lookup_collection(collection, namespace)
+            outcome = await self._search_with_stage_timings(command, collection, namespace, meta)
         except ServiceError as error:
-            self._report_failure(error, collection, _elapsed_ms(request_start))
+            self._report_failure(error, _single_target(collection), _elapsed_ms(request_start))
             raise
-        self._record_success(normalized, collection, outcome, _elapsed_ms(request_start))
+        self._record_success(command, collection, outcome, _elapsed_ms(request_start))
+        return outcome
+
+    async def _search_multi(
+        self, command: SearchCommand, collections: tuple[str, ...], namespace: str, request_start: float
+    ) -> SearchOutcome:
+        try:
+            outcome = await _map_failures(self._search_collections(command, collections, namespace))
+        except ServiceError as error:
+            self._report_failure(error, _multi_target(collections), _elapsed_ms(request_start))
+            raise
+        self._record_multi_success(collections, outcome, _elapsed_ms(request_start))
         return outcome
 
     async def _search_with_stage_timings(
@@ -189,33 +216,14 @@ class SearchService:
             )
             stages_start = time.perf_counter()
             try:
-                outcome = await self._map_failures(command, collection, namespace, meta)
+                outcome = await _map_failures(self._search_collection(command, collection, namespace, meta))
             except Exception:
                 _log_stage_timings(recorder, stages_start, collection)
                 raise
             _log_stage_timings(recorder, stages_start, collection)
             return outcome
 
-    async def _map_failures(
-        self, command: SearchCommand, collection: str, namespace: str, meta: CollectionMeta
-    ) -> SearchOutcome:
-        try:
-            return await self._search_collection(command, collection, namespace, meta)
-        except ServiceError:
-            raise
-        except EmbedderNotReadyError as exc:
-            raise ServiceError(ServiceErrorKind.EMBEDDER_NOT_READY) from exc
-        except GraphCommunitiesNotBuiltError as exc:
-            raise ServiceError(
-                ServiceErrorKind.GRAPH_COMMUNITIES_NOT_BUILT,
-                GraphCommunitiesNotBuiltError.MESSAGE_TEMPLATE.format(collection=exc.collection),
-            ) from exc
-        except SearchBudgetExceeded as exc:
-            raise ServiceError(ServiceErrorKind.TIMEOUT) from exc
-        except Exception as exc:
-            raise ServiceError(ServiceErrorKind.INTERNAL) from exc
-
-    def _report_failure(self, error: ServiceError, collection: str, latency_ms: float) -> None:
+    def _report_failure(self, error: ServiceError, target: _FailureTarget, latency_ms: float) -> None:
         """Log *error* where its cause is in hand and enqueue its error entry when the kind is recorded."""
         cause = error.__cause__
         kind = error.kind
@@ -227,12 +235,9 @@ class SearchService:
                 exc_info=cause,
             )
         elif kind is ServiceErrorKind.TIMEOUT:
-            logger.error(
-                "search pipeline timed out",
-                extra={"event_type": "search_timeout", "collection": collection},
-            )
+            logger.error("search pipeline timed out", extra={"event_type": "search_timeout", **target.log_extra})
         elif kind is ServiceErrorKind.METADATA_STORE_ERROR:
-            logger.error("search: meta lookup failed for collection %r", collection, exc_info=cause)
+            logger.error("%s", target.metadata_failure_message, exc_info=cause)
         elif kind is ServiceErrorKind.EMBEDDER_NOT_READY:
             logger.warning("search: embedder not ready — %s", cause)
         recorded = error.telemetry
@@ -268,6 +273,22 @@ class SearchService:
             )
 
         self._enqueue(build)
+
+    def _record_multi_success(self, collections: tuple[str, ...], outcome: SearchOutcome, latency_ms: float) -> None:
+        """Enqueue the ``search_multi`` entry: the requested names and counts only (no doc ids, no filter flags)."""
+        excluded_count = len(outcome.excluded_collections)
+        self._enqueue(
+            lambda: TelemetryEntry.from_search_multi_result(
+                collections=list(collections),
+                fanout_count=len(collections) - excluded_count,
+                result_count=len(outcome.results),
+                latency_ms=latency_ms,
+                excluded_count=excluded_count,
+                correlation_id=_correlation_id.get(),
+                rag_fusion_applied=outcome.rag_fusion_applied,
+                rag_fusion_queries_used=outcome.rag_fusion_queries_used,
+            )
+        )
 
     def _enqueue(self, build_entry: Callable[[], TelemetryEntry]) -> None:
         """Build and enqueue one entry; telemetry never breaks a request, a failure is logged by its exception type only."""
@@ -306,24 +327,7 @@ class SearchService:
         # leg alone (S290).  A failed warm-up attempt is not latched: the next call retries it (S283).
         warmup = await warmup_for_search(pipeline, embedder)
         fts_only = warmup.fts_only or selected.cold
-        request_hyde = RequestHyDE.for_request(
-            command.query,
-            requested=command.hyde,
-            rag_fusion=command.rag_fusion,
-            rag_fusion_enabled=self._config.rag_fusion.enabled,
-            graph_mode=command.graph_mode,
-            generator=self._hyde_generator,
-            config=self._config.hyde,
-            timeout=_SEARCH_TIMEOUT_SECONDS,
-        )
-        # Resolved only now that the collection's embedder is known, so the hypothesis lands in that collection's vector
-        # space.  An FTS-only search (a cold embedder, or the global placeholder for a pending load) skips it.
-        try:
-            hyde_outcome = await request_hyde.resolve(embedder, embedder_warm=not fts_only)
-        except EmbedderNotReadyError:
-            raise  # retryable: mapped by the caller
-        except Exception as exc:
-            raise ServiceError(ServiceErrorKind.HYDE_FAILED) from exc
+        hyde_outcome = await self._resolve_hyde(command, embedder, fts_only=fts_only)
         # ``run_within_budget``, not a bare ``asyncio.wait_for``: since 3.11 ``asyncio.TimeoutError`` is the builtin
         # ``TimeoutError`` (an ``OSError``), so a socket ETIMEDOUT raised inside the store would be mapped to a timeout.
         result = await run_within_budget(
@@ -351,6 +355,62 @@ class SearchService:
             hyde_applied=hyde_outcome.applied,
             hyde_warning=hyde_outcome.expansion_warning,
         )
+
+    async def _search_collections(self, command: SearchCommand, collections: tuple[str, ...], namespace: str) -> SearchOutcome:
+        pipeline = self._pipeline
+        # The fan-out embeds with the pipeline's global embedder and excludes every collection pinned to another model, so
+        # the warm-up and HyDE use it too.  ``fts_only`` is whatever the warm-up says: the service never re-derives it.
+        warmup = await warmup_for_search(pipeline)
+        hyde_outcome = await self._resolve_hyde(command, pipeline.global_embedder, fts_only=warmup.fts_only)
+        # Same overall budget as the single path: ``search_many``'s own fan-out timeout bounds the per-collection legs only.
+        result = await run_within_budget(
+            pipeline.search_many(
+                command.query,
+                list(collections),
+                namespace=namespace,
+                query_vector=hyde_outcome.vector,
+                rag_fusion=command.rag_fusion,
+                rag_fusion_generator=self._rag_fusion_generator,
+                rag_fusion_config=self._config.rag_fusion,
+                filters=command.filters,
+                graph_mode=command.graph_mode,
+                scope_filter=command.scope_filter,
+                rerank=warmup.rerank,
+                fts_only=warmup.fts_only,
+            ),
+            timeout=_SEARCH_TIMEOUT_SECONDS,
+        )
+        return _build_outcome(
+            command,
+            result,
+            embedding_model=self._config.embedding_model,
+            hyde_applied=hyde_outcome.applied,
+            hyde_warning=hyde_outcome.expansion_warning,
+        )
+
+    async def _resolve_hyde(self, command: SearchCommand, embedder: Embedder, *, fts_only: bool) -> HyDEOutcome:
+        """Resolve the request's HyDE vector with *embedder*, the one the search embeds with.
+
+        Resolved only once that embedder is known, so the hypothesis lands in the searched vector space.  An FTS-only search
+        (a cold embedder, or a placeholder for a pending load) skips it.  An ``EmbedderNotReadyError`` stays as it is (it is
+        retryable and mapped by the caller); any other failure is ``hyde_failed``.
+        """
+        request_hyde = RequestHyDE.for_request(
+            command.query,
+            requested=command.hyde,
+            rag_fusion=command.rag_fusion,
+            rag_fusion_enabled=self._config.rag_fusion.enabled,
+            graph_mode=command.graph_mode,
+            generator=self._hyde_generator,
+            config=self._config.hyde,
+            timeout=_SEARCH_TIMEOUT_SECONDS,
+        )
+        try:
+            return await request_hyde.resolve(embedder, embedder_warm=not fts_only)
+        except EmbedderNotReadyError:
+            raise
+        except Exception as exc:
+            raise ServiceError(ServiceErrorKind.HYDE_FAILED) from exc
 
     async def _select_embedder(self, meta: CollectionMeta) -> _SelectedEmbedder:
         """The embedder serving the collection, its model name, and whether the load is still pending (cold).
@@ -403,6 +463,50 @@ class _SelectedEmbedder(NamedTuple):
     embedder: Embedder
     model: str
     cold: bool
+
+
+class _FailureTarget(NamedTuple):
+    """What a failure log names: the ``extra`` fields of a timeout and the text of a metadata-store failure."""
+
+    log_extra: dict[str, object]
+    metadata_failure_message: str
+
+
+def _single_target(collection: str) -> _FailureTarget:
+    return _FailureTarget(
+        log_extra={"collection": collection},
+        metadata_failure_message=f"search: meta lookup failed for collection {collection!r}",
+    )
+
+
+def _multi_target(collections: tuple[str, ...]) -> _FailureTarget:
+    return _FailureTarget(
+        log_extra={"collections": list(collections)},
+        metadata_failure_message="multi-collection search: metadata lookup failed",
+    )
+
+
+async def _map_failures(run: Awaitable[SearchOutcome]) -> SearchOutcome:
+    """Await *run*, turning every exception it raises into the one :class:`ServiceError` that describes it."""
+    try:
+        return await run
+    except ServiceError:
+        raise
+    except EmbedderNotReadyError as exc:
+        raise ServiceError(ServiceErrorKind.EMBEDDER_NOT_READY) from exc
+    except GraphCommunitiesNotBuiltError as exc:
+        raise ServiceError(
+            ServiceErrorKind.GRAPH_COMMUNITIES_NOT_BUILT,
+            GraphCommunitiesNotBuiltError.MESSAGE_TEMPLATE.format(collection=exc.collection),
+        ) from exc
+    except (SearchBudgetExceeded, FanoutTimeoutError) as exc:
+        raise ServiceError(ServiceErrorKind.TIMEOUT) from exc
+    except CollectionNotFoundError as exc:
+        raise ServiceError(ServiceErrorKind.NOT_FOUND) from exc
+    except MetadataLookupError as exc:
+        raise ServiceError(ServiceErrorKind.METADATA_STORE_ERROR) from exc
+    except Exception as exc:
+        raise ServiceError(ServiceErrorKind.INTERNAL) from exc
 
 
 def _elapsed_ms(start: float) -> float:
