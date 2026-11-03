@@ -5,9 +5,9 @@ commands complete within timing budgets and produce human-readable output
 (no raw ``CollectionMeta(`` repr, no embedding vectors, etc.).
 
 Server-dependent tests (added in BE-3 and later) require the session-scoped
-``smoke_server`` fixture from ``conftest.py`` (added in BE-2). The only test
-currently in this file — ``test_smoke_marker_in_pyproject`` — is a
-configuration guard that does not require the server fixture.
+``smoke_server`` fixture from ``conftest.py`` (added in BE-2).
+``test_smoke_marker_in_pyproject`` is a configuration guard that does not
+require the server fixture.
 
 Module-level ``pytestmark`` serialises this file on one xdist worker so that
 all smoke tests share the single session-scoped server subprocess.
@@ -602,7 +602,7 @@ def test_e2e_collection_add_wait_against_server(smoke_server, tmp_path) -> None:
 def test_e2e_collection_add_progress_hint(smoke_server, tmp_path) -> None:
     """``archon-search collection add <dir>`` must print the progress hint
     "Track progress with: archon-search jobs status {id}" to stdout (string 2,
-    collection.py:122 — the only approved string not yet asserted by the
+    collection.py:160 — the only approved string not yet asserted by the
     existing ``test_e2e_collection_add_wait_against_server`` test).
     """
     col_dir = tmp_path / "smokehint"
@@ -833,9 +833,9 @@ def test_e2e_sync_wait_all_result_fields_against_server(smoke_server) -> None:
     fields: ``added``, ``removed``, ``unchanged``, ``errors``, ``skipped``,
     ``updated`` (S7, C2).
 
-    Note: the smoke server's ``ARCHON_SEARCH_CONFIG`` file holds only ``[hyde]``,
-    ``[rag_fusion]`` and ``[openai_shim]``, so ``load_config()`` uses defaults elsewhere, where both ``pinned_collections``
-    and ``collections`` are empty lists. ``POST /sync`` therefore calls
+    Note: the smoke server's ``ARCHON_SEARCH_CONFIG`` file (written by ``smoke_server``) holds only
+    ``[hyde]``, ``[rag_fusion]`` and ``[openai_shim]``, so ``load_config()`` uses defaults elsewhere,
+    where both ``pinned_collections`` and ``collections`` are empty lists. ``POST /sync`` therefore calls
     ``SearchCollectionSync.sync([])`` which produces an all-empty
     ``SyncResult`` (nothing to add/remove/update). This test proves the
     CLI-to-server wiring and the 6-field result shape — not the sync

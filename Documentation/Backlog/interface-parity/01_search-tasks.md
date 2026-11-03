@@ -1,7 +1,7 @@
 ---
 feature: Search on one implementation across REST, MCP, OpenAI shim and CLI
 plan: 01_search-team-plan.md
-status: draft        # draft → in-progress → done
+status: in-progress        # draft → in-progress → done
 ---
 
 # 01-SEARCH · Search on one implementation across REST, MCP, OpenAI shim and CLI — Task Breakdown
@@ -530,7 +530,7 @@ A field removed from one surface, or a forbidden import in an adapter, turns CI 
 
 ### Phase 7 · Close-out
 
-- [ ] **T-7** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-7** — Project close-out & acceptance fact-check #tester-role
     - — · 19.0h
     - needs all prior tasks · completes (acceptance gate; S62, S63, S64, S65)
     - Tests

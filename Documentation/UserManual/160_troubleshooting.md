@@ -1,7 +1,7 @@
 **Purpose**: Diagnose common runtime failures.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-10-20 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-11-03 / **Next review**: 2027-07-29
 
 # Troubleshooting
 
@@ -71,6 +71,8 @@ Symptoms: `archon-search collection list` shows no growth in `chunks=`, `GET /st
 
 `POST /search` returns 503 (`code: metadata_store_error`, `service unavailable: metadata store could not be reached`) when the collection-metadata lookup raises. LanceDB unreachable is one cause; metadata-row deserialization errors or a transient store init failure produce the same 503. Check disk space and inspect the log for the logged exception — it is the authoritative cause.
 
+The other search interfaces answer the same error class in their own shape. The MCP `search` tool answers `{"error": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"}` for one `collection` and for `collections` alike. The OpenAI shim answers `503` in the OpenAI envelope (`{"error": {"message": "Service temporarily unavailable.", "type": "server_error", …}}`, no `metadata_store_error` code) when the lookup of the one collection fails, and also when the lookup of the namespace's collection list fails for the model `archon-search`. `archon-search search` prints the REST answer as `Error: <detail>` and exits `1`. With telemetry on, a failed metadata lookup is recorded as an `internal_error` entry on REST, MCP and the shim, for one collection and for `collections` alike; the one exception is the shim's own failed lookup of the namespace's collection list, which is only logged. The cause is in the server log on every interface.
+
 ## Symptom: 504 from `/route`
 
 `/route` has a hard timeout (~30 s). A 504 means routing did not complete in time — typically model load on the first request after start, or contention from concurrent ingest. Retry; if persistent, check CPU pressure. #Unverified (tuning guidance is operational)
@@ -89,7 +91,7 @@ A plain `pip install archon-search` or `uv tool install archon-search` on Linux 
 
 ## Symptom: graph search returns 422 — communities not built
 
-`POST /search` with `graph_mode=local` or `graph_mode=global` returns HTTP **422** with `{"detail": {"code": "graph_communities_not_built", "message": "<collection>"}}`. The pipeline raised `GraphCommunitiesNotBuiltError`: the collection's Leiden communities have not been built, and `local`/`global` retrieval requires them.
+`POST /search` with `graph_mode=local` or `graph_mode=global` returns HTTP **422** with `{"detail": {"code": "graph_communities_not_built", "message": "No community representatives found for collection '<collection>'. Run community detection first."}}`. The pipeline raised `GraphCommunitiesNotBuiltError`: the collection's Leiden communities have not been built, and `local`/`global` retrieval requires them.
 
 1. **Build communities** for the collection, then retry:
    ```bash
@@ -102,10 +104,10 @@ See [`65_graph_search.md`](./65_graph_search.md).
 
 ## Symptom: `graph_mode=ppr` silently behaves like normal hybrid search
 
-`graph_mode=ppr` is not an error path — when no query entity matches the collection graph, the Personalised PageRank walk cannot seed itself and the pipeline **falls back to hybrid search** transparently (HTTP 200, results returned). The `ppr_entities_matched` field on the response is `0` in this case (and also when no graph store / PPR walker is configured, or when PPR chunks are all ACL-filtered).
+`graph_mode=ppr` is not an error path — when no query entity matches the collection graph, the Personalised PageRank walk cannot seed itself and the pipeline **falls back to hybrid search** transparently (HTTP 200, results returned). The `ppr_entities_matched` field on the response is `0` in this case (and also when no graph store / PPR walker is configured). When entities matched but the walk's chunks are missing from the store or are all removed by the glob or ACL filters, the search falls back to hybrid too, and `ppr_entities_matched` keeps the matched count (`> 0`). While the query embedder is still cold, the search runs on the FTS leg alone and drops `graph_mode`: `ppr_entities_matched` is `null` and `graph_expansion_applied` is `false` even when entities match.
 
 1. If you expected graph-aware ranking, confirm the graph is populated: entities are extracted only after ingest with `[graph].enabled = true`, and **existing collections do not retroactively gain graph edges** — re-ingest is the only path.
-2. Check `ppr_entities_matched` in the response to distinguish a real PPR walk (`> 0`) from a hybrid fallback (`0`).
+2. Check `ppr_entities_matched` in the response: `0` means no entity matched (or no graph store is configured), `null` means the PPR path did not run (cold embedder), and `> 0` means entities matched — the results are the PPR blend unless the walk's chunks were filtered out, in which case they are plain hybrid.
 
 ## Symptom: 422 — `scope_filter is not supported with graph_mode`
 
@@ -175,7 +177,7 @@ All three wordings are sanitized constants in `archon_search/graph_extractor.py`
 
 ## Symptom: HyDE or RAG Fusion not working — "expansion failed" in response
 
-`POST /search` with `hyde=true` or `rag_fusion=true` returns a non-null `expansion_warning` (and `expansion_used: false` — expansion fell back to the original query embedding).
+`POST /search` (and the MCP `search` tool and `archon-search search`) with `hyde=true` returns `hyde_applied: false` and `expansion_warning: "HyDE expansion failed"` — the original query was searched. With `rag_fusion=true` a failed provider call returns no warning: read `rag_fusion_attempted: true` with `rag_fusion_applied: false` and `rag_fusion_queries_used: 0` instead. `expansion_warning` is set for RAG Fusion only when the variant generator raises or embedding the variants fails (`"RAG Fusion timed out"`, `"RAG Fusion expansion failed"`).
 
 1. **Check `GET /status`** — with `[hyde] enabled = true` or `[rag_fusion] enabled = true`, the response includes `hyde.key_available` / `rag_fusion.key_available`. A `false` value means the provider's required key is unset: `ANTHROPIC_API_KEY` for `provider = "anthropic"` (default), `OPENAI_API_KEY` for `provider = "openai"`. `ollama`, `llama_cpp` and `claude_cli` report `key_available: true` (no API key) but that does **not** confirm Ollama or llama-server is reachable or the `claude` CLI is logged in.
 2. **Managed service**: put the key in `<data-dir>/.secrets.env` (`~/.archon-search/.secrets.env` by default; `ANTHROPIC_API_KEY=sk-...` or `OPENAI_API_KEY=sk-...`), then restart (`archon-search stop && archon-search start`). The wizard creates this file (mode 600) when HyDE/RAG-Fusion is enabled, or when the graph enrichment or collection description provider it wrote is `anthropic` or `openai`.

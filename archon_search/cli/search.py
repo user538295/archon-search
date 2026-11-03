@@ -47,6 +47,38 @@ def _error_message(resp: httpx.Response) -> str:
     return f"Error: {message.strip()}{_retry_after_note(resp)}"
 
 
+def _is_list_of_objects(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, dict) for item in value)
+
+
+def _is_printable_score(score: object) -> bool:
+    """True for a JSON number ``f"{score:.4f}"`` can format (an int too large for a float cannot)."""
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        return False
+    try:
+        float(score)
+    except OverflowError:
+        return False
+    return True
+
+
+def _shape_problem(payload: dict) -> str | None:
+    """What is wrong with the shape of a 200 body the plain output reads, or ``None`` when it can be printed.
+
+    A missing or ``null`` ``results`` or ``excluded_collections`` is an empty list; any other non-list is a problem.
+    """
+    results = payload.get("results")
+    results = [] if results is None else results
+    if not _is_list_of_objects(results):
+        return "results is not a list of objects"
+    if not all(_is_printable_score(result.get("score", 0.0)) for result in results):
+        return "a result score is not a number"
+    excluded = payload.get("excluded_collections")
+    if not _is_list_of_objects([] if excluded is None else excluded):
+        return "excluded_collections is not a list of objects"
+    return None
+
+
 def _excerpt(text: str) -> str:
     """*text* on one line: controls cleaned, whitespace collapsed, cut at ``_EXCERPT_MAX_CHARS``."""
     return " ".join(_clean(text).split())[:_EXCERPT_MAX_CHARS]
@@ -211,6 +243,10 @@ def search(
     if json_flag:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
+    problem = _shape_problem(payload)
+    if problem is not None:
+        click.echo(f"Error: server returned unexpected response: {problem}", err=True)
+        raise SystemExit(1)
     results = payload.get("results") or []
     if not results:
         click.echo("No results found.")

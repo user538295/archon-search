@@ -1,7 +1,7 @@
 **Purpose**: Show the same integration flows as the Python guide, in TypeScript against the standard `fetch` API, with types matching `archon_search/server/schemas.py`.
 **Audience**: TypeScript / Node engineers integrating `archon-search` from another process or a browser-adjacent runtime.
 **Status**: Draft
-**Last reviewed**: 2026-05-20 / **Next review**: 2027-05-20
+**Last reviewed**: 2026-11-03 / **Next review**: 2027-05-20
 
 # REST Client — TypeScript (`fetch` / `axios`)
 
@@ -70,9 +70,10 @@ export interface DeleteResponse {
 export interface SearchRequest {
   collection: string;
   query: string;
-  // Accepted (server bounds it to [1, 100]) but ignored at runtime —
-  // see BREAKING.md. Pipeline uses `[database] top_k_return` from config.
-  top_k?: number;
+  // The number of results. Omitted or null, the server uses
+  // `[database] top_k_return`; the server rejects values below 1 and above
+  // `[search].top_k_max` (default 100) with HTTP 422. See BREAKING.md.
+  top_k?: number | null;
 }
 
 export interface SearchResult {
@@ -250,8 +251,8 @@ export class ArchonError extends Error {
    *   - `401` — body is empty (auth middleware writes no body).
    *   - `422` — `detail` is a list of structured validation errors, not a string.
    *   - `POST /search` `500` (pipeline-stage failure) — body is plain text
-   *     `Internal Server Error` (Content-Type `text/plain`) emitted by
-   *     Starlette's `ServerErrorMiddleware`, not a JSON envelope.
+   *     `Internal Server Error` (Content-Type `text/plain`) returned by the
+   *     route as a `PlainTextResponse`, not a JSON envelope.
    * Callers that need the raw bytes for those cases should read `this.body`
    * directly and branch on `this.status` (and Content-Type) first. */
   parsedDetail(): string | null {
@@ -297,7 +298,7 @@ for (const hit of results) {
 }
 ```
 
-`top_k` is accepted but ignored — set `[database] top_k_return` in `archon-search.toml`. See `BREAKING.md`.
+`top_k` is the number of results: omit it (or send `null`) to get the server's `[database] top_k_return`, or set it between 1 and the operator's `[search].top_k_max` (default `100`); a value outside that range is an HTTP `422`. See `BREAKING.md`.
 
 ## Flow: register a collection and wait for ingest
 
@@ -336,4 +337,4 @@ If you already use `axios`, build an instance with `baseURL` and an `Authorizati
 - [`03_rest_client_python.md`](./03_rest_client_python.md) — same flows in Python.
 - [`06_error_handling.md`](./06_error_handling.md) — status codes and error envelopes.
 - [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) — full endpoint reference.
-- [`../../BREAKING.md`](../../BREAKING.md) — `top_k` deprecation and other contract changes.
+- [`../../BREAKING.md`](../../BREAKING.md) — `top_k` and other contract changes.

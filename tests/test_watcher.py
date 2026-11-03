@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -772,15 +773,25 @@ class TestWatcherManager:
         loop.close()
 
 
+# macOS FSEvents delivers a file event late (0.4-1.4 s measured for one write) and only sees writes made after its stream
+# exists, which the emitter thread creates after ``start()`` returns.  The test therefore re-writes the file until the
+# callback ran: a missed event costs one more interval, not a failure; the deadline only bounds a watcher that is broken.
+_EVENT_DELIVERY_DEADLINE_SECONDS = 15.0
+_REWRITE_INTERVAL_SECONDS = 2.0
+
+
 @pytest.mark.integration
 def test_collection_watcher_integration(tmp_path: Path):
-    """Real watcher: write a file, verify on_change is called within 0.5s."""
+    """Real watcher: write a file, verify on_change is called once the OS delivers the event."""
     calls: list[str] = []
+
+    loop = asyncio.new_event_loop()
+    called = asyncio.Event()
 
     async def on_change(collection_name: str) -> None:
         calls.append(collection_name)
+        called.set()
 
-    loop = asyncio.new_event_loop()
     watcher = CollectionWatcher(
         collection_name="intcol",
         source_path=tmp_path,
@@ -790,17 +801,20 @@ def test_collection_watcher_integration(tmp_path: Path):
     )
     watcher.start()
 
+    async def _write_until_called() -> None:
+        deadline = loop.time() + _EVENT_DELIVERY_DEADLINE_SECONDS
+        attempt = 0
+        while not called.is_set() and loop.time() < deadline:
+            attempt += 1
+            (tmp_path / "test.txt").write_text(f"hello {attempt}")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(called.wait(), timeout=_REWRITE_INTERVAL_SECONDS)
+
     try:
-        # Write a file to trigger the watcher
-        (tmp_path / "test.txt").write_text("hello")
-
-        # Run the event loop to process the coroutine
-        async def _wait():
-            await asyncio.sleep(0.5)
-
-        loop.run_until_complete(_wait())
+        loop.run_until_complete(_write_until_called())
     finally:
         watcher.stop()
         loop.close()
 
-    assert calls == ["intcol"]
+    assert calls, f"on_change was not called within {_EVENT_DELIVERY_DEADLINE_SECONDS}s"
+    assert set(calls) == {"intcol"}

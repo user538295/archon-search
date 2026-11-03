@@ -1,8 +1,8 @@
 **Purpose**: Give a medior engineer a load-bearing mental model of `archon-search` end to end.
 **Audience**: Engineers onboarding to `archon-search`; reviewers of cross-cutting changes.
 **Status**: Draft
-**Last reviewed**: 2026-06-24
-**Next review**: 2026-08-20
+**Last reviewed**: 2026-11-03
+**Next review**: 2027-02-03
 
 # System Architecture Overview
 
@@ -106,7 +106,7 @@ flowchart LR
       Q --> E2[Embedder.embed_one]
       E2 --> SH[SearchStore.hybrid_search_with_trace<br/>RRF over vector + FTS]
       SH --> ACL[acl.apply_acl_filter]
-      ACL --> R2[Reranker.rerank_candidates<br/>cross-encoder, top_k_return]
+      ACL --> R2[Reranker.rerank_candidates<br/>cross-encoder, top_k or top_k_return]
       R2 --> OUT[SearchResult list]
     end
 
@@ -124,7 +124,7 @@ Stages are independent classes wired by the orchestrator. The ordering `parser -
 
 ### Two-stage hybrid retrieval
 
-`SearchStore.hybrid_search_with_trace` performs vector ANN and FTS, fuses them with Reciprocal Rank Fusion, returns the fused candidates (the pipeline asks each leg for `max(top_k_retrieve * 3, 20)`). The cross-encoder reranker then narrows to `top_k_return`. ACL filtering sits between the two stages so the reranker never wastes work on chunks the namespace cannot see.
+`SearchStore.hybrid_search_with_trace` performs vector ANN and FTS, fuses them with Reciprocal Rank Fusion, returns the fused candidates (the pipeline asks each leg for `max(top_k_retrieve * 3, 20)`, raised to at least `top_k` when the request gives one). The cross-encoder reranker then narrows to `top_k_return`, or to the request's `top_k` when given. ACL filtering sits between the two stages so the reranker never wastes work on chunks the namespace cannot see.
 
 ### Multi-collection routing via centroid pre-ranking (and optional hybrid blend)
 

@@ -1,7 +1,7 @@
 **Purpose**: Procedure for upgrading and rolling back an `archon-search` deployment — how to read CalVer, run schema migrations, and where breaking changes and release notes are recorded.
 **Audience**: SREs and sysadmins responsible for the lifecycle of an `archon-search` install.
 **Status**: Draft
-**Last reviewed**: 2026-10-25
+**Last reviewed**: 2026-11-03
 **Next review**: 2027-07-29
 
 # Upgrading
@@ -183,11 +183,11 @@ If nothing touched the on-disk data (no rewrite migration applied, no storage-re
 
 ### MCP `search` response shape
 
-The relevant `BREAKING.md` entry changes the MCP `search` tool from a bare list to `{"results": [...], "acl_filtered": bool}`. Operator action: notify MCP consumers; no server-side migration needed.
+The relevant `BREAKING.md` entry changes the MCP `search` tool from a bare list to `{"results": [...], "acl_filtered": bool}`. Operator action: notify MCP consumers; no server-side migration needed. The same release gives the tool REST's response fields, a per-result `acl_gate` behind a new `acl_context` argument and a `top_k` argument, and removes its default collection: a call must name `collection` or `collections`. Agents that relied on the implicit default must pass it explicitly.
 
-### REST `/search` per-request `top_k`
+### REST `/search`, MCP `search` and CLI `top_k`
 
-Where a release ignores the per-request `top_k` field in `POST /search`, set `[database].top_k_return` in `archon-search.toml` to the desired value before upgrading.
+A request `top_k` now sets the number of results on `POST /search`, the MCP `search` tool and `archon-search search --top-k`; omitted or `null`, the count stays `[database].top_k_return`, and `[search].top_k_max` (default `100`) is the ceiling a request may not exceed. Operator action: none for REST, MCP and the CLI; if your file sets `[openai_shim].top_k`, see the last two sentences. A client that used to send a `top_k` the server ignored now gets that many results, so tell its owners. The OpenAI shim ignores a request `top_k`: its result count is the optional `[openai_shim].top_k` key (unset keeps `[database].top_k_return`). If your file sets that key, it must now be at most `[search].top_k_max`, otherwise the server does not start (`ConfigError` at config load); lower the key or raise `[search].top_k_max` before upgrading.
 
 ### C2 — multilingual retrieval
 

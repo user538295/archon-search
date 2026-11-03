@@ -4,6 +4,7 @@ from __future__ import annotations
 from archon_search._types import SearchResult
 from archon_search.server.routes_search import SearchRequest, SearchResultSchema
 from archon_search.server.schemas import AclGateSchema
+from archon_search.services.search_service import AclGate, SearchHit
 
 # ---------------------------------------------------------------------------
 # AclGateSchema field/type tests
@@ -86,57 +87,25 @@ def test_search_result_schema_acl_gate_absent_by_default() -> None:
         score=0.9,
         source_path="/doc.md",
     )
-    schema = SearchResultSchema.from_result(r, include_acl_gate=False)
+    schema = SearchResultSchema.from_result(r)
     assert schema.acl_gate is None
 
 
-def test_search_result_schema_acl_gate_built_when_requested() -> None:
-    """SearchResultSchema.acl_gate is populated when include_acl_gate=True."""
+def test_search_result_schema_from_hit_carries_the_gate_the_service_built() -> None:
+    """from_hit renders the service's AclGate as the wire acl_gate; a hit without one has none."""
     r = SearchResult(
         doc_id="a" * 64,
         chunk_id="a" * 64 + "-000001",
         text="hello",
         score=0.9,
         source_path="/doc.md",
-        acl=["ns-a"],
-        acl_source="frontmatter",
-        acl_sidecar_path=None,
-        acl_warning=[],
     )
-    schema = SearchResultSchema.from_result(r, include_acl_gate=True)
-    assert schema.acl_gate is not None
-    assert schema.acl_gate.allowed_principals == ["ns-a"]
-    assert schema.acl_gate.source == "frontmatter"
-    assert schema.acl_gate.sidecar_path is None
-    assert schema.acl_gate.warnings == []
+    gate = AclGate(allowed_principals=["ns-a"], source="sidecar", sidecar_path="doc.md.acl", warnings=["w"])
 
+    with_gate = SearchResultSchema.from_hit(SearchHit(result=r, acl_gate=gate))
+    without_gate = SearchResultSchema.from_hit(SearchHit(result=r, acl_gate=None))
 
-def test_search_result_schema_acl_gate_warnings_always_list() -> None:
-    """acl_gate.warnings is always a list, never None, even when acl_warning is empty."""
-    r = SearchResult(
-        doc_id="a" * 64,
-        chunk_id="a" * 64 + "-000001",
-        text="hello",
-        score=0.9,
-        source_path="/doc.md",
-        acl_warning=[],
+    assert with_gate.acl_gate == AclGateSchema(
+        allowed_principals=["ns-a"], source="sidecar", sidecar_path="doc.md.acl", warnings=["w"]
     )
-    schema = SearchResultSchema.from_result(r, include_acl_gate=True)
-    assert schema.acl_gate is not None
-    assert isinstance(schema.acl_gate.warnings, list)
-
-
-def test_search_result_schema_acl_source_unknown_coerced_to_none() -> None:
-    """An unrecognized acl_source value is coerced to None (no 500 on bad DB data)."""
-    r = SearchResult(
-        doc_id="a" * 64,
-        chunk_id="a" * 64 + "-000001",
-        text="hello",
-        score=0.9,
-        source_path="/doc.md",
-        acl_source="legacy_value",  # out-of-enum
-        acl_warning=[],
-    )
-    schema = SearchResultSchema.from_result(r, include_acl_gate=True)
-    assert schema.acl_gate is not None
-    assert schema.acl_gate.source is None  # coerced, not raised
+    assert without_gate.acl_gate is None

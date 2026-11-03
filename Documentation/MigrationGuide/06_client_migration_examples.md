@@ -1,4 +1,4 @@
-**Purpose**: Concrete before/after diffs for client code affected by the queued `[next release]` entries in `BREAKING.md` — MCP `search` response shape (NR-1), REST `/search` and CLI `top_k` (NR-2) and the 2026-10-25 security and operations batch (NR-43 … NR-47): keys and admin scope, graph view tokens, ingest paths and limits, export and import.
+**Purpose**: Concrete before/after diffs for client code affected by the queued `[next release]` entries in `BREAKING.md` — MCP `search` response shape (NR-1), REST `/search` and CLI `top_k` (NR-2), MCP `search` `top_k` (NR-84), the OpenAI shim's result count (NR-85) and the 2026-10-25 security and operations batch (NR-43 … NR-46): keys and admin scope, graph view tokens, ingest paths and limits, export and import.
 **Audience**: Developers maintaining REST or MCP client integrations against `archon-search`.
 **Status**: Draft
 **Last reviewed**: 2026-11-03
@@ -12,7 +12,7 @@ These examples cover the breaking changes queued in [`/BREAKING.md`](../../BREAK
 
 1. **`BREAKING.md` defines the contract; this doc shows the diff.** Names and shapes below mirror the authoritative source — do not paraphrase.
 2. **Switch in one step.** There is no shim period; when the tag lands, both shapes do not coexist.
-3. **Symmetry across REST and MCP applies only where stated.** REST `/search` and MCP `search` are aligned on response shape (NR-1) and on `top_k` (NR-2 and NR-84); the OpenAI shim differs: it ignores a request `top_k` and takes its count from `[openai_shim].top_k` (NR-85).
+3. **Symmetry across REST and MCP applies only where stated.** REST `/search` and MCP `search` are aligned on the response field set (NR-1, NR-76) and on `top_k` (NR-2 and NR-84); the OpenAI shim differs: it ignores a request `top_k` and takes its count from `[openai_shim].top_k` (NR-85).
 
 ## NR-1 — MCP `search` response shape
 
@@ -88,6 +88,7 @@ New shape (current `main`, will be tagged in the next release):
 **Source**: [BREAKING.md → "[next release] — REST `POST /search` and CLI `archon-search search --top-k`: `top_k` sets the number of results, `top_k: null` is valid, and the OpenAPI type of `top_k` changes (2026-11-03)"](../../BREAKING.md). **Code**: `archon_search/server/routes_search.py`, `archon_search/services/search_service.py`, `archon_search/cli/search.py`. The same release gives MCP `search` a `top_k` argument (NR-84, [BREAKING.md → "[next release] — MCP `search` takes `top_k`, the number of results; values below 1 and above `[search].top_k_max` are `validation_error` (2026-11-03)"](../../BREAKING.md)) and makes `[openai_shim].top_k` the OpenAI shim's count (NR-85, [BREAKING.md → "[next release] — OpenAI-compatible shim: `[openai_shim].top_k` is honored as the shim's result count, and a value above `[search].top_k_max` fails config load (2026-11-03)"](../../BREAKING.md)).
 
 Before: the request's `top_k` was validated and then ignored; every search returned `[database].top_k_return` results (default `5`).
+
 After: `top_k` is the number of results. Omitted or `null`, the count is still `[database].top_k_return`. `0` or a negative number is a `422` (the standard validation-error list); a value above `[search].top_k_max` (default `100`) is a `422` with `{"detail": "top_k <n> exceeds operator-configured maximum of <max>"}`.
 
 The OpenAPI type of `SearchRequest.top_k` changes from an integer with `minimum` 1 and `default` 5 to `anyOf` an integer with `minimum` 1 and `null`, with no default. A client generated from `GET /openapi.json` must be regenerated, or its type stub changed to an optional integer that allows `null`.
@@ -141,7 +142,7 @@ A client that sent a `top_k` the server ignored now gets that many results. Remo
 
 ### MCP client
 
-MCP `search` accepts `top_k` too (NR-84): an optional integer, omitted or `null` for the server's `[database].top_k_return`. A value below 1 or above `[search].top_k_max` answers `validation_error` with REST's text. `search_with_context` takes no `top_k`.
+MCP `search` accepts `top_k` too (NR-84): an optional integer, omitted or `null` for the server's `[database].top_k_return`. A value below 1 answers `validation_error` with `top_k must be at least 1` and a value above `[search].top_k_max` answers `validation_error` with REST's text `top_k <n> exceeds operator-configured maximum of <max>`. `search_with_context` takes no `top_k`.
 
 ### OpenAI shim
 

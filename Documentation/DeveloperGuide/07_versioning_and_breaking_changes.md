@@ -1,7 +1,7 @@
 **Purpose**: Explain `archon-search`'s versioning scheme, how to read `BREAKING.md`, and how to pin a client across releases.
 **Audience**: Engineers maintaining a long-lived integration who need to know what guarantees they have between two `archon-search` versions.
 **Status**: Draft
-**Last reviewed**: 2026-10-12 / **Next review**: 2027-10-12
+**Last reviewed**: 2026-11-03 / **Next review**: 2027-10-12
 
 # Versioning and Breaking Changes
 
@@ -40,7 +40,7 @@ Each section heading is the release name. Each entry has the shape:
 Two illustrative entries — **not** the full list. `BREAKING.md` carries 150 `### ` headings, all of them `[next release]`; the two below are the ones `MigrationGuide/03_breaking_changes_index.md` indexes as NR-1 and NR-2 (that index's NR rows cover only some of the headings). Never treat this section, or that index, as an inventory: read `BREAKING.md` itself before an upgrade.
 
 - **MCP `search` response shape.** Now `{"results": [...], "acl_filtered": bool}`; previously a bare list. Update consumers to read `response["results"]`. The response has since gained more fields; see the `BREAKING.md` entry on the MCP `search` response fields.
-- **REST `/search` `top_k` is real.** `top_k` is the number of results (omitted or `null` keeps `[database].top_k_return`; `0` or a negative number and a value above `[search].top_k_max` are `422`). The OpenAPI type of `top_k` is now an integer of at least 1 or `null`, with no default; `archon-search search` gains `--top-k`. See the `BREAKING.md` entry on REST `POST /search` and CLI `--top-k`.
+- **REST `/search` `top_k` is real.** `top_k` is the number of results (omitted or `null` keeps `[database].top_k_return`; `0` or a negative number and a value above `[search].top_k_max` are `422`). The OpenAPI type of `top_k` is now an integer of at least 1 or `null`, with no default; the new `archon-search search` command takes `--top-k`. See the `BREAKING.md` entry on REST `POST /search` and CLI `--top-k`.
 
 When upgrading, diff `BREAKING.md` between the version you have and the version you want; everything in that diff applies to you.
 

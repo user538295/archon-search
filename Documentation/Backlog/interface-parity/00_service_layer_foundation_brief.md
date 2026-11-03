@@ -4,6 +4,8 @@ Slice S0 of the [interface parity roadmap](./roadmap.md). Every later slice brie
 
 ## Problem
 
+This section is the state when S0 started, kept as written; line references, sizes and module locations are those of that time and have since moved (see the amendments in the Contract section).
+
 The same feature is implemented once per interface. The core is shared (`SearchPipeline.search` and `search_many` are called by REST, MCP and the OpenAI shim), but everything above it is duplicated: validation, HyDE and RAG Fusion resolution, warm-up, the search budget, filter building, error mapping, telemetry and response shaping. Evidence, as of 2026-10-30:
 
 - Search exists three times: `server/routes_search.py:301-695`, `server/mcp.py:520-865` and `server/routes_openai_shim.py` (~250-345). A step-by-step comparison found 20 behavioral differences and a dozen duplicated literals (see [Brief 01](./01_search_brief.md)).
@@ -53,8 +55,8 @@ flowchart LR
 
 **C2 — Service shape.**
 
-- One service class per feature group (for example `SearchService`). Constructor-injected dependencies, no module-level globals, built once at startup and reachable from `app.state` for REST and passed to the MCP factory.
-- Each method is async and takes a command plus the caller, and returns a result: `await service.search(command, caller) -> SearchResult`.
+- One service class per feature group (for example `SearchService`). Constructor-injected dependencies, no module-level globals. There is no service built once at startup: `services/container.py` is the one factory (`build_search_service`, and `build_search_service_from_state`). REST and the OpenAI shim build the service per request from `request.app.state` (so an object swapped on the state is seen by the next request); the MCP factory builds it lazily on the first `search` call from its own arguments (amended after S1).
+- Each method is async and takes a command plus the caller, and returns a result: `await service.search(command, caller) -> SearchOutcome`. The result is `SearchOutcome`, not `SearchResult`, because `archon_search/_types.py` already defines the per-chunk `SearchResult` (amended after S1).
 - A service never receives a request object, an `HTTPException`, a FastMCP `Context` or a Click context.
 
 **C3 — Commands, results and names.**
@@ -70,11 +72,11 @@ flowchart LR
 
 **C5 — Errors.**
 
-- Services raise `ServiceError` subclasses. Each carries a stable `code`, a fixed sanitized `detail` constant (never `str(exc)`, per `140_error_handling_strategy.md` principle 6 and `tests/test_no_wire_str_exc.py`) and the telemetry `ErrorKind` it maps to.
+- Services raise `ServiceError`, one class with a `kind` (a `ServiceErrorKind` member), not subclasses. Each carries a stable `code`, a sanitized `detail` (fixed for the kinds that have one, built from typed data otherwise, never `str(exc)`, per `140_error_handling_strategy.md` principle 6 and `tests/test_no_wire_str_exc.py`) and, for the kinds that are recorded, the telemetry outcome (`status` and `error_kind` for `TelemetryEntry.from_error`) it maps to; the cause rides on `__cause__` (amended after S1).
 - Services translate core exceptions (`CollectionNotFoundError`, `MetadataLookupError`, `FanoutTimeoutError`, `EmbedderNotReadyError`, `GraphCommunitiesNotBuiltError`, ...) once. Adapters never catch core exceptions.
-- Each adapter has exactly one mapping table: REST (error kind to HTTP status, including the existing coded and plain body shapes), MCP (`{"error", "code"}` dict), CLI (HTTP status to message and exit code). A slice that changes a wire shape records it in `BREAKING.md`.
+- Each adapter has exactly one mapping table: REST (error kind to HTTP status, including the existing coded and plain body shapes; `_error_response` in `routes_search.py`), the OpenAI shim (error kind to its OpenAI error envelope; `_error_response` in `routes_openai_shim.py`), MCP (`{"error", "code"}` dict, the same for every kind), CLI (an HTTP client of REST: it prints the server's `detail` as an `Error:` line on stderr and exits 1). A slice that changes a wire shape records it in `BREAKING.md`.
 
-**C6 — What belongs in the service.** Input validation and bounds, defaults and limits, collection and namespace resolution, embedder selection and warm-up, HyDE and RAG Fusion resolution, the budget and timeout, calls into the core, derived fields, telemetry for every outcome (including timeouts and internal errors, which MCP skips today), and logging.
+**C6 — What belongs in the service.** Input validation and bounds, defaults and limits, collection and namespace resolution, embedder selection and warm-up, HyDE and RAG Fusion resolution, the budget and timeout, calls into the core, derived fields, telemetry for every outcome (including timeouts and internal errors, which MCP skipped before S1), and logging.
 
 **C7 — What belongs in an adapter.** Parsing the transport shape into a command (REST Pydantic models, MCP function signatures, Click options), calling the service, rendering the result (REST JSON, MCP dict, CLI text or `--json`, OpenAI text and SSE) and mapping errors through its table. An adapter contains no business branching and does not recompute anything the service derives.
 
@@ -86,7 +88,7 @@ flowchart LR
 
 **C11 — Boundary enforcement.** An AST test asserts C1. Function-local and `TYPE_CHECKING` imports count like module-level ones. Current violations sit in an explicit allowlist keyed by (importing file, imported module, import scope: module-level, function-local or type-checking-only); the test fails on a new violation and on a stale allowlist entry. The two permanent exceptions (`server/app.py` as composition root, the `run_server` import in `cli/serve.py`) are hard-coded in the test, not allowlist entries. Each slice deletes the entries it resolves, so the list only shrinks.
 
-**C12 — Parity registry.** A registry in `tests/parity/` lists every capability: its service method, its REST route, its MCP tool, its CLI command, and a waiver (with reason) for each interface that lacks it. A test introspects the live REST app routes, the real FastMCP tool list and the Click command tree, and fails when an interface exposes something the registry does not claim, when a capability claims a surface that does not exist, when a gap has no waiver, or when a pending waiver names no slice. Pending slices carry a waiver that names the slice. Field-level parity (every command field exposed on every interface) is evaluated in S1.
+**C12 — Parity registry.** A registry in `tests/parity/` lists every capability: its service method, its REST route, its MCP tool, its CLI command, and a waiver (with reason) for each interface that lacks it. A test introspects the live REST app routes, the real FastMCP tool list and the Click command tree, and fails when an interface exposes something the registry does not claim, when a capability claims a surface that does not exist, when a gap has no waiver, or when a pending waiver names no slice. Pending slices carry a waiver that names the slice. Field-level parity (every command field exposed on every interface) is checked from S1 on, by an explicit mapping rather than a name match: `tests/parity/field_parity.py` compares the command's fields with REST's request model, MCP's input schema and the Click parameters (and the service result's fields with the REST and MCP response models), `tests/parity/field_registry.py` holds the mapping (REST's nested `filters` against the flat MCP and CLI filter parameters included) and a field a surface does not carry needs a waiver naming that surface (amended after S1).
 
 **C13 — Tests.**
 
@@ -103,7 +105,7 @@ flowchart LR
 S0 ships only what has a real consumer on day one:
 
 1. **`archon_search/services/` package** with the modules that search, search-with-context and explain all share, moved out of `server/` with every caller and test updated:
-   - `server/_search_budget.py` → `services/search_budget.py` (importers: `mcp.py`, `routes_search.py`, `routes_explain.py`, `routes_openai_shim.py`, `services/request_hyde.py`). The OpenAI shim imports only this module, not HyDE or validators.
+   - `server/_search_budget.py` → `services/search_budget.py` (importers: `mcp.py`, `routes_search.py`, `routes_explain.py`, `routes_openai_shim.py`, `services/request_hyde.py`). (S0-era; removed by S1: the shim imports none of the guarded modules since S1, `tests/test_adapter_thinness.py`.) The OpenAI shim then imported only this module, not HyDE or validators.
    - `server/_hyde.py` → `services/request_hyde.py` (the root `archon_search/hyde.py` already exists, hence the name; importers: `mcp.py`, `routes_search.py`, `routes_explain.py`).
    - `server/_validators.py` → `services/validators.py` (same three importers).
    - The transport-free policy half of `server/authz.py` (`AuthIdentity`, `ForbiddenError`, `require_admin`, `authorize_key_create`, `authorize_key_listing_namespace`, `can_manage_key`, `caller_may_revoke`, the `*_DETAIL` constants and `FORBIDDEN_CODE`) → `services/authz.py`. The FastAPI-specific half (`identity_of(request)`, `require_admin_dependency`, `caller_identity`, `ADMIN_ONLY_RESPONSES`) stays in `server/authz.py` and imports from services. Importers that change: `middleware_auth.py`, `routes_keys.py` and `mcp.py` (which also imports `identity_of`, so its import splits); the other routes import only names that stay.
@@ -131,7 +133,7 @@ S0 ships only what has a real consumer on day one:
 
 ## Edge Cases & Constraints
 
-- **String patch targets.** Many tests patch `archon_search.server.mcp.*` by string and a few call `monkeypatch.setattr` on the module object; none patches a moved name except the adapters' `_SEARCH_TIMEOUT_SECONDS` alias and `routes_search._EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS`, which S0 keeps. Only one test patched a moved module by string (`archon_search.server._hyde.resolve_hyde_within_budget`, now `archon_search.services.request_hyde.resolve_hyde_within_budget` in `tests/services/test_request_hyde.py:104`), plus one logger-name assertion (`:221`). A stale patch target or logger name breaks silently, so both are re-pointed.
+- **String patch targets.** Many tests patch `archon_search.server.mcp.*` by string and a few call `monkeypatch.setattr` on the module object; none patches a moved name except the adapters' `_SEARCH_TIMEOUT_SECONDS` alias and `routes_search._EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS`, which S0 kept (S1 removed both for search; the embedder wait is `_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS` in `services/search_service.py`). Only one test patched a moved module by string (`archon_search.server._hyde.resolve_hyde_within_budget`, now `archon_search.services.request_hyde.resolve_hyde_within_budget` in `tests/services/test_request_hyde.py:104`), plus one logger-name assertion (`:221`). A stale patch target or logger name breaks silently, so both are re-pointed.
 - **`conftest.py` autouse fixture.** `_mcp_default_request_context` patches `archon_search.server.mcp.get_http_request` for every test; opt-out is `real_mcp_auth_context`. Slices must keep both working.
 - **`authz.py` is mixed.** Its policy functions have no transport coupling; `identity_of`, `require_admin_dependency` and `caller_identity` need FastAPI. Only the policy half moves.
 - **Wire-text constants.** `tests/test_sanitized_wire_text_docs.py` requires wire literals to appear in docs `600`, `110`, `120`, `140` and `BREAKING.md`. Moving a constant must not break that link.
@@ -141,9 +143,9 @@ S0 ships only what has a real consumer on day one:
 
 ## Open Questions
 
-- Is `ServiceError` one class with a `kind` enum or a small hierarchy? Decided in S1 with the first real errors.
-- Where does the injected telemetry writer come from, and does the services container live on `app.state`, in a factory in `services/`, or both? Decided in S1.
-- Is field-level parity (every command field exposed on every interface) checkable without per-feature alias tables, given MCP and CLI flatten REST's nested `filters`? Evaluated in S1.
+- Is `ServiceError` one class with a `kind` enum or a small hierarchy? Decided in S1: one class with a `ServiceErrorKind` enum.
+- Where does the injected telemetry writer come from, and does the services container live on `app.state`, in a factory in `services/`, or both? Decided in S1: a factory in `services/` (`container.py`) and no instance on `app.state`; each adapter builds the service from its own state or arguments, and the writer is an optional constructor argument.
+- Is field-level parity (every command field exposed on every interface) checkable without per-feature alias tables, given MCP and CLI flatten REST's nested `filters`? Evaluated in S1: it needs an explicit mapping (`tests/parity/field_registry.py`), which the check enforces.
 - Whether `warmup.py` and `readiness.py` belong to services or stay server-side; decided in the Status slice (S25).
 
 ## Future Iterations

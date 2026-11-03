@@ -149,11 +149,14 @@ multilingual = false
 # to the default 60.0. A boolean, inf or nan is a config error.
 # validation_timeout_seconds = 60.0
 
-# Number of results returned per query (top-K return set).
+# Number of results returned per query (top-K return set), when the request gives no top_k.
+# A request's top_k (POST /search, the MCP search tool, `archon-search search --top-k`) overrides it, up to
+# [search].top_k_max. It is also the OpenAI shim's result count unless [openai_shim].top_k is set.
 # Set via `archon-search wizard --top-k N` (valid wizard range: 1–100).
 # top_k_return = 5
 
-# Candidate pool fetched from the vector + FTS stores before reranking.
+# Candidate pool fetched from the vector + FTS stores before reranking: max(top_k_retrieve × 3, 20),
+# raised to at least a request's top_k.
 # Set automatically by the wizard as max(15, 3 × top_k_return) when --top-k is passed.
 # top_k_retrieve = 15
 
@@ -164,14 +167,18 @@ centroid_recompute_threshold = 10000
 # Multi-collection fan-out execution bounds (B3). These govern the
 # server-side search_many primitive — they control the fan-out execution
 # window, not the storage schema.
-# Maximum number of collections accepted in one multi-collection request.
+# Maximum number of collections accepted in one multi-collection request (POST /search, POST /explain,
+# the MCP search and explain tools, `archon-search search`). The OpenAI shim does not reject a larger
+# namespace: its model "archon-search" searches the first max_fanout collections and logs the rest.
 max_fanout = 8
 # Per-leg candidate pool kept by local RRF score before the global merge.
+# When a request gives a top_k, the trim is max(fanout_leg_trim, top_k).
 fanout_leg_trim = 40
 # Whole-fan-out timeout (seconds); exceeding it returns HTTP 504.
 fanout_timeout_seconds = 30.0
-# Operator ceiling on the top_k value accepted by POST /search and POST /explain.
-# Requests exceeding this limit are rejected, protecting the server from
+# Operator ceiling on the top_k value accepted by POST /search, POST /explain, the MCP search and
+# explain tools and `archon-search search`. It also bounds [openai_shim].top_k: a larger value there
+# fails config load. Requests exceeding this limit are rejected, protecting the server from
 # expensive large-k reranking requests. Default: 100.
 # top_k_max = 100
 # Operator ceiling on context_window (neighbour chunks returned on each side of a
@@ -295,8 +302,8 @@ request_id_header = "X-Request-ID"
 #      (list your locally cached models with "llama cli -cl"; without that
 #      command the wizard scans your GGUF cache directories instead).
 #
-# When enabled = false (the default), hyde=true in a request is silently ignored and
-# the standard query embedding is used (hyde_applied: false in the response).
+# When enabled = false (the default), hyde=true in a request has no effect: the standard
+# query embedding is used (hyde_applied: false and expansion_warning "HyDE expansion failed").
 enabled = false
 # LLM provider for HyDE generation: "anthropic" (default), "ollama", "openai",
 # "claude_cli", or "llama_cpp".
@@ -799,7 +806,7 @@ enabled = false
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #
-# When enabled, each /search and /route call appends one JSON line to a daily
+# When enabled, each search (REST, MCP and the OpenAI shim), explain and route call appends one JSON line to a daily
 # file under log_dir. Only structural metadata is recorded (collection names,
 # latency, result counts, etc.) — raw query text is never written to disk.
 # Old files are pruned after retention_days.

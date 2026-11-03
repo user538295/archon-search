@@ -1,7 +1,7 @@
 **Purpose**: Enable and use the GraphRAG subsystem — entity graph, the four `graph_mode` search paths, synonym resolution, and the browser graph viewer.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-08-20 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-11-03 / **Next review**: 2027-07-29
 
 # Graph search (GraphRAG)
 
@@ -74,7 +74,7 @@ All three are sanitized constants in `archon_search/graph_extractor.py`; none of
 
 ## The four `graph_mode` values
 
-`graph_mode` is a field on `POST /search` (and the MCP `search` tool). Valid values are the literal set `"naive"`, `"local"`, `"global"`, `"ppr"`, or `null` (off) — verified in `archon_search/server/routes_search.py:SearchRequest`. `search_with_context` / the MCP `search_with_context` tool reject any non-null `graph_mode` — use `search` for graph modes.
+`graph_mode` is a field on `POST /search`, an input of the MCP `search` tool and the `--graph-mode` option of `archon-search search`. Valid values are the literal set `"naive"`, `"local"`, `"global"`, `"ppr"`, or `null` (off) — verified in `archon_search/server/routes_search.py:SearchRequest` and `archon_search/constants.py:VALID_GRAPH_MODES`. The MCP `search_with_context` tool rejects any non-null `graph_mode` — use `search` for graph modes.
 
 | Mode | What it does | When to use it | Prerequisite |
 |---|---|---|---|
@@ -87,7 +87,9 @@ Common guards for every graph mode (all return HTTP `422`):
 
 - `graph_mode` set while `[graph] enabled = false` → `"graph_mode requires [graph] enabled=true in server config"`.
 - `scope_filter` **and** `graph_mode` together → `"scope_filter is not supported with graph_mode"` (graph paths bypass the scope SQL predicate — they are mutually exclusive).
-- `graph_mode: "ppr"` with a multi-collection `collections[]` fanout → `"graph_mode is not supported with multi-collection fanout; use a single collection"`.
+- `graph_mode: "ppr"` with a multi-collection `collections[]` fanout → `"graph_mode is not supported with multi-collection fanout; use a single collection"`. The MCP `search` tool rejects it too, with `code="validation_error"` and the same text before any work is done, and `archon-search search --graph-mode ppr` with more than one `--collection` prints the server's `422` text and exits `1`.
+
+The MCP `search` tool answers the other two guards with the codes `graph_disabled` and `scope_filter_graph_mode_incompatible` (the same texts), and a `graph_mode` outside the set with `invalid_graph_mode`.
 
 ### `naive` — neighbour expansion
 
@@ -100,7 +102,7 @@ curl -s -X POST http://127.0.0.1:8765/search \
 
 The response carries `graph_expansion_applied: true` when expansion fired. Nothing needs to be pre-built beyond the graph itself.
 
-**Precondition — the trigger is lexical, not semantic.** Expansion fires only when an N-gram (1–3 words) of your query matches an extracted **entity name** verbatim (case-insensitive), after which that entity's first-degree neighbours are appended to the query. Entity names are the spans the extraction engine returned, so the match is against *names in the graph*, **not by semantic relevance**. A query with the same meaning but no matching entity-name N-gram returns `graph_expansion_applied: false` with plain hybrid results and no error or warning — so `false` means "your phrasing missed an entity name", not "the feature is broken" or "the graph is empty". Inspect the available names with `GET /graph/{collection}` (the `nodes[].entity_name` values) and phrase queries to overlap them.
+**Precondition — the trigger is lexical, not semantic.** Expansion fires only when an N-gram (1–3 words) of your query matches an extracted **entity name** verbatim (case-insensitive), after which that entity's first-degree neighbours are appended to the query. Entity names are the spans the extraction engine returned, so the match is against *names in the graph*, **not by semantic relevance**. A query with the same meaning but no matching entity-name N-gram returns `graph_expansion_applied: false` with plain hybrid results and no error or warning — so `false` usually means "your phrasing missed an entity name", not "the feature is broken" or "the graph is empty". The other cause is a cold query embedder: the search then runs on the FTS leg alone and drops `graph_mode`, so `graph_expansion_applied` is `false` even when an entity matches. Inspect the available names with `GET /graph/{collection}` (the `nodes[].entity_name` values) and phrase queries to overlap them.
 
 ### `local` and `global` — need communities first
 
@@ -134,7 +136,7 @@ curl -s -X POST http://127.0.0.1:8765/search \
   -d '{"collection": "docs", "query": "which services depend on the token cache", "graph_mode": "ppr"}'
 ```
 
-The response includes `ppr_entities_matched` (an integer count of seed entities matched). **Silent fallback:** if no query term matches any entity, `ppr_entities_matched` is `0` and you simply get standard hybrid results — no error, no empty set. The walk traverses every edge type: co-occurrence, `synonym_of` (below), and code def/ref edges. PPR needs the graph tables to exist for the collection but does **not** require communities to be built.
+The response includes `ppr_entities_matched` (an integer count of seed entities matched). **Silent fallback:** if no query term matches any entity, `ppr_entities_matched` is `0` and you simply get standard hybrid results — no error, no empty set. While the query embedder is still cold the search drops `graph_mode` and `ppr_entities_matched` is `null` (FTS-only results). The walk traverses every edge type: co-occurrence, `synonym_of` (below), and code def/ref edges. PPR needs the graph tables to exist for the collection but does **not** require communities to be built.
 
 ## Entity resolution and synonyms
 

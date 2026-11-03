@@ -1,7 +1,7 @@
 **Purpose**: Enable, inspect, and reason about local query telemetry.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-11-03 / **Next review**: 2027-07-29
 
 # Telemetry
 
@@ -32,7 +32,9 @@ Restart the server. Instrumented call sites append one JSON line per call to `<l
 
 The entries:
 
-- `search` and `search_with_context` — instrumented in the **MCP tool wrappers** (`archon_search/server/mcp.py`). The REST `/search` route is **not** instrumented.
+- `search` and `search_multi` — recorded by `SearchService` (`archon_search/services/search_service.py`), the one implementation behind every search interface: REST `POST /search`, the MCP `search` tool and the OpenAI shim's `POST /v1/chat/completions` (`archon-search search` goes through REST). A successful single-collection search writes one `search` entry (the collection and the result document ids); a successful `collections` search, and the shim's `archon-search` model, write one `search_multi` entry (the requested names, `fanout_count`, `excluded_count` and `result_count`, no document ids). A timeout writes a `search` entry with status `timeout` and error kind `timeout`; a failed metadata lookup, an embedder that is not ready, a failed HyDE generation and any unexpected failure write a `search` entry with status `internal_error` and error kind `other`. A request refused before the search (an invalid parameter, an unknown collection, a graph-mode error) writes nothing. The shim's own failed collection-list lookup is logged, not recorded.
+- `search_with_context` — instrumented in the **MCP tool wrapper** (`archon_search/server/mcp.py`).
+- `explain` — the **REST** endpoint (`archon_search/server/routes_explain.py`) writes an `ok` entry for a single collection and for `collections` (with `collection` set to the empty string); the MCP `explain` tool (`archon_search/server/mcp.py`) writes an `ok` entry for a single collection only, and none for a successful multi-collection call. Both write an `internal_error` entry on an unexpected failure.
 - `route` — instrumented in the **REST** endpoint (`archon_search/server/routes_route.py`).
 
 ### `export_enabled` coercion
@@ -46,21 +48,25 @@ No external transmission occurs regardless of the value.
 
 ## What is logged
 
-Every entry contains:
+Fields (each endpoint sets the ones that apply; a field with no value is left out of the JSON line):
 
 | Field | Notes |
 | --- | --- |
 | `query_id` | Random UUID per call. |
 | `timestamp` | UTC ISO-8601. |
-| `endpoint` | `search`, `search_with_context`, or `route`. |
+| `endpoint` | `search`, `search_multi`, `search_with_context`, `explain`, or `route`. |
 | `latency_ms` | Wall-clock latency. |
 | `status` | Exactly one of `ok`, `validation_error`, `timeout`, `internal_error` (the four values of `Status` in `entry.py`). |
-| `collection` / `collections` | Endpoint-specific. `collection` is set for `search` / `search_with_context`; `collections` is set for `route`. |
-| `result_count`, `result_doc_ids` | For retrieval endpoints. `result_doc_ids` are hashed when `hash_doc_ids = true` — see below. |
+| `collection` / `collections` | Endpoint-specific. `collection` is set for `search` / `search_with_context` / `explain` (an empty string for a REST multi-collection `explain`); `collections` is set for `route` and `search_multi`. Error entries carry neither. |
+| `result_count`, `result_doc_ids` | For retrieval endpoints; `search_multi` carries `result_count` only. `result_doc_ids` are hashed when `hash_doc_ids = true` — see below. |
 | `truncated` | `true` when `result_doc_ids` were dropped to fit the per-entry size cap (`MAX_ENTRY_BYTES = 8192`); otherwise absent / `null`. See `writer.py`. |
 | `decomposer_invoked` | For `route`. |
 | `doc_ids_hashed` | `true` when HMAC-SHA256 hashing was active for this entry (i.e., `hash_doc_ids = true` and the salt loaded successfully); `false` otherwise. |
 | `error_kind` | One of `empty_query \| slot_out_of_range \| timeout \| internal_error \| validation_error \| other` on errors. |
+| `fanout_count`, `excluded_count` | For `search_multi`: the collections actually searched, and those left out (for example a model mismatch). |
+| `filter_flags` | Booleans for which filters the call used (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `include_metadata`, `language_filter_used`); never the values. Filled for a successful `search` and `search_with_context`; all `false` on every other entry. |
+| `correlation_id` | The request's correlation id, when it has one. |
+| `rag_fusion_applied`, `rag_fusion_queries_used` | For successful `search`, `search_multi`, `search_with_context` and `explain` entries. |
 
 ## What is never logged
 
@@ -146,7 +152,7 @@ Response (`StatsResponse`):
 | `since` | `date` | unset → `until - retention_days` | Inclusive start date; clamped to `until - retention_days` if earlier. |
 | `until` | `date` | unset → today UTC | Inclusive end date. |
 | `collection` | string | unset | Filter by collection name. |
-| `endpoint` | `EndpointKind` literal | unset | One of `search`, `search_with_context`, `route`. |
+| `endpoint` | `EndpointKind` literal | unset | One of `search`, `search_multi`, `search_with_context`, `explain`, `route`. |
 | `status` | `Status` literal | unset | Filter by entry status. |
 | `error_kind` | `ErrorKind` literal | unset | Filter by error kind. |
 | `offset` | int `>= 0` | `0` | Pagination offset. |
@@ -191,5 +197,3 @@ curl -s "http://127.0.0.1:8765/telemetry/entries?endpoint=search&limit=20" \
 - [`../SecurityGuide/04_telemetry_privacy.md`](../SecurityGuide/04_telemetry_privacy.md) — privacy analysis and the no-raw-query guarantee.
 - [`../OperatorGuide/20_monitoring_and_alerts.md`](../OperatorGuide/20_monitoring_and_alerts.md) — observable degrade signals across the server.
 - [`../ADRs/05_opt_in_local_telemetry_no_raw_query.md`](../ADRs/05_opt_in_local_telemetry_no_raw_query.md) — design rationale.
-</content>
-</invoke>

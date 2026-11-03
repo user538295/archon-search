@@ -1,7 +1,7 @@
 **Purpose**: Configure `archon-search` via `archon-search.toml` and environment variables.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-10-31 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-11-03 / **Next review**: 2027-07-29
 
 # Configuration
 
@@ -66,8 +66,8 @@ Vector store location, models, chunking, and device selection.
 | `chunk_size` | `512` | Target chunk size in tokens (>0). |
 | `auto_reindex_on_chunk_size_change` | `true` | Reindex affected collections on startup when `chunk_size` changes. |
 | `device` | `auto` | Torch device the embedder and reranker run on: `auto` (CUDA if available, else the Apple GPU `mps`, else CPU), `cpu`, `mps` or `cuda`. An explicit `mps`/`cuda` that the host lacks steps down to CPU with a WARNING and a `device unavailable: <requested>; models loaded on cpu` entry in `GET /status` → `model_validation.provider_warnings`. Replaces the removed `providers` and `reranker_providers` keys: a config file that still holds one fails to load with a `ConfigError` (`[database].providers was replaced by [database].device (auto\|cpu\|mps\|cuda); see BREAKING.md`). See [`10_installation.md`](10_installation.md#device-selection-gpu-acceleration). |
-| `top_k_retrieve` | `15` | First-stage candidate pool size (>0). |
-| `top_k_return` | `5` | Results returned per query (>0). |
+| `top_k_retrieve` | `15` | Base of the first-stage candidate pool (>0): the pool is `max(top_k_retrieve × 3, 20)` candidates, raised to at least the request's `top_k` when one is given. |
+| `top_k_return` | `5` | Results returned per query when the request gives no `top_k` (>0); also the OpenAI shim's count unless `[openai_shim].top_k` is set. |
 | `validation_timeout_seconds` | `60.0` | Timeout in seconds for the background model-validation probe. A float: fractional values such as `1.5` are honoured, not truncated; values ≤0 warn and fall back to 60.0; a boolean, `inf` or `nan` is a config error. `GET /ready` answers `503`/`checks.models: "pending"` until model warm-up and this probe both finish; a failed warm-up ends the wait at once with `checks.models: "fail"`. The probe starts alongside warm-up and never fails startup (its only exception is a shutdown cancellation arriving during the startup probes below, which propagates); it first runs its startup probes in order: the llama-server reachability probe (5 s per server, the same wait as the context-window lookup and the description probe give a local server, the servers asked at once; only for an enabled `[hyde]`, `[rag_fusion]`, `[graph]` or `[description]` whose `provider` is `llama_cpp`), the graph NER importability check (only when `[graph].enabled`), and the extraction-model probe (up to min(`[graph].extraction_timeout_seconds`, 75 s); only when configured — `[graph].enabled`, `[graph].extraction_model` set, a `[graph].provider` whose package is installed (`anthropic`, `openai` and `ollama` need theirs, otherwise the server logs a WARNING with the install command and graph enrichment stays off) and, for `llama_cpp`, a reachable llama-server). Only then does this timeout start, so it bounds only the last part of the `/ready` `503` window. A timeout reports `checks.models: "fail"`: both `embedder_ok` and `reranker_ok` false with `validation timed out after <N>s`. A `warn`/`fail` result never gates readiness. |
 | `centroid_recompute_threshold` | `10000` | Full centroid recompute after this many mutations (≥1). |
 | `profile` | `""` | Install profile (`minimal`/`balanced`/`max`), set by `wizard --profile`. |
@@ -82,10 +82,10 @@ Multi-collection fan-out execution bounds, the top-k ceiling, and the context-wi
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `max_fanout` | `8` | Max collections accepted in one multi-collection request (≥1). |
-| `fanout_leg_trim` | `40` | Per-leg candidate pool kept by local RRF score before the global merge (≥1). |
+| `max_fanout` | `8` | Max collections accepted in one multi-collection request (≥1): `POST /search`, `POST /explain`, the MCP `search` and `explain` tools (`validation_error`) and `archon-search search` (the server's `422`). The OpenAI shim does not refuse a larger namespace: for the model `archon-search` it searches the first `max_fanout` collections of the namespace listing and logs the rest. |
+| `fanout_leg_trim` | `40` | Per-leg candidate pool kept by local RRF score before the global merge (≥1). When a request gives a `top_k`, the trim is `max(fanout_leg_trim, top_k)`, so a large `top_k` is not cut short before the merge. |
 | `fanout_timeout_seconds` | `30.0` | Whole-fan-out timeout; exceeding it returns HTTP 504 (>0). |
-| `top_k_max` | `100` | Operator ceiling on `top_k` accepted by `POST /search` and `POST /explain` (>0). |
+| `top_k_max` | `100` | Operator ceiling on `top_k` (>0): REST `POST /search` and `POST /explain` (`422`), the MCP `search` and `explain` tools (`validation_error`) and `archon-search search` (the server's `422`). It also bounds the OpenAI shim's `[openai_shim].top_k` key: a larger value fails config load. |
 | `context_window_max` | `10` | Operator ceiling on `context_window` (neighbour chunks per side of a hit) accepted by the MCP `search_with_context` tool; a larger value returns `code="validation_error"` (integer ≥1, so the tool's default window of `1` stays valid). No upper limit, like `top_k_max`: each hit fetches up to `2 * context_window_max` neighbour chunks in one query, so raise it with care. |
 
 ### `[routing]`
@@ -170,11 +170,11 @@ Full key lifecycle and rotation are in [`../SecurityGuide/02_authentication_and_
 
 ### `[hyde]` and `[rag_fusion]`
 
-Optional LLM-backed recall boosters, both **disabled by default**. They share the same provider/model/rate-limit shape; RAG Fusion adds `num_queries`. Enable a request-side booster via the `hyde` / `rag_fusion` flags on `POST /search`.
+Optional LLM-backed recall boosters, both **disabled by default**. They share the same provider/model/rate-limit shape; RAG Fusion adds `num_queries`. Enable a request-side booster via the `hyde` / `rag_fusion` flags on `POST /search`, the MCP `search` tool, or `archon-search search --hyde` / `--rag-fusion`. The OpenAI shim sends neither flag, so it never applies them.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `false` | Master switch. When off, the matching request flag is silently ignored (`hyde_applied`/`rag_fusion_applied: false`). |
+| `enabled` | `false` | Master switch. When off, the matching request flag has no effect (`hyde_applied`/`rag_fusion_applied: false`; a `hyde=true` request additionally reports `expansion_warning: "HyDE expansion failed"`, a `rag_fusion=true` one reports nothing). |
 | `provider` | `anthropic` | One of `anthropic`, `ollama`, `openai`, `claude_cli`, `llama_cpp`. Use `ollama` or `llama_cpp` for air-gapped deployments (query text stays local). |
 | `model` | `claude-haiku-4-5-20251001` | Generation model. Required for `ollama`/`openai`/`llama_cpp`; a model tag/id for those providers. |
 | `ollama_base_url` | `http://localhost:11434` | Ollama server URL; used only when `provider = "ollama"`. |
@@ -296,7 +296,7 @@ OpenAI-compatible API shim (G9). **Disabled by default** — when off, no `/v1` 
 | --- | --- | --- |
 | `enabled` | `false` | Master switch for `POST /v1/chat/completions` and `GET /v1/models`. |
 | `inject_citations` | `true` | Append `[Source: {source_path}]` per chunk in the assistant reply. |
-| `top_k` | `5` | Accepted and validated but **inert** — not forwarded to the pipeline (reserved for a future runtime `top_k`). |
+| `top_k` | unset | Optional integer ≥1: the shim's result count on both models. Unset, the shim returns `[database].top_k_return` results. Must not exceed `[search].top_k_max`, otherwise config load fails (also while the shim is disabled). A request's `top_k` is accepted and ignored. |
 
 See [`85_openai_compatible_api.md`](./85_openai_compatible_api.md) for usage.
 

@@ -9,6 +9,7 @@ import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from archon_search.cli import search as search_mod
@@ -139,6 +140,59 @@ def test_search_200_with_a_non_json_body_exits_1_like_collection_list() -> None:
     assert result.exit_code == 1
     assert "Error: server returned unexpected response: Expecting value" in result.stderr
     assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("payload", "problem"),
+    [
+        ({"results": "boom"}, "results is not a list of objects"),
+        ({"results": {"a": 1}}, "results is not a list of objects"),
+        ({"results": ["boom"]}, "results is not a list of objects"),
+        ({"results": 0}, "results is not a list of objects"),
+        ({"results": ""}, "results is not a list of objects"),
+        ({"results": False}, "results is not a list of objects"),
+        ({"results": [_result(score="high")]}, "a result score is not a number"),
+        ({"results": [_result(score=None)]}, "a result score is not a number"),
+        ({"results": [_result(score=True)]}, "a result score is not a number"),
+        ({"results": [_result(score=10**400)]}, "a result score is not a number"),
+        ({"results": [], "excluded_collections": "boom"}, "excluded_collections is not a list of objects"),
+        ({"results": [], "excluded_collections": ["boom"]}, "excluded_collections is not a list of objects"),
+        ({"results": [], "excluded_collections": 0}, "excluded_collections is not a list of objects"),
+    ],
+)
+def test_search_200_with_a_wrongly_typed_field_exits_1_without_a_traceback(payload: dict[str, Any], problem: str) -> None:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = payload
+
+    result, _ = _run(["q", "--collection", "docs"], resp)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert f"Error: server returned unexpected response: {problem}" in result.stderr
+    assert result.stdout == ""
+
+
+def test_search_200_with_null_results_and_excluded_collections_prints_no_results() -> None:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"results": None, "excluded_collections": None}
+
+    result, _ = _run(["q", "--collection", "docs"], resp)
+
+    assert result.exit_code == 0
+    assert result.stdout == "No results found.\n"
+
+
+def test_search_json_prints_a_wrongly_typed_body_unchanged() -> None:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"results": "boom"}
+
+    result, _ = _run(["q", "--collection", "docs", "--json"], resp)
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"results": "boom"}
 
 
 def test_search_200_with_a_json_body_that_is_not_an_object_exits_1() -> None:

@@ -1,7 +1,7 @@
 **Purpose**: Ordered, trackable roadmap for making every application feature available through REST, MCP and CLI on one shared implementation  
 **Audience**: Maintainers and contributors working on the interface-parity slices  
 **Status**: Draft  
-**Last reviewed**: 2026-11-02  
+**Last reviewed**: 2026-11-03  
 **Next review**: 2026-12-02
 
 # Interface parity roadmap
@@ -50,7 +50,7 @@ Legend: **converge** = the feature already exists on all three interfaces and mo
 
 ### Phase A — Retrieval
 
-- [ ] **S1 Search (pilot)**: CLI new; MCP gains `acl_context` (and `top_k` per brief decision); OpenAI shim moves onto the service. [Brief](./01_search_brief.md), [Plan](./01_search-team-plan.md), [Tasks](./01_search-tasks.md)
+- [x] **S1 Search (pilot)**: CLI new; MCP gains `acl_context` and `top_k`; REST, MCP and the OpenAI shim move onto the service. [Brief](./01_search_brief.md), [Plan](./01_search-team-plan.md), [Tasks](./01_search-tasks.md)
 - [ ] **S2 Search with context**: REST new; CLI new.
 - [ ] **S3 Explain**: CLI new.
 - [ ] **S4 Route**: MCP new; CLI new.

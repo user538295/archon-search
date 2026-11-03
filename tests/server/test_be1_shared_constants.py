@@ -11,8 +11,8 @@ from archon_search import constants
 from archon_search._types import SearchResult
 from archon_search.server import mcp, routes_explain, routes_search
 from archon_search.server.routes_explain import ExplainRequest, ExplainResult
-from archon_search.server.routes_search import SearchRequest, SearchResultSchema
-from archon_search.services import search_budget
+from archon_search.server.routes_search import SearchRequest
+from archon_search.services import search_budget, search_service
 
 _REST_GRAPH_MODE_ENUM = ["naive", "local", "global", "ppr"]
 
@@ -53,7 +53,7 @@ def test_unknown_acl_source_is_sanitised_with_the_shared_valid_set() -> None:
         source_path="/doc.md",
         acl_source="legacy_value",
     )
-    assert SearchResultSchema.from_result(result, include_acl_gate=True).acl_gate.source is None  # type: ignore[union-attr]
+    assert search_service._build_acl_gate(result).source is None
 
     from archon_search._diagnostics import ScoredSearchCandidate
     from tests.server.test_routes_explain_schemas import _breakdown

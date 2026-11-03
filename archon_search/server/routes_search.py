@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from archon_search._types import SearchResult
 from archon_search.constants import (
     TOP_K_MIN,
-    VALID_ACL_SOURCES,
     GraphMode,
 )
 from archon_search.filters import SearchFilters
@@ -106,15 +105,7 @@ class SearchResultSchema(BaseModel):
     acl_gate: AclGateSchema | None = None
 
     @classmethod
-    def from_result(cls, r: SearchResult, *, include_acl_gate: bool = False) -> SearchResultSchema:
-        gate: AclGateSchema | None = None
-        if include_acl_gate:
-            gate = AclGateSchema(
-                allowed_principals=r.acl,
-                source=r.acl_source if r.acl_source in VALID_ACL_SOURCES else None,
-                sidecar_path=r.acl_sidecar_path,
-                warnings=list(r.acl_warning),
-            )
+    def from_result(cls, r: SearchResult) -> SearchResultSchema:
         return cls(
             doc_id=r.doc_id,
             chunk_id=r.chunk_id,
@@ -130,7 +121,6 @@ class SearchResultSchema(BaseModel):
             acl=r.acl,
             collection=r.collection,
             reranker_score=r.reranker_score,
-            acl_gate=gate,
         )
 
     @classmethod

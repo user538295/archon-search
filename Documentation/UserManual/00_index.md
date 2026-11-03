@@ -1,7 +1,7 @@
 **Purpose**: Table of contents and reading order for the archon-search User Manual.
 **Audience**: End users / operators running archon-search on their own machine.
 **Status**: Stable
-**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-11-03 / **Next review**: 2027-07-29
 
 # archon-search User Manual
 
@@ -18,7 +18,7 @@ If you are new, work top to bottom — each step builds on the previous one:
 3. **[Configure](30_configuration.md)** — tune `archon-search.toml` and environment variables.
 4. **[Run the server](40_running_the_server.md)** — start, stop, and reach the endpoints.
 5. **[Ingest documents](50_ingestion_and_collections.md)** — build collections from your corpus.
-6. **[Search](60_searching.md)** — query the index over REST and MCP.
+6. **[Search](60_searching.md)** — query the index over REST, MCP and the CLI.
 7. **Go further** — graph search, code impact, explain/debug, the OpenAI shim, TTL, Docker, and the operational guides below, in whatever order your use case needs.
 
 ## All guides
@@ -31,7 +31,7 @@ If you are new, work top to bottom — each step builds on the previous one:
 | [40_running_the_server.md](40_running_the_server.md) | Start/stop/status, `serve` vs `start`, bind address, and reaching the endpoints. |
 | [50_ingestion_and_collections.md](50_ingestion_and_collections.md) | Ingest files and directories; collections, pinned collections, sync vs ingest vs reindex; size and path limits and how to let a team (non-admin) key ingest by path with `[ingest].allowed_roots`. |
 | [55_chunk_metadata_and_enrichment.md](55_chunk_metadata_and_enrichment.md) | What metadata each chunk carries, where it comes from, and how to backfill it. |
-| [60_searching.md](60_searching.md) | Hybrid search over `/search`, `/route`, filters, HyDE/RAG-Fusion, and MCP. |
+| [60_searching.md](60_searching.md) | Hybrid search over `/search`, `/route`, filters, HyDE/RAG-Fusion, MCP, and the `archon-search search` CLI. |
 | [65_graph_search.md](65_graph_search.md) | The GraphRAG subsystem — entity graph, the four `graph_mode` paths, synonyms, graph viewer. |
 | [70_code_graph_and_impact.md](70_code_graph_and_impact.md) | Index source into a def/ref graph and ask "what breaks if I change this symbol?". |
 | [80_explain_and_debugging.md](80_explain_and_debugging.md) | Use `POST /explain` to see per-stage provenance and tune routing, reranking, and scoring. |

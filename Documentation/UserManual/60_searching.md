@@ -1,16 +1,16 @@
-**Purpose**: Query the index over REST and MCP.
+**Purpose**: Query the index over REST, MCP and the CLI.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-10-17 / **Next review**: 2027-10-12
+**Last reviewed**: 2026-11-03 / **Next review**: 2027-10-12
 
 # Searching
 
 ## Principles
 
-1. **Hybrid search by default.** Every `/search` query runs dense vector + FTS retrieval, then a cross-encoder reranker (`archon_search/pipeline.py:SearchPipeline.search`). Three exceptions: the reranker is skipped when `[database].reranker_model` is empty, or when the cross-encoder is still cold after the request's bounded warm-up wait; the vector leg is dropped when the query embedder is still cold (both cold cases: `services/search_budget.py:warmup_for_search`).
-2. **The collection is part of the request.** `POST /search` requires either a `collection` or a `collections[]` list — the server does not auto-pick. Use `POST /route` to discover which collections to query.
-3. **Result count is server-configured.** Per-request `top_k` is validated (`1..[search].top_k_max`) but does not set the returned count — the pipeline returns `[database].top_k_return` results. See [`/BREAKING.md`](../../BREAKING.md).
-4. **REST and MCP share one pipeline.** The MCP tools wrap the same pipeline calls, but the surfaces differ in places — see [Difference vs REST](../DeveloperGuide/05_mcp_integration.md#difference-vs-rest). Choose REST for HTTP clients, MCP for MCP-native clients.
+1. **Hybrid search by default.** Every `/search` query runs dense vector + FTS retrieval, then a cross-encoder reranker (`archon_search/pipeline.py:SearchPipeline.search`). Three exceptions: the reranker is skipped when `[database].reranker_model` is empty, or when the cross-encoder is still cold after the request's bounded warm-up wait; the vector leg is dropped when the query embedder is still cold (both cold cases: `services/search_budget.py:warmup_for_search`). On one `collection` the vector leg is dropped the same way when the collection's own embedder is not available within 0.5 s (`services/search_service.py:SearchService._select_embedder`); that load keeps running and serves later requests.
+2. **The collection is part of the request.** `POST /search` requires either a `collection` or a `collections[]` list — the server does not auto-pick, and the MCP `search` tool has no default collection either. Use `POST /route` to discover which collections to query.
+3. **`top_k` sets the result count.** On REST `POST /search`, the MCP `search` tool and `archon-search search --top-k`, `top_k` is the number of results: an integer from `1` to `[search].top_k_max` (default 100). Omitted or `null`, the count is `[database].top_k_return` (default 5). It is exactly `top_k` when enough candidates survive the per-collection trim and the ACL, glob and wildcard-scope filters, fewer otherwise. The OpenAI shim ignores a request `top_k`: its count is the optional `[openai_shim].top_k` key (see [`85_openai_compatible_api.md`](./85_openai_compatible_api.md)). See [`/BREAKING.md`](../../BREAKING.md).
+4. **Every search interface runs one implementation.** REST `/search`, the MCP `search` tool and the OpenAI shim call the same `SearchService` (`archon_search/services/search_service.py`), and `archon-search search` is an HTTP client of REST `/search`. The surfaces still differ in places — see [Difference vs REST](../DeveloperGuide/05_mcp_integration.md#difference-vs-rest). Choose REST for HTTP clients, MCP for MCP-native clients, the CLI for a terminal.
 
 For graph-aware retrieval (`graph_mode`), the `/explain` provenance trace, and the OpenAI-compatible shim, this guide gives only pointers — those topics moved to their own files (see [Related documents](#related-documents)).
 
@@ -33,7 +33,7 @@ Key request fields (see `GET /openapi.json` for the exhaustive schema):
 | `collection` | `string` | Single-collection search. **XOR** with `collections`. Non-empty after strip. |
 | `collections` | `string[]` | Multi-collection fan-out. **XOR** with `collection`. De-duplicated; length capped at `[search].max_fanout` (default 8). |
 | `query` | `string` | Required, non-empty after strip. |
-| `top_k` | `int` | `>= 1`; rejected with `422` when above `[search].top_k_max` (default 100). Does not set the returned count (see principle 3). |
+| `top_k` | `int \| null` | Number of results. `>= 1` (else `422` with the standard validation list) and at most `[search].top_k_max` (default 100; above it `422` with `top_k <n> exceeds operator-configured maximum of <max>`). Omitted or `null` means `[database].top_k_return` (see principle 3). |
 | `filters` | `object \| null` | `SearchFilters` — see [Filtering results](#filtering-results-a2--c2). |
 | `hyde` | `bool` | HyDE query expansion — see [HyDE](#hyde-query-expansion-c4). |
 | `rag_fusion` | `bool` | RAG Fusion multi-query recall — see [RAG Fusion](#rag-fusion-multi-query-recall-c5). |
@@ -47,9 +47,10 @@ Response (`SearchResponse`) carries `results[]` plus signal fields (`acl_filtere
 Status codes:
 
 - `200` — success (empty `results` means the search ran but matched nothing).
+- `400` — invalid `scope_filter` (`{"detail": {"code": "invalid_scope_filter", "message": …}}`).
 - `404` — collection not found in the caller's namespace.
 - `422` — invalid selection (both/neither of `collection`/`collections`), fan-out over `max_fanout`, `top_k` over `top_k_max`, or an invalid model/parameter. (A missing HyDE/RAG-Fusion provider package is not a `422`: it prevents startup entirely, see `160_troubleshooting.md`.)
-- `503` — internal metadata lookup failed.
+- `503` — the collection-metadata lookup failed (`{"detail": …, "code": "metadata_store_error"}`, no `Retry-After`), or the collection's embedder load did not finish within the cache's own 120 s wait (`code: embedder_not_ready`, `Retry-After: 30`; a defensive mapping, because the search stops waiting for the embedder after 0.5 s and degrades to the FTS leg, so a client does not meet it with the shipped cache); see `160_troubleshooting.md`.
 - `500` — pipeline stage exception (embedder, store, or reranker raised), or an unexpected exception during HyDE generation (see [HyDE query expansion](#hyde-query-expansion-c4)).
 - `504` — pipeline call timed out (~30 s; up to ~60 s with `hyde=true`, whose ~30 s HyDE cap runs before the search budget). The timer starts after a bounded model warm-up wait (`0.5 s` per model), and a model still cold after it degrades the request instead (no reranking, or FTS only — see Principle 1), so a cold model no longer causes this on the first search after a restart.
 
@@ -102,7 +103,7 @@ A typical workflow is: call `/route`, then call `/search` once per name in `pinn
 
 | Tool | Key inputs | Output |
 | --- | --- | --- |
-| `search` | `query`, `collection?` / `collections?`, filter params (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`, `include_metadata`), `hyde`, `rag_fusion`, `graph_mode`, `scope_filter` | `{"results":[…], "acl_filtered":bool, "excluded_collections":[…], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null, "graph_expansion_applied":bool, "ppr_entities_matched":int\|null}` |
+| `search` | `query`, `collection?` / `collections?` (exactly one of the two), `top_k?`, filter params (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`, `include_metadata`), `hyde`, `rag_fusion`, `graph_mode`, `scope_filter`, `acl_context` | REST's `SearchResponse` field set: `{"results":[…], "acl_filtered":bool, "excluded_collections":[…], "embedding_model":str, "hyde_applied":bool, "rag_fusion_applied":bool, "rag_fusion_queries_used":int, "rag_fusion_attempted":bool, "expansion_used":bool, "expansion_warning":str\|null, "graph_expansion_applied":bool, "applied_filters":{…}\|null, "ppr_entities_matched":int\|null}`; every result has an `acl_gate` key (`null` unless `acl_context`) |
 | `search_with_context` | `query`, `collection?`, `context_window=1` (neighbour chunks on each side of a hit; must be in `[0, [search].context_window_max]` (default 10), else `code="validation_error"`), same filter/expansion params — but **`graph_mode` is rejected unconditionally** (`code="graph_mode_not_supported"`; use `search` for graph modes) | `{"results":[{"result":{…}, "context_before":[…], "context_after":[…]}], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null}` — neighbour shape and selection in [`search_with_context` neighbours](#search_with_context-neighbours) |
 
 Per-result `reranker_score`, on each `search` result and on the `result` object of each `search_with_context` item:
@@ -116,7 +117,15 @@ Per-result `reranker_score`, on each `search` result and on the `result` object 
 - Operator runbook: [cold-start symptoms](../OperatorGuide/90_incident_runbook.md#search-returns-http-500--503--504) and [a model that fails to load](../OperatorGuide/90_incident_runbook.md#provider--model-validation-failing-ready-status).
 - The `search` tool takes no `rerank` input — reranking runs whenever a warm cross-encoder is available. To compare the ranking with and without it, call the `explain` tool with `rerank=false` on a single collection (it rejects `rerank=false` across several `collections`); see [`80_explain_and_debugging.md`](./80_explain_and_debugging.md).
 
-When `collection` is omitted, the server uses the `default_collection` injected at app construction. The MCP `search` tool exposes filters as flat parameters rather than a nested `filters` object, and — unlike REST — does **not** echo `applied_filters` (track filters client-side).
+On `search`, give exactly one of `collection` or `collections`: the tool has no default collection. A call with neither is `{"error": "supply either collection or collections", "code": "validation_error"}`, a call with both is `supply either collection or collections, not both`. `search_with_context` still falls back, when `collection` is omitted, to the `default_collection` injected at app construction.
+
+What else the `search` tool shares with REST (both run `SearchService`):
+
+- `top_k` — an integer, omitted means `[database].top_k_return`. A value below 1 is `validation_error` with `top_k must be at least 1`; a value above `[search].top_k_max` is `validation_error` with `top_k <n> exceeds operator-configured maximum of <max>`. `search_with_context` takes no `top_k`.
+- `acl_context` — `true` fills each result's `acl_gate` (see [Permission-aware snippets](#permission-aware-snippets-acl_context--g15)); the default `false` leaves it `null`. `search_with_context` takes no `acl_context`.
+- Response — the filters are flat parameters rather than a nested `filters` object, and `applied_filters` echoes them as the parsed, normalised `SearchFilters` (`null` when the call sent none). `embedding_model` is the collection's active model on one `collection` and the configured model on `collections`. `metadata` is `{}` on every result unless `include_metadata` is set.
+- One collection and a cold embedder — the wait for the collection's embedder is bounded at 0.5 s. When it expires the call answers from the FTS leg alone, and `hyde_applied`, `rag_fusion_applied`, `graph_expansion_applied` and `expansion_used` are `false` even when requested.
+- Errors — `{"error": <fixed text>, "code": <code>}`, from the same table as REST: `validation_error` (also for a `top_k`, `collections` or `collection` problem, and for `graph_mode="ppr"` with `collections`), `invalid_graph_mode`, `graph_disabled`, `scope_filter_graph_mode_incompatible`, `invalid_scope_filter`, `graph_communities_not_built`, `not_found` (`collection not found`, also for a name that is not a valid collection name), `metadata_store_error` and `embedder_not_ready` (retryable), `timeout` (`search timed out`) and `internal_error` (`search failed`, also for a failed HyDE generation).
 
 For MCP client setup and worked SDK examples, see [`../DeveloperGuide/05_mcp_integration.md`](../DeveloperGuide/05_mcp_integration.md). The endpoint is `POST /mcp` (streamable HTTP transport), mounted on the REST port when `[mcp].enabled = true` (default).
 
@@ -183,7 +192,7 @@ Invalid combinations (e.g. `indexed_after > indexed_before`, an empty `file_type
 - `null` when no `filters` field was sent.
 - Values are normalised — `file_type: ".md"` becomes `"md"`.
 - Present on both single-collection and multi-collection responses.
-- **REST only** — the MCP `search` tool does not echo `applied_filters`.
+- Present on REST and on the MCP `search` tool, and printed by `archon-search search --json`; `search_with_context` has none.
 
 ### Language filter (C2)
 
@@ -207,11 +216,11 @@ curl -s -X POST http://127.0.0.1:8765/search \
 ```
 
 - `collection` and `collections` are mutually exclusive — supplying both (or neither) is a `422`.
-- Names are de-duplicated; the list length is capped at `[search].max_fanout` (default 8), and exceeding it returns `422`.
+- Names are de-duplicated; the list length is capped at `[search].max_fanout` (default 8), and exceeding it returns `422` (`validation_error` with the same text on the MCP `search` tool).
 - Collections whose stored embedding model differs from the live embedder are dropped and reported in the response `excluded_collections[]` (reason `embedding_model_mismatch`) rather than failing the whole request — even when *every* requested collection is excluded, you get a `200` with `results: []`.
 - On `/search`, a name that does not exist in your namespace fails the whole request with `404 collection not found`; a metadata-store failure is a `503`. `/explain` is deliberately more forgiving here: it reports unknown names in `excluded_collections[]` with reason `not_found` and only returns `404` when *every* requested name is unknown (see [`80_explain_and_debugging.md`](80_explain_and_debugging.md)).
 - Filters — including `language` (E0e) — apply across every collection in the fan-out.
-- On `/search`, `graph_mode` `naive`, `local` and `global` fan out across every collection; `ppr` is single-collection only and returns `422`. `/explain` rejects any `graph_mode` combined with `collections[]` (`422`).
+- On `/search`, `graph_mode` `naive`, `local` and `global` fan out across every collection; `ppr` is single-collection only and returns `422` with `graph_mode is not supported with multi-collection fanout; use a single collection`. The MCP `search` tool answers `validation_error` with the same text before any work, and the CLI prints the server's text when it is given more than one `--collection`. `/explain` rejects any `graph_mode` combined with `collections[]` (`422`).
 
 ## HyDE query expansion (C4)
 
@@ -277,11 +286,11 @@ The response sets `hyde_applied: true` when HyDE was used, or `false` on fallbac
 | Field | Meaning |
 | --- | --- |
 | `expansion_used` | `true` when any of `hyde_applied`, `rag_fusion_applied`, or `graph_expansion_applied` is `true`. |
-| `expansion_warning` | Non-null when expansion was requested but fell back to the original query embedding (`"HyDE expansion failed"`, `"RAG Fusion timed out"`, or `"RAG Fusion expansion failed"`); `null` otherwise. |
+| `expansion_warning` | Non-null when expansion was requested but the original query was searched instead. HyDE: `"HyDE expansion failed"` whenever `hyde=true` was not suppressed (by RAG Fusion or by a `graph_mode`, see below) and produced no hypothesis vector (see [Fallback behaviour](#fallback-behaviour)). RAG Fusion: `"RAG Fusion timed out"` or `"RAG Fusion expansion failed"`, but only when the variant generator call itself raises or embedding the query and its variants fails — a failed provider call sets no warning (see [RAG Fusion fallback](#fallback-behaviour-1)). `null` otherwise. |
 
 ### Fallback behaviour
 
-A provider-side HyDE failure never degrades availability. It falls back silently (`hyde_applied: false`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors (the server logs one WARNING per process, without the query or the hypothesis); the model's window has no room for the query (one WARNING per process, naming the window); or the per-process rate limit is exhausted. On every HyDE surface (REST `/search` and `/explain`, the MCP `search`, `search_with_context` and `explain` tools) the whole expansion is additionally capped at ~30 s (S582) — its own window, before the search budget starts, so a `/search` with `hyde=true` can take ~60 s before a `504` — and on `POST /search` and the MCP `search` tool it is skipped while the searched collection's embedding model is still loading, so a provider that accepts the connection but never answers can no longer hold the request open for the full `timeout_seconds` — it falls back the same way. Any `graph_mode` suppresses HyDE (no LLM call, `hyde_applied: false`, no warning): graph mode wins over HyDE, since most graph paths drop the hypothesis vector. The non-silent cases: `[hyde] enabled = true` with the provider package uninstalled makes the server refuse to start with a `ConfigError` naming the missing package (see `160_troubleshooting.md`); and an unexpected exception during HyDE generation outside the provider call (e.g. embedding the hypothesis) fails the request — REST `500` with `{"detail": "search failed"}` (`/explain`: `explain failed`), MCP `internal_error` with the same text (`search` / `search_with_context`: `search failed`, `explain`: `explain failed`) — with the cause in the server log. The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
+A provider-side HyDE failure never degrades availability. It falls back without an error (`hyde_applied: false`, `expansion_warning: "HyDE expansion failed"`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors (the server logs one WARNING per process, without the query or the hypothesis); the model's window has no room for the query (one WARNING per process, naming the window); or the per-process rate limit is exhausted. On every HyDE surface (REST `/search` and `/explain`, the MCP `search`, `search_with_context` and `explain` tools) the whole expansion is additionally capped at ~30 s (S582) — its own window, before the search budget starts, so a `/search` with `hyde=true` can take ~60 s before a `504` — and on `POST /search` and the MCP `search` tool it is skipped while the searched collection's embedding model is still loading, so a provider that accepts the connection but never answers can no longer hold the request open for the full `timeout_seconds` — it falls back the same way. Any `graph_mode` suppresses HyDE (no LLM call, `hyde_applied: false`, no warning): graph mode wins over HyDE, since most graph paths drop the hypothesis vector. The non-silent cases: `[hyde] enabled = true` with the provider package uninstalled makes the server refuse to start with a `ConfigError` naming the missing package (see `160_troubleshooting.md`); and an unexpected exception during HyDE generation outside the provider call (e.g. embedding the hypothesis) fails the request — REST `500` with `{"detail": "search failed"}` (`/explain`: `explain failed`), MCP `internal_error` with the same text (`search` / `search_with_context`: `search failed`, `explain`: `explain failed`) — with the cause in the server log. The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
 
 ## RAG Fusion multi-query recall (C5)
 
@@ -323,7 +332,36 @@ Pass `rag_fusion: true` on any `/search` or `/explain` request. The response add
 
 ### Fallback behaviour
 
-Same silent-fallback contract as HyDE (`rag_fusion_applied: false`), plus: `rag_fusion=true` is silently ignored for FTS-only collections (no vector index). When the generator returns no variants — the provider is down, a key or package is missing, the call times out, the answer holds no valid variant, the model's window has no room for the query, or the per-process rate limit is exhausted — the original query is still searched normally. A failed call or an answer with no valid variant logs one WARNING per process (the query fingerprint and the failure, never the query); an exhausted rate limit logs its own WARNING at most once a minute. The `/explain` response additionally surfaces `rag_fusion_failure_reason` and a per-sub-query `rag_fusion_sub_queries` breakdown.
+Same fallback contract as HyDE (`rag_fusion_applied: false`), with one difference: a failed provider call sets no `expansion_warning`. `rag_fusion=true` is ignored for FTS-only collections (no vector index; the response reads `rag_fusion_attempted: true`) and while the query embedder is still cold (the search runs on the FTS leg alone and skips RAG Fusion). When the generator returns no variants — the provider is down, a key or package is missing, the call times out, the answer holds no valid variant, the model's window has no room for the query, or the per-process rate limit is exhausted — the original query is still searched normally, and the response reads `rag_fusion_applied: false`, `rag_fusion_queries_used: 0`, `rag_fusion_attempted: true` and `expansion_warning: null`: `RAGFusionGenerator.generate_variants` (`rag_fusion.py`) turns each of these failures into an empty variant list, so the pipeline never sees an error. A failed call or an answer with no valid variant logs one WARNING per process (the query fingerprint and the failure, never the query); an exhausted rate limit logs its own WARNING at most once a minute. The `expansion_warning` of RAG Fusion is set only when the generator call itself raises (`"RAG Fusion timed out"` for a `TimeoutError`, `"RAG Fusion expansion failed"` for any other exception) or when embedding the query or a variant fails (`"RAG Fusion expansion failed"`); the search then continues without fusion. The `/explain` response additionally surfaces `rag_fusion_failure_reason` and a per-sub-query `rag_fusion_sub_queries` breakdown.
+
+## CLI `archon-search search`
+
+`archon-search search` is an HTTP client of REST `POST /search` (`archon_search/cli/search.py`): the server must be running, and the command sends one request and prints the answer. It checks no value's range or meaning itself (`--top-k` must be an integer) — the server validates every option and enforces every limit (`[search].top_k_max`, `[search].max_fanout`, `graph_mode`, `scope_filter`), and the command prints the server's error text.
+
+```bash
+archon-search search "how does the router work?" --collection docs
+archon-search search "retry loop" --collection docs --collection code --top-k 10 --file-type md
+archon-search search "retry loop" --collection docs --json | jq '.results[].source_path'
+```
+
+| Argument / option | Meaning |
+| --- | --- |
+| `QUERY` | Required. The query text. |
+| `--collection NAME` | Required; repeat it to search several collections. One name is sent as `collection`, several as `collections` (the fan-out of [Multi-collection search](#multi-collection-search-b3--e0e)). |
+| `--top-k N` | Number of results (see principle 3). Sent in the request body only when given; the server's `422` text is printed for a value below 1 or above `[search].top_k_max`. |
+| `--file-type`, `--source-path-prefix`, `--source-path-glob`, `--indexed-after`, `--indexed-before`, `--language` | The fields of [Filtering results](#filtering-results-a2--c2), sent as `filters` only when at least one is given. |
+| `--include-metadata` | Ask for each result's stored `metadata`; only `--json` shows it. |
+| `--hyde`, `--rag-fusion` | Flags: [HyDE](#hyde-query-expansion-c4) and [RAG Fusion](#rag-fusion-multi-query-recall-c5). |
+| `--graph-mode MODE` | One of `naive`, `local`, `global`, `ppr`; the server validates the value. `ppr` with more than one `--collection` gets the server's `422` text. |
+| `--scope-filter VALUE` | Exact tag or one trailing `*` prefix; the server refuses it together with `--graph-mode`. |
+| `--acl-context` | Fill each result's `acl_gate`; only `--json` shows it. |
+| `--json` | Print the full response instead of result lines. |
+| `--api-url URL` | Server base URL; default `http://localhost:8765`. |
+| `--api-key KEY` | API key; falls back to `ARCHON_SEARCH_API_KEY`, then the key file. |
+
+Output. Without `--json`, each result is one line on stdout, in rank order: `<rank>.`, the score with four decimals, the collection, the source path and the chunk text, separated by two spaces. The text is collapsed to one line and cut at 200 characters, and control characters are replaced by spaces. An empty result prints `No results found.`. After the lines, a `Note:` line goes to stderr for an `expansion_warning` (`Note: <warning>`) and for every skipped collection (`Note: collection '<name>' skipped: <reason>`); a note does not change the exit code. With `--json`, stdout holds the complete response (`results` with their full text, every signal field, `applied_filters`, `excluded_collections`), indented and with sorted keys, and stderr gets no notes: the same information is in the JSON.
+
+Exit codes: `0` for a `200` answer the command can read, including an empty result and notes. `1` for every failure: any answer other than `200` (stderr: `Error: <the server's message>`, with ` (retry after Ns)` appended when the answer carries a whole-second `Retry-After`, such as the `503` with `Retry-After: 30` for an embedder that is not ready; a body-less `401` prints `Error: the server rejected the API key. Check --api-key, ARCHON_SEARCH_API_KEY or the key file.`, and any other body-less error prints `Error: the server answered <status> without an error message.`), a server that cannot be reached or does not answer, a `200` body the plain output cannot read (`Error: server returned unexpected response: …`; `--json` prints a JSON-object body as it is), and no API key found. `2` for a command-line usage error, such as a missing `QUERY` or `--collection`, or a `--top-k` that is not an integer. The request timeout is 65 seconds: twice the 30 s search budget plus a 5 s margin, because a HyDE expansion runs before, and outside, the search budget.
 
 ## Permission-aware snippets (`acl_context` → G15)
 
@@ -345,7 +383,7 @@ Each `acl_gate` (`AclGateSchema`) carries:
 | `sidecar_path` | Path of the `.acl` sidecar, when `source="sidecar"` (also set when that sidecar was unusable, in which case the chunk is deny-all — see `warnings`). |
 | `warnings` | Structured warnings raised while resolving the ACL (malformed value, oversized sidecar, …). |
 
-When `acl_context` is `false` (the default), the `acl_gate` key is still present on every result, with the value `null` (`GET /openapi.json` lists the field as optional only because it defaults to `null`). `POST /explain` always populates `acl_gate` on its results regardless of this flag. `acl_context` and `acl_gate` are REST-only: the MCP `search` and `search_with_context` tools take no `acl_context` input, and their results carry no `acl_gate` key. ACL enforcement itself — how principals gate visibility, sidecar format, the `acl_filtered` response flag — lives in [`../SecurityGuide/03_authorization_and_acl.md`](../SecurityGuide/03_authorization_and_acl.md).
+When `acl_context` is `false` (the default), the `acl_gate` key is still present on every result, with the value `null` (`GET /openapi.json` lists the field as optional only because it defaults to `null`). `POST /explain` always populates `acl_gate` on its results regardless of this flag. `acl_context` is accepted by REST `POST /search`, by the MCP `search` tool (every result keeps an `acl_gate` key, `null` unless the flag is set) and by `archon-search search --acl-context` (shown by `--json`); the MCP `search_with_context` tool takes no `acl_context` input, and its results carry no `acl_gate` key. ACL enforcement itself — how principals gate visibility, sidecar format, the `acl_filtered` response flag — lives in [`../SecurityGuide/03_authorization_and_acl.md`](../SecurityGuide/03_authorization_and_acl.md).
 
 ## Related documents
 

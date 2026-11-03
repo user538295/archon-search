@@ -1,7 +1,7 @@
 Purpose: Single entry point to all `archon-search` documentation, plus the rules for adding and maintaining docs.
 Audience: Medior engineers contributing to or navigating the `archon-search` documentation set.
 Status: Draft
-Last reviewed: 2026-11-02 / Next review: 2027-11-02
+Last reviewed: 2026-11-03 / Next review: 2027-11-02
 
 # Documentation Index and Contribution Guide
 
@@ -50,7 +50,7 @@ End-user / operator documentation. Audience is medior-technical operators runnin
 | [`UserManual/40_running_the_server.md`](../UserManual/40_running_the_server.md) | `start`/`stop`/`status`/`serve`, bind address, exposed endpoints, uniform Bearer auth. |
 | [`UserManual/50_ingestion_and_collections.md`](../UserManual/50_ingestion_and_collections.md) | `ingest`/`sync`/`collection` CLI and REST; pinned collections, the watcher, and reindex triggers. |
 | [`UserManual/55_chunk_metadata_and_enrichment.md`](../UserManual/55_chunk_metadata_and_enrichment.md) | Core schema vs auto-enrichment chunk fields, where each comes from, how they surface, and how to backfill. |
-| [`UserManual/60_searching.md`](../UserManual/60_searching.md) | Query the index over REST and MCP: `POST /search`, `POST /route`, hybrid pipeline behavior. |
+| [`UserManual/60_searching.md`](../UserManual/60_searching.md) | Query the index over REST, MCP and the `archon-search search` CLI: `POST /search`, `POST /route`, hybrid pipeline behavior. |
 | [`UserManual/65_graph_search.md`](../UserManual/65_graph_search.md) | GraphRAG: entity graph, the four `graph_mode` paths, synonym resolution, and the browser graph viewer. |
 | [`UserManual/70_code_graph_and_impact.md`](../UserManual/70_code_graph_and_impact.md) | Index a code corpus into a typed def/ref graph and run "what breaks if I change X?" impact analysis. |
 | [`UserManual/80_explain_and_debugging.md`](../UserManual/80_explain_and_debugging.md) | `POST /explain`: per-stage retrieval provenance to debug and tune routing, reranking, and scoring. |
@@ -74,7 +74,7 @@ Versioning, upgrade procedure, and the contract-change index. Audience: maintain
 | [`MigrationGuide/03_breaking_changes_index.md`](../MigrationGuide/03_breaking_changes_index.md) | Chronological index of `BREAKING.md` entries with one-line migrations and links to the authoritative source. |
 | [`MigrationGuide/04_config_migration.md`](../MigrationGuide/04_config_migration.md) | `archon-search.toml` keys, the `export_enabled` silent-coerce quirk (TEL-1), validation via `archon-search config show`. |
 | [`MigrationGuide/05_data_migration.md`](../MigrationGuide/05_data_migration.md) | On-disk layout under `~/.archon-search/`, what survives upgrades, manual reindex via `archon-search collection reindex`, gap to roadmap D3. |
-| [`MigrationGuide/06_client_migration_examples.md`](../MigrationGuide/06_client_migration_examples.md) | Python / TypeScript / MCP diffs for the queued NR-1 (MCP response shape) and NR-2 (`top_k` ignored) breaking changes. |
+| [`MigrationGuide/06_client_migration_examples.md`](../MigrationGuide/06_client_migration_examples.md) | Python / TypeScript / MCP before-and-after diffs, with CLI and OpenAI-shim notes, for the queued breaking changes: NR-1 (MCP `search` response shape), NR-2 (`top_k` sets the number of results) and the later search entries, plus the security and operations batch (NR-43 … NR-46). |
 
 ## Developer Guide
 
@@ -163,7 +163,7 @@ Security-focused documentation for security engineers, IT admins, and reviewers 
 | [`Completed/e0d-pdf-large-file-support-brief.md`](../Completed/e0d-pdf-large-file-support-brief.md) | E0d: PDF streaming ingest + configurable size guard. |
 | [`Completed/e0e-multi-collection-filters-brief.md`](../Completed/e0e-multi-collection-filters-brief.md) | E0e: lift multi-collection filter v1 restriction. |
 | [`Backlog/2026-10-30-010-llm-collection-descriptions-brief.md`](../Backlog/2026-10-30-010-llm-collection-descriptions-brief.md) | Provider-based collection descriptions and a shared LLM client (LCD): the brief, its [team plan](../Backlog/2026-10-30-010-llm-collection-descriptions-team-plan.md), [task breakdown](../Backlog/2026-10-30-010-llm-collection-descriptions-tasks.md) and `Backlog/api-contracts/*llm-collection-descriptions*` contracts. Delivered; each "Revised after implementation" note records where the shipped feature differs. Decision record: [ADR 19](../ADRs/19_shared_llm_client_and_provider_based_collection_descriptions.md). |
-| [`Backlog/interface-parity/roadmap.md`](../Backlog/interface-parity/roadmap.md) | Interface-parity roadmap: every feature on REST, MCP and CLI through one implementation in `services/`, as ordered slices S0-S33 with waivers and a decisions log. S0 (service-layer foundation): its [brief](../Backlog/interface-parity/00_service_layer_foundation_brief.md), [team plan](../Backlog/interface-parity/00_service_layer_foundation-team-plan.md) and [task breakdown](../Backlog/interface-parity/00_service_layer_foundation-tasks.md) and `Backlog/interface-parity/00_service_layer_foundation-c*.tsp` contracts; [S1 search brief](../Backlog/interface-parity/01_search_brief.md). Decision record: [ADR 20](../ADRs/20_application_service_layer_with_enforced_boundaries_and_interface_parity.md). |
+| [`Backlog/interface-parity/roadmap.md`](../Backlog/interface-parity/roadmap.md) | Interface-parity roadmap: every feature on REST, MCP and CLI through one implementation in `services/`, as ordered slices S0-S33 with waivers and a decisions log. S0 (service-layer foundation): its [brief](../Backlog/interface-parity/00_service_layer_foundation_brief.md), [team plan](../Backlog/interface-parity/00_service_layer_foundation-team-plan.md) and [task breakdown](../Backlog/interface-parity/00_service_layer_foundation-tasks.md) and `Backlog/interface-parity/00_service_layer_foundation-c*.tsp` contracts; S1 (search): its [brief](../Backlog/interface-parity/01_search_brief.md), [team plan](../Backlog/interface-parity/01_search-team-plan.md) and [task breakdown](../Backlog/interface-parity/01_search-tasks.md). Decision record: [ADR 20](../ADRs/20_application_service_layer_with_enforced_boundaries_and_interface_parity.md). |
 | [`Backlog/store_cleanup_plan.md`](../Backlog/store_cleanup_plan.md) | `store.py` clean-code remediation: work slices with a proposed dependency order and a per-slice doc checklist. Unowned, unscheduled. |
 | [`Backlog/pytorch-runtime-plan.md`](../Backlog/pytorch-runtime-plan.md) | RT1: replace fastembed/ONNX Runtime with PyTorch for the embedder and reranker, phase by phase, with its implementation status. |
 

@@ -17,6 +17,19 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/ChatCompletionResponse'
                   - $ref: '#/components/schemas/OpenAIErrorResponse'
+        '503':
+          description: Service unavailable. The collection list or the collection metadata could not be read, the search failed unexpectedly, or the embedder load did not finish within the cache's own 120 s wait (this last case adds a Retry-After header of 30 seconds; it is a defensive mapping, because the search stops waiting for the embedder after 0.5 s and answers from the FTS leg, so a client does not meet it with the shipped cache). The body is the OpenAI error envelope with message "Service temporarily unavailable." and type "server_error"; no exception text.
+          headers:
+            Retry-After:
+              required: false
+              description: Seconds to wait before retrying; present only when the embedder is not ready.
+              schema:
+                type: integer
+                format: int32
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenAIErrorResponse'
       requestBody:
         required: true
         content:
@@ -96,7 +109,7 @@ components:
           type: integer
           format: int32
           nullable: true
-          description: Accepted for forward compatibility but has no effect — pipeline uses construction-time top_k. Reserved for a future release.
+          description: Accepted for protocol compatibility and ignored for any integer, in or out of range, and never answered with a 4xx. A non-integer value is the generic 422 of a malformed body field. The number of result chunks is the operator's [openai_shim].top_k when set, else [database].top_k_return.
     ChatCompletionResponse:
       type: object
       required:

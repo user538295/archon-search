@@ -1,7 +1,7 @@
 **Purpose**: Show concrete, copy-paste-correct `httpx` calls against the `archon-search` REST surface, with verified request and response shapes.
 **Audience**: Python engineers integrating `archon-search` from another process.
 **Status**: Draft
-**Last reviewed**: 2026-05-20 / **Next review**: 2027-05-20
+**Last reviewed**: 2026-11-03 / **Next review**: 2027-05-20
 
 # REST Client — Python (`httpx`)
 
@@ -160,7 +160,7 @@ r = client.post("/ingest", json={
 
 ## Searching
 
-`POST /search` runs hybrid search inside one collection:
+`POST /search` runs hybrid search inside one collection (`collection`) or across several (`collections`; supply exactly one of the two):
 
 ```python
 r = client.post("/search", json={
@@ -178,13 +178,13 @@ for hit in payload["results"]:
     print(f"{hit['score']:.3f}  {hit['source_path']}")
 ```
 
-**Gotchas verified against `routes_search.py`:**
+**Gotchas verified against `routes_search.py` and `services/search_service.py`:**
 
-- `top_k` in the request body is accepted (Pydantic validates `top_k ≥ 1`; the route rejects a value above `[search].top_k_max` with `422`) but **ignored** — the pipeline uses `[database] top_k_return`. See `BREAKING.md`.
+- `top_k` in the request body is the number of results: omitted or `null` (JSON `null` is valid) it is `[database] top_k_return`. A value below 1 is a `422` (the standard validation-error list) and a value above `[search].top_k_max` (default `100`) is a `422` with `{"detail": "top_k <n> exceeds operator-configured maximum of <max>"}`. The service returns exactly `top_k` results when enough candidates survive the ACL, glob and wildcard-scope filters, fewer otherwise. See `BREAKING.md`.
 - Empty `query` or empty `collection` → `422` from Pydantic validators.
-- Unknown / cross-namespace collection → `404 {"detail": "collection not found"}`.
-- Meta lookup failure → `503 {"detail": "service unavailable"}`.
-- Pipeline failure mid-search → HTTP 500 with a **plain-text** body `Internal Server Error` (Content-Type `text/plain`), produced by Starlette's `ServerErrorMiddleware` after the route bare-re-raises. Do NOT call `response.json()` on the 500 body — it is not JSON and `requests`/`httpx` will raise `JSONDecodeError`. Use `response.text` or branch on `response.status_code` before parsing. Pipeline timeout → HTTP 504 with `{"detail": "Search timed out"}` (JSON, safe to parse). HTTP 200 with `results=[]` means no matches found on a healthy pipeline.
+- Unknown / cross-namespace collection, or a `collection` that is not a valid collection name → `404 {"detail": "collection not found"}`.
+- Meta lookup failure → `503 {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"}`.
+- Unexpected failure mid-search → HTTP 500 with a **plain-text** body `Internal Server Error` (Content-Type `text/plain`), answered by the route as a `PlainTextResponse` when the search service reports an unexpected failure. Do NOT call `response.json()` on the 500 body — it is not JSON and `requests`/`httpx` will raise `JSONDecodeError`. Use `response.text` or branch on `response.status_code` before parsing. A failed HyDE generation is the exception: it answers HTTP 500 with the JSON body `{"detail": "search failed"}`. Pipeline timeout → HTTP 504 with `{"detail": "Search timed out"}` (JSON, safe to parse). HTTP 200 with `results=[]` means no matches found on a healthy pipeline.
 
 There is no REST `/search/with_context` endpoint. That capability is exposed only as the MCP tool `search_with_context` (`archon_search/server/mcp.py`). If you need it from REST today, ingest the document and issue follow-up `/search` calls; or use the MCP transport.
 
@@ -219,5 +219,5 @@ r.raise_for_status()
 
 - [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) — full reference.
 - [`06_error_handling.md`](./06_error_handling.md) — status codes and retry guidance.
-- [`../../BREAKING.md`](../../BREAKING.md) — `top_k` deprecation and other contract changes.
+- [`../../BREAKING.md`](../../BREAKING.md) — `top_k` and other contract changes.
 - [`../Architecture/140_error_handling_strategy.md`](../Architecture/140_error_handling_strategy.md) — full status code matrix.

@@ -1,7 +1,7 @@
 **Purpose**: Orient external engineers integrating `archon-search` from another application, and frame the scope and non-goals of the integration surface.
 **Audience**: Engineers writing Python or TypeScript clients, MCP-aware tools (Claude Code, custom agents), or any process that calls `archon-search` over HTTP or MCP.
 **Status**: Draft
-**Last reviewed**: 2026-10-17 / **Next review**: 2027-10-12
+**Last reviewed**: 2026-11-03 / **Next review**: 2027-10-12
 
 # Developer Guide — Overview
 
@@ -27,6 +27,7 @@ The authoritative contract is `GET /openapi.json` on the running server. Everyth
 | Error envelope | `{"detail": "..."}` with HTTP status | `{"error": "...", "code": "..."}` (`McpErrorResponse` TypedDict in `mcp.py`) returned as the tool result; the HTTP-200 framing is the FastMCP transport's behavior rather than something archon-search controls #Unverified |
 | Long-running operations | Job model (`POST /ingest` → 202 + `JobResponse`, poll `GET /jobs/{id}`) | Synchronous within the tool call; progress reported via `ctx.report_progress` for `ingest_directory` |
 | Surface | `/search`, `/route`, `/collections/*` (including `POST /collections/{name}/reindex`, `PUT` / `DELETE /collections/{name}/description` and `POST /collections/{name}/describe`), `/ingest`, `/jobs/{id}` (incl. `DELETE /jobs/{job_id}`), `/telemetry/*`, `/health`, `/status`, `/indexing-state` | The search, ingest, collection (including `set_collection_description` and `clear_collection_description`), document, export/import, graph, and key-management tools listed in [`05_mcp_integration.md`](./05_mcp_integration.md#principles) |
+| Result count | `top_k` on `POST /search` (`int \| null`, at least 1): the number of results; omitted or `null` keeps `[database] top_k_return`; a value above `[search].top_k_max` is a `422` | `top_k` on `search`, with the same meaning and bounds (`validation_error` outside them); `search_with_context` takes none. See `BREAKING.md` |
 
 ## What is not in scope
 
@@ -34,7 +35,6 @@ The authoritative contract is `GET /openapi.json` on the running server. Everyth
 - **No streaming search results.** Responses are fully buffered JSON. The MCP `ingest_directory` tool streams *progress*, not results.
 - **No webhooks or push notifications.** Job state is poll-only (`GET /jobs/{id}`); watcher-triggered reindexing is observable only through `GET /indexing-state` and `GET /status`.
 - **No client SDKs published.** Use any HTTP client. Examples in this guide use `httpx` (Python) and `fetch` (TypeScript); the "30-line" sizing in earlier drafts is editorial and not enforced by anything in the codebase. #Unverified
-- **No per-request `top_k`.** The `top_k` field on `SearchRequest` is still declared and validated (`routes_search.py`: `top_k: int = Field(default=5, ge=1)`, plus the route's `[search].top_k_max` check) but is never passed through to the pipeline, which uses `self._top_k_return` from `[database] top_k_return` in `archon-search.toml`. `BREAKING.md` frames this as the current behavior rather than a backwards-compatibility shim.
 
 ## A 60-second mental model
 
@@ -48,7 +48,7 @@ The runtime is one process, plus a lazily-spawned, recycled docling parse-worker
 - A small job store for ingest/reindex/export/import/description jobs (`archon_search/jobs/store.py`) — REST ingest submits to it; `POST /collections/{name}/describe` creates a `description` job in it; the MCP `ingest_file` / `ingest_directory` tools bypass it and run synchronously, while `export_collection` / `import_collection` create jobs in it.
 - `SearchPipeline`'s single `DocumentParser`, which owns the single-worker (`max_workers=1`) docling parse pool — PDF and image OCR for every concurrent ingest job, watcher sync, and bulk job funnels through that one child process, one file at a time (`[jobs] max_concurrent_bulk` does not parallelize it).
 
-When you call `POST /search`, the request flows: middleware → route handler (`routes_search.py`) → `SearchPipeline.search` → LanceDB hybrid search → reranker → ACL filter → Pydantic response. The MCP `search` tool follows the same pipeline but validates its return through `McpSearchResponse` (in `mcp_schemas.py`) before returning. Like the REST handler, its single-collection path checks `pipeline.get_collection_meta(...)` first: a collection missing from the caller's namespace returns `{"error": ..., "code": "not_found"}` where REST returns `404`.
+When you call `POST /search`, the request flows: middleware → route handler (`routes_search.py`) → `SearchService.search` (`archon_search/services/search_service.py`) → `SearchPipeline.search` (one collection) or `SearchPipeline.search_many` (a `collections` fan-out) → LanceDB hybrid search → reranker → ACL filter → Pydantic response. The MCP `search` tool and the `/v1` OpenAI shim call the same `SearchService`, and `archon-search search` calls `POST /search`; the MCP tool validates its return through `McpSearchResponse` (in `mcp_schemas.py`) before returning. For every interface the service checks `pipeline.get_collection_meta(...)` first on the single-collection path: a collection missing from the caller's namespace returns `{"error": ..., "code": "not_found"}` on MCP where REST returns `404`.
 
 Defaults live in `archon-search.toml.example`. The server listens on `127.0.0.1:8765` by default; this guide assumes that base URL.
 

@@ -398,5 +398,3 @@ For the full explanation — volume architecture, the two-phase test split, and 
 - [`150_multi_instance_setup.md`](150_multi_instance_setup.md) — running a native-service prod instance and a Docker dev-UAT instance side by side on the same machine.
 - [`../OperatorGuide/10_deployment_topologies.md`](../OperatorGuide/10_deployment_topologies.md) — reverse-proxy patterns and topology comparison.
 - [`../Architecture/160_operational_readiness_monitoring_and_reliability.md`](../Architecture/160_operational_readiness_monitoring_and_reliability.md) — health/ready surface, runbooks.
-</content>
-</invoke>

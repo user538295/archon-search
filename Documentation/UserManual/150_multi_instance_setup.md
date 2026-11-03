@@ -587,5 +587,3 @@ curl http://127.0.0.1:18766/health   # archon-test
 - [`40_running_the_server.md`](40_running_the_server.md) — `start`/`stop`/`status`/`serve` subcommands.
 - [`140_running_with_docker.md`](140_running_with_docker.md) — full Docker reference including `docker run`, environment variables, and persistence layout.
 - [`../OperatorGuide/10_deployment_topologies.md`](../OperatorGuide/10_deployment_topologies.md) — supported deployment shapes and isolation boundaries.
-</content>
-</invoke>

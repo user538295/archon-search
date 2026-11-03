@@ -1,8 +1,8 @@
 **Purpose**: Get a new contributor from a fresh clone to a running, queryable `archon-search` server in under ten minutes.
 **Audience**: Developers onboarding to the project; medior-level Python familiarity assumed.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
-**Next review**: 2026-08-20
+**Last reviewed**: 2026-11-03
+**Next review**: 2027-02-03
 
 # Quick Start
 
@@ -34,7 +34,7 @@ uv sync --dev
 
 ## 2. Run the Server
 
-`archon-search` (entry point `archon_search.cli.main:main`) is a Click **command group** with subcommands (`wizard`, `install`, `uninstall`, `start`, `stop`, `serve`, `status`, `ingest`, `sync`, `collection`, `config`, `key`, `graph`, `jobs`, `export`, `import`, `backup`, `maintenance`; `archon-search --help` lists them). Invoking `uv run archon-search` with no subcommand prints the Click help and exits — it does **not** start the server.
+`archon-search` (entry point `archon_search.cli.main:main`) is a Click **command group** with subcommands (`wizard`, `install`, `uninstall`, `start`, `stop`, `serve`, `status`, `ingest`, `sync`, `collection`, `config`, `key`, `graph`, `jobs`, `export`, `import`, `backup`, `maintenance`, `search`; `archon-search --help` lists them). Invoking `uv run archon-search` with no subcommand prints the Click help and exits — it does **not** start the server.
 
 For a foreground developer run, use `serve` (or the module entry point, `uv run python -m archon_search.server`):
 
@@ -125,7 +125,7 @@ curl -X POST http://127.0.0.1:8765/search \
   -d '{"collection": "docs", "query": "how does the router work?"}'
 ```
 
-Note: the `top_k` field on `SearchRequest` is ignored at the route level — the pipeline uses `config.top_k_return` from `[database]` in `~/.archon-search/archon-search.toml`. See `../BREAKING.md` for the rationale.
+Note: the optional `top_k` field of the request body is the number of results. Omitted (or `null`), the count is `top_k_return` from `[database]` in `<data-dir>/archon-search.toml` (see §4); a value below 1 or above `[search].top_k_max` (default `100`) is a `422`. See `../BREAKING.md` for the change.
 
 ## 7. Run the Tests
 

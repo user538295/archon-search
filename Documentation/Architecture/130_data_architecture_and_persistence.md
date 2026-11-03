@@ -1,8 +1,8 @@
 **Purpose**: Document where `archon-search` keeps state on disk, the LanceDB schemas it writes, and how ingest mutates that state.
 **Audience**: Maintainers and operators of an `archon-search` install.
 **Status**: Draft
-**Last reviewed**: 2026-10-20
-**Next review**: 2027-01-20
+**Last reviewed**: 2026-11-03
+**Next review**: 2027-02-03
 
 # Data Architecture and Persistence
 
@@ -253,10 +253,10 @@ A2 adds query-side filtering (`archon_search/filters.py`, `archon_search/store_f
 2. **Python post-filter** (in-memory, `pipeline.py`): handles `source_path_glob` via `fnmatch.fnmatchcase`. **No path semantics**: `*` matches `/`, and `**` is identical to `*` — there is no shell-style directory-boundary awareness. **E2a**: also handles `scope_filter` with a trailing `*` (wildcard prefix match). Wildcard scope matching is Python-side on the top-k candidate set after LanceDB retrieval; unscoped chunks (`scopes is None`) always pass through the wildcard filter.
 
 Because glob and ACL filtering happen after retrieval, the pipeline over-fetches candidates before post-processing: `hybrid_search_with_trace` takes the per-leg `candidate_depth` from its caller (`pipeline.py`) and returns every fused candidate.
-- Default: `max(top_k_retrieve * 3, 20)` — standard RRF over-fetch, used by single-collection `search` / `explain` and by `search_many` without a glob.
-- `search_many` with a glob: `max(candidate_depth * GLOB_OVERFETCH_FACTOR, 60)` where `GLOB_OVERFETCH_FACTOR = 5` (`store_filters.py`) — extra headroom to absorb glob × ACL attrition. Single-collection `search` applies no glob multiplier.
+- Default: `max(top_k_retrieve * 3, 20)` — standard RRF over-fetch, used by single-collection `search` / `explain` and by `search_many` without a glob. When a `search` or `search_many` request gives `top_k`, the depth is raised to at least `top_k` (`SearchPipeline._candidate_pool`); `explain` accepts a `top_k` but does not raise its pool for it (it keeps `max(top_k_retrieve * 3, 20)`).
+- `search_many` with a glob: `max(candidate_depth * GLOB_OVERFETCH_FACTOR, 60)` where `GLOB_OVERFETCH_FACTOR = 5` (`store_filters.py`) — extra headroom to absorb glob × ACL attrition (the base `candidate_depth` here is already the `top_k`-raised depth). Single-collection `search` applies no glob multiplier.
 
-**Known limitation (E2a):** the glob over-fetch does not account for wildcard `scope_filter`. When both `source_path_glob` and a wildcard `scope_filter` (trailing `*`) are active simultaneously, two independent Python-side post-filters apply — the 5x glob over-fetch factor may not compensate for the compounded attrition, and the caller may receive fewer than `top_k` results. No additional over-fetch multiplier is applied for `scope_filter`.
+**Known limitation (E2a):** the glob over-fetch does not account for wildcard `scope_filter`. When both `source_path_glob` and a wildcard `scope_filter` (trailing `*`) are active simultaneously, two independent Python-side post-filters apply — the 5x glob over-fetch factor may not compensate for the compounded attrition, and the caller may receive fewer than `top_k` results: raising the depth to `top_k` does not guarantee `top_k` results, because up to `top_k` return only when enough candidates survive the ACL, glob and wildcard-scope post-filters (and, on a multi-collection search, the per-leg trim). No additional over-fetch multiplier is applied for `scope_filter`.
 
 ### Migrations (idempotent, run at startup)
 

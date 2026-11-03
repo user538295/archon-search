@@ -1,7 +1,7 @@
 **Purpose**: Define what to probe, what each `archon-search` endpoint actually tells you, and which alert rules are worth wiring up on a single host.
 **Audience**: SREs and sysadmins operating `archon-search` in production.
 **Status**: Draft
-**Last reviewed**: 2026-10-25
+**Last reviewed**: 2026-11-03
 **Next review**: 2027-07-29
 
 # Monitoring and Alerts
@@ -128,10 +128,10 @@ Starting thresholds for a single-host deployment. Tune to local noise; none corr
 
 ### Search pipeline failures surface as 5xx (CON-5 resolved in A3)
 
-Pre-A3, `POST /search` returned `200 OK` with `results: []` when the pipeline raised — alerting on HTTP status alone would miss the regression. **A3 resolved this**: pipeline stage exceptions now return HTTP 500 (bare re-raise; plain-text `Internal Server Error` body — not JSON), and pipeline timeouts return HTTP 504 with `{"detail": "Search timed out"}`. Both paths emit a telemetry entry with `endpoint="search"` and `status="internal_error"` or `status="timeout"`, plus an ERROR-level log record on `archon.search` (`event_type="search_pipeline_failure"` / `"search_timeout"`). Alerts can key on 5xx rate plus the telemetry `status` field.
+Pre-A3, `POST /search` returned `200 OK` with `results: []` when the pipeline raised — alerting on HTTP status alone would miss the regression. **A3 resolved this**: pipeline stage exceptions now return HTTP 500 (plain-text `Internal Server Error` body — not JSON), and pipeline timeouts return HTTP 504 with `{"detail": "Search timed out"}`. Both paths emit a telemetry entry with `endpoint="search"` and `status="internal_error"` or `status="timeout"`, plus an ERROR-level log record on `archon_search.services.search_service`, the `SearchService` that runs every search (`event_type="search_pipeline_failure"` / `"search_timeout"`). Alerts can key on 5xx rate plus the telemetry `status` field.
 
 Notes:
-- The 503 meta-lookup path in `routes_search.py` is **unchanged** by A3: it returns `{"detail": "service unavailable"}` and emits **no** telemetry entry (only a `logger.error`). Alerts that count "search failures" via `/telemetry/entries` will not see meta-lookup failures — pair with a 503-rate alert sourced from access logs or a reverse proxy.
+- The 503 meta-lookup path returns `{"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"}` and, since the search service records every interface's outcome, emits one telemetry entry with `endpoint="search"`, `status="internal_error"` and error kind `other` (plus the `logger.error` from `archon_search.services.search_service`). The entry is the same as for an unexpected search failure, so a count of `internal_error` entries includes metadata-store outages and the log message tells them apart: `search: meta lookup failed for collection ...` for a single `collection`, `multi-collection search: metadata lookup failed` for a `collections` fan-out. A telemetry-only alert does not separate a 503 from a 500 — pair it with a 503-rate alert sourced from access logs or a reverse proxy.
 - `HTTP 200` with `results: []` now unambiguously means the pipeline ran successfully and found no matching documents; it is **not** a failure signal.
 
 See `BREAKING.md` and the resolved CON-5 entry in [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md).
