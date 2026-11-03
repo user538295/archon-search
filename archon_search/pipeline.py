@@ -1506,6 +1506,11 @@ class SearchPipeline:
         pool = max(self._top_k_retrieve * _CANDIDATE_POOL_MULTIPLIER, _MIN_CANDIDATE_POOL)
         return pool if top_k is None else max(pool, top_k)
 
+    def _leg_trim(self, top_k: int | None) -> int:
+        """The per-collection candidate trim of a multi-path search: the configured trim, raised to at least *top_k*."""
+        trim = max(self._fanout_leg_trim, 1)
+        return trim if top_k is None else max(trim, top_k)
+
     async def search(
         self,
         query: str,
@@ -3172,6 +3177,7 @@ class SearchPipeline:
         scope_filter: str | None = None,
         *,
         rerank: bool = True,
+        top_k: int | None = None,
         fts_only: bool = False,
     ) -> SearchPipelineResult:
         """Embed the query once, fan out hybrid retrieval across ``collections`` in
@@ -3190,6 +3196,14 @@ class SearchPipeline:
         every leg fuses its FTS results alone, for a caller whose embedder is still
         cold (S290).  RAG Fusion and graph expansion exist only to embed something, so
         they are skipped in that mode; an already-computed ``query_vector`` cancels it.
+
+        ``top_k``, when given, is the number of results instead of the configured
+        ``top_k_return``; it raises the candidate pool to at least that many and every leg
+        trim to ``max(trim, top_k)``, so up to ``top_k`` results return (exactly ``top_k``
+        when enough candidates survive the leg trim and the ACL, glob and wildcard-scope
+        post-filters). ``None`` keeps the configured ``top_k_return``, pool and trim.
+        ``graph_mode="global"`` has no pool or trim: it ranks the community representatives,
+        at most ``[graph].max_global_candidates`` per collection.
 
         ``graph_mode="ppr"`` is single-collection only: passing it here fails an assertion."""
         # Belt-and-suspenders like the scope_filter asserts: PPR is single-collection only
@@ -3245,7 +3259,7 @@ class SearchPipeline:
             and rag_fusion_config is not None
             and rag_fusion_config.enabled
         ):
-            candidate_depth = max(self._top_k_retrieve * 3, 20)
+            candidate_depth = self._candidate_pool(top_k)
             if filters and filters.source_path_glob:
                 candidate_depth = max(candidate_depth * GLOB_OVERFETCH_FACTOR, 60)
 
@@ -3286,17 +3300,17 @@ class SearchPipeline:
                 std_vector = await self._global_embedder.embed_one(query)
                 std_merged, std_acl_filtered, std_leg_times = await self._fanout_merge_acl(
                     query, std_vector, collections_in_scope, namespace, candidate_depth, filters=filters,
-                    scope_filter=scope_filter,
+                    scope_filter=scope_filter, top_k=top_k,
                 )
                 if reranker is not None:
                     t0 = monotonic()
                     std_ranked = await reranker.rerank_candidates(
-                        query, std_merged, top_k=self._top_k_return
+                        query, std_merged, top_k=self._effective_top_k(top_k)
                     )
                     std_rerank_ms = (monotonic() - t0) * 1000.0
                 else:
                     std_merged.sort(key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id))
-                    std_ranked = std_merged[:self._top_k_return]
+                    std_ranked = std_merged[:self._effective_top_k(top_k)]
                     std_rerank_ms = 0.0
                 return SearchPipelineResult(
                     results=[self._candidate_to_search_result(c) for c in std_ranked],
@@ -3308,7 +3322,7 @@ class SearchPipeline:
                 )
 
             # Step C: Per-collection fan-out with fusion.
-            trim = max(self._fanout_leg_trim, 1)
+            trim = self._leg_trim(top_k)
             trimmed_per_coll: dict[str, list[ScoredSearchCandidate]] = {}
             # Track successful variant searches across all collections (variant idx > 0).
             # A variant is "successful" if its search succeeded for at least one collection.
@@ -3374,12 +3388,12 @@ class SearchPipeline:
             if reranker is not None:
                 t0 = monotonic()
                 ranked = await reranker.rerank_candidates(
-                    query, merged, top_k=self._top_k_return
+                    query, merged, top_k=self._effective_top_k(top_k)
                 )
                 rerank_time_ms = (monotonic() - t0) * 1000.0
             else:
                 merged.sort(key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id))
-                ranked = merged[:self._top_k_return]
+                ranked = merged[:self._effective_top_k(top_k)]
                 rerank_time_ms = 0.0
 
             results = [self._candidate_to_search_result(c) for c in ranked]
@@ -3420,10 +3434,10 @@ class SearchPipeline:
             text_to_vec: dict[str, list[float]] = dict(zip(unique_texts, embedded_vecs))
 
             # Step 3: Per-leg search in parallel with timeout protection.
-            candidate_depth = max(self._top_k_retrieve * 3, 20)
+            candidate_depth = self._candidate_pool(top_k)
             if filters and filters.source_path_glob:
                 candidate_depth = max(candidate_depth * GLOB_OVERFETCH_FACTOR, 60)
-            trim = max(self._fanout_leg_trim, 1)
+            trim = self._leg_trim(top_k)
 
             async def _graph_leg(
                 coll: str, exp: ExpandedQuery,
@@ -3470,11 +3484,11 @@ class SearchPipeline:
 
             if reranker is not None:
                 t0 = monotonic()
-                ranked = await reranker.rerank_candidates(query, all_cands, top_k=self._top_k_return)
+                ranked = await reranker.rerank_candidates(query, all_cands, top_k=self._effective_top_k(top_k))
                 rerank_time_ms = (monotonic() - t0) * 1000.0
             else:
                 all_cands.sort(key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id))
-                ranked = all_cands[:self._top_k_return]
+                ranked = all_cands[:self._effective_top_k(top_k)]
                 rerank_time_ms = 0.0
 
             results = [self._candidate_to_search_result(c) for c in ranked]
@@ -3519,11 +3533,11 @@ class SearchPipeline:
                 )
             else:
                 if reranker is not None:
-                    all_candidates = await reranker.rerank_candidates(query, all_candidates, top_k=self._top_k_return)
+                    all_candidates = await reranker.rerank_candidates(query, all_candidates, top_k=self._effective_top_k(top_k))
                 else:
                     all_candidates = sorted(
                         all_candidates, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
-                    )[:self._top_k_return]
+                    )[:self._effective_top_k(top_k)]
                 return SearchPipelineResult(
                     results=[self._candidate_to_search_result(c) for c in all_candidates],
                     acl_filtered=acl_filtered,
@@ -3538,7 +3552,7 @@ class SearchPipeline:
             )
             # Embed the query once so all per-collection hybrid legs share the same vector.
             local_vector = list(query_vector) if query_vector is not None else await self._global_embedder.embed_one(query)
-            local_candidate_depth = max(self._top_k_retrieve * 3, 20)
+            local_candidate_depth = self._candidate_pool(top_k)
             if filters and filters.source_path_glob:
                 local_candidate_depth = max(local_candidate_depth * GLOB_OVERFETCH_FACTOR, 60)
 
@@ -3551,7 +3565,7 @@ class SearchPipeline:
                 ``graph_match`` is True when community representative chunks were
                 fetched for this leg (not a pure hybrid fallback).
                 """
-                trim = max(self._fanout_leg_trim, 1)
+                trim = self._leg_trim(top_k)
 
                 # Helper: run standard hybrid search and return (candidates, False).
                 async def _hybrid_fallback() -> tuple[list[ScoredSearchCandidate], bool]:
@@ -3710,13 +3724,13 @@ class SearchPipeline:
 
             if reranker is not None:
                 local_ranked = await reranker.rerank_candidates(
-                    query, all_local_candidates, top_k=self._top_k_return
+                    query, all_local_candidates, top_k=self._effective_top_k(top_k)
                 )
             else:
                 local_ranked = sorted(
                     all_local_candidates,
                     key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id),
-                )[:self._top_k_return]
+                )[:self._effective_top_k(top_k)]
 
             return SearchPipelineResult(
                 results=[self._candidate_to_search_result(c) for c in local_ranked],
@@ -3742,22 +3756,22 @@ class SearchPipeline:
             vector = await self._global_embedder.embed_one(query)
 
         # Step 3: fan-out + per-leg trim + merge + ACL.
-        candidate_depth = max(self._top_k_retrieve * 3, 20)
+        candidate_depth = self._candidate_pool(top_k)
         if filters and filters.source_path_glob:
             candidate_depth = max(candidate_depth * GLOB_OVERFETCH_FACTOR, 60)
         merged, acl_filtered, leg_times = await self._fanout_merge_acl(
             query, vector, collections_in_scope, namespace, candidate_depth, filters=filters,
-            scope_filter=scope_filter,
+            scope_filter=scope_filter, top_k=top_k,
         )
 
         # Step 7: single global rerank pass.
         if reranker is not None:
             t0 = monotonic()
-            ranked = await reranker.rerank_candidates(query, merged, top_k=self._top_k_return)
+            ranked = await reranker.rerank_candidates(query, merged, top_k=self._effective_top_k(top_k))
             rerank_time_ms = (monotonic() - t0) * 1000.0
         else:
             merged.sort(key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id))
-            ranked = merged[:self._top_k_return]
+            ranked = merged[:self._effective_top_k(top_k)]
             rerank_time_ms = 0.0
 
         # Step 8: convert to public results.
@@ -3780,7 +3794,10 @@ class SearchPipeline:
         candidate_depth: int,
         filters: SearchFilters | None = None,
         scope_filter: str | None = None,
+        top_k: int | None = None,
     ) -> tuple[list[ScoredSearchCandidate], bool, dict[str, float]]:
+        """Fan out to every collection, trim each leg to ``max(fanout_leg_trim, 1)`` (raised to at least
+        *top_k* when given; ``explain`` never passes it), merge and ACL-filter."""
         # Exact scope_filter → push to store; wildcard → store gets None, applied Python-side.
         store_scope = scope_filter if scope_filter and not scope_filter.endswith("*") else None
 
@@ -3810,7 +3827,7 @@ class SearchPipeline:
 
         leg_results = [t.result() for t in tasks]
 
-        trim = max(self._fanout_leg_trim, 1)
+        trim = self._leg_trim(top_k)
         trimmed: dict[str, list[ScoredSearchCandidate]] = {}
         leg_times: dict[str, float] = {}
         for coll, cands, leg_ms in leg_results:
