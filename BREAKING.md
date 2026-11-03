@@ -8,6 +8,84 @@
 
 ## Changelog
 
+### [next release] — OpenAI-compatible shim `POST /v1/chat/completions`: shim searches are recorded in the telemetry stats, and a timeout or an internal failure writes an error entry (2026-11-03)
+
+**Surface**: the telemetry JSONL and the consumers that count its entries (stats, error rates, dashboards) for `POST /v1/chat/completions`, and the server log of its failures, when `[openai_shim]` and telemetry are both enabled. The shim's answers are not changed by this entry.
+
+**What changed:**
+
+- **Before**: the shim wrote no telemetry entry at all, on success or on failure, so its traffic was missing from the search stats.
+- **New**: the shim searches through `SearchService`, the one that writes the entries of REST and MCP, with the same labels. A successful single-collection model (`archon-search/<collection>`) writes one `search` entry (collection and result document ids, hashed when document-id hashing is on); the all-collections model (`archon-search`) writes one `search_multi` entry (the requested collection names and counts, no document ids). A timeout (the shim's 504) writes one `search` entry with status `timeout` and error kind `timeout`; a failed metadata lookup, an embedder that is not ready and any unexpected failure write one `search` entry with status `internal_error` and error kind `other`, on both models. A `404` (a model that does not exist, an unknown, empty or invalid collection name) and the failures of the shim's own checks write nothing, and a failed collection-list lookup on the all-collections model is not recorded either, because the shim makes that call itself. No entry carries the query text. The success entries and the timeout entry are pinned by `test_shim_search_is_recorded_in_telemetry_with_the_same_labels` and `test_shim_search_timeout_answers_the_504_envelope_and_records_a_timeout_entry` in `tests/integration/test_be20_shim_search_service.py`.
+
+- **Log records**: the shim's search failure records (the timeout, the failed metadata lookup and the unexpected failure) are written by `SearchService`, the logger `archon_search.services.search_service`, with the service's messages, instead of `archon_search.server.routes_openai_shim` with the `chat_completions: ...` messages; the failure of the collection-list lookup is still logged by the shim.
+
+**Migration**: nothing to change for a client. A log filter keyed on the old shim messages or logger name must follow the move. An operator who has telemetry on now sees shim searches in the stats and in the per-endpoint counts, and a dashboard or alert that counts `search` and `search_multi` entries includes them; no entry field tells the shim apart from REST or MCP, so use the access log to separate them.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — OpenAI-compatible shim: a failed collection-list lookup and an unexpected failure of the all-collections search answer the OpenAI 503 envelope, not an unhandled 500 (2026-11-03)
+
+**Surface**: `POST /v1/chat/completions` with the model `archon-search` (the all-collections model). Clients that retry or alert on its `500` answers. The single-collection model `archon-search/<collection>` already answered an unexpected failure with this 503 and is not changed here.
+
+**What changed:**
+
+- **Before**: a failure of the lookup that lists the namespace's collections, and any failure of the fan-out search other than a missing collection, a timeout, a failed metadata lookup or an embedder that is not ready (the app-wide handler already answered that one with `503` and `Retry-After: 30`), escaped the handler and answered a plain `500 Internal Server Error`.
+- **New**: both answer `503` with the OpenAI envelope `{"error": {"message": "Service temporarily unavailable.", "type": "server_error", "param": null, "code": null}}` and no `Retry-After` header, the answer the shim already gave a failed metadata lookup and an unexpected failure on one collection. The envelope carries no exception text; the cause is in the server log (pinned by `test_shim_collection_list_failure_and_fanout_failure_are_the_503_envelope`). The shim's other fan-out answers (`404 Collection not found.`, `404 No collections available.`, `504 Request timeout.`) and its `503` with `Retry-After: 30` for an embedder that is not ready are unchanged.
+
+**Migration**: treat `503` from `/v1/chat/completions` as a retryable server-side failure on both models; a client that special-cased the `500` of the all-collections model must follow the `503`.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — OpenAI-compatible shim strips the collection name of the model and the query before it searches (2026-11-03)
+
+**Surface**: `POST /v1/chat/completions`: the part of `model` after `archon-search/` and the last user message. Clients that send padded values.
+
+**What changed:**
+
+- **Before**: the collection name was used exactly as written (a name padded with spaces reached the store unstripped, which refuses it, and answered `503`; see the next entry) and the user message was checked for being blank but then searched as written, with its leading and trailing whitespace.
+- **New**: the name and the query are stripped of leading and trailing whitespace before they are used, so the model `"archon-search/  docs  "` with the message `"  find the answer  "` searches `find the answer` in `docs`. The `model` echoed in the response is the one the client sent, padding included (pinned by `test_shim_padded_name_and_query_reach_the_service_stripped`). A blank user message still answers `400` with `code` `no_user_message`, and a name that is empty after stripping is the `404` of the next entry. The collection names of the all-collections model come from the namespace's collection list and are not changed.
+
+**Migration**: nothing to change; a client that padded a name or a query no longer needs to, and one that depended on the unstripped query text reaching the search must strip it itself.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — OpenAI-compatible shim: an empty, whitespace-only or invalid collection name in the model answers a real 404, not 503 (2026-11-03)
+
+**Surface**: `POST /v1/chat/completions` with the model `archon-search/<name>` when `<name>` is empty (`archon-search/`), only whitespace, or not a valid collection name (a space or `!` inside it, a leading `_` or `-`, non-ASCII, more than 64 characters: the rule is `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`). Clients that retry or alert on the `503` this produced.
+
+**What changed:**
+
+- **Before**: against a real store the lookup of such a name raised and the handler's catch-all answered `503` `Service temporarily unavailable.`; the `404` for `archon-search/` held only against a mocked store. An unknown name that is valid already answered `404`.
+- **New**: all three answer `404` `{"error": {"message": "The model '<model>' does not exist.", "type": "invalid_request_error", "param": null, "code": null}}`, the answer for an unknown collection, with `<model>` as the client sent it. The shim and the search service check the name before any store call, nothing is recorded in telemetry and no error is logged (pinned against the real store by `test_shim_empty_whitespace_and_invalid_collection_name_return_404_against_the_real_store`). A real metadata-store outage on a valid name is still `503`.
+
+**Migration**: treat `404` as "no such model or collection" and do not retry it; `503` stays the retryable answer.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — OpenAI-compatible shim on one collection waits at most 0.5 s for the collection's embedder and answers from the FTS leg alone when it is not ready (2026-11-03)
+
+**Surface**: `POST /v1/chat/completions` with the model `archon-search/<collection>`, when that collection's embedder is still loading (typically right after a restart). The all-collections model `archon-search` is not changed: it never goes through the per-collection embedder cache and was already bounded by the S290 warm-up.
+
+**What changed:**
+
+- **Before**: the shim waited for the embedder cache with no bound of its own, up to the cache's 120 s dedup wait, and the request blocked for as long.
+- **New**: the cache handoff is bounded by the same 0.5 s `EMBEDDER_WARMUP_WAIT_SECONDS` that S299 introduced for REST and that MCP `search` takes on one collection. When it expires the shim answers `200` from the FTS leg alone (the S290 degraded result: a different set of sources and ordering). The load keeps running and fills the cache for later requests, and the server logs a WARNING (the degrade and its 0.5 s bound are pinned by `test_shim_cold_embedder_degrades_to_fts_only`). The shim still answers `503` with `Retry-After: 30` when the cache itself gives up with its not-ready error inside the bound; it now renders the search service's error instead of the app-wide handler's, and the wire answer is the same.
+- **Reconciled with the S290 and S299 entries**: the S299 entry described REST only and said the shim kept the cache-level wait; the shim now takes the bound too, as the entry on the MCP `search` embedder wait announced. The S290 entry (the cold embedder degrades REST, MCP and the shim to the FTS leg) and the S286/S288 entry (the cold cross-encoder degrade) are unchanged.
+
+**Migration**: as for the S290 and S299 entries: gate traffic on `GET /ready` returning 200 if a degraded answer is not acceptable, and do not pin the order of the `[Source: ...]` citations returned during that window.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — MCP `search` has no default collection: `collection` or `collections` is required (2026-11-03)
 
 **Surface**: the MCP `search` tool on `/mcp`. Agents and scripts that call it with neither `collection` nor `collections`. `search_with_context`, `explain` and the other tools keep their default-collection fallback.
@@ -135,7 +213,7 @@
 
 ### [next release] — REST `POST /search` with a `collection` that is not a valid collection name answers `404 collection not found`, not `503` (2026-11-03)
 
-**Surface**: REST `POST /search` with the single-collection field `collection`; the server log. Clients that send a name that is not a valid collection name (a space or `!`, a leading `_` or `-`, non-ASCII, more than 64 characters: the rule is `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`), and any alert or retry rule keyed on the `503` this produced. The `collections` list (the multi-collection path), `POST /explain` (still `503` for an invalid `collection`) and the OpenAI-compatible shim are unchanged in this release; the MCP `search` tool changes in its own entries of this release.
+**Surface**: REST `POST /search` with the single-collection field `collection`; the server log. Clients that send a name that is not a valid collection name (a space or `!`, a leading `_` or `-`, non-ASCII, more than 64 characters: the rule is `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`), and any alert or retry rule keyed on the `503` this produced. The `collections` list (the multi-collection path), and `POST /explain` (still `503` for an invalid `collection`) are unchanged in this release; the MCP `search` tool and the OpenAI-compatible shim change in their own entries of this release.
 
 **What changed:**
 
@@ -1344,7 +1422,7 @@ This replaces the previous behaviour, which was strictly worse: the request bloc
 
 **What changed:** the route's own bound on `embedder_cache.get_or_load()` (`_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS`) drops from 30s to `server/_search_budget.EMBEDDER_WARMUP_WAIT_SECONDS` = 0.5s, and expiring it no longer raises `EmbedderNotReadyError`. The request now runs `fts_only=True` and answers `200`, exactly as the S290 warm-up stage one step later already did — so the whole cold path is under one policy. Note this bound never covered an ONNX build: `make_embedder` returns a lazy backend, so what it covers is the cache handoff (a saturated `asyncio.to_thread` executor, or this request parked as a deduplicated waiter behind another caller's in-flight load). The load is shielded and keeps running, so it still populates the cache for later requests.
 
-**Consequences for clients:** a request that previously got `503` + `Retry-After: 30` after 30s of waiting now gets a `200` in ~0.5s carrying the S290 degraded response — FTS-only ordering, `rag_fusion_applied` / `graph_expansion_applied` / `hyde_applied` `false`; see the S290 entry below for the full list. A `503` with `code: "embedder_not_ready"` on `/search` now means only a genuinely wedged load (past the cache's 120s dedup wait). No other surface changed by this entry: `/explain`, the MCP tools, the `/v1` shim and the job tasks kept the 120s cache-level bound and their existing `embedder_not_ready` mapping. Since 2026-11-03 the MCP `search` tool on a single collection takes this 0.5s bound too (see the entry on its embedder wait above); `search_with_context`, `explain`, the shim and the job tasks are as described here.
+**Consequences for clients:** a request that previously got `503` + `Retry-After: 30` after 30s of waiting now gets a `200` in ~0.5s carrying the S290 degraded response — FTS-only ordering, `rag_fusion_applied` / `graph_expansion_applied` / `hyde_applied` `false`; see the S290 entry below for the full list. A `503` with `code: "embedder_not_ready"` on `/search` now means only a genuinely wedged load (past the cache's 120s dedup wait). No other surface changed by this entry: `/explain`, the MCP tools, the `/v1` shim and the job tasks kept the 120s cache-level bound and their existing `embedder_not_ready` mapping. Since 2026-11-03 the MCP `search` tool on a single collection takes this 0.5s bound too (see the entry on its embedder wait above), and so does the OpenAI-compatible shim on a single collection (see the entry on the shim's embedder wait above); `search_with_context`, `explain` and the job tasks are as described here.
 
 **Migration:** clients that treated a cold-start `/search` `503` as "retry shortly" need no change — they simply stop seeing it. Clients that relied on that `503` to detect a cold server must gate on `GET /ready` returning `200` (S279) instead, and should handle the degraded `200` per the S290 entry below.
 
@@ -1387,7 +1465,7 @@ All three conditions are transient: the build continues in its worker thread, so
 
 **What changed:** Previously only `POST /search` mapped a wedged/still-loading embedder-cache load (`EmbedderNotReadyError`, raised when a deduplicated waiter blocks past `_LOAD_WAIT_TIMEOUT_SECONDS`=120s) to a clean 503. Every other surface that resolves an embedder let the exception fall into its generic `except Exception` handling: `/explain` and `/v1/chat/completions` fell through to FastAPI's default handler and returned a plain-text `500 Internal Server Error`; `routes_jobs.py`'s ingest/reindex tasks and `routes_export.py`'s import task left the job `FAILED` with `error=str(exc)` (leaking the exception class name, the timeout value, and the model name); the 5 embedder-resolving MCP tools (`search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory`) returned `{"error": str(exc), "code": "internal_error"}`.
 
-Now a single `@app.exception_handler(EmbedderNotReadyError)` in `create_app()` (`server/app.py`) covers every plain HTTP route without its own handling, returning `503` with `{"detail": "service unavailable: embedding model still loading", "code": "embedder_not_ready"}` and a `Retry-After: 30` header (or the OpenAI error envelope plus the same header under `/v1/*`) instead of a `500`. `routes_jobs.py`/`routes_export.py` job tasks now catch it explicitly and record the same sanitized `error` string instead of `str(exc)`, leaving the job `FAILED` (retryable — see the per-job-type retry rules in `Architecture/140_error_handling_strategy.md`). Each of the 5 MCP tools now catches it explicitly and returns `{"error": "service unavailable: embedding model still loading", "code": "embedder_not_ready"}` instead of `"internal_error"`. `routes_search.py`'s own local handler gained the same `Retry-After: 30` header and now also enqueues a telemetry entry (`from_error`, `status="internal_error"`, `error_kind="other"`) — previously this branch recorded nothing.
+Now a single `@app.exception_handler(EmbedderNotReadyError)` in `create_app()` (`server/app.py`) covers every plain HTTP route without its own handling, returning `503` with `{"detail": "service unavailable: embedding model still loading", "code": "embedder_not_ready"}` and a `Retry-After: 30` header (or the OpenAI error envelope plus the same header under `/v1/*`; since 2026-11-03 the shim builds that answer itself from the search service's error, and the wire answer is unchanged) instead of a `500`. `routes_jobs.py`/`routes_export.py` job tasks now catch it explicitly and record the same sanitized `error` string instead of `str(exc)`, leaving the job `FAILED` (retryable — see the per-job-type retry rules in `Architecture/140_error_handling_strategy.md`). Each of the 5 MCP tools now catches it explicitly and returns `{"error": "service unavailable: embedding model still loading", "code": "embedder_not_ready"}` instead of `"internal_error"`. `routes_search.py`'s own local handler gained the same `Retry-After: 30` header and now also enqueues a telemetry entry (`from_error`, `status="internal_error"`, `error_kind="other"`) — previously this branch recorded nothing.
 
 Also new: `POST /search` now bounds its own wait on `embedder_cache.get_or_load()` with `_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS` (`routes_search.py`), separately from the cache's own internal dedup-wait bound (`_LOAD_WAIT_TIMEOUT_SECONDS = 120s`, unchanged), so the request never holds the connection for up to 120s. **Superseded within this same unreleased window by the S299 entry above** — that bound is now `EMBEDDER_WARMUP_WAIT_SECONDS` = 0.5s and expiring it degrades the search to the FTS leg with a `200` rather than returning a 503. Only the cache-level `EmbedderNotReadyError` (a load wedged past the 120s dedup wait) still produces the sanitized 503 + `Retry-After: 30` on `/search`. No release ever shipped the intermediate 30s-then-503 behaviour, so there is nothing to migrate from it.
 
