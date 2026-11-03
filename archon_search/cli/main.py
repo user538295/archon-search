@@ -12,6 +12,7 @@ from archon_search.cli.install_cmd import install, uninstall, wizard
 from archon_search.cli.jobs_cmd import jobs
 from archon_search.cli.key_cmd import key_cmd
 from archon_search.cli.maintenance_cmd import maintenance_cmd
+from archon_search.cli.search import search
 from archon_search.cli.serve import serve
 from archon_search.cli.start import start
 from archon_search.cli.status import status
@@ -84,6 +85,7 @@ main.add_command(backup_cmd)
 main.add_command(maintenance_cmd)
 main.add_command(key_cmd)
 main.add_command(jobs)
+main.add_command(search)
 
 
 if __name__ == "__main__":

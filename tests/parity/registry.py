@@ -2,7 +2,7 @@
 
 Plain data: lists, dicts and string constants, no imports and no behaviour, so a test can deep-copy and mutate it. The shape
 is documented in ``tests/parity/test_parity.py``. Every live REST route, MCP tool and Click command is claimed here exactly as
-the live surfaces report it, or waived; ``service_method`` is ``None`` because no service method exists before roadmap S1.
+the live surfaces report it, or waived; ``service_method`` is ``None`` until the slice's service method exists.
 When a slice lands, replace its pending waiver with the new surface identifier.
 """
 
@@ -27,7 +27,7 @@ _LOCAL_OPERATION = (
 REGISTRY = [
     {
         "name": "S1 Search (pilot)",
-        "service_method": None,
+        "service_method": "SearchService.search",
         "claims": [
             {
                 "surface": "rest",
@@ -41,12 +41,8 @@ REGISTRY = [
             },
             {
                 "surface": "cli",
-                "identifier": None,
-                "waiver": {
-                    "kind": "pending",
-                    "reason": "No CLI search command yet; S1 adds it",
-                    "pending_slice": "S1",
-                },
+                "identifier": "search",
+                "waiver": None,
             },
         ],
     },
