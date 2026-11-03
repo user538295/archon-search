@@ -127,7 +127,7 @@ flowchart LR
 
 ### Phase 0 · Kickoff *(prerequisite; the one cross-cutting step)*
 
-- [ ] **K1** — Agree the Contracts C1–C9 and the scenario split with the team; TQ1 is already decided (Option D, see **Open questions**) and its plan corrections go to the plan owner #team
+- [x] **K1** — Agree the Contracts C1–C9 and the scenario split with the team; TQ1 is already decided (Option D, see **Open questions**) and its plan corrections go to the plan owner #team
     - — · 1.5h
     - completes C1, C2, C3, C4, C5, C6, C7, C8, C9
     - Tests
