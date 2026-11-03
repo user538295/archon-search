@@ -497,7 +497,7 @@ REST, MCP and the CLI honour `top_k`; the shim ignores the request value and tak
         - #e2e_test — `test_mcp_call_uses_top_k_and_acl_context_on_a_real_server` — a real `fastmcp` client
         - #e2e_test — `test_full_smoke_suite_passes` — (existing, `tests/smoke/test_rest.py` ≈352) T-4 owns the final count: the new smoke tests of T-1 to T-4 (all its predecessors) enlarge the child run, so raise `_EXPECTED_MIN_PASSED` (25) and re-measure `_CHILD_SUITE_TIMEOUT_S` (480 s) together, once, here
         - #manual_test — Real OpenAI-compatible client and real MCP agent — a product such as Open WebUI and an LLM-driven agent choosing the tool (non-automatable: needs external products and an LLM; the protocol behaviour is automated above)
-- [ ] **T-5** — Manual: review `BREAKING.md` and the migration rows against the S62 list #tester-role
+- [x] **T-5** — Manual: review `BREAKING.md` and the migration rows against the S62 list #tester-role
     - — · 1.5h
     - needs BE-9, BE-18, BE-21, BE-28 · completes S62
     - Tests
