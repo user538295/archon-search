@@ -33,6 +33,9 @@ INTERNAL_ERROR_CODE: Final[str] = "internal_error"
 NOT_FOUND_CODE: Final[str] = "not_found"
 COLLECTION_NOT_FOUND_DETAIL: Final[str] = "collection not found"
 
+# Wire-safe text for a rejected filter value: a Pydantic ``ValidationError`` embeds the rejected input, so it is never echoed.
+INVALID_SEARCH_FILTERS_DETAIL: Final[str] = "invalid search filters"
+
 VALIDATION_ERROR_CODE: Final[str] = "validation_error"
 INVALID_GRAPH_MODE_CODE: Final[str] = "invalid_graph_mode"
 GRAPH_DISABLED_CODE: Final[str] = "graph_disabled"

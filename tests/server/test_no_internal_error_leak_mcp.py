@@ -57,7 +57,6 @@ from archon_search.pipeline import (
 )
 from archon_search.server.mcp import (
     _INVALID_EXPLAIN_RESPONSE_DETAIL,
-    _INVALID_SEARCH_FILTERS_DETAIL,
     _INVALID_SEARCH_RESPONSE_DETAIL,
     CREATE_KEY_FAILED_DETAIL,
     INTERNAL_ERROR_DETAIL,
@@ -72,7 +71,10 @@ from archon_search.server.mcp_schemas import (
     McpSearchResultSchema,
 )
 from archon_search.server.routes_explain import EXPLAIN_FAILED_DETAIL, ExplainResponse
-from archon_search.services.service_error import SEARCH_FAILED_DETAIL
+from archon_search.services.service_error import (
+    INVALID_SEARCH_FILTERS_DETAIL,
+    SEARCH_FAILED_DETAIL,
+)
 from archon_search.store import StoreBusyError
 from tests._collection_lock_stub import with_locked_collection_meta
 from tests._docling_stubs import reset_parser_worker_globals  # noqa: F401 — autouse fixture
@@ -448,7 +450,7 @@ async def test_filter_validation_error_does_not_echo_input_value(tool: str, kwar
 
     result, wire = await _wire(_tools(pipeline), tool, indexed_after=_BAD_FILTER_VALUE, **kwargs)
 
-    _assert_error_without_leak(result, wire, "validation_error", _INVALID_SEARCH_FILTERS_DETAIL)
+    _assert_error_without_leak(result, wire, "validation_error", INVALID_SEARCH_FILTERS_DETAIL)
     pipeline.search.assert_not_awaited()
     pipeline.search_many.assert_not_awaited()
     pipeline.search_with_context.assert_not_awaited()

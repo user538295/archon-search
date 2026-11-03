@@ -12,6 +12,9 @@ VALID_GRAPH_MODES: Final[tuple[GraphMode, ...]] = get_args(GraphMode)
 # Where a chunk's ACL rule came from; any other stored string is shown as ``None`` on the wire.
 VALID_ACL_SOURCES: Final[frozenset[str]] = frozenset({"frontmatter", "sidecar", "collection_default"})
 
+# Lowest per-request ``top_k`` a search accepts.
+TOP_K_MIN: Final[int] = 1
+
 # Overall wall-clock budget of one search request on every interface.
 # TODO: make configurable via config.py (see /route for parity)
 SEARCH_TIMEOUT_SECONDS: Final[float] = 30.0

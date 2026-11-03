@@ -159,7 +159,7 @@ An operator runs `archon-search search "q" --collection docs` and reads ranked r
     - needs K1 · completes S76
     - Tests
         - #unit_test — `test_graph_communities_not_built_text_is_byte_identical` — the rendered text equals today's `No community representatives found for collection '<name>'. Run community detection first.`
-- [ ] **BE-4** — Add `SearchCommand` and the one normaliser under `services/`: REST's actual check order, REST's exact 422 strings, stripped query and collection names, the two include-metadata flags ORed once, no-filter means no filter, fan-out (after de-duplication), `top_k` bounds, scope-filter and `graph_mode` rules, `ppr` with any `collections` #backend-role
+- [x] **BE-4** — Add `SearchCommand` and the one normaliser under `services/`: REST's actual check order, REST's exact 422 strings, stripped query and collection names, the two include-metadata flags ORed once, no-filter means no filter, fan-out (after de-duplication), `top_k` bounds, scope-filter and `graph_mode` rules, `ppr` with any `collections` #backend-role
     - Use Cases · 5.0h
     - needs BE-2 · completes C1, S5, S6, S8, S9, S10, S13, S14, S15, S20
     - Tests

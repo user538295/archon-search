@@ -151,6 +151,7 @@ from archon_search.services.service_error import (
     GRAPH_COMMUNITIES_NOT_BUILT_CODE,
     INTERNAL_ERROR_CODE,
     INVALID_SCOPE_FILTER_CODE,
+    INVALID_SEARCH_FILTERS_DETAIL,
     NOT_FOUND_CODE,
     SEARCH_FAILED_DETAIL,
     fanout_exceeded_detail,
@@ -233,10 +234,8 @@ class McpErrorResponse(TypedDict):
 
 
 _ERR_SCHEMA = "schema_validation_error"
-# Wire-safe text for search / search_with_context Pydantic failures: a ValidationError's text
-# embeds the rejected input values, so neither the filter nor the response-schema
-# failure is echoed (mirrors explain's "invalid explain request").
-_INVALID_SEARCH_FILTERS_DETAIL = "invalid search filters"
+# Wire-safe text for the search / search_with_context response-schema failure: a ValidationError's text
+# embeds the rejected input values, so it is not echoed (mirrors explain's "invalid explain request").
 _INVALID_SEARCH_RESPONSE_DETAIL = "search response failed schema validation"
 # explain's response-schema failure, for the same reason as search's above.
 _INVALID_EXPLAIN_RESPONSE_DETAIL = "explain response failed schema validation"
@@ -632,7 +631,7 @@ def create_app(
                         language=language,
                     )
                 except ValidationError:
-                    return McpErrorResponse(error=_INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
+                    return McpErrorResponse(error=INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
             else:
                 _multi_filters = None
             # Same warm-up as the REST fan-out route: the global embedder (which
@@ -740,7 +739,7 @@ def create_app(
                     include_metadata=include_metadata,
                 )
             except ValidationError:
-                return McpErrorResponse(error=_INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
+                return McpErrorResponse(error=INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
             _col = collection or default_collection
             # Namespace gate: collection must exist in the caller's namespace.
             # Mirrors the REST search route's get_collection_meta check (routes_search.py)
@@ -922,7 +921,7 @@ def create_app(
                     include_metadata=include_metadata,
                 )
             except ValidationError:
-                return McpErrorResponse(error=_INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
+                return McpErrorResponse(error=INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
             _swc_col = collection or default_collection
             # Namespace gate: collection must exist in the caller's namespace.
             _swc_meta = await pipeline.get_collection_meta(_swc_col, namespace=_swc_ns)
