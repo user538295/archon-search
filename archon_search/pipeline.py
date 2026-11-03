@@ -233,6 +233,10 @@ class GraphCommunitiesNotBuiltError(Exception):
 #: The rrf_score of every graph-sourced candidate: graph paths have no retrieval rank to fuse.
 _GRAPH_NEUTRAL_RRF_SCORE = 1.0
 
+#: The candidate pool of a search is ``max(top_k_retrieve * 3, 20)``; a request ``top_k`` raises it to at least ``top_k``.
+_CANDIDATE_POOL_MULTIPLIER = 3
+_MIN_CANDIDATE_POOL = 20
+
 
 def _row_to_graph_candidate(row: dict[str, Any], collection: str) -> ScoredSearchCandidate:
     """Convert a raw LanceDB chunk row to a graph-sourced ScoredSearchCandidate.
@@ -1493,6 +1497,15 @@ class SearchPipeline:
     # Search
     # ------------------------------------------------------------------
 
+    def _effective_top_k(self, top_k: int | None) -> int:
+        """The result count of a search: the request's *top_k*, else the configured ``top_k_return``."""
+        return self._top_k_return if top_k is None else top_k
+
+    def _candidate_pool(self, top_k: int | None) -> int:
+        """The candidate pool of a search: the configured pool, raised to at least *top_k*."""
+        pool = max(self._top_k_retrieve * _CANDIDATE_POOL_MULTIPLIER, _MIN_CANDIDATE_POOL)
+        return pool if top_k is None else max(pool, top_k)
+
     async def search(
         self,
         query: str,
@@ -1508,6 +1521,7 @@ class SearchPipeline:
         graph_mode: str | None = None,
         scope_filter: str | None = None,
         rerank: bool = True,
+        top_k: int | None = None,
         fts_only: bool = False,
     ) -> SearchPipelineResult:
         """*rerank=False* skips the cross-encoder stage and returns the fused
@@ -1521,7 +1535,14 @@ class SearchPipeline:
         both need to embed, so they are skipped in that mode; an already-computed
         *query_vector* removes the need to embed and cancels the degrade. HyDE
         does not reach that case during a cold window — generating its vector
-        would itself use the cold embedder, so the routes skip it upstream."""
+        would itself use the cold embedder, so the routes skip it upstream.
+
+        *top_k*, when given, is the number of results instead of the configured
+        ``top_k_return`` and raises the candidate pool to at least that many, so up to
+        *top_k* results return (exactly *top_k* when enough candidates survive the
+        ACL, glob and wildcard-scope post-filters). ``None`` keeps the configured ``top_k_return`` and pool.
+        ``graph_mode="global"`` has no pool: it ranks the community representatives, at most
+        ``[graph].max_global_candidates``, so it can return fewer than *top_k*."""
         # --- Graph expansion (naive mode) — applied to original query before all other paths ---
         # Expansion is applied to the original query only.  RAG Fusion variants are generated
         # from the original (unexpanded) query.  HyDE uses the original query; when expansion
@@ -1540,6 +1561,7 @@ class SearchPipeline:
                 filters=filters,
                 scope_filter=scope_filter,
                 rerank=rerank,
+                top_k=top_k,
             )
         if graph_mode in ("local", "global"):
             return await self._search_graph_mode(  # type: ignore[return-value]
@@ -1547,6 +1569,7 @@ class SearchPipeline:
                 filters=filters,
                 scope_filter=scope_filter,
                 rerank=rerank,
+                top_k=top_k,
             )
         if graph_mode == "naive" and self._graph_expander is not None:
             expanded_text = await self._search_graph_mode(
@@ -1576,7 +1599,7 @@ class SearchPipeline:
                 result = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank,
+                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank, top_k=top_k,
                 )
                 result.graph_expansion_applied = graph_expansion_applied
                 return result
@@ -1592,7 +1615,7 @@ class SearchPipeline:
                 fallback = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank,
+                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank, top_k=top_k,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion timed out"
                 fallback.graph_expansion_applied = graph_expansion_applied
@@ -1605,7 +1628,7 @@ class SearchPipeline:
                 fallback = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank,
+                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank, top_k=top_k,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion expansion failed"
                 fallback.graph_expansion_applied = graph_expansion_applied
@@ -1625,7 +1648,7 @@ class SearchPipeline:
                 fallback = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank,
+                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank, top_k=top_k,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion expansion failed"
                 fallback.graph_expansion_applied = graph_expansion_applied
@@ -1634,7 +1657,7 @@ class SearchPipeline:
             # 5. Parallel variant searches using hybrid_search_with_trace.
             # Exact scope_filter is pushed to the store; wildcard is applied Python-side after fusion.
             _rag_scope = scope_filter if scope_filter and not scope_filter.endswith("*") else None
-            _rag_candidate_depth = max(self._top_k_retrieve * 3, 20)
+            _rag_candidate_depth = self._candidate_pool(top_k)
             search_calls = [
                 self.store.hybrid_search_with_trace(
                     collection, v, query, candidate_depth=_rag_candidate_depth,
@@ -1660,7 +1683,7 @@ class SearchPipeline:
                 result = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank,
+                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank, top_k=top_k,
                 )
                 result.graph_expansion_applied = graph_expansion_applied
                 return result
@@ -1690,10 +1713,10 @@ class SearchPipeline:
             # 9. Rerank on fused set using the original query.
             if self._reranker is not None and rerank:
                 fused = await self._reranker.rerank_candidates(
-                    query, fused, top_k=self._top_k_return
+                    query, fused, top_k=self._effective_top_k(top_k)
                 )
             else:
-                fused = fused[:self._top_k_return]
+                fused = fused[:self._effective_top_k(top_k)]
 
             results = [self._candidate_to_search_result(c) for c in fused]
             # rag_fusion_applied=True only when at least one variant was generated and searched.
@@ -1715,7 +1738,7 @@ class SearchPipeline:
         result = await self._search_standard(
             effective_query, collection, namespace, embedder=embedder,
             filters=filters, query_vector=effective_query_vector,
-            scope_filter=scope_filter, rerank=rerank, fts_only=fts_only,
+            scope_filter=scope_filter, rerank=rerank, fts_only=fts_only, top_k=top_k,
         )
         result.graph_expansion_applied = graph_expansion_applied
         return result
@@ -1730,6 +1753,7 @@ class SearchPipeline:
         filters: SearchFilters | None = None,
         scope_filter: str | None = None,
         rerank: bool = True,
+        top_k: int | None = None,
     ) -> SearchPipelineResult | str:
         """Dispatch for graph retrieval modes.
 
@@ -1747,7 +1771,7 @@ class SearchPipeline:
             return expanded.expanded_text if expanded.expansion_applied else query
 
         if graph_mode == "local":
-            return await self._search_local_mode(query, collection, namespace, filters=filters, rerank=rerank)
+            return await self._search_local_mode(query, collection, namespace, filters=filters, rerank=rerank, top_k=top_k)
 
 
         if graph_mode == "global":
@@ -1757,7 +1781,7 @@ class SearchPipeline:
                     "falling back to standard search (collection=%r)", collection,
                 )
                 return await self._search_standard(
-                    query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                    query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
                 )
             communities = await self._graph_store.list_community_representatives(collection, ns=namespace)
             if not communities:
@@ -1776,7 +1800,7 @@ class SearchPipeline:
                     "falling back to standard search", collection,
                 )
                 return await self._search_standard(
-                    query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                    query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
                 )
 
             candidates = [_row_to_graph_candidate(r, collection) for r in rows]
@@ -1788,15 +1812,15 @@ class SearchPipeline:
                     "falling back to standard search", collection,
                 )
                 return await self._search_standard(
-                    query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                    query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
                 )
 
             if rerank and self._reranker is not None:
-                candidates = await self._reranker.rerank_candidates(query, candidates, top_k=self._top_k_return)
+                candidates = await self._reranker.rerank_candidates(query, candidates, top_k=self._effective_top_k(top_k))
             else:
                 candidates = sorted(
                     candidates, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
-                )[:self._top_k_return]
+                )[:self._effective_top_k(top_k)]
 
             return SearchPipelineResult(
                 results=[self._candidate_to_search_result(c) for c in candidates],
@@ -1807,7 +1831,7 @@ class SearchPipeline:
         # Unknown mode — log and fall through to standard
         logger.warning("_search_graph_mode: unknown graph_mode=%r; falling back", graph_mode)
         return await self._search_standard(
-            query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+            query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
         )
 
     async def _search_ppr_mode(
@@ -1819,6 +1843,7 @@ class SearchPipeline:
         filters: SearchFilters | None = None,
         scope_filter: str | None = None,
         rerank: bool = True,
+        top_k: int | None = None,
     ) -> SearchPipelineResult:
         """Personalized PageRank retrieval mode (E2h BE-6).
 
@@ -1843,7 +1868,7 @@ class SearchPipeline:
         if self._ppr_walker is None or self._graph_store is None:
             logger.debug("_search_ppr_mode: no ppr_walker/graph_store; falling back (fp=%s)", fp)
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
             result.ppr_entities_matched = 0
             return result
@@ -1862,7 +1887,7 @@ class SearchPipeline:
                 collection, fp, exc_info=True,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
             result.ppr_entities_matched = 0
             return result
@@ -1871,7 +1896,7 @@ class SearchPipeline:
         if ppr_result.entities_matched == 0:
             logger.debug("_search_ppr_mode: no entities matched (fp=%s); falling back", fp)
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
             result.ppr_entities_matched = 0
             return result
@@ -1886,7 +1911,7 @@ class SearchPipeline:
                 collection, fp,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
             result.ppr_entities_matched = entities_matched
             return result
@@ -1909,7 +1934,7 @@ class SearchPipeline:
                 collection, fp,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
             result.ppr_entities_matched = entities_matched
             return result
@@ -1918,7 +1943,7 @@ class SearchPipeline:
         vector = await self._global_embedder.embed_one(query)
         hybrid_candidates = await self.store.hybrid_search_with_trace(
             collection, vector, query,
-            candidate_depth=max(self._top_k_retrieve * 3, 20),
+            candidate_depth=self._candidate_pool(top_k),
             filters=filters,
         )
         if filters and filters.source_path_glob:
@@ -1943,12 +1968,12 @@ class SearchPipeline:
         # S7: rerank merged set; return top-k.
         if rerank and self._reranker is not None:
             final_candidates = await self._reranker.rerank_candidates(
-                query, merged, top_k=self._top_k_return
+                query, merged, top_k=self._effective_top_k(top_k)
             )
         else:
             final_candidates = sorted(
                 merged, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
-            )[:self._top_k_return]
+            )[:self._effective_top_k(top_k)]
 
         return SearchPipelineResult(
             results=[self._candidate_to_search_result(c) for c in final_candidates],
@@ -1965,6 +1990,7 @@ class SearchPipeline:
         *,
         filters: SearchFilters | None = None,
         rerank: bool = True,
+        top_k: int | None = None,
     ) -> SearchPipelineResult:
         """Single-collection path for graph_mode='local' (BE-7a).
 
@@ -1996,14 +2022,14 @@ class SearchPipeline:
         if not ngrams:
             logger.debug("_search_local_mode: empty query (fp=%s); falling back", fp)
             return await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
 
         # Step 2: entity matching.
         if self._graph_store is None:
             logger.debug("_search_local_mode: no graph_store; falling back (fp=%s)", fp)
             return await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
 
         try:
@@ -2014,14 +2040,14 @@ class SearchPipeline:
                 collection, fp, exc_info=True,
             )
             return await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
 
         if not matched_nodes:
             # S10: no entities recognised in query → standard hybrid search.
             logger.debug("_search_local_mode: no graph entities matched query (fp=%s)", fp)
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
             result.graph_expansion_applied = False
             return result
@@ -2035,7 +2061,7 @@ class SearchPipeline:
                 collection, fp, exc_info=True,
             )
             return await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
 
         if not table_exists:
@@ -2055,7 +2081,7 @@ class SearchPipeline:
                 collection, fp, exc_info=True,
             )
             return await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
 
         if not communities:
@@ -2071,7 +2097,7 @@ class SearchPipeline:
             else:
                 effective_query = query
             std_result = await self._search_standard(
-                effective_query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                effective_query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
             return SearchPipelineResult(
                 results=std_result.results,
@@ -2091,7 +2117,7 @@ class SearchPipeline:
                 collection, fp,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
             result.graph_expansion_applied = False
             return result
@@ -2111,7 +2137,7 @@ class SearchPipeline:
                 collection, fp,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
             result.graph_expansion_applied = False
             return result
@@ -2135,7 +2161,7 @@ class SearchPipeline:
                 collection, fp,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank, top_k=top_k,
             )
             result.graph_expansion_applied = False
             return result
@@ -2144,7 +2170,7 @@ class SearchPipeline:
         vector = await self._global_embedder.embed_one(query)
         hybrid_candidates = await self.store.hybrid_search_with_trace(
             collection, vector, query,
-            candidate_depth=max(self._top_k_retrieve * 3, 20),
+            candidate_depth=self._candidate_pool(top_k),
             filters=filters,
         )
         if filters and filters.source_path_glob:
@@ -2169,12 +2195,12 @@ class SearchPipeline:
         # Step 10: rerank merged set; return top-k.
         if rerank and self._reranker is not None:
             final_candidates = await self._reranker.rerank_candidates(
-                query, merged, top_k=self._top_k_return
+                query, merged, top_k=self._effective_top_k(top_k)
             )
         else:
             final_candidates = sorted(
                 merged, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
-            )[:self._top_k_return]
+            )[:self._effective_top_k(top_k)]
 
         return SearchPipelineResult(
             results=[self._candidate_to_search_result(c) for c in final_candidates],
@@ -2194,6 +2220,7 @@ class SearchPipeline:
         rag_fusion_attempted: bool = False,
         scope_filter: str | None = None,
         rerank: bool = True,
+        top_k: int | None = None,
         fts_only: bool = False,
     ) -> SearchPipelineResult:
         """Standard single-query search path (no RAG Fusion).
@@ -2211,7 +2238,7 @@ class SearchPipeline:
         # Wildcard (ending '*') is skipped at the SQL level and applied Python-side below.
         store_scope = scope_filter if scope_filter and not scope_filter.endswith("*") else None
         candidates = await self.store.hybrid_search_with_trace(
-            collection, vector, query, candidate_depth=max(self._top_k_retrieve * 3, 20),
+            collection, vector, query, candidate_depth=self._candidate_pool(top_k),
             filters=filters, scope_filter=store_scope,
         )
         if filters and filters.source_path_glob:
@@ -2220,10 +2247,11 @@ class SearchPipeline:
         # Wildcard scope post-filter: applied before ACL and reranking.
         if scope_filter and scope_filter.endswith("*"):
             candidates = _apply_scope_wildcard_filter(candidates, scope_filter)
+        result_count = self._effective_top_k(top_k)
         candidates_before_acl = len(candidates)
         candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, namespace)
         acl_denied = candidates_before_acl - len(candidates)
-        if filters is not None and len(candidates) < self._top_k_return:
+        if filters is not None and len(candidates) < result_count:
             filter_flags = {
                 k: v
                 for k, v in filters.model_dump().items()
@@ -2234,15 +2262,15 @@ class SearchPipeline:
                     "filter+ACL combined attrition: only %d/%d candidates reached reranker"
                     " (filter_flags=%r, acl_denied=%d)",
                     len(candidates),
-                    self._top_k_return,
+                    result_count,
                     filter_flags,
                     acl_denied,
                 )
         if self._reranker is not None and rerank:
-            reranked = await self._reranker.rerank_candidates(query, candidates, top_k=self._top_k_return)
+            reranked = await self._reranker.rerank_candidates(query, candidates, top_k=result_count)
             results = [self._candidate_to_search_result(c) for c in reranked]
         else:
-            candidates = candidates[:self._top_k_return]
+            candidates = candidates[:result_count]
             results = [self._candidate_to_search_result(c) for c in candidates]
         return SearchPipelineResult(
             results=results,

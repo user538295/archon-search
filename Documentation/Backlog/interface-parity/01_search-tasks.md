@@ -427,7 +427,7 @@ REST, MCP and the CLI honour `top_k`; the shim ignores the request value and tak
     - Tests
         - #unit_test — `test_pipeline_constructor_has_no_max_fanout_parameter` — the parameter is gone
         - #integration_test — `test_create_app_builds_the_pipeline_without_a_max_fanout_argument` — the rewritten `test_create_app_wires_fanout_config_into_pipeline`: `fanout_timeout_seconds` and `fanout_leg_trim` from the TOML still reach the pipeline, `max_fanout` is no argument of it (the service and shim wiring of `config.max_fanout` is proved in BE-20, where both exist)
-- [ ] **BE-23** — Add an optional `top_k` to `SearchPipeline.search` and its helpers: the pool is raised to at least `top_k` at the four `search` pool sites, every cutoff and the shortfall warning use the effective count, default behaviour byte-identical #backend-role
+- [x] **BE-23** — Add an optional `top_k` to `SearchPipeline.search` and its helpers: the pool is raised to at least `top_k` at the four `search` pool sites, every cutoff and the shortfall warning use the effective count, default behaviour byte-identical #backend-role
     - Frameworks & Drivers · 5.5h
     - needs K1 · completes C3, S21, S22, S72, S73
     - Tests
