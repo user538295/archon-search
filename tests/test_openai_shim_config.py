@@ -17,11 +17,16 @@ from archon_search.config import OpenAIShimConfig, load_config
 
 
 def test_openai_shim_config_defaults() -> None:
-    """OpenAIShimConfig() has enabled=False, inject_citations=True, top_k=5."""
+    """OpenAIShimConfig() has enabled=False, inject_citations=True, top_k=None."""
     cfg = OpenAIShimConfig()
     assert cfg.enabled is False
     assert cfg.inject_citations is True
-    assert cfg.top_k == 5
+    assert cfg.top_k is None
+
+
+def test_shim_top_k_is_unset_by_default(tmp_path: Path) -> None:
+    """S61/S79: with no [openai_shim].top_k the loaded config holds no value."""
+    assert load_config(path=tmp_path / "nonexistent.toml").openai_shim.top_k is None
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +65,7 @@ def test_openai_shim_toml_partial_parse(tmp_path: Path) -> None:
     config = load_config(path=toml)
     assert config.openai_shim.enabled is True
     assert config.openai_shim.inject_citations is True
-    assert config.openai_shim.top_k == 5
+    assert config.openai_shim.top_k is None
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +133,42 @@ def test_openai_shim_enabled_string_rejected(tmp_path: Path) -> None:
         load_config(path=toml)
 
 
+
+# ---------------------------------------------------------------------------
+# Cross-check against [search].top_k_max
+# ---------------------------------------------------------------------------
+
+
+def test_shim_top_k_above_top_k_max_raises_config_error(tmp_path: Path) -> None:
+    """A set [openai_shim].top_k above [search].top_k_max fails at load_config."""
+    from archon_search.config import ConfigError
+
+    toml = tmp_path / "archon-search.toml"
+    toml.write_text("[openai_shim]\ntop_k = 11\n\n[search]\ntop_k_max = 10\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=r"\[openai_shim\]\.top_k.*top_k_max \(10\), got 11"):
+        load_config(path=toml)
+
+
+def test_shim_top_k_above_default_top_k_max_raises_config_error(tmp_path: Path) -> None:
+    """With [search].top_k_max unset the dataclass default ceiling applies."""
+    from archon_search.config import ConfigError, SearchConfig
+
+    ceiling = SearchConfig().top_k_max
+    toml = tmp_path / "archon-search.toml"
+    toml.write_text(f"[openai_shim]\ntop_k = {ceiling + 1}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=rf"top_k_max \({ceiling}\), got {ceiling + 1}"):
+        load_config(path=toml)
+
+
+def test_shim_top_k_equal_to_top_k_max_is_accepted(tmp_path: Path) -> None:
+    """The ceiling is inclusive: top_k == top_k_max loads."""
+    toml = tmp_path / "archon-search.toml"
+    toml.write_text("[search]\ntop_k_max = 10\n\n[openai_shim]\ntop_k = 10\n", encoding="utf-8")
+    config = load_config(path=toml)
+    assert config.openai_shim.top_k == 10
+    assert config.top_k_max == 10
+
+
 # ---------------------------------------------------------------------------
 # Snapshot inclusion
 # ---------------------------------------------------------------------------
@@ -141,5 +182,5 @@ def test_config_snapshot_includes_openai_shim(tmp_path: Path) -> None:
     assert dataclasses.asdict(config)["openai_shim"] == {
         "enabled": False,
         "inject_citations": True,
-        "top_k": 5,
+        "top_k": None,
     }

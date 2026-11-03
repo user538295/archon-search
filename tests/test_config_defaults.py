@@ -276,7 +276,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "openai_shim": {
             "enabled": False,
             "inject_citations": True,
-            "top_k": 5,
+            "top_k": None,
         },
     }
 

@@ -94,6 +94,26 @@ def test_config_set_boolean_false(runner: CliRunner, tmp_path: Path) -> None:
     assert doc["database"]["auto_reindex_on_chunk_size_change"] is True  # must be bool, not string
 
 
+@pytest.mark.parametrize(
+    ("original", "key", "value"),
+    [
+        ("[search]\ntop_k_max = 10\n", "openai_shim.top_k", "11"),
+        ("[search]\ntop_k_max = 10\n\n[openai_shim]\ntop_k = 10\n", "search.top_k_max", "9"),
+    ],
+    ids=["raise-shim-key", "lower-ceiling"],
+)
+def test_config_set_rejects_shim_top_k_above_top_k_max_and_leaves_file_untouched(
+    runner: CliRunner, tmp_path: Path, original: str, key: str, value: str
+) -> None:
+    """`config set` accepts exactly what `load_config` accepts: the shim key above `[search].top_k_max` is refused."""
+    config_file = tmp_path / "archon-search.toml"
+    config_file.write_text(original)
+    result = runner.invoke(main, ["config", "set", key, value, "--config", str(config_file)])
+    assert result.exit_code == 1, result.output
+    assert "top_k_max" in result.output
+    assert config_file.read_text() == original
+
+
 def test_config_get_routing_key_with_no_file(runner: CliRunner, tmp_path: Path) -> None:
     missing = tmp_path / "nonexistent.toml"
     result = runner.invoke(main, ["config", "get", "routing.routing_shortlist_size", "--config", str(missing)])

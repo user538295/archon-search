@@ -790,11 +790,11 @@ enabled = false
 # Append source citations to the assistant reply.
 # inject_citations = true
 
-# Number of retrieval results to feed into the response context.
-# Accepted and validated, but currently not forwarded to the pipeline
-# (reserved for a future release when search() and search_many() support
-# a runtime top_k parameter).
-# top_k = 5
+# The shim's result count: how many retrieval results feed the response context.
+# Unset by default, which uses [database].top_k_return like every other interface.
+# Integer >= 1, and not above [search].top_k_max (a larger value fails config load).
+# A `top_k` field in the request body is accepted and ignored.
+# top_k = 10
 
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.

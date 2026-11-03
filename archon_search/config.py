@@ -309,22 +309,20 @@ class GraphConfig:
     the engine's guardrails are tuned for CPU and an accelerator is allowed but unmeasured."""
 
 
-_OPENAI_SHIM_TOP_K_DEFAULT: int = 5
-
-
 @dataclass
 class OpenAIShimConfig:
     """Configuration for the OpenAI-compatible shim endpoint (G9).
 
     enabled: expose the /v1/chat/completions shim route (default: False).
     inject_citations: append source citations to the assistant reply (default: True).
-    top_k: number of retrieval results to feed into the response context (default: 5).
-        Accepted and validated but currently has no effect — not forwarded to the pipeline. Reserved for a future release when search() and search_many() support a runtime top_k parameter.
+    top_k: the shim's result count (default: unset, meaning `[database].top_k_return` like every other
+        interface). A set value is an integer >= 1 and must not exceed `[search].top_k_max`; `load_config`
+        raises `ConfigError` otherwise. The shim never takes a count from the request.
     """
 
     enabled: bool = False
     inject_citations: bool = True
-    top_k: int = _OPENAI_SHIM_TOP_K_DEFAULT
+    top_k: int | None = None
 
 
 @dataclass
@@ -630,7 +628,8 @@ def strip_removed_keys(doc: tomlkit.TOMLDocument) -> list[str]:
 def validate_document(doc: tomlkit.TOMLDocument, *, setting: tuple[str, str] | None = None) -> None:
     """Raise ``ConfigError`` when *doc* would not load, ignoring ``REMOVED_KEYS`` entries the file still holds.
 
-    Runs the loader's own ``_apply_toml`` on a copy, so ``config set`` accepts exactly what ``load_config`` accepts.
+    Runs the loader's own `_apply_toml` and the config-level cross-check `_post_process_openai_shim` on a copy, so
+    ``config set`` accepts exactly what ``load_config`` accepts.
     *setting* is the ``(section, key)`` just written: when it is itself a removed key the loader's
     ``ConfigError`` is raised for it, since only keys already in the file are tolerated.
     """
@@ -639,7 +638,9 @@ def validate_document(doc: tomlkit.TOMLDocument, *, setting: tuple[str, str] | N
         _reject_removed_key(doc[section_name], key, f"[{section_name}]")
     copy = tomlkit.parse(tomlkit.dumps(doc))
     strip_removed_keys(copy)
-    _apply_toml(SearchConfig(), copy)
+    candidate = SearchConfig()
+    _apply_toml(candidate, copy)
+    _post_process_openai_shim(candidate)
 
 
 def _coerce_nonempty_str(raw: object, field_name: str) -> str:
@@ -770,6 +771,7 @@ def load_config(path: Path | None = None, *, serve: bool = False, drop_removed_k
         _logger.warning(LOG_FILE_DISABLED_WARNING)
     _post_process_backup(config)
     _post_process_maintenance(config)
+    _post_process_openai_shim(config)
     return config
 
 
@@ -1488,6 +1490,13 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     if "top_k" in openai_shim_cfg:
         openai_shim.top_k = _coerce_bounded_int(openai_shim_cfg["top_k"], "[openai_shim].top_k", minimum=1)
     config.openai_shim = openai_shim
+
+
+def _post_process_openai_shim(config: SearchConfig) -> None:
+    """Cross-check `[openai_shim].top_k` against `[search].top_k_max` once both sections are loaded."""
+    shim_top_k = config.openai_shim.top_k
+    if shim_top_k is not None and shim_top_k > config.top_k_max:
+        raise ConfigError(f"[openai_shim].top_k must be <= [search].top_k_max ({config.top_k_max}), got {shim_top_k}")
 
 
 def _post_process_maintenance(config: SearchConfig) -> None:

@@ -74,8 +74,8 @@ class ChatCompletionRequest(BaseModel):
     model: str
     messages: list[ChatMessage]
     stream: bool = False
-    # ``top_k`` is accepted for forward-compatibility but has no effect at
-    # runtime — the pipeline uses its construction-time top_k setting.
+    # ``top_k`` is accepted for protocol compatibility and ignored: the shim's result
+    # count is ``[openai_shim].top_k`` when set, else ``[database].top_k_return``.
     top_k: int | None = None
 
 
