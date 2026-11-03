@@ -325,21 +325,20 @@ def test_e2e_explain_acl_gate_always_present(smoke_server) -> None:
 _RECURSION_GUARD_ENV = "_ARCHON_E2E_SUBPROCESS"
 
 # Number of tests in tests/smoke/ that pass outright inside the child run.
-# 32 test functions collected total (test_cli.py: 18, test_conftest.py: 4,
-# test_rest.py: 10). Conditional skips that reduce the count:
+# Conditional skips that reduce the count:
 # - 1 recursion-guard skip: test_full_smoke_suite_passes itself
 # - 1 leidenalg/gliner importorskip: test_e2e_graph_build_communities_wait_against_server
 # - 2 smoke_server_graph_enabled consumers in test_conftest.py (same importorskip)
 # - 5 SMOKE_NO_TIMING-gated tests (skipped only when that env var is set)
-# On a machine with graph extras installed: ~30 pass. Conservative floor of 25
-# guards against a subset-collection regression that silently drops > 5 tests
-# while tolerating environment-dependent skips (graph extra absent, etc.).
-_EXPECTED_MIN_PASSED = 25
+# Measured on a machine with graph extras installed (T-4, after the top_k tests landed): 68 passed, 1 skipped,
+# 1 xpassed. Conservative floor of 55 guards against a subset-collection regression that silently drops > 13
+# tests while tolerating the environment-dependent skips above (graph extra absent, timing tests gated).
+_EXPECTED_MIN_PASSED = 55
 
 # Child budget: fixture startup (90s per health/ready poll phase + 60s ingest job poll,
-# tests/smoke/conftest.py) plus ~17 tests, several of which spawn their own
+# tests/smoke/conftest.py) plus ~70 tests, several of which spawn their own
 # `uv run archon-search` subprocess (each paying its own cold-start cost).
-# Measured wall-clock on this machine: ~45s. 480s leaves ample margin while
+# Measured wall-clock on this machine (T-4): ~102s. 480s leaves ample margin while
 # staying under the 600s foreground Bash ceiling this test may run inside.
 _CHILD_SUITE_TIMEOUT_S = 480
 
@@ -382,10 +381,9 @@ def test_full_smoke_suite_passes() -> None:
       (returncode 0 alone does not prove the whole suite ran: a collection
       error that drops most tests still exits 0 on the surviving subset);
     - no nonzero "failed"/"error(s)" count appears in the summary line;
-    - ``test_collection_info_no_repr`` (S4) reports as ``xfail``, never
-      ``xpass`` (bug-007 must still be open; an ``xpass`` here means the
-      bug was fixed and the ``xfail`` marker in ``test_cli.py`` must be
-      removed as a follow-up, not silently pass this gate).
+    - ``test_collection_info_no_repr`` (S4) passes: it reports neither ``XFAIL``
+      nor ``FAILED`` (bug-007 is fixed and its ``xfail`` marker is gone);
+    - the ``test_top_k.py`` tests (T-4) ran: the module name appears in the output.
     """
     child_env = {
         **os.environ,
@@ -451,4 +449,7 @@ def test_full_smoke_suite_passes() -> None:
     )
     assert not re.search(r"test_collection_info_no_repr\b.*\bFAILED\b", output), (
         f"test_collection_info_no_repr reported as FAILED:\n{output}"
+    )
+    assert "test_top_k.py" in output, (
+        f"positive control failed: the top_k smoke module is missing from the output:\n{output}"
     )

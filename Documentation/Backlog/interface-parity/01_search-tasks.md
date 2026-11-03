@@ -487,7 +487,7 @@ REST, MCP and the CLI honour `top_k`; the shim ignores the request value and tak
     - Tests
         - #integration_test — `test_breaking_md_headings_have_index_rows` — (existing, `tests/test_removed_engine_repo_guard.py`) the renamed heading and the NR-2 row stay in step
         - #integration_test — `test_s52_allowlist_is_pinned_and_self_tightening` — (existing, `tests/test_removed_engine_repo_guard.py`) the 65-heading allowlist is untouched
-- [ ] **T-4** — e2e: `top_k` on a real server and through a real OpenAI client and MCP client; manual: real products #tester-role
+- [x] **T-4** — e2e: `top_k` on a real server and through a real OpenAI client and MCP client; manual: real products #tester-role
     - — · 4.0h
     - needs BE-26, FE-6, T-3, T-1 · completes S68, S71
     - Tests
