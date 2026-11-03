@@ -108,7 +108,8 @@ def _error_response(error: ServiceError, *, model: str, is_fanout: bool) -> JSON
             return _service_unavailable(headers={"Retry-After": str(error.retry_after_seconds)})
         case _:
             # Every other kind: metadata-store, internal and HyDE failures.  The request-shape kinds (validation, graph
-            # mode, scope filter) cannot arise: the shim sends no filter or graph mode and checks the query and name first.
+            # mode, scope filter) cannot arise: the shim sends no filter or graph mode and checks the query and name first,
+            # and its ``top_k`` is the operator's key, which ``load_config`` bounds by ``top_k_max``.
             return _service_unavailable()
 
 
@@ -231,6 +232,8 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
 
     is_fanout = len(parts) == 1  # exactly "archon-search"
     inject_citations: bool = config.openai_shim.inject_citations
+    # The result count is the operator's key (``None`` when unset: the configured ``top_k_return``); the request's ``top_k`` is ignored.
+    shim_top_k = config.openai_shim.top_k
 
     if is_fanout:
         # Fanout path — model = "archon-search": the names come from the namespace listing, truncated here (adapter policy).
@@ -255,14 +258,14 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
                 omitted,
             )
 
-        command = SearchCommand(query=query, collections=tuple(col_names))
+        command = SearchCommand(query=query, collections=tuple(col_names), top_k=shim_top_k)
     else:
         # Direct single-collection path — model = "archon-search/{col}".  An empty or whitespace-only name is not a model;
         # an invalid one is answered ``not_found`` by the service before any store call.
         collection = parts[1].strip()
         if not collection:
             return _model_not_found(model)
-        command = SearchCommand(query=query, collection=collection)
+        command = SearchCommand(query=query, collection=collection, top_k=shim_top_k)
 
     # The service logs and records every failure (S29, S30, S34); the shim only renders it in its own envelopes.
     service = build_search_service_from_state(request.app.state)

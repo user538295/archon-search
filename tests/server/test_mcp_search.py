@@ -279,6 +279,16 @@ async def _published_tools() -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
+async def test_mcp_search_tool_input_schema_has_top_k() -> None:
+    """S40: ``search`` publishes ``top_k`` (an optional integer) next to the filters and ``acl_context``."""
+    tools = await _published_tools()
+    schema = tools["search"].to_mcp_tool().input_schema
+
+    assert {"top_k", "acl_context"} <= set(schema["properties"])
+    assert "top_k" not in schema.get("required", [])
+
+
+@pytest.mark.asyncio
 async def test_mcp_search_tool_input_schema_is_superset_of_search_filters() -> None:
     """Every field on SearchFilters must appear in the published MCP tool input schema
     for both ``search`` and ``search_with_context``.  This is the compile-time guard
@@ -299,7 +309,7 @@ async def test_mcp_search_tool_input_schema_is_superset_of_search_filters() -> N
 
 @pytest.mark.asyncio
 async def test_mcp_search_tool_input_schema_has_acl_context() -> None:
-    """S40: ``search`` publishes ``acl_context`` (``top_k`` joins in BE-26) and documents ``ppr``; ``search_with_context`` takes no ``acl_context``."""
+    """S40: ``search`` publishes ``acl_context`` and documents ``ppr``; ``search_with_context`` takes no ``acl_context``."""
     tools = await _published_tools()
     schema_by_name = {name: tool.to_mcp_tool().input_schema for name, tool in tools.items()}
 

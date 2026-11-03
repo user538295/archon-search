@@ -686,3 +686,23 @@ async def test_acl_gate_lists_are_copies_of_the_hits() -> None:
     assert gate.allowed_principals == hit.acl
     assert gate.allowed_principals is not hit.acl
 
+
+
+# --- per-request top_k (BE-26, C3) ----------------------------------------------------------------------
+
+
+async def test_top_k_is_forwarded_only_when_present() -> None:
+    """The pipeline call carries ``top_k`` only when the command has one, never ``top_k=None``, on both paths."""
+    pipeline = _pipeline()
+    pipeline.search_many = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    service = _service(pipeline, cache=_cache())
+
+    await service.search(_command(), _CALLER)
+    await service.search(_command(collection=None, collections=(_COLLECTION,)), _CALLER)
+    assert "top_k" not in pipeline.search.call_args.kwargs
+    assert "top_k" not in pipeline.search_many.call_args.kwargs
+
+    await service.search(_command(top_k=_TOP_K_MAX), _CALLER)
+    await service.search(_command(collection=None, collections=(_COLLECTION,), top_k=_TOP_K_MAX), _CALLER)
+    assert pipeline.search.call_args.kwargs["top_k"] == _TOP_K_MAX
+    assert pipeline.search_many.call_args.kwargs["top_k"] == _TOP_K_MAX

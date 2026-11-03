@@ -324,21 +324,22 @@ def test_search_store_exception_returns_500(tmp_path: Path, caplog: pytest.LogCa
 
 
 # ---------------------------------------------------------------------------
-# 6. top_k field is accepted but does not control pipeline (config-level top_k_return used)
+# 6. top_k is forwarded to the pipeline when given; omitted or null means the configured top_k_return
 # ---------------------------------------------------------------------------
 
 
-def test_search_top_k_accepted_but_ignored_by_pipeline(tmp_path: Path) -> None:
-    """top_k is accepted in the request body for backward compat but not forwarded to pipeline."""
+def test_search_top_k_is_forwarded_to_the_pipeline_only_when_given(tmp_path: Path) -> None:
+    """A request ``top_k`` reaches the pipeline; an omitted or null one leaves the keyword out (the configured count)."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(results=[_make_search_result(1)])
 
-    response = client.post("/search", json={"collection": "col", "query": "q", "top_k": 3})
+    given = client.post("/search", json={"collection": "col", "query": "q", "top_k": 3})
+    assert given.status_code == 200
+    assert app.state.pipeline.search.call_args.kwargs["top_k"] == 3
 
-    assert response.status_code == 200
-    # pipeline.search is called without top_k (uses config-level top_k_return)
-    call_kwargs = app.state.pipeline.search.call_args
-    assert "top_k" not in call_kwargs.kwargs
+    for body in ({"collection": "col", "query": "q"}, {"collection": "col", "query": "q", "top_k": None}):
+        assert client.post("/search", json=body).status_code == 200
+        assert "top_k" not in app.state.pipeline.search.call_args.kwargs
 
 
 # ---------------------------------------------------------------------------

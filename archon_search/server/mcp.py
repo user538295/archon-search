@@ -558,11 +558,15 @@ def create_app(
         graph_mode: str | None = None,
         scope_filter: str | None = None,
         acl_context: bool = False,
+        top_k: int | None = None,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search.
 
         Supply exactly one of ``collection`` (one collection) or ``collections`` (a multi-collection fan-out);
         neither has a default.
+
+        ``top_k`` is the number of results (at least 1, at most the operator's ``[search].top_k_max``);
+        omitted, it is the server's configured ``[database].top_k_return``.
 
         ``graph_mode`` controls graph-aware retrieval:
         - ``"naive"`` — entity n-gram expansion (E1a).
@@ -607,6 +611,7 @@ def create_app(
                 query=query,
                 collection=collection,
                 collections=None if collections is None else tuple(collections),
+                top_k=top_k,
                 filters=build_search_filters(
                     file_type=file_type,
                     source_path_prefix=source_path_prefix,

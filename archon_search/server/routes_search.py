@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from archon_search._types import SearchResult
 from archon_search.constants import (
+    TOP_K_MIN,
     VALID_ACL_SOURCES,
     GraphMode,
 )
@@ -59,7 +60,7 @@ class SearchRequest(BaseModel):
     collection: str | None = None
     collections: list[str] | None = None
     query: str
-    top_k: int = Field(default=5, ge=1)
+    top_k: int | None = Field(default=None, ge=TOP_K_MIN)
     filters: SearchFilters | None = None
     hyde: bool = False
     rag_fusion: bool = False

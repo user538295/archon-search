@@ -3543,10 +3543,16 @@
             "title": "Scope Filter"
           },
           "top_k": {
-            "default": 5,
-            "minimum": 1.0,
-            "title": "Top K",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top K"
           }
         },
         "required": [

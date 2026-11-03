@@ -345,6 +345,7 @@ class SearchService:
                 scope_filter=command.scope_filter,
                 rerank=warmup.rerank,
                 fts_only=fts_only,
+                **_top_k_kwargs(command),
             ),
             timeout=_SEARCH_TIMEOUT_SECONDS,
         )
@@ -377,6 +378,7 @@ class SearchService:
                 scope_filter=command.scope_filter,
                 rerank=warmup.rerank,
                 fts_only=warmup.fts_only,
+                **_top_k_kwargs(command),
             ),
             timeout=_SEARCH_TIMEOUT_SECONDS,
         )
@@ -507,6 +509,11 @@ async def _map_failures(run: Awaitable[SearchOutcome]) -> SearchOutcome:
         raise ServiceError(ServiceErrorKind.METADATA_STORE_ERROR) from exc
     except Exception as exc:
         raise ServiceError(ServiceErrorKind.INTERNAL) from exc
+
+
+def _top_k_kwargs(command: SearchCommand) -> dict[str, int]:
+    """The pipeline's ``top_k`` keyword when the command carries one, else nothing: the pipeline is never given ``top_k=None``."""
+    return {} if command.top_k is None else {"top_k": command.top_k}
 
 
 def _elapsed_ms(start: float) -> float:

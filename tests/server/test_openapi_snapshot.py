@@ -114,3 +114,15 @@ def test_openapi_describes_the_manual_description_routes(tmp_path: Path) -> None
         "$ref": "#/components/schemas/HTTPValidationError"
     }
     assert spec["components"]["schemas"]["SetDescriptionBody"]["required"] == ["description"]
+
+
+def test_openapi_search_request_top_k_is_an_integer_minimum_1_or_null_without_a_default(tmp_path: Path) -> None:
+    """S39, C5: ``SearchRequest.top_k`` is optional and nullable (omitted means the configured ``top_k_return``)."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    spec = _strip_dynamic_fields(create_app(cfg, JobStore(path=tmp_path / "jobs.json")).openapi())
+
+    for schema in (spec, json.loads(SNAPSHOT_PATH.read_text()), json.loads(CONTRACT_SNAPSHOT_PATH.read_text())):
+        top_k = schema["components"]["schemas"]["SearchRequest"]["properties"]["top_k"]
+        assert "default" not in top_k
+        assert top_k["anyOf"] == [{"type": "integer", "minimum": 1}, {"type": "null"}]
