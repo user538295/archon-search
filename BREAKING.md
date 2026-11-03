@@ -8,6 +8,58 @@
 
 ## Changelog
 
+### [next release] — OpenAI-compatible shim: `[openai_shim].top_k` is honored as the shim's result count, and a value above `[search].top_k_max` fails config load (2026-11-03)
+
+**Surface**: the `[openai_shim].top_k` key of `archon-search.toml` (and `archon-search config set openai_shim.top_k <n>`) and the number of result chunks (each with a `[Source:` line while `inject_citations` is on) that `POST /v1/chat/completions` puts in its reply, for both models (`archon-search` and `archon-search/<collection>`). Operators who set the key or who run a config check in CI. A `top_k` field in the request body is not part of this entry: it is still accepted and ignored.
+
+**What changed:**
+
+- **Before**: the key was accepted and validated (an integer of at least 1; a boolean, a float or a string was a `ConfigError`) but had no effect, because the pipeline took no per-request count. The shim always returned `[database].top_k_return` results, whatever the key said (the documented default of the key was 5, which was never used), and any integer, however large, loaded.
+- **New**: the key is optional and unset by default; unset keeps `[database].top_k_return`, like every other interface. A value an operator set is the shim's result count on both models (pinned by `test_shim_count_follows_the_config_key_then_top_k_return`); a request `top_k` never is.
+- **Config load**: a value above `[search].top_k_max` (default `100`) is a `ConfigError` (`[openai_shim].top_k must be <= [search].top_k_max (<max>), got <value>`) at `load_config`, so the server does not start (pinned by `test_shim_top_k_above_top_k_max_raises_config_error`); a value equal to `top_k_max` loads. `archon-search config set` runs the same check and leaves the file untouched when it refuses (pinned by `test_config_set_rejects_shim_top_k_above_top_k_max_and_leaves_file_untouched`). Because of this the shim never meets the `top_k` 422 of the other interfaces.
+- **Unchanged**: the strict integer rule of the key and the minimum of 1.
+
+**Migration**: an operator whose file sets `[openai_shim].top_k` finds that the value now decides how many sources the shim returns: remove the key to keep `[database].top_k_return`, or leave a value that is the count you want. A value above `[search].top_k_max` must be lowered, or `[search].top_k_max` raised, before the server starts. Nothing to change for an OpenAI client; the request's `top_k` stays ignored.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — MCP `search` takes `top_k`, the number of results; values below 1 and above `[search].top_k_max` are `validation_error` (2026-11-03)
+
+**Surface**: the MCP `search` tool: its input schema (`top_k`) and the number of results it returns. Agents and clients that build the call from the tool schema. `acl_context` on the same tool is the entry on the response fields.
+
+**What changed:**
+
+- **New argument**: `top_k`, an optional integer. Omitted (or `null`), the count is `[database].top_k_return` as before. Set, it is the number of results on the single-collection and on the multi-collection path: exactly `top_k` when enough candidates survive the pipeline's per-collection trim and its ACL, glob and wildcard-scope filters, fewer otherwise (pinned by `test_top_k_exact_n_on_rest_and_mcp_single_and_multi_path`).
+- **Candidates**: a set `top_k` raises the candidate pool to at least `top_k`, and on the multi-collection path every collection's trim to at least `top_k`, so a large `top_k` can reach candidates the default count never retrieves. `graph_mode="global"` ranks community representatives, at most `[graph].max_global_candidates` per collection.
+- **Bounds**: a value below 1 answers `validation_error` with `top_k must be at least 1` (the text is pinned in `tests/services/test_search_command.py`); a value above `[search].top_k_max` answers `validation_error` with `top_k <n> exceeds operator-configured maximum of <max>`, REST's text (pinned by `test_top_k_below_one_or_above_the_maximum_is_rejected_on_rest_and_mcp`). A `top_k` that makes the search exceed its time budget answers the usual `timeout` error.
+- **Unchanged**: `search_with_context` takes no `top_k`; `explain` keeps its own `top_k` (default 5).
+
+**Migration**: nothing to change for a client that does not send `top_k`. An agent that needs a count other than the server's sets it; the description of the tool says so. A client that keeps a fixed copy of the tool's input schema must add the argument.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — REST `POST /search` and CLI `archon-search search --top-k`: `top_k` sets the number of results, `top_k: null` is valid, and the OpenAPI type of `top_k` changes (2026-11-03)
+
+**Surface**: `POST /search` and its request schema in `GET /openapi.json` (`SearchRequest.top_k`), clients generated from it, and the `archon-search search` command. This entry replaces the earlier entry "REST `/search` per-request `top_k` no longer honored", which said the opposite and is gone from this file. It does not cover the OpenAI shim (see the `[openai_shim].top_k` entry), `POST /explain` or `search_with_context`.
+
+**What changed:**
+
+- **Before**: a request `top_k` was validated (an integer of at least 1, default 5, and a value above `[search].top_k_max` was a `422`) and then ignored: every search returned `[database].top_k_return` results.
+- **New**: `top_k` is the number of results. Omitted or `null`, the count is `[database].top_k_return`. On the single-collection and the multi-collection path alike it returns exactly `top_k` results when enough candidates survive the per-collection trim and the ACL, glob and wildcard-scope filters, fewer otherwise (pinned by `test_top_k_exact_n_on_rest_and_mcp_single_and_multi_path`); `top_k: null` is a valid value (pinned by `test_top_k_null_is_valid_on_rest_and_means_the_configured_count`). A set `top_k` raises the candidate pool to at least `top_k` and, on the multi-collection path, every collection's trim to at least `top_k`, so a large `top_k` can reach candidates the default count never retrieves.
+- **OpenAPI**: `SearchRequest.top_k` was `{"type": "integer", "minimum": 1, "default": 5}`; it is now `anyOf` an integer with `minimum` 1 and `null`, with no `default` (pinned by `test_openapi_search_request_top_k_is_an_integer_minimum_1_or_null_without_a_default`). A generated client types the field as nullable and optional, and a client that sent `top_k: null`, which was a `422`, is now accepted.
+- **Bounds, unchanged**: `0` or a negative number is a `422` with the standard validation-error list; a value above `[search].top_k_max` (default `100`) is a `422` with `{"detail": "top_k <n> exceeds operator-configured maximum of <max>"}` (pinned by `test_top_k_below_one_or_above_the_maximum_is_rejected_on_rest_and_mcp`). A `top_k` that makes the search exceed its time budget answers the usual timeout error.
+- **CLI**: `archon-search search` gains `--top-k <n>`, sent in the request body only when given. The CLI checks no range: the server's `422` text is printed on stderr and the exit code is `1` (pinned by `test_search_top_k_above_the_maximum_prints_the_422_string_and_exits_1` and `test_search_top_k_zero_prints_the_servers_422_text_and_exits_1`; the body carries `top_k` only when given: `test_search_top_k_is_sent_in_the_body_only_when_given`, and `--top-k N` returns N results: `test_cli_search_top_k_returns_exactly_n_results`).
+
+**Migration**: a client that sent `top_k` and saw it ignored now gets that many results: remove a stale value (a copied `10` or `50` returns that many now) or keep it deliberately. A client that never sent it is unchanged. Regenerate a client generated from `GET /openapi.json`, or change its type stub for `top_k` to an optional integer that allows `null`. Operators change nothing: `[database].top_k_return` is still the default count and `[search].top_k_max` the ceiling.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — OpenAI-compatible shim `POST /v1/chat/completions`: shim searches are recorded in the telemetry stats, and a timeout or an internal failure writes an error entry (2026-11-03)
 
 **Surface**: the telemetry JSONL and the consumers that count its entries (stats, error rates, dashboards) for `POST /v1/chat/completions`, and the server log of its failures, when `[openai_shim]` and telemetry are both enabled. The shim's answers are not changed by this entry.
@@ -2362,13 +2414,6 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 **Change**: `search` tool now returns `{"results": [...], "acl_filtered": bool}` instead of `[{...}, {...}]` (bare list of result dicts).
 **Migration**: Update consumers to access `response["results"]` instead of iterating the response directly. `response["acl_filtered"]` provides the ACL filter flag previously unavailable on the MCP surface.
 **Announced in**: this release (no prior deprecation period — the old shape was never documented as stable).
-
-### [next release] — REST `/search` per-request `top_k` no longer honored
-
-**Surface**: REST (`/search` POST)
-**Change**: The `top_k` field in `SearchRequest` is now ignored at the route level; the pipeline uses `config.top_k_return` instead. Previously, each request could specify its own `top_k`.
-**Migration**: Configure `[database] top_k_return` in `archon-search.toml` to set the desired result count.
-**Announced in**: this release (the behavior was supported but never documented as stable).
 
 ### [next release] — D3 migration tooling: new REST endpoints and `STORE_SCHEMA_VERSION` policy
 
