@@ -89,7 +89,7 @@ def test_s302_zero_match_glob_over_cold_query_embedder(
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
         import archon_search.embedder_cache as embedder_cache_mod
-        import archon_search.server.routes_search as routes_search_mod
+        import archon_search.services.search_service as search_service_mod
 
         real_make_embedder = embedder_cache_mod.make_embedder
         loads_finished: list[threading.Event] = []
@@ -108,11 +108,11 @@ def test_s302_zero_match_glob_over_cold_query_embedder(
             embedder_cache_mod, "_LOAD_WAIT_TIMEOUT_SECONDS", _SHORT_WAIT_SECONDS
         )
         monkeypatch.setattr(
-            routes_search_mod, "_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS", _SHORT_WAIT_SECONDS
+            search_service_mod, "_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS", _SHORT_WAIT_SECONDS
         )
         client.app.state.embedder_cache._cache.clear()
 
-        with caplog.at_level(logging.WARNING, logger="archon_search.server.routes_search"):
+        with caplog.at_level(logging.WARNING, logger="archon_search.services.search_service"):
             resp = client.post(
                 "/search", json={"collection": col, "query": "quick brown fox"}, headers=headers
             )

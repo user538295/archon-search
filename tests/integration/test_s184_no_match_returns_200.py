@@ -7,10 +7,10 @@ Bug report: ``Documentation/Backlog/S184-no_match_returns_200.md``
 
 Root cause
 ----------
-``routes_search.search`` wraps the whole pipeline call in
-``asyncio.wait_for(..., timeout=_SEARCH_TIMEOUT_SECONDS)`` (a hard-coded 30 s;
-``routes_search.py:32``) and maps ``asyncio.TimeoutError`` to
-``504 "Search timed out"`` (``routes_search.py:397-416``).
+``SearchService.search`` (``services/search_service.py``) wraps the whole pipeline call in
+``run_within_budget(..., timeout=_SEARCH_TIMEOUT_SECONDS)`` (a hard-coded 30 s) and maps
+``SearchBudgetExceeded`` to a ``timeout`` ``ServiceError``, which ``routes_search.py`` renders as
+``504 "Search timed out"``.
 
 Both ML backends on that path are **lazy**: ``ModelEmbedder.encode``
 (``embedder.py:34-41``) and ``ModelReranker.predict`` (``reranker.py:31-44``)
@@ -46,7 +46,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.server import routes_search
+from archon_search.services import search_service
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
@@ -118,7 +118,7 @@ def test_s184_no_match_query_returns_200_on_first_search(
         monkeypatch.setattr(
             pipeline._reranker, "_backend", _ColdLoadRerankerBackend(_SCALED_COLD_LOAD_S)
         )
-        monkeypatch.setattr(routes_search, "_SEARCH_TIMEOUT_SECONDS", _SCALED_SEARCH_TIMEOUT_S)
+        monkeypatch.setattr(search_service, "_SEARCH_TIMEOUT_SECONDS", _SCALED_SEARCH_TIMEOUT_S)
 
         resp = client.post(
             "/search",
@@ -154,7 +154,7 @@ def test_s184_no_match_query_returns_200_when_reranker_is_warm(
         backend.predict([("warm", "up")])  # pay the load cost before the request
         assert backend.is_warm, "control requires an already-loaded backend"
         monkeypatch.setattr(pipeline._reranker, "_backend", backend)
-        monkeypatch.setattr(routes_search, "_SEARCH_TIMEOUT_SECONDS", _SCALED_SEARCH_TIMEOUT_S)
+        monkeypatch.setattr(search_service, "_SEARCH_TIMEOUT_SECONDS", _SCALED_SEARCH_TIMEOUT_S)
 
         resp = client.post(
             "/search",

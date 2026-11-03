@@ -103,21 +103,19 @@ def build_search_filters(
 
 
 def normalize_request_shape(command: SearchCommand) -> SearchCommand:
-    """The rules that need no server configuration: the part REST's request model validators are to call.
+    """The rules that need no server configuration, in order (REST's request model calls the single rules; other adapters call this).
 
     Strips the collection name and the query, rejects a ``top_k`` below one and a ``graph_mode`` outside the valid set,
     then checks the collection selection and returns the command with the names stripped and de-duplicated.  Order is
     REST's: the field checks (collection, query, ``top_k``, ``graph_mode``), then the model-level selection check.
     """
-    collection = _strip_collection(command.collection)
-    query = command.query.strip()
-    if not query:
-        raise ServiceError(ServiceErrorKind.VALIDATION, _QUERY_EMPTY_DETAIL)
+    collection = normalize_collection(command.collection)
+    query = normalize_query(command.query)
     if command.top_k is not None and command.top_k < TOP_K_MIN:
         raise ServiceError(ServiceErrorKind.VALIDATION, _TOP_K_BELOW_MINIMUM_DETAIL)
     if command.graph_mode is not None and command.graph_mode not in VALID_GRAPH_MODES:
         raise ServiceError(ServiceErrorKind.INVALID_GRAPH_MODE, _INVALID_GRAPH_MODE_DETAIL)
-    collections = _select_collections(collection, command.collections)
+    collections = select_collections(collection, command.collections)
     return replace(command, query=query, collection=collection, collections=collections)
 
 
@@ -153,7 +151,16 @@ def normalize_search_command(
     return normalized
 
 
-def _strip_collection(collection: str | None) -> str | None:
+def normalize_query(query: str) -> str:
+    """The stripped query; an empty or blank one is a ``validation`` error (one of the rules REST's request model calls)."""
+    stripped = query.strip()
+    if not stripped:
+        raise ServiceError(ServiceErrorKind.VALIDATION, _QUERY_EMPTY_DETAIL)
+    return stripped
+
+
+def normalize_collection(collection: str | None) -> str | None:
+    """The stripped collection name (``None`` stays ``None``); an empty or blank one is a ``validation`` error."""
     if collection is None:
         return None
     stripped = collection.strip()
@@ -162,7 +169,7 @@ def _strip_collection(collection: str | None) -> str | None:
     return stripped
 
 
-def _select_collections(collection: str | None, collections: Sequence[str] | None) -> tuple[str, ...] | None:
+def select_collections(collection: str | None, collections: Sequence[str] | None) -> tuple[str, ...] | None:
     """Validate that exactly one selection is given; return the stripped, de-duplicated names."""
     if collection is not None and collections is not None:
         raise ServiceError(ServiceErrorKind.VALIDATION, _COLLECTION_AND_COLLECTIONS_DETAIL)

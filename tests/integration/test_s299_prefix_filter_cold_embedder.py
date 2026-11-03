@@ -6,7 +6,7 @@ Bug report: ``Documentation/Backlog/S299-results_restricted_to_prefix.md``.  The
 captured evidence is ``unfiltered POST /search returned 0: None`` — status 0, i.e.
 the request never produced an HTTP response at all.
 
-Root cause exercised here: ``routes_search.py`` resolves the request's embedder with
+Root cause exercised here: ``SearchService`` (``services/search_service.py``) resolves the request's embedder with
 ``asyncio.wait_for(embedder_cache.get_or_load(...), _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS)``
 *before* ``warmup_for_search``.  That wait used to run for 30 s and then raise
 ``EmbedderNotReadyError`` → 503, which defeats the S290 policy stated in
@@ -78,7 +78,7 @@ def test_s299_prefix_filter_survives_cold_query_embedder(
 
         # --- put the query embedder back into its cold-build state -----------
         import archon_search.embedder_cache as embedder_cache_mod
-        import archon_search.server.routes_search as routes_search_mod
+        import archon_search.services.search_service as search_service_mod
 
         real_make_embedder = embedder_cache_mod.make_embedder
         loads_finished: list[threading.Event] = []
@@ -98,14 +98,14 @@ def test_s299_prefix_filter_survives_cold_query_embedder(
             embedder_cache_mod, "_LOAD_WAIT_TIMEOUT_SECONDS", _SHORT_WAIT_SECONDS
         )
         monkeypatch.setattr(
-            routes_search_mod, "_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS", _SHORT_WAIT_SECONDS
+            search_service_mod, "_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS", _SHORT_WAIT_SECONDS
         )
         cache = client.app.state.embedder_cache
         cache._cache.clear()
 
         # --- step 2: unfiltered search ---------------------------------------
         t0 = time.monotonic()
-        with caplog.at_level(logging.WARNING, logger="archon_search.server.routes_search"):
+        with caplog.at_level(logging.WARNING, logger="archon_search.services.search_service"):
             resp = client.post(
                 "/search", json={"collection": col, "query": "widget"}, headers=headers
             )

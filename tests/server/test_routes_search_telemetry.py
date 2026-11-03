@@ -252,13 +252,18 @@ def test_sequential_failure_then_success_on_same_app() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 7: serialization error in response construction enqueues telemetry
+# Test 7: a response-rendering failure after the service answered
 # ---------------------------------------------------------------------------
 
 
-def test_serialization_error_in_response_construction_enqueues_telemetry(
+def test_response_rendering_failure_is_a_plain_500_after_the_service_recorded_the_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The service records the search it ran (success) before the adapter renders; a rendering failure is a plain 500.
+
+    Rendering is the adapter's job and the adapter holds no telemetry (S77), so such a failure adds no error entry:
+    exactly one entry exists, the success the service recorded.
+    """
     from archon_search._types import SearchResult
     from archon_search.server.routes_search import SearchResultSchema
 
@@ -288,11 +293,11 @@ def test_serialization_error_in_response_construction_enqueues_telemetry(
         response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 500
+    assert "bad row" not in response.text
     assert writer_mock.enqueue.call_count == 1
     entry = writer_mock.enqueue.call_args.args[0]
     assert entry.endpoint == "search"
-    assert entry.status == "internal_error"
-    assert entry.error_kind == "other"
+    assert entry.status == "ok"
     assert entry.latency_ms > 0
 
 
@@ -382,9 +387,9 @@ def test_search_pipeline_timeout_returns_504_and_enqueues_telemetry(
 ) -> None:
     import asyncio
 
-    import archon_search.server.routes_search as routes_search_module
+    import archon_search.services.search_service as search_service_module
 
-    monkeypatch.setattr(routes_search_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(search_service_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
 
     writer_mock = _make_mock_writer()
     pipeline_mock = MagicMock()

@@ -1,6 +1,6 @@
 """S582 regression — HyDE generation is not bounded by the per-request search budget.
 
-``routes_search.search`` resolves HyDE (``services/request_hyde.RequestHyDE.resolve``) *before*
+``SearchService`` (``services/search_service.py``) resolves HyDE (``services/request_hyde.RequestHyDE.resolve``) *before*
 it enters ``run_within_budget(..., timeout=_SEARCH_TIMEOUT_SECONDS)`` around the
 pipeline call. The ``embedder_warm`` gate only skips HyDE on a cold *embedder*; without
 ``services.request_hyde.resolve_hyde_within_budget`` nothing would bound the provider's HTTP call to
@@ -31,8 +31,8 @@ from archon_search._types import ChunkRecord
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import HyDEConfig, SearchConfig
 from archon_search.jobs.store import JobStore
-from archon_search.server import routes_search
 from archon_search.server.app import create_app
+from archon_search.services import search_service
 from archon_search.store import SearchStore
 
 pytestmark = pytest.mark.integration
@@ -134,7 +134,7 @@ async def test_search_hyde_llama_cpp_unresponsive_server_stays_within_search_bud
         )
         app = create_app(config, JobStore(path=tmp_path / "jobs.json"))
         monkeypatch.setattr(
-            routes_search, "_SEARCH_TIMEOUT_SECONDS", _SEARCH_BUDGET_SECONDS
+            search_service, "_SEARCH_TIMEOUT_SECONDS", _SEARCH_BUDGET_SECONDS
         )
         key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
 

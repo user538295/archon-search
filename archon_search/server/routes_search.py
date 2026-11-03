@@ -1,19 +1,16 @@
-"""POST /search endpoint — delegates to SearchPipeline (Task 3.4)."""
+"""POST /search endpoint — the single-collection branch is an adapter over ``SearchService``; the multi branch still calls the pipeline."""
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
-from contextlib import ExitStack
+from dataclasses import asdict
 from time import monotonic
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, assert_never
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from archon_search._types import SearchResult
-from archon_search.config import resolve_active_model
 from archon_search.constants import (
     SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
 )
@@ -22,12 +19,9 @@ from archon_search.constants import (
     GraphMode,
 )
 from archon_search.embedder_cache import (
-    EMBEDDER_NOT_READY_CODE,
-    EMBEDDER_NOT_READY_DETAIL,
     EmbedderNotReadyError,
 )
 from archon_search.filters import SearchFilters
-from archon_search.observability import bind_stage_recorder
 from archon_search.observability import correlation_id as _correlation_id
 from archon_search.pipeline import (
     METADATA_STORE_UNAVAILABLE_CODE,
@@ -37,6 +31,7 @@ from archon_search.pipeline import (
     GraphCommunitiesNotBuiltError,
     MetadataLookupError,
 )
+from archon_search.server.authz import caller_identity
 from archon_search.server.schemas import (
     AclGateSchema,
     CodedErrorDetail,
@@ -44,66 +39,48 @@ from archon_search.server.schemas import (
     ExcludedCollectionSchema,
     route_422_response,
 )
+from archon_search.services.authz import AuthIdentity
+from archon_search.services.container import build_search_service_from_state
 from archon_search.services.request_hyde import RequestHyDE
 from archon_search.services.search_budget import (
-    EMBEDDER_WARMUP_WAIT_SECONDS,
     SearchBudgetExceeded,
     run_within_budget,
     warmup_for_search,
 )
+from archon_search.services.search_command import (
+    SearchCommand,
+    normalize_collection,
+    normalize_query,
+    select_collections,
+)
+from archon_search.services.search_service import SearchHit, SearchOutcome
 from archon_search.services.service_error import (
     COLLECTION_NOT_FOUND_DETAIL,
     GRAPH_COMMUNITIES_NOT_BUILT_CODE,
     INVALID_SCOPE_FILTER_CODE,
-    RETRY_AFTER_SECONDS,
     SEARCH_FAILED_DETAIL,
+    ServiceError,
+    ServiceErrorKind,
     fanout_exceeded_detail,
     top_k_exceeded_detail,
 )
 from archon_search.services.validators import (
     validate_scope_filter as _check_scope_filter,
 )
-from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
+from archon_search.telemetry.entry import TelemetryEntry
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from archon_search.telemetry.writer import TelemetryWriter
 
-# Upper bound on how long a single POST /search request waits on
-# embedder_cache.get_or_load() before degrading to the FTS leg alone.
-#
-# What can be slow here is NOT the model build: make_embedder() only constructs a
-# lazy backend (embedder.py) and the weights are built on the first encode(), one
-# stage later in warmup_for_search. This wait is the cache's *handoff* — queueing
-# behind a saturated asyncio.to_thread executor, or blocking as a deduplicated
-# waiter behind another caller's in-flight load, whose own bound
-# (_LOAD_WAIT_TIMEOUT_SECONDS in embedder_cache.py) is 120s, tuned for the
-# waiter/loader handoff rather than one HTTP request's patience.
-#
-# Bound here by the same S290 ceiling the later warmup_for_search stage uses,
-# because both answer the same question: how long a search may sit on an
-# unavailable embedder before answering without a query vector (S299 — waiting
-# 30s and then 503ing is the very cold-connection parking the S290 policy exists
-# to prevent). The load itself is shielded, so it keeps running and populates the
-# cache for later requests.
-_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = EMBEDDER_WARMUP_WAIT_SECONDS
+# REST wire text of a search that overran its budget (the 504 body), and of Starlette's plain-text 500.
+_SEARCH_TIMED_OUT_DETAIL = "Search timed out"
+_PLAIN_500_BODY = "Internal Server Error"
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _discard_abandoned_load(task: asyncio.Future[object]) -> None:
-    """Consume the outcome of an embedder load this request stopped waiting for.
-
-    The load is shielded so it keeps running and caches its embedder for later
-    requests; retrieving its exception here is what stops a failed one from being
-    reported as a never-retrieved task exception at GC time.
-    """
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        logger.warning("search: abandoned embedder load failed — %s", exc)
 
 
 def _enqueue_error(
@@ -152,6 +129,14 @@ def _hyde_failure_response(writer: TelemetryWriter | None, start: float, exc: Ex
     return JSONResponse({"detail": SEARCH_FAILED_DETAIL}, status_code=500)
 
 
+def _call_normaliser[**P, R](rule: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    """Run one service normaliser rule as transport parsing: its ``ServiceError`` becomes the framework's 422 ``ValueError``."""
+    try:
+        return rule(*args, **kwargs)
+    except ServiceError as error:
+        raise ValueError(error.detail) from error
+
+
 class SearchRequest(BaseModel):
     collection: str | None = None
     collections: list[str] | None = None
@@ -174,41 +159,17 @@ class SearchRequest(BaseModel):
     @field_validator("collection")
     @classmethod
     def collection_nonempty(cls, v: str | None) -> str | None:
-        if v is None:
-            return v
-        stripped = v.strip()
-        if not stripped:
-            raise ValueError("collection must not be empty")
-        return stripped
+        return _call_normaliser(normalize_collection, v)
 
     @field_validator("query")
     @classmethod
     def query_nonempty(cls, v: str) -> str:
-        stripped = v.strip()
-        if not stripped:
-            raise ValueError("query must not be empty")
-        return stripped
+        return _call_normaliser(normalize_query, v)
 
     @model_validator(mode="after")
     def _validate_collection_selection(self) -> SearchRequest:
-        if self.collection is not None and self.collections is not None:
-            raise ValueError("supply either collection or collections, not both")
-        if self.collection is None and self.collections is None:
-            raise ValueError("supply either collection or collections")
-        if self.collections is not None:
-            if len(self.collections) == 0:
-                raise ValueError("collections must not be empty")
-            stripped: list[str] = []
-            for name in self.collections:
-                s = name.strip()
-                if not s:
-                    raise ValueError("collection names must not be empty or whitespace")
-                stripped.append(s)
-            deduped: list[str] = []
-            for s in stripped:
-                if s not in deduped:
-                    deduped.append(s)
-            self.collections = deduped
+        selected = _call_normaliser(select_collections, self.collection, self.collections)
+        self.collections = None if selected is None else list(selected)
         return self
 
 
@@ -257,6 +218,15 @@ class SearchResultSchema(BaseModel):
             acl_gate=gate,
         )
 
+    @classmethod
+    def from_hit(cls, hit: SearchHit) -> SearchResultSchema:
+        """Render a service hit: the ``acl_gate`` is the one the service built (present only when ``acl_context`` was set)."""
+        schema = cls.from_result(hit.result)
+        gate = hit.acl_gate
+        if gate is not None:
+            schema.acl_gate = AclGateSchema(**asdict(gate))
+        return schema
+
 
 class SearchResponse(BaseModel):
     results: list[SearchResultSchema]
@@ -275,6 +245,91 @@ class SearchResponse(BaseModel):
     ppr_entities_matched: int | None = None
 
 
+def _error_response(error: ServiceError) -> JSONResponse | PlainTextResponse:
+    """The one error table of the single-collection branch: a :class:`ServiceError` kind to its REST body and status.
+
+    The service has already logged the failure with its exception and recorded its telemetry; the wire body carries only
+    the error's fixed, sanitized detail.  An unexpected failure is Starlette's plain ``500`` (never exception text).
+    """
+    kind = error.kind
+    match kind:
+        case (
+            ServiceErrorKind.VALIDATION
+            | ServiceErrorKind.INVALID_GRAPH_MODE
+            | ServiceErrorKind.GRAPH_DISABLED
+            | ServiceErrorKind.SCOPE_FILTER_GRAPH_MODE_INCOMPATIBLE
+        ):
+            return JSONResponse({"detail": error.detail}, status_code=422)
+        case ServiceErrorKind.INVALID_SCOPE_FILTER:
+            return JSONResponse({"detail": {"code": error.code, "message": error.detail}}, status_code=400)
+        case ServiceErrorKind.GRAPH_COMMUNITIES_NOT_BUILT:
+            return JSONResponse({"detail": {"code": error.code, "message": error.detail}}, status_code=422)
+        case ServiceErrorKind.NOT_FOUND:
+            return JSONResponse({"detail": error.detail}, status_code=404)
+        case ServiceErrorKind.METADATA_STORE_ERROR | ServiceErrorKind.EMBEDDER_NOT_READY:
+            retry_after = error.retry_after_seconds
+            return JSONResponse(
+                {"detail": error.detail, "code": error.code},
+                status_code=503,
+                headers=None if retry_after is None else {"Retry-After": str(retry_after)},
+            )
+        case ServiceErrorKind.TIMEOUT:
+            return JSONResponse({"detail": _SEARCH_TIMED_OUT_DETAIL}, status_code=504)
+        case ServiceErrorKind.HYDE_FAILED:
+            return JSONResponse({"detail": error.detail}, status_code=500)
+        case ServiceErrorKind.INTERNAL:
+            return PlainTextResponse(_PLAIN_500_BODY, status_code=500)
+        case _:
+            assert_never(kind)
+
+
+def _render_outcome(outcome: SearchOutcome) -> SearchResponse:
+    """Render the service outcome as the REST response; ``metadata`` is blanked unless the outcome's ORed flag is set."""
+    schemas = [SearchResultSchema.from_hit(hit) for hit in outcome.results]
+    if not outcome.include_metadata:
+        for schema in schemas:
+            schema.metadata = {}
+    return SearchResponse(
+        results=schemas,
+        acl_filtered=outcome.acl_filtered,
+        excluded_collections=[ExcludedCollectionSchema(name=e.name, reason=e.reason) for e in outcome.excluded_collections],
+        embedding_model=outcome.embedding_model,
+        hyde_applied=outcome.hyde_applied,
+        rag_fusion_applied=outcome.rag_fusion_applied,
+        rag_fusion_queries_used=outcome.rag_fusion_queries_used,
+        rag_fusion_attempted=outcome.rag_fusion_attempted,
+        graph_expansion_applied=outcome.graph_expansion_applied,
+        expansion_used=outcome.expansion_used,
+        expansion_warning=outcome.expansion_warning,
+        applied_filters=outcome.applied_filters,
+        ppr_entities_matched=outcome.ppr_entities_matched,
+    )
+
+
+async def _search_single(
+    body: SearchRequest, request: Request, caller: AuthIdentity
+) -> SearchResponse | JSONResponse | PlainTextResponse:
+    """The single-collection branch: build the command, run the service, render its outcome or its error."""
+    service = build_search_service_from_state(request.app.state)
+    command = SearchCommand(
+        query=body.query,
+        collection=body.collection,
+        top_k=body.top_k,
+        filters=body.filters,
+        include_metadata=body.include_metadata,
+        hyde=body.hyde,
+        rag_fusion=body.rag_fusion,
+        graph_mode=body.graph_mode,
+        scope_filter=body.scope_filter,
+        acl_context=body.acl_context,
+    )
+    try:
+        outcome = await service.search(command, caller)
+    except ServiceError as error:
+        return _error_response(error)
+    return _render_outcome(outcome)
+
+
 @router.post(
     "/search",
     response_model=SearchResponse,
@@ -290,19 +345,21 @@ class SearchResponse(BaseModel):
             "description": "HyDE generation failure (JSON detail); a pipeline failure is a plain-text 500",
         },
         503: {"model": ErrorDetail},
-        504: {"model": ErrorDetail, "description": "Search timed out"},
+        504: {"model": ErrorDetail, "description": _SEARCH_TIMED_OUT_DETAIL},
     },
 )
-async def search(body: SearchRequest, request: Request) -> SearchResponse | JSONResponse:
+async def search(body: SearchRequest, request: Request) -> SearchResponse | JSONResponse | PlainTextResponse:
+    caller = caller_identity(request)
+    if body.collections is None:
+        return await _search_single(body, request, caller)
+    ns = caller.namespace
     pipeline = request.app.state.pipeline
-    ns = request.state.namespace
     writer = getattr(request.app.state, "telemetry_writer", None)
     config = request.app.state.config
     start = monotonic()
-    timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
 
     # Config-wired fanout and top_k validation (moved from Pydantic layer).
-    if body.collections is not None and len(body.collections) > config.max_fanout:
+    if len(body.collections) > config.max_fanout:
         return JSONResponse(
             {"detail": fanout_exceeded_detail(config.max_fanout)},
             status_code=422,
@@ -329,7 +386,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         )
 
     # ppr graph_mode + multi-collection fanout is not supported (search_many has no PPR branch)
-    if body.graph_mode == "ppr" and body.collections is not None:
+    if body.graph_mode == "ppr":
         return JSONResponse(
             {"detail": "graph_mode is not supported with multi-collection fanout; use a single collection"},
             status_code=422,
@@ -354,309 +411,108 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         timeout=_SEARCH_TIMEOUT_SECONDS,
     )
 
-    if body.collections is not None:
-        # Warm both lazy models outside the fan-out budget (S184). With no embedder
-        # argument warmup_models warms the pipeline's global embedder — the one
-        # search_many embeds with. Both legs are bounded so a cold model cannot stall
-        # the request: rerank=False degrades to the fused RRF ranking (S288) and
-        # fts_only=True to the FTS leg alone (S290).
-        warmup = await warmup_for_search(pipeline)
-        try:
-            # search_many embeds with the global embedder and excludes every collection
-            # pinned to another model (embedding_model_mismatch), so HyDE embeds with it too.
-            hyde_outcome = await request_hyde.resolve(pipeline.global_embedder, embedder_warm=not warmup.fts_only)
-        except EmbedderNotReadyError:
-            raise  # retryable 503 (app-level handler), as for the fan-out itself
-        except Exception as exc:  # noqa: BLE001 — any HyDE/embedding failure is mapped to an internal-error response
-            return _hyde_failure_response(writer, start, exc)
-        try:
-            # search_many's own _fanout_timeout_seconds bounds the per-collection leg
-            # gathers only; the meta lookup, embed_one, graph-store calls and the
-            # global rerank pass sit outside it, so the whole call gets the same
-            # overall budget as the single-collection path below.
-            result = await run_within_budget(
-                pipeline.search_many(
-                    body.query,
-                    body.collections,
-                    namespace=ns,
-                    query_vector=hyde_outcome.vector,
-                    rag_fusion=body.rag_fusion,
-                    rag_fusion_generator=rag_fusion_gen,
-                    rag_fusion_config=config.rag_fusion,
-                    filters=body.filters,
-                    graph_mode=body.graph_mode,
-                    scope_filter=body.scope_filter,
-                    rerank=warmup.rerank,
-                    fts_only=warmup.fts_only,
-                ),
-                timeout=_SEARCH_TIMEOUT_SECONDS,
-            )
-        except GraphCommunitiesNotBuiltError as exc:
-            return JSONResponse(
-                {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422
-            )
-        except CollectionNotFoundError:
-            return JSONResponse({"detail": COLLECTION_NOT_FOUND_DETAIL}, status_code=404)
-        except MetadataLookupError:
-            logger.exception("multi-collection search: metadata lookup failed")
-            return JSONResponse(
-                {"detail": METADATA_STORE_UNAVAILABLE_DETAIL, "code": METADATA_STORE_UNAVAILABLE_CODE},
-                status_code=503,
-            )
-        except (FanoutTimeoutError, SearchBudgetExceeded):
-            # SearchBudgetExceeded, not asyncio.TimeoutError: since 3.11 the latter is
-            # the builtin TimeoutError (an OSError), so catching it here would also
-            # swallow a socket ETIMEDOUT from the store and mis-map it to a 504.
-            _enqueue_error(writer, start, status="timeout", error_kind="timeout")
-            logger.error(
-                "search pipeline timed out",
-                extra={
-                    "event_type": "search_timeout",
-                    "collections": list(body.collections),
-                },
-            )
-            raise HTTPException(status_code=504, detail="Search timed out")
-        except Exception as exc:
-            # Same failure contract as the single-collection path below: telemetry,
-            # a search_pipeline_failure log, then a plain 500.
-            _report_pipeline_failure(writer, start, exc)
-            raise
-        schemas = [SearchResultSchema.from_result(r, include_acl_gate=body.acl_context) for r in result.results]
-        if not body.wants_metadata:
-            for schema in schemas:
-                schema.metadata = {}
-        if writer is not None:
-            try:
-                excluded_count = len(result.excluded_collections)
-                writer.enqueue(
-                    TelemetryEntry.from_search_multi_result(
-                        collections=body.collections,
-                        fanout_count=len(body.collections) - excluded_count,
-                        result_count=len(result.results),
-                        latency_ms=(monotonic() - start) * 1000.0,
-                        excluded_count=excluded_count,
-                        correlation_id=_correlation_id.get(),
-                        rag_fusion_applied=result.rag_fusion_applied,
-                        rag_fusion_queries_used=result.rag_fusion_queries_used,
-                    )
-                )
-            except Exception:
-                logger.warning("telemetry: search_multi entry enqueue failed", exc_info=True)
-        _multi_expansion_warning = hyde_outcome.expansion_warning or result.rag_fusion_warning
-        return SearchResponse(
-            results=schemas,
-            acl_filtered=result.acl_filtered,
-            excluded_collections=[
-                ExcludedCollectionSchema(name=e.name, reason=e.reason)
-                for e in result.excluded_collections
-            ],
-            embedding_model=config.embedding_model,
-            hyde_applied=hyde_outcome.applied,
-            rag_fusion_applied=result.rag_fusion_applied,
-            rag_fusion_queries_used=result.rag_fusion_queries_used,
-            rag_fusion_attempted=result.rag_fusion_attempted,
-            graph_expansion_applied=result.graph_expansion_applied,
-            expansion_used=hyde_outcome.applied or result.rag_fusion_applied or result.graph_expansion_applied,
-            expansion_warning=_multi_expansion_warning,
-            applied_filters=body.filters,
-            ppr_entities_matched=result.ppr_entities_matched,
-        )
-
+    # Warm both lazy models outside the fan-out budget (S184). With no embedder
+    # argument warmup_models warms the pipeline's global embedder — the one
+    # search_many embeds with. Both legs are bounded so a cold model cannot stall
+    # the request: rerank=False degrades to the fused RRF ranking (S288) and
+    # fts_only=True to the FTS leg alone (S290).
+    warmup = await warmup_for_search(pipeline)
     try:
-        meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
-    except Exception:
-        logger.exception("search: meta lookup failed for collection %r", body.collection)
+        # search_many embeds with the global embedder and excludes every collection
+        # pinned to another model (embedding_model_mismatch), so HyDE embeds with it too.
+        hyde_outcome = await request_hyde.resolve(pipeline.global_embedder, embedder_warm=not warmup.fts_only)
+    except EmbedderNotReadyError:
+        raise  # retryable 503 (app-level handler), as for the fan-out itself
+    except Exception as exc:  # noqa: BLE001 — any HyDE/embedding failure is mapped to an internal-error response
+        return _hyde_failure_response(writer, start, exc)
+    try:
+        # search_many's own _fanout_timeout_seconds bounds the per-collection leg
+        # gathers only; the meta lookup, embed_one, graph-store calls and the
+        # global rerank pass sit outside it, so the whole call gets the same
+        # overall budget as the single-collection path.
+        result = await run_within_budget(
+            pipeline.search_many(
+                body.query,
+                body.collections,
+                namespace=ns,
+                query_vector=hyde_outcome.vector,
+                rag_fusion=body.rag_fusion,
+                rag_fusion_generator=rag_fusion_gen,
+                rag_fusion_config=config.rag_fusion,
+                filters=body.filters,
+                graph_mode=body.graph_mode,
+                scope_filter=body.scope_filter,
+                rerank=warmup.rerank,
+                fts_only=warmup.fts_only,
+            ),
+            timeout=_SEARCH_TIMEOUT_SECONDS,
+        )
+    except GraphCommunitiesNotBuiltError as exc:
+        return JSONResponse(
+            {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422
+        )
+    except CollectionNotFoundError:
+        return JSONResponse({"detail": COLLECTION_NOT_FOUND_DETAIL}, status_code=404)
+    except MetadataLookupError:
+        logger.exception("multi-collection search: metadata lookup failed")
         return JSONResponse(
             {"detail": METADATA_STORE_UNAVAILABLE_DETAIL, "code": METADATA_STORE_UNAVAILABLE_CODE},
             status_code=503,
         )
-
-    if meta is None:
-        return JSONResponse({"detail": COLLECTION_NOT_FOUND_DETAIL}, status_code=404)
-
-    with ExitStack() as stack:
-        recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
-        t0 = time.perf_counter()
-
-        def _emit_timings() -> None:
-            if recorder is not None:
-                recorder.record_total(t0)
-                logger.info(
-                    "stage timings",
-                    extra={
-                        "event_type": "stage_timings",
-                        "correlation_id": _correlation_id.get(),
-                        "endpoint": "search",
-                        "collection": body.collection,
-                        "stage_timings_ms": recorder.stage_timings_ms,
-                    },
-                )
-
+    except (FanoutTimeoutError, SearchBudgetExceeded):
+        # SearchBudgetExceeded, not asyncio.TimeoutError: since 3.11 the latter is
+        # the builtin TimeoutError (an OSError), so catching it here would also
+        # swallow a socket ETIMEDOUT from the store and mis-map it to a 504.
+        _enqueue_error(writer, start, status="timeout", error_kind="timeout")
+        logger.error(
+            "search pipeline timed out",
+            extra={
+                "event_type": "search_timeout",
+                "collections": list(body.collections),
+            },
+        )
+        raise HTTPException(status_code=504, detail=_SEARCH_TIMED_OUT_DETAIL)
+    except Exception as exc:
+        # A search_pipeline_failure log and the telemetry entry, then a plain 500.
+        _report_pipeline_failure(writer, start, exc)
+        raise
+    schemas = [SearchResultSchema.from_result(r, include_acl_gate=body.acl_context) for r in result.results]
+    if not body.wants_metadata:
+        for schema in schemas:
+            schema.metadata = {}
+    if writer is not None:
         try:
-            embedder_cache = getattr(request.app.state, "embedder_cache", None)
-            active_model = resolve_active_model(meta, config)
-            embedder_cold = False
-            if embedder_cache is not None:
-                load = asyncio.ensure_future(embedder_cache.get_or_load(active_model))
-                try:
-                    embedder = await asyncio.wait_for(
-                        asyncio.shield(load), timeout=_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS
-                    )
-                except TimeoutError:
-                    if load.done():
-                        # Not this bound expiring: since 3.11 asyncio.TimeoutError *is*
-                        # the builtin TimeoutError (an OSError), so a TimeoutError the
-                        # load itself raised lands here too. Re-raise it with its own
-                        # status mapping rather than reporting a failed load as a
-                        # merely-unavailable one and answering 200. shield has already
-                        # retrieved it, so no done-callback is needed.
-                        raise
-                    # S299/S290: the per-request embedder is not available in time.
-                    # Degrade to the FTS leg exactly as warmup_for_search does below,
-                    # instead of parking the connection and then 503ing — the FTS index
-                    # is built at ingest, so the collection is answerable without a
-                    # query vector. shield keeps the load running (cancelling it would
-                    # throw away work another request is already waiting on), so it
-                    # still populates the cache for later requests; the embedder below
-                    # is a placeholder that fts_only guarantees is never embedded with.
-                    # A cache-level EmbedderNotReadyError — a load wedged past the
-                    # cache's own 120s dedup wait, not a merely slow one — still
-                    # propagates to the 503 handler below.
-                    embedder_cold = True
-                    embedder = pipeline.global_embedder
-                    load.add_done_callback(_discard_abandoned_load)
-                    logger.warning(
-                        "search: embedder %r unavailable after %ss (cache load still in "
-                        "flight) — serving this request FTS-only while it completes",
-                        active_model,
-                        _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS,
-                    )
-                except BaseException:
-                    # Anything else that unwinds this await — most commonly the
-                    # CancelledError of a disconnecting client — leaves the shielded
-                    # load running with nobody left to read its outcome, which asyncio
-                    # reports as a never-retrieved task exception at GC time.
-                    if not load.done():
-                        load.add_done_callback(_discard_abandoned_load)
-                    raise
-            else:
-                logger.warning("search: embedder_cache absent from app.state — falling back to global embedder")
-                embedder = pipeline.global_embedder
-                active_model = config.embedding_model
-            # Outside the wait_for below by design (S184): a cold model build must not
-            # consume the search budget. Both legs are bounded and degrade instead of
-            # parking the connection — the reranker to the fused ranking (S288), the
-            # embedder to the FTS leg alone (S290); see search_budget.warmup_for_search.
-            # The same cold-model root cause is reported by S278/S288/S299/S302.
-            # A failed warm-up attempt is not latched: the next call retries it (S283).
-            warmup = await warmup_for_search(pipeline, embedder)
-            fts_only = warmup.fts_only or embedder_cold
-            # Resolved only now that the collection's embedder is known, so the
-            # hypothesis lands in that collection's vector space. An FTS-only search —
-            # a cold embedder, or the global placeholder for a pending load — skips it.
-            try:
-                hyde_outcome = await request_hyde.resolve(embedder, embedder_warm=not fts_only)
-            except EmbedderNotReadyError:
-                raise  # retryable 503, answered below
-            except Exception as exc:  # noqa: BLE001 — any HyDE/embedding failure is mapped to an internal-error response
-                _emit_timings()
-                return _hyde_failure_response(writer, start, exc)
-            # run_within_budget, not a bare asyncio.wait_for: since 3.11
-            # asyncio.TimeoutError *is* the builtin TimeoutError (an OSError), so a
-            # socket ETIMEDOUT raised inside the store would otherwise be caught by
-            # the handler below and mis-mapped to a 504. Only a genuine budget
-            # overrun raises SearchBudgetExceeded — everything else keeps its own
-            # status mapping, exactly like the fan-out branch above.
-            result = await run_within_budget(
-                pipeline.search(
-                    body.query,
-                    body.collection,
-                    namespace=ns,
-                    embedder=embedder,
-                    filters=body.filters,
-                    query_vector=hyde_outcome.vector,
-                    rag_fusion=body.rag_fusion,
-                    rag_fusion_generator=rag_fusion_gen,
-                    rag_fusion_config=config.rag_fusion,
-                    graph_mode=body.graph_mode,
-                    scope_filter=body.scope_filter,
-                    rerank=warmup.rerank,
-                    fts_only=fts_only,
-                ),
-                timeout=_SEARCH_TIMEOUT_SECONDS,
+            excluded_count = len(result.excluded_collections)
+            writer.enqueue(
+                TelemetryEntry.from_search_multi_result(
+                    collections=body.collections,
+                    fanout_count=len(body.collections) - excluded_count,
+                    result_count=len(result.results),
+                    latency_ms=(monotonic() - start) * 1000.0,
+                    excluded_count=excluded_count,
+                    correlation_id=_correlation_id.get(),
+                    rag_fusion_applied=result.rag_fusion_applied,
+                    rag_fusion_queries_used=result.rag_fusion_queries_used,
+                )
             )
-            schemas = [SearchResultSchema.from_result(r, include_acl_gate=body.acl_context) for r in result.results]
-            if not body.wants_metadata:
-                for schema in schemas:
-                    schema.metadata = {}
-            if writer is not None:
-                try:
-                    flags = FilterFlags.from_search_filters(body.filters) if body.filters is not None else FilterFlags()
-                    if body.include_metadata and not flags.include_metadata:
-                        flags = flags.model_copy(update={"include_metadata": True})
-                    writer.enqueue(
-                        TelemetryEntry.from_search_tool_result(
-                            endpoint="search",
-                            collection=body.collection,
-                            result_doc_ids=[r.doc_id for r in result.results],
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            filter_flags=flags,
-                            correlation_id=_correlation_id.get(),
-                            rag_fusion_applied=result.rag_fusion_applied,
-                            rag_fusion_queries_used=result.rag_fusion_queries_used,
-                            doc_id_hasher=getattr(request.app.state, "doc_id_hasher", None),
-                        )
-                    )
-                except Exception:
-                    logger.warning("telemetry: search entry enqueue failed", exc_info=True)
-            _emit_timings()
-            _expansion_warning = hyde_outcome.expansion_warning or result.rag_fusion_warning
-            return SearchResponse(
-                results=schemas,
-                acl_filtered=result.acl_filtered,
-                excluded_collections=[
-                    ExcludedCollectionSchema(name=e.name, reason=e.reason)
-                    for e in result.excluded_collections
-                ],
-                embedding_model=active_model,
-                hyde_applied=hyde_outcome.applied,
-                rag_fusion_applied=result.rag_fusion_applied,
-                rag_fusion_queries_used=result.rag_fusion_queries_used,
-                rag_fusion_attempted=result.rag_fusion_attempted,
-                graph_expansion_applied=result.graph_expansion_applied,
-                expansion_used=hyde_outcome.applied or result.rag_fusion_applied or result.graph_expansion_applied,
-                expansion_warning=_expansion_warning,
-                applied_filters=body.filters,
-                ppr_entities_matched=result.ppr_entities_matched,
-            )
-        except EmbedderNotReadyError as exc:
-            # The model is still loading (or its load is wedged) — retryable, so
-            # 503, never 500. Kept as its own handler (rather than relying on the
-            # generic app-level EmbedderNotReadyError handler in app.py) because it
-            # also emits stage timings for the recorder bound above — the generic
-            # handler has no access to that ExitStack-scoped recorder.
-            _emit_timings()
-            _enqueue_error(writer, start, status="internal_error", error_kind="other")
-            logger.warning("search: embedder not ready — %s", exc)
-            return JSONResponse(
-                {"detail": EMBEDDER_NOT_READY_DETAIL, "code": EMBEDDER_NOT_READY_CODE},
-                status_code=503,
-                headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
-            )
-        except GraphCommunitiesNotBuiltError as exc:
-            _emit_timings()
-            return JSONResponse(
-                {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422
-            )
-        except SearchBudgetExceeded:
-            _emit_timings()
-            _enqueue_error(writer, start, status="timeout", error_kind="timeout")
-            logger.error(
-                "search pipeline timed out",
-                extra={"event_type": "search_timeout", "collection": body.collection},
-            )
-            raise HTTPException(status_code=504, detail="Search timed out")
-        except Exception as exc:
-            _emit_timings()
-            _report_pipeline_failure(writer, start, exc)
-            raise
+        except Exception:
+            logger.warning("telemetry: search_multi entry enqueue failed", exc_info=True)
+    _multi_expansion_warning = hyde_outcome.expansion_warning or result.rag_fusion_warning
+    return SearchResponse(
+        results=schemas,
+        acl_filtered=result.acl_filtered,
+        excluded_collections=[
+            ExcludedCollectionSchema(name=e.name, reason=e.reason)
+            for e in result.excluded_collections
+        ],
+        embedding_model=config.embedding_model,
+        hyde_applied=hyde_outcome.applied,
+        rag_fusion_applied=result.rag_fusion_applied,
+        rag_fusion_queries_used=result.rag_fusion_queries_used,
+        rag_fusion_attempted=result.rag_fusion_attempted,
+        graph_expansion_applied=result.graph_expansion_applied,
+        expansion_used=hyde_outcome.applied or result.rag_fusion_applied or result.graph_expansion_applied,
+        expansion_warning=_multi_expansion_warning,
+        applied_filters=body.filters,
+        ppr_entities_matched=result.ppr_entities_matched,
+    )

@@ -240,9 +240,9 @@ def test_search_emits_partial_stage_timings_on_timeout(
     raised *by the pipeline* is an ``OSError`` from the store and keeps its own
     500 mapping.
     """
-    import archon_search.server.routes_search as routes_search_module
+    import archon_search.services.search_service as search_service_module
 
-    monkeypatch.setattr(routes_search_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(search_service_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
 
     async def _search_with_embed_then_hang(*args: object, **kwargs: object) -> SearchPipelineResult:
         with record_stage("embed"):

@@ -434,8 +434,8 @@ def test_search_cross_namespace_404(tmp_path: Path) -> None:
 def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """When get_collection_meta raises (LanceDB error), response is 503, not 404 or 200.
 
-    Also verifies that the 503 meta-lookup failure path does NOT enqueue a telemetry
-    entry (telemetry is reserved for the search-execution failure paths).
+    The service records the metadata-store failure as exactly one ``internal_error``/``other`` entry and logs it with its
+    traceback (the pre-service REST route recorded nothing here).
     """
     from archon_search.telemetry.writer import TelemetryWriter
 
@@ -444,16 +444,19 @@ def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCa
     writer_mock = MagicMock(spec=TelemetryWriter)
     app.state.telemetry_writer = writer_mock
 
-    with caplog.at_level(logging.ERROR, logger="archon.search"):
+    with caplog.at_level(logging.ERROR, logger="archon_search"):
         response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 503
     body = response.json()
     assert (body["code"], body["detail"]) == (METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL)
     app.state.pipeline.search.assert_not_called()
-    assert any("service unavailable" in record.message.lower() or "lancedb" in record.message.lower() or "col" in record.message for record in caplog.records)
-    # 503 meta-lookup path must not enqueue telemetry.
-    assert writer_mock.enqueue.call_count == 0
+    assert any(
+        record.exc_info is not None and "meta lookup failed" in record.getMessage() for record in caplog.records
+    )
+    writer_mock.enqueue.assert_called_once()
+    entry = writer_mock.enqueue.call_args.args[0]
+    assert (entry.endpoint, entry.status, entry.error_kind) == ("search", "internal_error", "other")
 
 
 # ---------------------------------------------------------------------------
@@ -1272,7 +1275,7 @@ def test_search_hyde_is_skipped_while_the_collection_embedder_load_is_pending(
     """
     import asyncio
 
-    import archon_search.server.routes_search as routes_search_mod
+    import archon_search.services.search_service as search_service_mod
 
     app, client, generator = _make_hyde_app(tmp_path, embedder_is_warm=True)
 
@@ -1281,7 +1284,7 @@ def test_search_hyde_is_skipped_while_the_collection_embedder_load_is_pending(
         raise AssertionError("unreachable")
 
     app.state.embedder_cache = MagicMock(get_or_load=_never_finishing_load)
-    monkeypatch.setattr(routes_search_mod, "_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(search_service_mod, "_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS", 0.01)
 
     response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
 
@@ -1421,7 +1424,7 @@ def test_search_stage_total_excludes_hyde_time(tmp_path: Path, caplog: pytest.Lo
 
     generator.generate = _slow_generate
 
-    with caplog.at_level(logging.INFO, logger="archon_search.server.routes_search"):
+    with caplog.at_level(logging.INFO, logger="archon_search.services.search_service"):
         response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
 
     assert response.status_code == 200, response.text

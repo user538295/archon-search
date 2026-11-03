@@ -88,7 +88,12 @@ def _is_this_fake(pid: int, fake: _fake_claude.FakeClaude) -> bool:
 @pytest.fixture(autouse=True)
 def _search_budget_never_ends_a_held_call(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without this a held call ends at the 30 s search budget and a missing cancel would only look slow, not wrong."""
-    for module in ("archon_search.server.mcp", "archon_search.server.routes_search", "archon_search.server.routes_explain"):
+    for module in (
+        "archon_search.server.mcp",
+        "archon_search.server.routes_search",
+        "archon_search.server.routes_explain",
+        "archon_search.services.search_service",
+    ):
         monkeypatch.setattr(f"{module}._SEARCH_TIMEOUT_SECONDS", _BUDGET_SECONDS)
 
 
