@@ -8,9 +8,134 @@
 
 ## Changelog
 
+### [next release] — MCP `search` has no default collection: `collection` or `collections` is required (2026-11-03)
+
+**Surface**: the MCP `search` tool on `/mcp`. Agents and scripts that call it with neither `collection` nor `collections`. `search_with_context`, `explain` and the other tools keep their default-collection fallback.
+
+**What changed:**
+
+- **Before**: a call with neither field searched the server's default collection (the `default_collection` the MCP app is built with).
+- **New**: the call is refused before any lookup with `{"error": "supply either collection or collections", "code": "validation_error"}`, REST's text. Supplying both is refused with `supply either collection or collections, not both` as before. The literal name `default` is not special either: a collection of that name is searched only when named (pinned by `test_mcp_search_without_a_collection_never_uses_the_factory_default_or_the_literal_default` in `tests/server/test_mcp_search_service.py`).
+
+**Migration**: name the collection in every `search` call (`collection="docs"` or `collections=["docs", "notes"]`). A client that relied on the implicit default must pass it explicitly.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — MCP `search` rejects `graph_mode="ppr"` together with `collections`, before any work is done (2026-11-03)
+
+**Surface**: the MCP `search` tool with `graph_mode="ppr"` and a `collections` list of any length (one name included). A single `collection` with `ppr` is unchanged.
+
+**What changed:**
+
+- **Before**: the call ran the fan-out and answered a normal result with `ppr_entities_matched: 0`, so a personalised-PageRank request that could not run looked like one that found no entity.
+- **New**: `{"error": "graph_mode is not supported with multi-collection fanout; use a single collection", "code": "validation_error"}`, REST's text and code. The check runs before the HyDE or RAG Fusion providers are called and before any collection is read, so no provider quota is spent (pinned by `test_mcp_search_ppr_with_collections_is_rejected_before_hyde`). It also runs before the `graph_disabled` check: a server with `[graph]` off answers this text for `ppr` with `collections`. `SearchPipeline.search_many` asserts the same rule for any other caller.
+
+**Migration**: search one collection at a time when you need `ppr`, or use `naive`, `local` or `global` with `collections`.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — MCP `search` rejects an empty query and a whitespace-only `collection`, and strips a padded query and collection name (2026-11-03)
+
+**Surface**: the MCP `search` tool: the `query`, `collection` and `collections` arguments.
+
+**What changed:**
+
+- **Before**: the tool did not check the query, so an empty or blank one went on to the pipeline; a padded query reached the pipeline as written; the single `collection` was used as written, and an empty one fell back to the default collection (the names of a `collections` list were already stripped and de-duplicated).
+- **New**: a blank query answers `{"error": "query must not be empty", "code": "validation_error"}` and a blank or empty `collection` answers `collection must not be empty` with the same code, both REST's texts (it no longer falls back to a default). A padded `query` and a padded `collection` are stripped before they are used, so `"  q  "` and `"  docs  "` search `q` in `docs` (pinned by `test_mcp_search_strips_a_padded_query_and_collection_and_rejects_a_whitespace_only_collection`). The collection names inside `collections` were already stripped; their whitespace rule changed text, see the entry on the check order.
+
+**Migration**: send a non-blank query. A client that padded a name no longer needs to, and one that padded a query gets the stripped query searched.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — MCP `search` runs its input checks in REST's order, and three error texts are REST's (2026-11-03)
+
+**Surface**: the `error` text and the `code` that MCP `search` answers for an input that fails several checks, and the three texts below. Clients that match on the `error` text.
+
+**What changed:**
+
+- **Order**: the filter arguments are validated first (`invalid search filters`; it used to be the last check, so a call with an invalid filter and another fault now answers `invalid search filters`), then the tool checks, in this order, the collection and query fields, `graph_mode` against its valid values, the collection selection (both, neither, an empty list, a blank name), the fan-out limit, the `scope_filter` syntax, `scope_filter` together with `graph_mode`, `ppr` with `collections`, and last whether `[graph]` is enabled. The first failure wins. It used to check `graph_mode` against the switch before the `scope_filter` rules, so a call that broke both answered `graph_disabled` and now answers the `scope_filter` code (pinned by `test_mcp_search_check_order_matches_rests`).
+- **Texts** (the codes are unchanged): a `graph_mode` on a server with `[graph]` off, `graph_mode requires [graph] enabled=true`, becomes `graph_mode requires [graph] enabled=true in server config` (`graph_disabled`). `scope_filter` with `graph_mode`, `scope_filter is not supported with graph_mode; use scope_filter without graph_mode or use graph_mode without scope_filter`, becomes `scope_filter is not supported with graph_mode` (`scope_filter_graph_mode_incompatible`). A blank name in `collections`, `collection names must not be whitespace`, becomes `collection names must not be empty or whitespace` (`validation_error`).
+- **Unchanged**: `search_with_context` and `explain` keep their own checks and the old texts.
+
+**Migration**: match on `code`, not on the `error` text. A client that matched one of the three old strings must follow the new text.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — MCP `search` on one collection waits at most 0.5 s for the collection's embedder and answers from the FTS leg alone when it is not ready (2026-11-03)
+
+**Surface**: the MCP `search` tool with a single `collection`, when the collection's embedder is still loading (typically right after a restart). `search_with_context` and `explain` are not changed; the multi-collection path already used the global embedder under the S290 bound.
+
+**What changed:**
+
+- **Before**: the tool waited for the embedder cache with no bound of its own, up to the cache's 120 s dedup wait, and the call blocked for as long.
+- **New**: the cache handoff is bounded by the same 0.5 s `EMBEDDER_WARMUP_WAIT_SECONDS` that S299 introduced for REST. When it expires the call answers from the FTS leg alone (the S290 degraded result: a different result set and ordering, and `hyde_applied`, `rag_fusion_applied`, `graph_expansion_applied` and `expansion_used` `false` even when requested). The load keeps running and fills the cache for later calls, and the server logs a WARNING (the degrade is pinned by `test_mcp_search_cold_embedder_degrades_to_fts_only`). A load wedged past the cache's own 120 s wait still answers `embedder_not_ready`.
+- **Reconciled with the S286/S288, S290 and S299 entries**: the S299 entry described REST only and said the MCP tools kept the cache-level wait; that is now true of `search_with_context` and `explain` only. The S290 entry (the cold embedder degrades REST, MCP and the shim to the FTS leg) and the S286/S288 entry (the cold cross-encoder degrade) are unchanged; this entry extends the S299 bound to the MCP `search` single path, and a later entry covers the shim.
+
+**Migration**: as for the S290 and S299 entries: gate traffic on `GET /ready` returning 200 if a degraded answer is not acceptable, and read `hyde_applied`, `rag_fusion_applied`, `graph_expansion_applied` and `expansion_used` as a report of what ran.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — MCP `search` response carries REST's fields and a per-result `acl_gate` behind the new `acl_context` argument (2026-11-03)
+
+**Surface**: the MCP `search` tool: its input schema (`acl_context`) and its response schema, which is strict (`additionalProperties: false`). Clients that validate the response against a fixed schema.
+
+**What changed:**
+
+- **New response fields**, so the field set equals REST's `SearchResponse`: `embedding_model` (the collection's active model on the single path, the configured model on the multi-collection path), `rag_fusion_applied`, `rag_fusion_queries_used`, `rag_fusion_attempted` and `applied_filters` (the filters as parsed, `null` when the call sent none). A result of `search` also gains `acl_gate`, `null` unless asked for. `search_with_context` and `explain` are unchanged.
+- **New argument**: `acl_context` (boolean, default `false`). With `acl_context=true` each result carries `acl_gate`, its ACL provenance envelope, in REST's shape; without it `acl_gate` is `null` (pinned by `test_mcp_search_response_carries_rests_fields_and_per_result_acl_gate`).
+- **Tool description**: it now lists `ppr` among the `graph_mode` values and says that `collection` or `collections` is required.
+
+**Migration**: a client that rejects unknown fields must add the new ones. Nothing else changes for a client that reads the fields it knows.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — MCP `search` error codes: an unknown or invalid collection is `not_found` with a fixed text, a failed metadata lookup is `metadata_store_error`, a multi-collection embedder that is not ready is `embedder_not_ready` (2026-11-03)
+
+**Surface**: the `error` text and `code` of failed MCP `search` calls. Clients and agents that branch on them.
+
+**What changed:**
+
+- **Not found**: the single path answered `collection '<name>' not found` and echoed the name; both paths now answer the fixed `collection not found` with `not_found`, REST's text. On the single path a name that is not a valid collection name (a space or `!`, a leading `_` or `-`, non-ASCII, more than 64 characters) used to reach the store, which refuses it, and the call answered `internal_error` / `search failed`; it is now `not_found` as on REST and is no longer recorded as an `internal_error` telemetry entry (pinned by `test_mcp_search_not_found_has_the_fixed_text_on_both_paths_and_for_an_invalid_name`).
+- **Metadata store**: a failed collection-metadata lookup on the single path answered `internal_error` / `search failed`; it now answers `metadata_store_error` with the fixed text the multi path always used (pinned by `test_mcp_search_single_path_metadata_failure_is_metadata_store_error`).
+- **Embedder not ready**: on the multi-collection path an embedder load wedged past the cache's wait answered `internal_error`; it now answers `embedder_not_ready`, as the single path already did (pinned by `test_mcp_search_multi_path_embedder_not_ready_is_embedder_not_ready`).
+- **Unchanged**: `timeout`, `internal_error` for an unexpected failure, `graph_communities_not_built`, every validation code.
+
+**Migration**: treat `not_found` as "no such collection" for every name, and `embedder_not_ready` and `metadata_store_error` as retryable infrastructure answers. A client that read `internal_error` from these three cases must follow the new codes.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — MCP `search`: a timeout, a failed metadata lookup on the multi path and an embedder that is not ready on the single path are recorded in telemetry (2026-11-03)
+
+**Surface**: the telemetry JSONL and the consumers that count its entries (error rates, dashboards) for the MCP `search` tool, when telemetry is enabled. The tool's answers are the ones described in the entry above; this entry is about what is recorded.
+
+**What changed:**
+
+- **Before**: a timeout wrote no error entry on either path, nor did a failed metadata lookup on the multi path or an embedder that was not ready on the single path. The other failures reached the catch-all and were recorded as `internal_error`: a failed metadata lookup on the single path, an embedder that was not ready on the multi path, and the store's refusal of an invalid collection name.
+- **New**: one error entry per failed call with endpoint `search`: a timeout with status `timeout` and error kind `timeout`; a failed metadata lookup and an embedder that is not ready, on both paths, with status `internal_error` and error kind `other`, as an unexpected failure. An invalid collection name is `not_found` now and writes no entry. The entries are written by `SearchService`, the one that also writes REST's; the entry carries no query text. A `not_found` and a validation error are not recorded (the timeout and internal-failure entries on both paths are pinned by `test_mcp_search_timeout_and_internal_error_are_recorded` in `tests/server/test_mcp_search_service.py`).
+
+**Migration**: nothing to change for a client. A dashboard or alert that counts `search` entries now sees MCP timeouts and these outages; no entry field tells the `internal_error` causes apart, so keep the server log for the cause.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — REST `POST /search` with a `collection` that is not a valid collection name answers `404 collection not found`, not `503` (2026-11-03)
 
-**Surface**: REST `POST /search` with the single-collection field `collection`; the server log. Clients that send a name that is not a valid collection name (a space or `!`, a leading `_` or `-`, non-ASCII, more than 64 characters: the rule is `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`), and any alert or retry rule keyed on the `503` this produced. The `collections` list (the multi-collection path), `POST /explain` (still `503` for an invalid `collection`), the MCP `search` tool and the OpenAI-compatible shim are unchanged in this release.
+**Surface**: REST `POST /search` with the single-collection field `collection`; the server log. Clients that send a name that is not a valid collection name (a space or `!`, a leading `_` or `-`, non-ASCII, more than 64 characters: the rule is `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`), and any alert or retry rule keyed on the `503` this produced. The `collections` list (the multi-collection path), `POST /explain` (still `503` for an invalid `collection`) and the OpenAI-compatible shim are unchanged in this release; the MCP `search` tool changes in its own entries of this release.
 
 **What changed:**
 
@@ -1219,7 +1344,7 @@ This replaces the previous behaviour, which was strictly worse: the request bloc
 
 **What changed:** the route's own bound on `embedder_cache.get_or_load()` (`_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS`) drops from 30s to `server/_search_budget.EMBEDDER_WARMUP_WAIT_SECONDS` = 0.5s, and expiring it no longer raises `EmbedderNotReadyError`. The request now runs `fts_only=True` and answers `200`, exactly as the S290 warm-up stage one step later already did — so the whole cold path is under one policy. Note this bound never covered an ONNX build: `make_embedder` returns a lazy backend, so what it covers is the cache handoff (a saturated `asyncio.to_thread` executor, or this request parked as a deduplicated waiter behind another caller's in-flight load). The load is shielded and keeps running, so it still populates the cache for later requests.
 
-**Consequences for clients:** a request that previously got `503` + `Retry-After: 30` after 30s of waiting now gets a `200` in ~0.5s carrying the S290 degraded response — FTS-only ordering, `rag_fusion_applied` / `graph_expansion_applied` / `hyde_applied` `false`; see the S290 entry below for the full list. A `503` with `code: "embedder_not_ready"` on `/search` now means only a genuinely wedged load (past the cache's 120s dedup wait). No other surface changed: `/explain`, the MCP tools, the `/v1` shim and the job tasks keep the 120s cache-level bound and their existing `embedder_not_ready` mapping.
+**Consequences for clients:** a request that previously got `503` + `Retry-After: 30` after 30s of waiting now gets a `200` in ~0.5s carrying the S290 degraded response — FTS-only ordering, `rag_fusion_applied` / `graph_expansion_applied` / `hyde_applied` `false`; see the S290 entry below for the full list. A `503` with `code: "embedder_not_ready"` on `/search` now means only a genuinely wedged load (past the cache's 120s dedup wait). No other surface changed by this entry: `/explain`, the MCP tools, the `/v1` shim and the job tasks kept the 120s cache-level bound and their existing `embedder_not_ready` mapping. Since 2026-11-03 the MCP `search` tool on a single collection takes this 0.5s bound too (see the entry on its embedder wait above); `search_with_context`, `explain`, the shim and the job tasks are as described here.
 
 **Migration:** clients that treated a cold-start `/search` `503` as "retry shortly" need no change — they simply stop seeing it. Clients that relied on that `503` to detect a cold server must gate on `GET /ready` returning `200` (S279) instead, and should handle the degraded `200` per the S290 entry below.
 
@@ -2024,7 +2149,7 @@ These columns are **not exposed** via any REST endpoint, MCP tool, or CLI comman
 - `POST /search` and the MCP `search` tool gain an optional `collections: list[str]` field for fanning out a single query across multiple collections in one request. `POST /explain` and the MCP `explain` tool gain the same field.
 
 **Request-schema change (REST `/search`)**:
-- `SearchRequest.collection` changes from required (`str`) to optional (`str | None = None`). Exactly one of `collection` / `collections` must be supplied. Existing clients that omit `collection` now receive a different 422 message (`"supply either collection or collections"` instead of Pydantic's `"field required"`); clients that explicitly send `collection: null` get the same new error. This is a request-schema behavioral change for clients that relied on the old validation message. The MCP `search` tool preserves its existing `default_collection` fallback when neither field is supplied.
+- `SearchRequest.collection` changes from required (`str`) to optional (`str | None = None`). Exactly one of `collection` / `collections` must be supplied. Existing clients that omit `collection` now receive a different 422 message (`"supply either collection or collections"` instead of Pydantic's `"field required"`); clients that explicitly send `collection: null` get the same new error. This is a request-schema behavioral change for clients that relied on the old validation message. The MCP `search` tool preserved its `default_collection` fallback when neither field was supplied; that fallback was removed on 2026-11-03 (see the entry on the MCP `search` default collection).
 
 **Response — additive keys**:
 - Every result in `POST /search` / `POST /explain` (REST) and the `search`/`explain` MCP tools gains a `collection` key naming its origin collection. Each response gains an `excluded_collections` list (entries `{"name", "reason"}`) reporting collections dropped from a multi-collection request (e.g. embedding-model mismatch).
