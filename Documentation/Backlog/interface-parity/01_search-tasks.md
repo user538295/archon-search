@@ -403,7 +403,7 @@ A chat client keeps its envelope, streaming and model-name routing, and gains de
     - Tests
         - #integration_test — `test_breaking_md_headings_have_index_rows` — (existing) heading-to-index parity
         - #integration_test — `test_wire_text_matches_source_and_every_quoting_doc` — (existing) no back-quoted metadata-store literal in `BREAKING.md`
-- [ ] **BE-22** — Prove the four interfaces agree in the default lane: one `make_real_app` with MCP and the shim enabled, the same query and collection through REST, MCP, the CLI `--json` (bridge) and the shim #backend-role
+- [x] **BE-22** — Prove the four interfaces agree in the default lane: one `make_real_app` with MCP and the shim enabled, the same query and collection through REST, MCP, the CLI `--json` (bridge) and the shim #backend-role
     - Interface Adapters · 4.0h
     - needs BE-15, BE-20, FE-4 · completes S1
     - Tests
