@@ -522,7 +522,7 @@ A field removed from one surface, or a forbidden import in an adapter, turns CI 
         - #unit_test — `test_adapters_import_no_forbidden_module_in_scope` — the real tree passes
         - #unit_test — `test_thinness_scan_fails_on_a_forbidden_import_in_a_scoped_body` — a fake `search` tool body that uses `RequestHyDE`
         - #unit_test — `test_thinness_scan_ignores_imports_used_by_other_mcp_tools` — `search_with_context` and `explain` keep theirs
-- [ ] **T-6** — e2e: keep the real-pytest guard-failure test in step with the new parity files #tester-role
+- [x] **T-6** — e2e: keep the real-pytest guard-failure test in step with the new parity files #tester-role
     - — · 1.0h
     - needs BE-29 · completes S41, S42
     - Tests
