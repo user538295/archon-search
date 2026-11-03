@@ -14,7 +14,7 @@ import logging
 import time
 from contextlib import ExitStack
 from time import monotonic
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -22,6 +22,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from archon_search._types import IngestedBy
 from archon_search.config import resolve_active_model
+from archon_search.constants import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+)
+from archon_search.constants import (
+    VALID_ACL_SOURCES,
+    GraphMode,
+)
 from archon_search.observability import bind_stage_recorder
 from archon_search.observability import correlation_id as _correlation_id
 from archon_search.pipeline import (
@@ -44,9 +51,6 @@ from archon_search.server.schemas import (
     route_422_response,
 )
 from archon_search.services.request_hyde import RequestHyDE
-from archon_search.services.search_budget import (
-    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
-)
 from archon_search.services.validators import (
     validate_scope_filter as _check_scope_filter,
 )
@@ -80,8 +84,6 @@ _EXPLAIN_500_DESCRIPTION = (
     "Any other failure (e.g. loading the collection's embedder failing for a reason other than "
     "the embedder not being ready yet) is a plain-text 500."
 )
-
-_VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
 
 def _final_score(b: SearchScoreBreakdown) -> float:
@@ -214,7 +216,7 @@ class ExplainResult(BaseModel):
             graph_provenance=graph_prov,
             acl_gate=AclGateSchema(
                 allowed_principals=c.acl,
-                source=c.acl_source if c.acl_source in _VALID_ACL_SOURCES else None,
+                source=c.acl_source if c.acl_source in VALID_ACL_SOURCES else None,
                 sidecar_path=c.acl_sidecar_path,
                 warnings=c.acl_warning,
             ),
@@ -293,7 +295,7 @@ class ExplainRequest(BaseModel):
     rerank: bool = True
     hyde: bool = False
     rag_fusion: bool = False
-    graph_mode: Literal["naive", "local", "global", "ppr"] | None = None
+    graph_mode: GraphMode | None = None
     scope_filter: str | None = None
 
     @field_validator("query")
@@ -360,7 +362,7 @@ class ExplainResponse(BaseModel):
     rag_fusion_attempted: bool = False
     rag_fusion_failure_reason: str | None = None
     rag_fusion_sub_queries: list[RagFusionSubQueryResult] | None = None
-    graph_mode_applied: Literal["naive", "local", "global", "ppr"] | None = None
+    graph_mode_applied: GraphMode | None = None
     # BE-2 — PPR retrieval: count of seed entities matched during PPR graph walk
     ppr_entities_matched: int | None = None
 
@@ -380,7 +382,7 @@ class ExplainResponse(BaseModel):
         rag_fusion_attempted: bool = False,
         rag_fusion_failure_reason: str | None = None,
         rag_fusion_sub_query_results: list | None = None,
-        graph_mode_applied: Literal["naive", "local", "global", "ppr"] | None = None,
+        graph_mode_applied: GraphMode | None = None,
         ppr_entities_matched: int | None = None,
     ) -> ExplainResponse:
         sub_queries: list[RagFusionSubQueryResult] | None = None

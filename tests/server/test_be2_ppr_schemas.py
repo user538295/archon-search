@@ -5,7 +5,7 @@ Verifies:
 - ExplainRequest accepts graph_mode="ppr"
 - SearchResponse has ppr_entities_matched: int | None field
 - ExplainResponse has ppr_entities_matched: int | None field
-- _VALID_GRAPH_MODES in mcp.py includes "ppr"
+- VALID_GRAPH_MODES in constants.py includes "ppr"
 - search_with_context rejection message lists "ppr"
 """
 from __future__ import annotations
@@ -94,14 +94,14 @@ def test_explainResponse_pprEntitiesMatched_acceptsInt() -> None:
 
 
 # ---------------------------------------------------------------------------
-# MCP _VALID_GRAPH_MODES
+# MCP graph-mode validation set
 # ---------------------------------------------------------------------------
 
 
 def test_mcpValidModes_includesPpr() -> None:
-    """_VALID_GRAPH_MODES in mcp.py includes 'ppr'."""
-    from archon_search.server.mcp import _VALID_GRAPH_MODES
-    assert "ppr" in _VALID_GRAPH_MODES
+    """The shared valid graph-mode set the MCP tools validate against includes 'ppr'."""
+    from archon_search.constants import VALID_GRAPH_MODES
+    assert "ppr" in VALID_GRAPH_MODES
 
 
 def test_mcpSearchWithContext_rejectionMessage_includesPpr() -> None:

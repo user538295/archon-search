@@ -59,6 +59,7 @@ from archon_search.constants import (
     EMBED_WAIT_SECONDS,
     INLINE_CHUNK_METADATA_KEY,
     INLINE_CHUNK_METADATA_VALUE,
+    GraphMode,
 )
 from archon_search.defref_extractor import DEFREF_SUPPORTED_EXTENSIONS
 from archon_search.description_write import is_storable_vector
@@ -191,7 +192,7 @@ class ExplainPipelineResult:
     rag_fusion_attempted: bool = False
     rag_fusion_failure_reason: str | None = None
     rag_fusion_sub_query_results: list[RagFusionSubQueryInfo] | None = None
-    graph_mode_applied: Literal["naive", "local", "global", "ppr"] | None = None
+    graph_mode_applied: GraphMode | None = None
     ppr_entities_matched: int | None = None
 
 
@@ -2262,7 +2263,7 @@ class SearchPipeline:
         rag_fusion: bool = False,
         rag_fusion_generator: RAGFusionGenerator | None = None,
         rag_fusion_config: RAGFusionConfig | None = None,
-        graph_mode: Literal["naive", "local", "global", "ppr"] | None = None,
+        graph_mode: GraphMode | None = None,
         scope_filter: str | None = None,
     ) -> ExplainPipelineResult:
         """Fetch an amplified pool (``max(top_k_retrieve*3, 20)`` candidates) and, when
@@ -2827,7 +2828,7 @@ class SearchPipeline:
         namespace: str,
         query_vector: list[float] | None,
         embedder: Embedder,
-        graph_mode: Literal["naive", "local", "global", "ppr"],
+        graph_mode: GraphMode,
         scope_filter: str | None = None,
     ) -> ExplainPipelineResult:
         """Merge winning graph candidates with hybrid baseline, ACL filter, rerank, and return ExplainPipelineResult."""

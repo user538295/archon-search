@@ -285,8 +285,8 @@ def test_hyde_false_search_p95_under_threshold(bench_store) -> None:  # type: ig
     from unittest.mock import MagicMock
 
     from archon_search.config import HyDEConfig
+    from archon_search.constants import SEARCH_TIMEOUT_SECONDS
     from archon_search.services.request_hyde import RequestHyDE
-    from archon_search.services.search_budget import SEARCH_TIMEOUT_SECONDS
 
     query_text = "benchmark query for hyde fast path"
     request_hyde = RequestHyDE(

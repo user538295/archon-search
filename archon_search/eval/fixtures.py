@@ -10,8 +10,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from archon_search.constants import VALID_GRAPH_MODES
+
 _VALID_METRIC_SCOPES = ("retrieval", "routing")
-_VALID_GRAPH_MODES = (None, "naive", "local", "global", "ppr")
+_GRAPH_MODE_CHOICES = (None, *VALID_GRAPH_MODES)
 
 # Same pattern as archon_search.store._COLLECTION_RE
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
@@ -67,9 +69,9 @@ class EvalQuery:
                 f"metric_scope must be one of {_VALID_METRIC_SCOPES!r}, "
                 f"got {self.metric_scope!r}"
             )
-        if self.graph_mode not in _VALID_GRAPH_MODES:
+        if self.graph_mode not in _GRAPH_MODE_CHOICES:
             raise ValueError(
-                f"graph_mode must be one of {_VALID_GRAPH_MODES!r}, "
+                f"graph_mode must be one of {_GRAPH_MODE_CHOICES!r}, "
                 f"got {self.graph_mode!r}"
             )
         if self.graph_mode is not None and self.metric_scope != "retrieval":

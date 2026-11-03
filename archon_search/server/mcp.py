@@ -39,6 +39,10 @@ from archon_search.constants import (
     DEFAULT_MAX_CROSS_COLLECTION_COLLECTIONS,
     DEFAULT_NAMESPACE,
     INGEST_LOCK_TIMEOUT_S,
+    VALID_GRAPH_MODES,
+)
+from archon_search.constants import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
 )
 from archon_search.description_change import (
     DescriptionChangeStatus,
@@ -142,9 +146,6 @@ from archon_search.services.authz import (
 )
 from archon_search.services.request_hyde import RequestHyDE
 from archon_search.services.search_budget import (
-    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
-)
-from archon_search.services.search_budget import (
     SearchBudgetExceeded,
     run_within_budget,
     warmup_for_search,
@@ -241,7 +242,6 @@ _INVALID_SEARCH_RESPONSE_DETAIL = "search response failed schema validation"
 _EXPLAIN_FAILED_CODE = "internal_error"
 # explain's response-schema failure, for the same reason as search's above.
 _INVALID_EXPLAIN_RESPONSE_DETAIL = "explain response failed schema validation"
-_VALID_GRAPH_MODES: tuple[None | str, ...] = (None, "naive", "local", "global", "ppr")
 # E2a — ingest TTL and scope validation limits (same constraints as routes_jobs.py IngestRequest validators)
 _INT32_MAX: int = 2**31 - 1
 _MAX_SCOPE_LIST_ITEMS: int = 100
@@ -550,8 +550,8 @@ def create_app(
         start = monotonic()
 
         # graph_mode validation — must be None, "naive", "local", or "global".
-        if graph_mode not in _VALID_GRAPH_MODES:
-            return McpErrorResponse(error=f"graph_mode must be one of {[m for m in _VALID_GRAPH_MODES if m is not None]!r}", code="invalid_graph_mode")
+        if graph_mode not in (None, *VALID_GRAPH_MODES):
+            return McpErrorResponse(error=f"graph_mode must be one of {list(VALID_GRAPH_MODES)!r}", code="invalid_graph_mode")
         _graph_config = getattr(config, "graph", None)
         _graph_enabled = getattr(_graph_config, "enabled", False) if _graph_config is not None else False
         if graph_mode is not None and not _graph_enabled:
@@ -1083,9 +1083,9 @@ def create_app(
             )
 
         # graph_mode validation — must be None, "naive", "local", or "global".
-        if graph_mode not in _VALID_GRAPH_MODES:
+        if graph_mode not in (None, *VALID_GRAPH_MODES):
             return McpErrorResponse(
-                error=f"graph_mode must be one of {[m for m in _VALID_GRAPH_MODES if m is not None]!r}",
+                error=f"graph_mode must be one of {list(VALID_GRAPH_MODES)!r}",
                 code="invalid_graph_mode",
             )
         _explain_graph_config = getattr(config, "graph", None)

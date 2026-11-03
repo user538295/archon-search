@@ -34,6 +34,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response, StreamingResponse
 
 from archon_search.config import resolve_active_model
+from archon_search.constants import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+)
 from archon_search.pipeline import (
     CollectionNotFoundError,
     FanoutTimeoutError,
@@ -51,9 +54,6 @@ from archon_search.server.schemas_openai import (
     ModelObject,
     OpenAIError,
     OpenAIErrorResponse,
-)
-from archon_search.services.search_budget import (
-    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
 )
 from archon_search.services.search_budget import (
     SearchBudgetExceeded,

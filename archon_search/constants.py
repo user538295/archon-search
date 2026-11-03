@@ -3,7 +3,18 @@
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, get_args
+
+# The graph retrieval modes a search or explain request may name; REST's OpenAPI enum is these four values.
+GraphMode = Literal["naive", "local", "global", "ppr"]
+VALID_GRAPH_MODES: Final[tuple[GraphMode, ...]] = get_args(GraphMode)
+
+# Where a chunk's ACL rule came from; any other stored string is shown as ``None`` on the wire.
+VALID_ACL_SOURCES: Final[frozenset[str]] = frozenset({"frontmatter", "sidecar", "collection_default"})
+
+# Overall wall-clock budget of one search request on every interface.
+# TODO: make configurable via config.py (see /route for parity)
+SEARCH_TIMEOUT_SECONDS: Final[float] = 30.0
 
 # Pre-A1 sentinel for ``ingested_by``. Stored on legacy rows; normalized to
 # ``"cli"`` at read/header-parse boundaries (see _types.IngestedBy). Reindex

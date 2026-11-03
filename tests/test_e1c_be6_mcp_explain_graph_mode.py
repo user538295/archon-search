@@ -4,7 +4,7 @@ Covers:
 - MCP explain tool accepts graph_mode parameter (None default)
 - graph_mode="naive"/"local"/"global" forwarded to pipeline.explain on single-collection path
 - graph_mode + collections together → error result (multi-collection not supported)
-- graph_mode="invalid" → error result via _VALID_GRAPH_MODES validation
+- graph_mode="invalid" → error result via VALID_GRAPH_MODES validation
 - graph disabled + graph_mode → code="graph_disabled" (not a pipeline call)
 - GraphCommunitiesNotBuiltError from pipeline → code="graph_communities_not_built"
 - graph_mode=None → result dict contains graph_mode_applied=null; all result items
@@ -201,7 +201,7 @@ async def test_mcp_explain_tool_graph_mode_with_collections_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_explain_tool_invalid_graph_mode_rejected() -> None:
-    """graph_mode='invalid' → error result via _VALID_GRAPH_MODES validation, no pipeline call."""
+    """graph_mode='invalid' → error result via VALID_GRAPH_MODES validation, no pipeline call."""
     pipeline = _make_pipeline()
     app = _make_mcp_app(pipeline, graph_enabled=True)
     explain_fn = app.tools["explain"]

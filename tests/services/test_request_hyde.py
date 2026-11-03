@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search.config import HyDEConfig
+from archon_search.constants import SEARCH_TIMEOUT_SECONDS
 from archon_search.observability import _stage_recorder, bind_stage_recorder
 from archon_search.services.request_hyde import (
     HYDE_EXPANSION_FAILED_WARNING,
@@ -17,7 +18,6 @@ from archon_search.services.request_hyde import (
     hyde_suppressed,
     resolve_hyde_within_budget,
 )
-from archon_search.services.search_budget import SEARCH_TIMEOUT_SECONDS
 from tests._hyde_stubs import stub_hyde_generator
 
 _VECTOR = [0.1, 0.2, 0.3]

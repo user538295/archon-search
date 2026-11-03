@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from archon_search.constants import SEARCH_TIMEOUT_SECONDS
 from archon_search.services.search_budget import (
     EMBEDDER_WARMUP_WAIT_SECONDS,
     RERANKER_WARMUP_WAIT_SECONDS,
-    SEARCH_TIMEOUT_SECONDS,
     SearchBudgetExceeded,
     run_within_budget,
     warmup_for_search,

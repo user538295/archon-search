@@ -31,7 +31,7 @@ async def await_models_warm(
     ``archon-search collection add --wait`` polls exactly this, then searches.
     Ingest only ever touches the *embedder*, so ``DONE`` used to be emitted while
     the cross-encoder was still cold; the next ``POST /search`` then awaited
-    ``Reranker._warmup_lock`` outside ``search_budget.SEARCH_TIMEOUT_SECONDS`` and
+    ``Reranker._warmup_lock`` outside ``constants.SEARCH_TIMEOUT_SECONDS`` and
     produced no response inside any normal client read budget (S281). Absorbing that
     wait here — off the request path, where ``/ready`` already puts it for
     probe-aware clients (S279) — makes a completed job mean what it says.

@@ -13,12 +13,11 @@ import asyncio
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
 
+from archon_search.constants import SEARCH_TIMEOUT_SECONDS
+
 if TYPE_CHECKING:
     from archon_search.embedder import Embedder
     from archon_search.pipeline import SearchPipeline
-
-# TODO: make configurable via config.py (see /route for parity)
-SEARCH_TIMEOUT_SECONDS = 30.0
 
 # Upper bound on how long one search request waits for the cross-encoder to finish
 # its cold model build before answering without reranking (S286/S288).  Deliberately

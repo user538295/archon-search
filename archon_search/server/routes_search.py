@@ -14,6 +14,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from archon_search._types import SearchResult
 from archon_search.config import resolve_active_model
+from archon_search.constants import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+)
+from archon_search.constants import (
+    VALID_ACL_SOURCES,
+    GraphMode,
+)
 from archon_search.embedder_cache import (
     EMBEDDER_NOT_READY_CODE,
     EMBEDDER_NOT_READY_DETAIL,
@@ -46,9 +53,6 @@ from archon_search.services.search_budget import (
     run_within_budget,
     warmup_for_search,
 )
-from archon_search.services.search_budget import (
-    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
-)
 from archon_search.services.validators import (
     validate_scope_filter as _check_scope_filter,
 )
@@ -80,8 +84,6 @@ _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = EMBEDDER_WARMUP_WAIT_SECONDS
 # exception's message may embed internals (model paths), so it goes to the server log
 # only. Same text as MCP ``search``'s ``_SEARCH_FAILED_DETAIL``.
 SEARCH_FAILED_DETAIL = "search failed"
-
-_VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +158,7 @@ class SearchRequest(BaseModel):
     filters: SearchFilters | None = None
     hyde: bool = False
     rag_fusion: bool = False
-    graph_mode: Literal["naive", "local", "global", "ppr"] | None = None
+    graph_mode: GraphMode | None = None
     scope_filter: str | None = None
     acl_context: bool = False
     # Response-shaping flag, accepted top-level to mirror the MCP search tool
@@ -231,7 +233,7 @@ class SearchResultSchema(BaseModel):
         if include_acl_gate:
             gate = AclGateSchema(
                 allowed_principals=r.acl,
-                source=r.acl_source if r.acl_source in _VALID_ACL_SOURCES else None,
+                source=r.acl_source if r.acl_source in VALID_ACL_SOURCES else None,
                 sidecar_path=r.acl_sidecar_path,
                 warnings=list(r.acl_warning),
             )
