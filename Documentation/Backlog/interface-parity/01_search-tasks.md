@@ -308,7 +308,7 @@ An API client or operator searches `collections=[a, b]` (or repeats `--collectio
 
 An MCP agent now gets REST's validation, REST's response fields, `acl_context`, bounded embedder wait and the unified error codes.
 
-- [ ] **BE-13** — Write the MCP characterization tests first, recording today's behaviour: check order (graph disabled before scope rules, MCP texts), `ppr` with `collections` reaching `search_many`, a timeout with no telemetry, the unbounded single-path embedder wait, the default collection #backend-role
+- [x] **BE-13** — Write the MCP characterization tests first, recording today's behaviour: check order (graph disabled before scope rules, MCP texts), `ppr` with `collections` reaching `search_many`, a timeout with no telemetry, the unbounded single-path embedder wait, the default collection #backend-role
     - Interface Adapters · 3.5h
     - needs K1 · completes S60
     - Tests
