@@ -89,6 +89,13 @@ def _given(**options: object) -> dict[str, object]:
     required=True,
     help="Collection to search (repeat for several).",
 )
+@click.option(
+    "--top-k",
+    "top_k",
+    type=int,
+    default=None,
+    help="Number of results to return (the server validates the range; default: the server's).",
+)
 @click.option("--file-type", default=None, help="Only files of this type.")
 @click.option("--source-path-prefix", default=None, help="Only sources whose path starts with this prefix.")
 @click.option("--source-path-glob", default=None, help="Only sources whose path matches this glob.")
@@ -133,6 +140,7 @@ def _given(**options: object) -> dict[str, object]:
 )
 def search(
     query: str,
+    top_k: int | None,
     collections: tuple[str, ...],
     file_type: str | None,
     source_path_prefix: str | None,
@@ -169,6 +177,7 @@ def search(
     if filters:
         body["filters"] = filters
     body |= _given(
+        top_k=top_k,
         include_metadata=include_metadata or None,
         hyde=hyde or None,
         rag_fusion=rag_fusion or None,

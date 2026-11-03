@@ -473,7 +473,7 @@ REST, MCP and the CLI honour `top_k`; the shim ignores the request value and tak
         - #integration_test — `test_openapi_snapshots_regenerated_match` — (existing, `tests/server/test_openapi_snapshot.py`) both pinned files equal the live schema
         - #integration_test — `test_both_openapi_snapshots_match` — (existing, `tests/integration/test_be18_provider_notes_removal.py`) the two copies are identical
         - #integration_test — `test_openapi_search_request_top_k_is_an_integer_minimum_1_or_null_without_a_default` — S39, C5: the new assertion on the regenerated schema
-- [ ] **FE-6** — Add `--top-k` to `cli/search.py`: a plain integer option, sent in the body only when given; below 1 and above the maximum come back as the server's 422 text; no CLI-private limit #frontend-role
+- [x] **FE-6** — Add `--top-k` to `cli/search.py`: a plain integer option, sent in the body only when given; below 1 and above the maximum come back as the server's 422 text; no CLI-private limit #frontend-role
     - Presentation · 1.5h
     - needs BE-26, FE-5 · completes S19, S20, S50
     - Tests
