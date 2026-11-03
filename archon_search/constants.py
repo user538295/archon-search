@@ -19,6 +19,16 @@ TOP_K_MIN: Final[int] = 1
 # TODO: make configurable via config.py (see /route for parity)
 SEARCH_TIMEOUT_SECONDS: Final[float] = 30.0
 
+# Margin added to ``2 * SEARCH_TIMEOUT_SECONDS`` to form the CLI search request timeout; it covers the
+# warm-up and embedder-handoff bounds of 0.5 s each (``services/search_budget.py``, which this module cannot import).
+CLI_SEARCH_REQUEST_TIMEOUT_MARGIN_SECONDS: Final[float] = 5.0
+
+# ``archon-search search`` request timeout: HyDE runs before and outside the search budget with its own
+# bound of the same size, so the worst-case server path is about twice the budget plus the warm-up bounds.
+CLI_SEARCH_REQUEST_TIMEOUT_SECONDS: Final[float] = (
+    2 * SEARCH_TIMEOUT_SECONDS + CLI_SEARCH_REQUEST_TIMEOUT_MARGIN_SECONDS
+)
+
 # Pre-A1 sentinel for ``ingested_by``. Stored on legacy rows; normalized to
 # ``"cli"`` at read/header-parse boundaries (see _types.IngestedBy). Reindex
 # (Task 6.2) rewrites legacy stored values to ``"reindex"``.

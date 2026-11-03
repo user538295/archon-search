@@ -224,7 +224,7 @@ An operator runs `archon-search search "q" --collection docs` and reads ranked r
         - #unit_test — `test_server_message_returns_the_callers_empty_text_for_an_empty_detail_and_body` — a bare 401 (no body, `middleware_auth.py` ≈152) shows the text the caller passed, never the description text
         - #unit_test — `test_send_or_exit_connect_failure_prints_the_shared_message_and_exits_1` — the shared connection-refused text
         - #integration_test — (existing, file-level) `tests/test_cli_collection_description.py` and `tests/test_cli_collection_describe.py` — stay green after the helper move (the description text is still printed for an empty description error)
-- [ ] **FE-2** — Add the CLI request-timeout constant to `constants.py` as `2 * SEARCH_TIMEOUT_SECONDS` plus a named margin constant (the 0.5 s warm-up bounds live in `services/search_budget.py`, which `constants.py` and the CLI cannot import) #frontend-role
+- [x] **FE-2** — Add the CLI request-timeout constant to `constants.py` as `2 * SEARCH_TIMEOUT_SECONDS` plus a named margin constant (the 0.5 s warm-up bounds live in `services/search_budget.py`, which `constants.py` and the CLI cannot import) #frontend-role
     - Presentation · 1.0h
     - needs BE-1 · completes S52
     - Tests
