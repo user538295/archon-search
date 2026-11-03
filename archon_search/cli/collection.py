@@ -18,10 +18,13 @@ from archon_search.cli._helpers import (
     _LOCK_WAITING_REQUEST_TIMEOUT_S,
     _clean,
     _jobs_status_hint,
+    _json_body,
     _poll_job,
     _poll_job_to_end,
     _resolve_api_key,
+    _send_or_exit,
     _server_connect_fail_msg,
+    _server_message,
 )
 from archon_search.collection_meta import (
     DESCRIPTION_SOURCE_MANUAL,
@@ -42,8 +45,6 @@ _INFO_OMIT_WHEN_EMPTY = frozenset({
     "description_source", "description_status",
 })
 
-# Pydantic prefixes the message of a validator's ValueError with this; the CLI prints the message alone.
-_PYDANTIC_VALUE_ERROR_PREFIX = "Value error, "
 # The ``code`` of the 503 the server answers when the collection lock is not free in time.
 _STORE_BUSY_CODE = "store_busy"
 _EMPTY_SERVER_MESSAGE = "the server refused the description"
@@ -274,15 +275,6 @@ def info(collection_name: str, api_url: str, api_key: str | None) -> None:
         click.echo(f"{field}: {text}")
 
 
-def _json_body(resp: httpx.Response) -> dict:
-    """The JSON object of *resp*, or ``{}`` when the body is not JSON or not an object (a proxy's error page)."""
-    try:
-        body = resp.json()
-    except ValueError:
-        return {}
-    return body if isinstance(body, dict) else {}
-
-
 def _description_error(name: str, resp: httpx.Response) -> str:
     """The stderr line for a failed description request (404, 422, 503 or any other status).
 
@@ -299,18 +291,8 @@ def _description_error(name: str, resp: httpx.Response) -> str:
             " Retry after the active job completes."
         )
     if resp.status_code in (422, 503):
-        return f"Error: {_server_message(body.get('detail'), resp.text)}"
+        return f"Error: {_server_message(body.get('detail'), resp.text, empty_text=_EMPTY_SERVER_MESSAGE)}"
     return f"Error: server returned {resp.status_code}: {_clean(resp.text)}"
-
-
-def _server_message(detail: object, fallback: str) -> str:
-    """The words of a ``detail``: FastAPI's list of ``{"msg": ...}`` items (the validator prefix dropped), a plain
-    string, or *fallback* when the body had none."""
-    if isinstance(detail, list):
-        messages = [str(item.get("msg", "")) for item in detail if isinstance(item, dict)]
-        detail = "; ".join(message.removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX) for message in messages if message)
-    text = _clean(str(detail)) if detail else _clean(fallback)
-    return text or _EMPTY_SERVER_MESSAGE
 
 
 def _collection_segment(name: str) -> str:
@@ -323,18 +305,6 @@ def _collection_segment(name: str) -> str:
         click.echo("Error: the collection name cannot be empty.", err=True)
         raise SystemExit(1)
     return quote(name, safe="").replace(".", "%2E")
-
-
-def _send_or_exit(base_url: str, send: Callable[[], httpx.Response]) -> httpx.Response:
-    """Return ``send()``'s response; a connect failure or another transport error exits 1 with its message."""
-    try:
-        return send()
-    except _CONNECT_FAIL:
-        click.echo(_server_connect_fail_msg(base_url), err=True)
-        raise SystemExit(1)
-    except httpx.HTTPError as exc:
-        click.echo(f"Error contacting server: {exc}", err=True)
-        raise SystemExit(1)
 
 
 def _call_description_route(
@@ -462,7 +432,7 @@ def _manual_message(name: str) -> str:
 
 
 def _not_configured_message(resp: httpx.Response) -> str:
-    return f"Error: {_server_message(_json_body(resp).get('detail'), resp.text)}"
+    return f"Error: {_server_message(_json_body(resp).get('detail'), resp.text, empty_text=_EMPTY_SERVER_MESSAGE)}"
 
 
 def _started_job_id(resp: httpx.Response) -> str:

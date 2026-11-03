@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 import click
@@ -36,6 +36,8 @@ _SERVER_STARTING_MSG = (
     "Please wait for it to finish loading models, then retry."
 )
 _CONNECT_FAIL = (httpx.ConnectError, httpx.ConnectTimeout)
+# Pydantic prefixes the message of a validator's ValueError with this; the CLI prints the message alone.
+_PYDANTIC_VALUE_ERROR_PREFIX = "Value error, "
 _CONTAINER_MSG = (
     "Service management is not available in container mode. "
     "Use 'archon-search serve' to run the server."
@@ -94,12 +96,49 @@ def _clean(value: str) -> str:
 
     Applied to stdout; the ``err=True`` error paths are each followed by
     ``SystemExit(1)``, so no row can follow them, and an operator debugging a
-    failure wants the server's bytes verbatim. The exceptions are the error text of
-    ``collection set-description`` / ``clear-description`` / ``describe``, which prints the
-    server's words (a 422 or 503 detail, an unexpected body, a 409 message) through it too,
-    and the job-polling errors of ``_poll_job_to_end``.
+    failure wants the server's bytes verbatim. The exceptions are the server's words on stderr:
+    the error text of ``collection set-description`` / ``clear-description`` /
+    ``describe`` and of ``search`` (a detail, an unexpected body, a 409 message, the notes after the
+    results), and the job-polling errors of ``_poll_job_to_end``.
     """
     return "".join(ch if ch.isprintable() else " " for ch in value)
+
+
+def _json_body(resp: httpx.Response) -> dict:
+    """The JSON object of *resp*, or ``{}`` when the body is not JSON or not an object (a proxy's error page)."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _server_message(detail: object, fallback: str, *, empty_text: str) -> str:
+    """The words of a ``detail``: FastAPI's list of ``{"msg": ...}`` items (the validator prefix dropped), a coded
+    ``{"code": ..., "message": ...}`` object (its message), a plain string, or *fallback* when the body had none.
+
+    *empty_text* is the caller's own text when the detail and the body leave nothing printable, so each command says
+    its own words.
+    """
+    if isinstance(detail, list):
+        messages = [str(item.get("msg", "")) for item in detail if isinstance(item, dict)]
+        detail = "; ".join(message.removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX) for message in messages if message)
+    elif isinstance(detail, dict):
+        detail = detail.get("message")
+    text = _clean(str(detail)) if detail else _clean(fallback)
+    return text if text.strip() else empty_text
+
+
+def _send_or_exit(base_url: str, send: Callable[[], httpx.Response]) -> httpx.Response:
+    """Return ``send()``'s response; a connect failure or another transport error exits 1 with its message."""
+    try:
+        return send()
+    except _CONNECT_FAIL:
+        click.echo(_server_connect_fail_msg(base_url), err=True)
+        raise SystemExit(1)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1)
 
 
 def _server_connect_fail_msg(base_url: str | None = None) -> str:

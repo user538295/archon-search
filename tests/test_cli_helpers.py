@@ -4,9 +4,16 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 import pytest
+from _cli_server_stub import server_reported_stopped
 
-from archon_search.cli._helpers import _resolve_api_key
+from archon_search.cli._helpers import (
+    _SERVER_NOT_RUNNING_MSG,
+    _resolve_api_key,
+    _send_or_exit,
+    _server_message,
+)
 from archon_search.config import ConfigError
 
 
@@ -69,3 +76,64 @@ def test_resolve_api_key_lets_config_error_propagate(monkeypatch: pytest.MonkeyP
 
     with pytest.raises(ConfigError):
         _resolve_api_key(None)
+
+
+_EMPTY = "the caller's own empty text"
+
+
+def test_server_message_renders_the_message_of_a_coded_detail() -> None:
+    detail = {"code": "invalid_scope_filter", "message": "scope filter is malformed"}
+
+    assert _server_message(detail, "", empty_text=_EMPTY) == "scope filter is malformed"
+
+
+def test_server_message_joins_a_validation_list_and_drops_the_value_error_prefix() -> None:
+    detail = [{"msg": "Value error, first"}, {"msg": "second"}, {"loc": ["body"]}]
+
+    assert _server_message(detail, "", empty_text=_EMPTY) == "first; second"
+
+
+@pytest.mark.parametrize(
+    "detail",
+    ["bad\x1b[31m text", {"code": "c", "message": "bad\x1b[31m text"}, [{"msg": "bad\x1b[31m text"}]],
+    ids=["string", "coded", "list"],
+)
+def test_server_message_cleans_terminal_controls(detail: object) -> None:
+    assert _server_message(detail, "", empty_text=_EMPTY) == "bad [31m text"
+
+
+def test_server_message_returns_the_callers_empty_text_for_an_empty_detail_and_body() -> None:
+    assert _server_message(None, "", empty_text=_EMPTY) == _EMPTY
+    assert _server_message([], "", empty_text=_EMPTY) == _EMPTY
+    assert _server_message({"code": "c"}, "", empty_text=_EMPTY) == _EMPTY
+    assert _server_message("\x1b", "", empty_text=_EMPTY) == _EMPTY
+
+
+def test_server_message_for_a_coded_detail_without_a_message_uses_the_body_text() -> None:
+    assert _server_message({"code": "c"}, "raw body", empty_text=_EMPTY) == "raw body"
+
+
+def test_server_message_falls_back_to_the_cleaned_body_text() -> None:
+    assert _server_message(None, "plain\x1b text", empty_text=_EMPTY) == "plain  text"
+
+
+def test_send_or_exit_connect_failure_prints_the_shared_message_and_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
+    def refuse() -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    with server_reported_stopped(), pytest.raises(SystemExit) as exc:
+        _send_or_exit("http://x", refuse)
+
+    assert exc.value.code == 1
+    assert _SERVER_NOT_RUNNING_MSG in capsys.readouterr().err
+
+
+def test_send_or_exit_other_transport_error_prints_the_error_and_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
+    def fail() -> httpx.Response:
+        raise httpx.ReadTimeout("slow")
+
+    with pytest.raises(SystemExit) as exc:
+        _send_or_exit("http://x", fail)
+
+    assert exc.value.code == 1
+    assert "Error contacting server: slow" in capsys.readouterr().err
