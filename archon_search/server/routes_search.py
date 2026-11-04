@@ -1,7 +1,6 @@
 """POST /search endpoint — an adapter over ``SearchService`` for the single and the multi-collection path."""
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import TYPE_CHECKING, assert_never
 
 from fastapi import APIRouter, Request
@@ -20,6 +19,7 @@ from archon_search.server.schemas import (
     CodedErrorDetail,
     ErrorDetail,
     ExcludedCollectionSchema,
+    blank_unrequested_metadata,
     route_422_response,
 )
 from archon_search.services.container import build_search_service_from_state
@@ -127,9 +127,7 @@ class SearchResultSchema(BaseModel):
     def from_hit(cls, hit: SearchHit) -> SearchResultSchema:
         """Render a service hit: the ``acl_gate`` is the one the service built (present only when ``acl_context`` was set)."""
         schema = cls.from_result(hit.result)
-        gate = hit.acl_gate
-        if gate is not None:
-            schema.acl_gate = AclGateSchema(**asdict(gate))
+        schema.acl_gate = AclGateSchema.from_gate(hit.acl_gate)
         return schema
 
 
@@ -191,9 +189,7 @@ def _error_response(error: ServiceError) -> JSONResponse | PlainTextResponse:
 def _render_outcome(outcome: SearchOutcome) -> SearchResponse:
     """Render the service outcome as the REST response; ``metadata`` is blanked unless the outcome's ORed flag is set."""
     schemas = [SearchResultSchema.from_hit(hit) for hit in outcome.results]
-    if not outcome.include_metadata:
-        for schema in schemas:
-            schema.metadata = {}
+    blank_unrequested_metadata(schemas, outcome.include_metadata)
     return SearchResponse(
         results=schemas,
         acl_filtered=outcome.acl_filtered,

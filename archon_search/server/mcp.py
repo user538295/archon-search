@@ -6,7 +6,6 @@ import logging
 import time
 from collections.abc import Callable
 from contextlib import AsyncExitStack, ExitStack
-from dataclasses import asdict
 from datetime import UTC
 from time import monotonic
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypedDict
@@ -132,7 +131,7 @@ from archon_search.server.routes_explain import (
     RoutingExplain,
 )
 from archon_search.server.routes_export import is_ingesting_cancel_leftover
-from archon_search.server.schemas import AclGateSchema
+from archon_search.server.schemas import AclGateSchema, blank_unrequested_metadata
 from archon_search.services.authz import (
     FORBIDDEN_CODE,
     AuthIdentity,
@@ -301,13 +300,11 @@ def _schema_error(tool: str) -> McpErrorResponse:
 
 def _render_search_outcome(outcome: SearchOutcome) -> dict[str, Any]:
     """Render the service outcome as the ``search`` response; ``metadata`` is blanked unless the outcome's ORed flag is set."""
-    results = []
-    for hit in outcome.results:
-        gate = None if hit.acl_gate is None else AclGateSchema(**asdict(hit.acl_gate))
-        schema = McpSearchToolResultSchema.from_search_result(hit.result, acl_gate=gate)
-        if not outcome.include_metadata:
-            schema.metadata = {}
-        results.append(schema)
+    results = [
+        McpSearchToolResultSchema.from_search_result(hit.result, acl_gate=AclGateSchema.from_gate(hit.acl_gate))
+        for hit in outcome.results
+    ]
+    blank_unrequested_metadata(results, outcome.include_metadata)
     response = McpSearchResponse(
         results=results,
         acl_filtered=outcome.acl_filtered,

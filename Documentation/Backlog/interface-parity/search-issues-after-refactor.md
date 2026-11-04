@@ -121,7 +121,9 @@ The test `test_watcher_ingested_new_file_is_tagged_watcher` waits for the macOS 
 
 **Recommendation: Option A.** The new message will show which case it is next time.
 
-### 6. Two functions do nearly the same job
+### 6. Two functions do nearly the same job (small shared steps merged; the two response classes stay)
+
+**Decision taken:** the two small shared steps are merged. `AclGateSchema.from_gate` builds the ACL details and `blank_unrequested_metadata` empties `metadata` (both in `server/schemas.py`). REST and MCP now call them. The two response classes stay separate, so the OpenAPI contract, the MCP error path and the field-parity test are unchanged. The text below is the original problem statement.
 
 `_render_search_outcome` (`server/mcp.py`) and `_render_outcome` (`server/routes_search.py`) both turn the service result into a response. They use different response classes, so merging them is not trivial.
 

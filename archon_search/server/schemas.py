@@ -4,9 +4,11 @@ Pure data models — no business logic.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import asdict
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from fastapi.openapi.constants import REF_PREFIX
 from pydantic import (
@@ -22,6 +24,9 @@ from archon_search.collection_meta import DescriptionSource, DescriptionStatus
 from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
 from archon_search.description_write import check_description_text
 from archon_search.services.service_error import GRAPH_COMMUNITIES_NOT_BUILT_CODE
+
+if TYPE_CHECKING:
+    from archon_search.services.search_service import AclGate
 
 # Inclusive valid range for TTL seconds — shared by IngestRequest and PatchCollectionBody.
 _TTL_MIN: int = 1
@@ -972,6 +977,26 @@ class AclGateSchema(BaseModel):
     source: Literal["frontmatter", "sidecar", "collection_default"] | None = None
     sidecar_path: str | None = None
     warnings: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def from_gate(cls, gate: AclGate | None) -> AclGateSchema | None:
+        """The wire form of a service hit's gate: ``None`` when the search did not ask for ``acl_context``."""
+        return None if gate is None else cls(**asdict(gate))
+
+
+class _HasMetadata(Protocol):
+    metadata: dict[str, str]
+
+
+def blank_unrequested_metadata(items: Iterable[_HasMetadata], include_metadata: bool) -> None:
+    """Empty each search result's ``metadata`` unless the outcome's ORed include-metadata flag is set.
+
+    The one step REST and MCP share after rendering a search outcome; the service always carries the metadata.
+    """
+    if include_metadata:
+        return
+    for item in items:
+        item.metadata = {}
 
 
 class GraphImpactResponse(BaseModel):
