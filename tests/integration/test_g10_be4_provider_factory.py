@@ -444,7 +444,11 @@ def test_rag_fusion_non_ollama_provider_respects_rate_limit(
     Covers the cloud branch of the generator's token bucket: with the bucket empty the shared client is never called.
     """
     from archon_search.config import RAGFusionConfig
-    from archon_search.rag_fusion import RAGFusionGenerator
+    from archon_search.rag_fusion import (
+        RAGFusionFailure,
+        RAGFusionFailureReason,
+        RAGFusionGenerator,
+    )
     from tests._hyde_stubs import ScriptedLlmClient
 
     client = ScriptedLlmClient(reply="q1\nq2")
@@ -454,9 +458,10 @@ def test_rag_fusion_non_ollama_provider_respects_rate_limit(
     # Exhaust the token bucket
     generator._rpm_tokens = 0
 
-    result = asyncio.run(generator.generate_variants("test query"))
+    with pytest.raises(RAGFusionFailure) as caught:
+        asyncio.run(generator.generate_variants("test query"))
 
-    assert result == [], (
-        f"Non-Ollama RAG Fusion must return [] when _rpm_tokens=0 (rate limited), got: {result}"
+    assert caught.value.reason is RAGFusionFailureReason.RATE_LIMITED, (
+        "Non-Ollama RAG Fusion must refuse the call when _rpm_tokens=0 (rate limited)"
     )
     assert client.requests == []

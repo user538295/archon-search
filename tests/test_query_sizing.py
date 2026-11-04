@@ -38,6 +38,7 @@ from archon_search.rag_fusion import (
     RAG_FUSION_TOKENS_PER_QUERY,
     RAGFusionGenerator,
 )
+from archon_search.rag_fusion_failure import RAGFusionFailure, RAGFusionFailureReason
 from tests._fake_model_server import (
     FAKE_CHAT_FRAME_TOKENS,
     FakeModelServer,
@@ -96,7 +97,14 @@ def _rag_runner(client: LlmClient, provider: str) -> Callable[[str], Awaitable[o
     generator = RAGFusionGenerator(
         RAGFusionConfig(enabled=True, provider=provider, timeout_seconds=5.0, num_queries=_NUM_QUERIES), client
     )
-    return generator.generate_variants
+
+    async def run(query: str) -> object:
+        try:
+            return await generator.generate_variants(query)
+        except RAGFusionFailure as failure:  # the shared checks below read a failed call as a value
+            return failure
+
+    return run
 
 
 HYDE = Feature(
@@ -113,7 +121,7 @@ RAG_FUSION = Feature(
         num_queries=_NUM_QUERIES, max_chars=RAG_FUSION_MAX_VARIANT_CHARS, query=query
     ),
     start=_rag_runner,
-    failed=lambda result: result == [],
+    failed=lambda result: isinstance(result, RAGFusionFailure),
 )
 FEATURES = pytest.mark.parametrize("feature", [HYDE, RAG_FUSION], ids=lambda feature: feature.name)
 
@@ -412,6 +420,15 @@ def test_the_rag_fusion_config_still_caps_num_queries_at_five(tmp_path: Path) ->
 
     with pytest.raises(ConfigError):
         load_config(config_file)
+
+
+async def test_a_window_with_no_room_is_a_no_room_failure_for_rag_fusion() -> None:
+    client = BudgetedLlmClient(window_tokens=1100, budget=0)
+
+    failure = await RAG_FUSION.start(client, "ollama")("query one")
+
+    assert isinstance(failure, RAGFusionFailure)
+    assert failure.reason is RAGFusionFailureReason.NO_ROOM
 
 
 async def test_hyde_and_rag_fusion_each_log_their_own_no_room_warning(caplog: pytest.LogCaptureFixture) -> None:

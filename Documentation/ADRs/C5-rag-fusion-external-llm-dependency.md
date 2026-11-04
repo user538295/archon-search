@@ -132,3 +132,9 @@ This balances recall improvement against operational simplicity, explicit privac
 - `archon_search/_privacy.py` — shared `_query_fingerprint` utility.
 - `tests/test_no_query_log_in_rag_fusion.py` — CI privacy guard.
 - `archon-search.toml.example` — `[rag_fusion]` section with rate-limit warning.
+
+---
+
+## Amendments
+
+- **The fallback is announced, not silent (2026-11-04).** The Decision and Consequences text above calls the fallback on a runtime failure (timeout, API error, missing key, rate limit) silent. The fallback itself still holds: the single query is searched, `rag_fusion_applied` is `false` and no error is raised. But the response now carries a fixed `expansion_warning` as HyDE's does: `RAGFusionGenerator.generate_variants` raises a `RAGFusionFailure` with a typed reason (never the query, the prompt or the provider's text), and the pipeline sets `"RAG Fusion timed out"` for a timeout and `"RAG Fusion expansion failed"` for every other failure. See `BREAKING.md` (2026-11-04, RAG Fusion failures).

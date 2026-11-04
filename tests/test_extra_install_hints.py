@@ -29,6 +29,7 @@ from archon_search.graph_inspector import (
 from archon_search.hyde import HyDEGenerator
 from archon_search.llm_client.anthropic_client import AnthropicClient
 from archon_search.rag_fusion import RAGFusionGenerator
+from archon_search.rag_fusion_failure import RAGFusionFailure, RAGFusionFailureReason
 
 _INSTALL_METHODS = pytest.mark.parametrize(
     ("prefix_fixture", "command"),
@@ -114,9 +115,13 @@ async def test_missing_rag_fusion_provider_names_the_install_command(
         RAGFusionConfig(enabled=True), AnthropicClient(model="claude-haiku-4-5-20251001")
     )
 
-    with patch.dict(sys.modules, {"anthropic": None}), caplog.at_level(logging.WARNING):
-        result = await generator.generate_variants("query")
+    with (
+        patch.dict(sys.modules, {"anthropic": None}),
+        caplog.at_level(logging.WARNING),
+        pytest.raises(RAGFusionFailure) as failure,
+    ):
+        await generator.generate_variants("query")
 
-    assert result == []
+    assert failure.value.reason is RAGFusionFailureReason.PROVIDER_FAILED
     [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert f"run: {command} 'archon-search[hyde]'" in warning.getMessage()

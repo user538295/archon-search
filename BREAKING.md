@@ -8,6 +8,24 @@
 
 ## Changelog
 
+### [next release] — RAG Fusion failures set `expansion_warning` (`"RAG Fusion timed out"` or `"RAG Fusion expansion failed"`); it was `null` (2026-11-04)
+
+**Surface**: REST `POST /search` and `POST /explain`, MCP `search`, `search_with_context` and `explain`, and the CLI `archon-search search` (`SearchService` answers `search`, the pipeline answers `explain` and `search_with_context`; both use the same pipeline code, so they change together); `RAGFusionGenerator.generate_variants` in `archon_search/rag_fusion.py`. **Behaviour only: no response field was added, removed or retyped, so `GET /openapi.json` needs no regeneration.**
+
+**What changed:**
+
+- **Before**: a request with `rag_fusion: true` whose variant generation failed (provider down or erroring, a wrong model name, a missing key or package, a timeout, an exhausted `[rag_fusion].max_requests_per_minute`, a window with no room for the query, an answer with no valid variant) came back `rag_fusion_attempted: true`, `rag_fusion_applied: false`, `rag_fusion_queries_used: 0` and `expansion_warning: null`: the generator turned every failure into an empty list and only logged (one WARNING per process for a failed call or an answer with no valid variant, its own once-a-minute WARNING for the rate limit). HyDE, in the same situation, answered `expansion_warning: "HyDE expansion failed"`.
+- **New**: the same request answers `expansion_warning: "RAG Fusion timed out"` when the model call timed out (`[rag_fusion].timeout_seconds`), and `"RAG Fusion expansion failed"` for every other failure. The texts are fixed: they never carry the query, the prompt or the provider's error text (the server log keeps its existing WARNINGs, with the query fingerprint and never the query). `expansion_used` stays `false`, the single query is searched and the results are the same as without `rag_fusion`. The multi-collection path and `search_with_context` behave the same. The same two texts also cover a failed embedding of the query or its variants (as before) and variants that were generated but whose every search failed (new, on the single and the multi-collection path).
+- **Generator contract**: `generate_variants` raises `RAGFusionFailure` (typed `reason`: `timeout`, `rate_limited`, `no_room_for_query`, `provider_failed`, `no_variants`) where it returned `[]`. A shortfall (some valid variants, fewer than `num_queries`) is still a success: the valid ones are returned and no warning is set. Only the pipeline calls it.
+- **`POST /explain` and the MCP `explain` tool**: for a failed generation `rag_fusion_failure_reason` is now that reason (it was `null`) and `rag_fusion_sub_queries` is `null` (it was a one-entry list for the original query, because the empty variant list ran through the fusion branch). A failure in a later stage keeps what it reported: an exception class name for a failed embedding, `null` when every search failed.
+- **Unchanged**: no warning when `rag_fusion` was not requested or `[rag_fusion] enabled = false`, on an FTS-only collection, or while the embedder is cold; `rag_fusion_applied`, `rag_fusion_queries_used` and `rag_fusion_attempted` take the values they took before; HyDE's warning still wins when both would be set.
+
+**Migration**: a client that treated `expansion_warning: null` next to `rag_fusion_attempted: true` and `rag_fusion_applied: false` as "RAG Fusion ran without effect" now sees a warning in that case; read the two fixed texts as a failed expansion. A client that asserts `expansion_warning is None` for every `rag_fusion=true` response must allow them. No request change is needed. A caller of `RAGFusionGenerator.generate_variants` (only `SearchPipeline` in this repository) must catch `RAGFusionFailure` instead of testing for `[]`.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — OpenAI-compatible shim: `[openai_shim].top_k` is honored as the shim's result count, and a value above `[search].top_k_max` fails config load (2026-11-03)
 
 **Surface**: the `[openai_shim].top_k` key of `archon-search.toml` (and `archon-search config set openai_shim.top_k <n>`) and the number of result chunks (each with a `[Source:` line while `inject_citations` is on) that `POST /v1/chat/completions` puts in its reply, for both models (`archon-search` and `archon-search/<collection>`). Operators who set the key or who run a config check in CI. A `top_k` field in the request body is not part of this entry: it is still accepted and ignored.

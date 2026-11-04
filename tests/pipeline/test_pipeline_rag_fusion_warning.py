@@ -4,8 +4,8 @@ Tests for SearchPipelineResult.rag_fusion_warning field and the pipeline
 capturing asyncio.TimeoutError / generic Exception from RAG Fusion.
 
 The pipeline-level cases monkeypatch ``generate_variants()`` to raise, so the pipeline can distinguish a failure from
-an empty-variant success. The real ``RAGFusionGenerator`` no longer raises on a provider failure (BE-12): it returns
-no variants, and ``test_rag_failure_falls_back_to_single_query`` runs it over a failing client.
+an empty-variant success. The real ``RAGFusionGenerator`` raises ``RAGFusionFailure`` (a typed reason, a fixed warning)
+for every failed generation, and ``test_rag_failure_falls_back_to_single_query`` runs it over a failing client.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from archon_search.llm_client.protocol import LlmCallFailure, LlmCallTimeout
 from archon_search.pipeline import SearchPipelineResult
 
 from .conftest import make_pipeline
@@ -322,33 +323,44 @@ async def test_search_embedding_failure_sets_rag_fusion_warning(
 
 
 # ---------------------------------------------------------------------------
-# BE-12 (S3): a failing shared client leaves the real generator returning no variants -> single-query search
+# A failing shared client: the real generator raises a typed failure -> single-query search plus a fixed warning
 # ---------------------------------------------------------------------------
+
+
+def _fusion_over(client):
+    from archon_search.config import RAGFusionConfig
+    from archon_search.rag_fusion import RAGFusionGenerator
+
+    config = RAGFusionConfig(enabled=True)
+    return {"rag_fusion": True, "rag_fusion_generator": RAGFusionGenerator(config, client), "rag_fusion_config": config}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["search", "search_many"])
-async def test_rag_failure_falls_back_to_single_query(connected_store, col_name, tmp_path, caplog, path):
-    """A client that raises LlmCallFailure gives rag_fusion_applied=False with the single-query results.
+@pytest.mark.parametrize(
+    ("failure", "warning"),
+    [
+        (LlmCallFailure("ollama", "connection refused"), "RAG Fusion expansion failed"),
+        (LlmCallTimeout("ollama", "no answer in 10s"), "RAG Fusion timed out"),
+    ],
+    ids=["provider-failure", "timeout"],
+)
+async def test_rag_failure_falls_back_to_single_query(connected_store, col_name, tmp_path, caplog, path, failure, warning):
+    """A client that raises LlmCallFailure gives rag_fusion_applied=False, the single-query results and a fixed warning.
 
-    The real generator absorbs the failure itself (one WARNING of its own, no variants): the pipeline's catch-all for a
-    raising generator is never reached, so there is no "failed unexpectedly" log and no ``rag_fusion_warning``.
+    The generator reports the failure itself (one WARNING of its own); the pipeline's catch-all for an unexpected
+    exception is not reached, so there is no "failed unexpectedly" log.
     """
     import logging
 
-    from archon_search.config import RAGFusionConfig
-    from archon_search.llm_client.protocol import LlmCallFailure
-    from archon_search.rag_fusion import RAGFusionGenerator
     from tests._hyde_stubs import ScriptedLlmClient
 
     pipeline = make_pipeline(connected_store)
     doc = tmp_path / "doc.md"
     doc.write_text("# Search content\n\nThis is a searchable document.\n" * 10)
     await pipeline.ingest_file(doc, col_name, embedder=pipeline._global_embedder)
-    client = ScriptedLlmClient(failure=LlmCallFailure("ollama", "connection refused"))
-    config = RAGFusionConfig(enabled=True)
-    generator = RAGFusionGenerator(config, client)
-    fusion = {"rag_fusion": True, "rag_fusion_generator": generator, "rag_fusion_config": config}
+    client = ScriptedLlmClient(failure=failure)
+    fusion = _fusion_over(client)
 
     with caplog.at_level(logging.WARNING):
         if path == "search":
@@ -364,7 +376,8 @@ async def test_rag_failure_falls_back_to_single_query(connected_store, col_name,
     assert with_fusion.rag_fusion_attempted is True
     assert with_fusion.rag_fusion_applied is False
     assert with_fusion.rag_fusion_queries_used == 0
-    assert with_fusion.rag_fusion_warning is None
+    assert with_fusion.rag_fusion_warning == warning
+    assert plain.rag_fusion_warning is None
     assert with_fusion.results, "the search must still answer"
     assert {r.chunk_id for r in with_fusion.results} == {r.chunk_id for r in plain.results}
     warnings = [
@@ -374,3 +387,150 @@ async def test_rag_failure_falls_back_to_single_query(connected_store, col_name,
     ]
     assert len(warnings) == 1 and "RAG Fusion generation failed" in warnings[0], warnings
     assert not [r for r in caplog.records if "failed unexpectedly" in r.getMessage()], "the pipeline catch-all must not run"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["search", "search_many"])
+@pytest.mark.parametrize("reply", ["   \n  ", "v1\nv2"], ids=["no-valid-variant", "success"])
+async def test_rag_answer_without_variants_warns_and_a_good_answer_does_not(
+    connected_store, col_name, tmp_path, path, reply
+):
+    from tests._hyde_stubs import ScriptedLlmClient
+
+    pipeline = make_pipeline(connected_store)
+    doc = tmp_path / "doc.md"
+    doc.write_text("# Search content\n\nThis is a searchable document.\n" * 10)
+    await pipeline.ingest_file(doc, col_name, embedder=pipeline._global_embedder)
+    fusion = _fusion_over(ScriptedLlmClient(reply=reply))
+
+    if path == "search":
+        result = await pipeline.search("searchable document", col_name, embedder=pipeline._global_embedder, **fusion)
+    else:
+        result = await pipeline.search_many("searchable document", [col_name], **fusion)
+
+    if reply.strip():
+        assert (result.rag_fusion_applied, result.rag_fusion_queries_used) == (True, 2)
+        assert result.rag_fusion_warning is None
+    else:
+        assert (result.rag_fusion_applied, result.rag_fusion_queries_used) == (False, 0)
+        assert result.rag_fusion_warning == "RAG Fusion expansion failed"
+
+
+@pytest.mark.asyncio
+async def test_explain_reports_the_typed_reason_of_a_failed_generation(connected_store, col_name, tmp_path):
+    """``rag_fusion_failure_reason`` is the reason value, not the exception class name."""
+    from tests._hyde_stubs import ScriptedLlmClient
+
+    pipeline = make_pipeline(connected_store)
+    doc = tmp_path / "doc.md"
+    doc.write_text("# Search content\n\nThis is a searchable document.\n" * 10)
+    await pipeline.ingest_file(doc, col_name, embedder=pipeline._global_embedder)
+    fusion = _fusion_over(ScriptedLlmClient(failure=LlmCallTimeout("ollama", "no answer in 10s")))
+
+    result = await pipeline.explain("searchable document", col_name, embedder=pipeline._global_embedder, **fusion)
+
+    assert result.rag_fusion_attempted is True
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_failure_reason == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_search_sets_a_warning_when_every_rag_fusion_search_fails(connected_store, col_name, tmp_path):
+    """Variants were generated but no store search answered: that is a RAG Fusion failure too."""
+    from archon_search.config import RAGFusionConfig
+
+    pipeline = make_pipeline(connected_store)
+    doc = tmp_path / "doc.md"
+    doc.write_text("# Search content\n\nThis is a searchable document.\n" * 10)
+    await pipeline.ingest_file(doc, col_name, embedder=pipeline._global_embedder)
+    generator = MagicMock()
+    generator.generate_variants = AsyncMock(return_value=["variant one", "variant two"])
+    real_search = connected_store.hybrid_search_with_trace
+    calls: list[int] = []
+
+    async def failing_then_working(*args, **kwargs):
+        calls.append(1)
+        if len(calls) <= 3:  # the original query and both variants
+            raise RuntimeError("store unavailable")
+        return await real_search(*args, **kwargs)
+
+    connected_store.hybrid_search_with_trace = failing_then_working
+    try:
+        result = await pipeline.search(
+            "searchable document", col_name, embedder=pipeline._global_embedder,
+            rag_fusion=True, rag_fusion_generator=generator, rag_fusion_config=RAGFusionConfig(enabled=True),
+        )
+    finally:
+        connected_store.hybrid_search_with_trace = real_search
+
+    assert result.rag_fusion_attempted is True
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_warning == "RAG Fusion expansion failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["search", "search_many"])
+async def test_a_warning_is_set_when_only_the_variant_searches_fail(connected_store, col_name, tmp_path, path):
+    """The original query's search answers, every variant search fails: variants were generated and none was used."""
+    from archon_search.config import RAGFusionConfig
+
+    pipeline = make_pipeline(connected_store)
+    doc = tmp_path / "doc.md"
+    doc.write_text("# Search content\n\nThis is a searchable document.\n" * 10)
+    await pipeline.ingest_file(doc, col_name, embedder=pipeline._global_embedder)
+    generator = MagicMock()
+    generator.generate_variants = AsyncMock(return_value=["variant one", "variant two"])
+    real_search = connected_store.hybrid_search_with_trace
+    calls: list[int] = []
+
+    async def original_only(*args, **kwargs):
+        calls.append(1)
+        if len(calls) > 1:  # the first call of the gather is the original query
+            raise RuntimeError("store unavailable")
+        return await real_search(*args, **kwargs)
+
+    connected_store.hybrid_search_with_trace = original_only
+    fusion = {
+        "rag_fusion": True, "rag_fusion_generator": generator, "rag_fusion_config": RAGFusionConfig(enabled=True),
+    }
+    try:
+        if path == "search":
+            result = await pipeline.search("searchable document", col_name, embedder=pipeline._global_embedder, **fusion)
+        else:
+            result = await pipeline.search_many("searchable document", [col_name], **fusion)
+    finally:
+        connected_store.hybrid_search_with_trace = real_search
+
+    assert result.results, "the original query's search still answers"
+    assert (result.rag_fusion_attempted, result.rag_fusion_applied, result.rag_fusion_queries_used) == (True, False, 0)
+    assert result.rag_fusion_warning == "RAG Fusion expansion failed"
+
+
+@pytest.mark.asyncio
+async def test_search_many_sets_no_warning_when_no_collection_has_a_vector_index(connected_store, col_name, tmp_path):
+    """Variants generated but never searched (FTS-only collections) is not a failure."""
+    from archon_search.config import RAGFusionConfig
+
+    pipeline = make_pipeline(connected_store)
+    doc = tmp_path / "doc.md"
+    doc.write_text("# Search content\n\nThis is a searchable document.\n" * 10)
+    await pipeline.ingest_file(doc, col_name, embedder=pipeline._global_embedder)
+    generator = MagicMock()
+    generator.generate_variants = AsyncMock(return_value=["variant one", "variant two"])
+    real_has_vector_index = connected_store.has_vector_index
+
+    async def no_vector_index(collection):
+        return False
+
+    connected_store.has_vector_index = no_vector_index
+    try:
+        result = await pipeline.search_many(
+            "searchable document", [col_name],
+            rag_fusion=True, rag_fusion_generator=generator, rag_fusion_config=RAGFusionConfig(enabled=True),
+        )
+    finally:
+        connected_store.has_vector_index = real_has_vector_index
+
+    assert result.rag_fusion_attempted is True
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_warning is None

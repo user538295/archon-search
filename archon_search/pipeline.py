@@ -83,6 +83,11 @@ from archon_search.graph_types import ChunkInput, GraphNode
 from archon_search.ingest_path_policy import ingest_path_policy
 from archon_search.observability import record_stage
 from archon_search.parser import PARSE_FAILED_TEMPLATE, DocumentParser, ParseError
+from archon_search.rag_fusion_failure import (
+    RAG_FUSION_FAILED_WARNING,
+    RAG_FUSION_TIMED_OUT_WARNING,
+    RAGFusionFailure,
+)
 from archon_search.reranker import (
     ModelReranker,
     Reranker,
@@ -376,6 +381,28 @@ def context_window_error(context_window: int, context_window_max: int) -> str | 
     if 0 <= context_window <= context_window_max:
         return None
     return f"context_window must be in [0, {context_window_max}]; got {context_window}"
+
+
+def _rag_fusion_failure_warning(exc: Exception, query: str) -> str:
+    """The fixed ``expansion_warning`` for a variant generation that raised *exc*.
+
+    A :class:`RAGFusionFailure` carries its own warning and was logged by the generator. Anything else is a pluggable
+    generator misbehaving: logged here (query fingerprint only), a ``TimeoutError`` as a timeout, the rest as a failure.
+    """
+    if isinstance(exc, RAGFusionFailure):
+        return exc.warning
+    timed_out = isinstance(exc, TimeoutError)
+    logger.warning(
+        "rag_fusion generate_variants %s for query=%s; falling back",
+        "timed out" if timed_out else "failed unexpectedly",
+        _query_fingerprint(query),
+    )
+    return RAG_FUSION_TIMED_OUT_WARNING if timed_out else RAG_FUSION_FAILED_WARNING
+
+
+def _rag_fusion_failure_reason(exc: Exception) -> str:
+    """``rag_fusion_failure_reason`` of an explain whose RAG Fusion stage raised *exc*: the typed reason, else the exception class."""
+    return exc.reason.value if isinstance(exc, RAGFusionFailure) else type(exc).__name__
 
 
 def _fuse_rag_fusion_results(
@@ -1612,30 +1639,14 @@ class SearchPipeline:
             # 2. Generate variants from the ORIGINAL (unexpanded) query.
             try:
                 variants = await rag_fusion_generator.generate_variants(query)
-            except TimeoutError:
-                logger.warning(
-                    "rag_fusion generate_variants timed out for query=%s; falling back",
-                    _query_fingerprint(query),
-                )
+            except Exception as exc:  # noqa: BLE001 — pluggable LLM variant generator; any failure falls back to standard search
+                warning = _rag_fusion_failure_warning(exc, query)
                 fallback = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
                     rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank, top_k=top_k,
                 )
-                fallback.rag_fusion_warning = "RAG Fusion timed out"
-                fallback.graph_expansion_applied = graph_expansion_applied
-                return fallback
-            except Exception:  # noqa: BLE001 — pluggable LLM variant generator; any failure falls back to standard search
-                logger.warning(
-                    "rag_fusion generate_variants failed unexpectedly for query=%s; falling back",
-                    _query_fingerprint(query),
-                )
-                fallback = await self._search_standard(
-                    effective_query, collection, namespace, embedder=embedder,
-                    filters=filters, query_vector=None,
-                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank, top_k=top_k,
-                )
-                fallback.rag_fusion_warning = "RAG Fusion expansion failed"
+                fallback.rag_fusion_warning = warning
                 fallback.graph_expansion_applied = graph_expansion_applied
                 return fallback
 
@@ -1655,7 +1666,7 @@ class SearchPipeline:
                     filters=filters, query_vector=None,
                     rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank, top_k=top_k,
                 )
-                fallback.rag_fusion_warning = "RAG Fusion expansion failed"
+                fallback.rag_fusion_warning = RAG_FUSION_FAILED_WARNING
                 fallback.graph_expansion_applied = graph_expansion_applied
                 return fallback
 
@@ -1690,6 +1701,7 @@ class SearchPipeline:
                     filters=filters, query_vector=None,
                     rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank, top_k=top_k,
                 )
+                result.rag_fusion_warning = RAG_FUSION_FAILED_WARNING
                 result.graph_expansion_applied = graph_expansion_applied
                 return result
 
@@ -1733,6 +1745,7 @@ class SearchPipeline:
                 rag_fusion_applied=rag_fusion_applied,
                 rag_fusion_queries_used=num_successful_variants,
                 rag_fusion_attempted=True,
+                rag_fusion_warning=None if rag_fusion_applied or not variants else RAG_FUSION_FAILED_WARNING,
                 graph_expansion_applied=graph_expansion_applied,
             )
 
@@ -2533,7 +2546,7 @@ class SearchPipeline:
                     query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
                     query_vector=None, embedder=_single_embedder,
                     rag_fusion_attempted=True,
-                    rag_fusion_failure_reason=type(exc).__name__,
+                    rag_fusion_failure_reason=_rag_fusion_failure_reason(exc),
                     scope_filter=scope_filter,
                 )
 
@@ -3267,19 +3280,8 @@ class SearchPipeline:
             _rag_fusion_warning: str | None = None
             try:
                 variants = await rag_fusion_generator.generate_variants(query)
-            except TimeoutError:
-                logger.warning(
-                    "rag_fusion search_many generate_variants timed out for query=%s; falling back",
-                    _query_fingerprint(query),
-                )
-                _rag_fusion_warning = "RAG Fusion timed out"
-                variants = []
-            except Exception:  # noqa: BLE001 — pluggable LLM variant generator; any failure falls back to no variants
-                logger.warning(
-                    "rag_fusion search_many generate_variants failed for query=%s; falling back",
-                    _query_fingerprint(query),
-                )
-                _rag_fusion_warning = "RAG Fusion expansion failed"
+            except Exception as exc:  # noqa: BLE001 — pluggable LLM variant generator; any failure falls back to no variants
+                _rag_fusion_warning = _rag_fusion_failure_warning(exc, query)
                 variants = []
 
             all_queries_rf = [query] + variants
@@ -3295,7 +3297,7 @@ class SearchPipeline:
                     "rag_fusion search_many embedding failed for query=%s; falling back to single-query",
                     _query_fingerprint(query),
                 )
-                _rag_fusion_warning = _rag_fusion_warning or "RAG Fusion expansion failed"
+                _rag_fusion_warning = _rag_fusion_warning or RAG_FUSION_FAILED_WARNING
                 # Explicit fallback: run standard fan-out with rag_fusion_attempted preserved.
                 std_vector = await self._global_embedder.embed_one(query)
                 std_merged, std_acl_filtered, std_leg_times = await self._fanout_merge_acl(
@@ -3327,12 +3329,14 @@ class SearchPipeline:
             # Track successful variant searches across all collections (variant idx > 0).
             # A variant is "successful" if its search succeeded for at least one collection.
             successful_variant_indices: set[int] = set()
+            variant_search_ran = False  # a collection with a vector index ran the variant searches
             # Exact scope goes to the store; wildcard is handled as a Python-side post-filter.
             store_scope = scope_filter if scope_filter and not scope_filter.endswith("*") else None
 
             for coll in sorted(collections_in_scope):
                 has_vi = await self.store.has_vector_index(coll)
                 if has_vi:
+                    variant_search_ran = variant_search_ran or len(all_vectors) > 1
                     # N+1 searches (original + variants) in parallel.
                     coll_raw = await asyncio.gather(
                         *[
@@ -3401,6 +3405,8 @@ class SearchPipeline:
             # rag_fusion_queries_used = successful LLM-generated variant searches.
             # Count unique variant indices that succeeded in at least one collection.
             num_successful_variants = len(successful_variant_indices)
+            if variant_search_ran and not num_successful_variants:
+                _rag_fusion_warning = _rag_fusion_warning or RAG_FUSION_FAILED_WARNING
 
             return SearchPipelineResult(
                 results=results,

@@ -21,6 +21,12 @@ from archon_search.rag_fusion import (
     RAG_FUSION_TOKENS_PER_QUERY,
     RAGFusionGenerator,
 )
+from archon_search.rag_fusion_failure import (
+    RAG_FUSION_FAILED_WARNING,
+    RAG_FUSION_TIMED_OUT_WARNING,
+    RAGFusionFailure,
+    RAGFusionFailureReason,
+)
 from tests._hyde_stubs import ScriptedLlmClient
 
 _WARN_LOGGER = "archon_search.rag_fusion"
@@ -46,6 +52,13 @@ def _generator(reply: str = "v1\nv2", failure: Exception | None = None, **config
 
 def _warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     return [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+async def _failed(generator: RAGFusionGenerator, query: str = "original query") -> RAGFusionFailure:
+    """The failure *generator* raises for *query*; the test fails when it returns variants instead."""
+    with pytest.raises(RAGFusionFailure) as caught:
+        await generator.generate_variants(query)
+    return caught.value
 
 
 # ---------------------------------------------------------------------------
@@ -236,8 +249,8 @@ async def test_a_shortfall_does_not_use_up_the_failure_warning(caplog: pytest.Lo
 
     with caplog.at_level(logging.WARNING):
         await short.generate_variants("query 1")
-        await failing.generate_variants("query 2")
-        await failing.generate_variants("query 3")
+        await _failed(failing, "query 2")
+        await _failed(failing, "query 3")
 
     messages = [warning.getMessage() for warning in _warnings(caplog)]
     assert len(messages) == 2
@@ -252,40 +265,91 @@ async def test_a_failed_call_and_an_answer_without_variants_share_one_warning(ca
     empty, _ = _generator("   \n  ")
 
     with caplog.at_level(logging.WARNING):
-        await failing.generate_variants("query 1")
-        await empty.generate_variants("query 2")
+        await _failed(failing, "query 1")
+        await _failed(empty, "query 2")
 
     assert len(_warnings(caplog)) == 1
 
 
 @pytest.mark.asyncio
-async def test_generate_variants_only_blank_lines_is_empty_with_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+async def test_generate_variants_only_blank_lines_is_no_variants_with_one_warning(caplog: pytest.LogCaptureFixture) -> None:
     generator, _client = _generator("   \n  \n  ")
 
     with caplog.at_level(logging.WARNING):
-        result = await generator.generate_variants("test query")
+        failure = await _failed(generator, "test query")
 
-    assert result == []
+    assert failure.reason is RAGFusionFailureReason.NO_VARIANTS
     assert len(_warnings(caplog)) == 1
 
 
 # ---------------------------------------------------------------------------
-# Failure -> [] (the pipeline then searches the single query)
+# Failure -> RAGFusionFailure with a typed reason (the pipeline then searches the single query and says so)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure",
-    [LlmCallFailure("anthropic", "the ANTHROPIC_API_KEY is not set"), LlmCallTimeout("ollama", "no answer in 5s")],
+    ("failure", "reason", "warning"),
+    [
+        (
+            LlmCallFailure("anthropic", "the ANTHROPIC_API_KEY is not set"),
+            RAGFusionFailureReason.PROVIDER_FAILED,
+            RAG_FUSION_FAILED_WARNING,
+        ),
+        (LlmCallTimeout("ollama", "no answer in 5s"), RAGFusionFailureReason.TIMEOUT, RAG_FUSION_TIMED_OUT_WARNING),
+    ],
     ids=["failure", "timeout"],
 )
-async def test_generate_variants_failure_returns_empty(failure: LlmCallFailure) -> None:
-    """A raised LlmCallFailure (or its timeout subclass) is absorbed: no variants, never an exception."""
+async def test_a_failed_call_raises_a_typed_failure(
+    failure: LlmCallFailure, reason: RAGFusionFailureReason, warning: str
+) -> None:
+    """A raised LlmCallFailure (or its timeout subclass) becomes a RAGFusionFailure: the reason and the fixed warning."""
     generator, client = _generator(failure=failure)
 
-    assert await generator.generate_variants("original query") == []
+    raised = await _failed(generator)
+
+    assert raised.reason is reason
+    assert raised.warning == warning
     assert len(client.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_rate_limit_raises_a_failure_without_a_call() -> None:
+    generator, client = _generator("v1\nv2", max_requests_per_minute=1)
+    await generator.generate_variants("query 1")
+
+    raised = await _failed(generator, "query 2")
+
+    assert raised.reason is RAGFusionFailureReason.RATE_LIMITED
+    assert raised.warning == RAG_FUSION_FAILED_WARNING
+    assert len(client.requests) == 1, "the rate-limited call must not reach the client"
+
+
+@pytest.mark.asyncio
+async def test_a_failure_carries_no_query_prompt_or_provider_text() -> None:
+    """C1: the provider's failure text may echo the query; the raised failure holds the reason and nothing else."""
+    generator, _client = _generator(failure=LlmCallFailure("openai", f"rejected: {_SECRET_QUERY}"))
+
+    raised = await _failed(generator, _SECRET_QUERY)
+
+    assert str(raised) == RAGFusionFailureReason.PROVIDER_FAILED.value
+    assert _SECRET_QUERY not in f"{raised!s} {raised!r} {raised.args} {raised.warning}"
+    assert raised.__cause__ is None
+    assert raised.__suppress_context__ is True, "the provider's exception must not print beside the failure"
+
+
+@pytest.mark.parametrize(
+    ("reason", "warning"),
+    [
+        (RAGFusionFailureReason.TIMEOUT, "RAG Fusion timed out"),
+        (RAGFusionFailureReason.RATE_LIMITED, "RAG Fusion expansion failed"),
+        (RAGFusionFailureReason.NO_ROOM, "RAG Fusion expansion failed"),
+        (RAGFusionFailureReason.PROVIDER_FAILED, "RAG Fusion expansion failed"),
+        (RAGFusionFailureReason.NO_VARIANTS, "RAG Fusion expansion failed"),
+    ],
+)
+def test_every_reason_has_one_fixed_warning(reason: RAGFusionFailureReason, warning: str) -> None:
+    assert RAGFusionFailure(reason).warning == warning
 
 
 @pytest.mark.asyncio
@@ -297,9 +361,9 @@ async def test_rag_logs_one_warning_per_process_without_query_text(caplog: pytes
     generator, client = _generator(failure=LlmCallFailure("ollama", f"server said: bad request for {first_query}"))
 
     with caplog.at_level(logging.INFO):
-        results = [await generator.generate_variants(f"{_SECRET_QUERY} {attempt}") for attempt in range(5)]
+        failures = [await _failed(generator, f"{_SECRET_QUERY} {attempt}") for attempt in range(5)]
 
-    assert results == [[]] * 5
+    assert {f.reason for f in failures} == {RAGFusionFailureReason.PROVIDER_FAILED}
     assert len(client.requests) == 5
     [warning] = [r for r in caplog.records if r.levelno >= logging.WARNING and r.name == _WARN_LOGGER]
     assert _query_fingerprint(f"{_SECRET_QUERY} 0") in warning.getMessage()
@@ -319,7 +383,7 @@ async def test_failure_text_echoing_the_query_is_masked(caplog: pytest.LogCaptur
     generator, _client = _generator(failure=LlmCallFailure("openai", f"rejected: {echoes}"))
 
     with caplog.at_level(logging.WARNING):
-        await generator.generate_variants(query)
+        await _failed(generator, query)
 
     [warning] = _warnings(caplog)
     assert "rejected:" in warning.getMessage()
@@ -332,8 +396,8 @@ async def test_failures_in_one_generator_silence_the_next_in_the_same_process(ca
     """The once-per-process key is not per generator instance: a second generator stays quiet."""
     failure = LlmCallFailure("ollama", "connection refused")
     with caplog.at_level(logging.WARNING):
-        await _generator(failure=failure)[0].generate_variants("q1")
-        await _generator(failure=failure)[0].generate_variants("q2")
+        await _failed(_generator(failure=failure)[0], "q1")
+        await _failed(_generator(failure=failure)[0], "q2")
 
     assert len(_warnings(caplog)) == 1
 
@@ -345,15 +409,15 @@ async def test_failures_in_one_generator_silence_the_next_in_the_same_process(ca
 
 @pytest.mark.asyncio
 async def test_rate_limit_fallback(caplog: pytest.LogCaptureFixture) -> None:
-    """When the token bucket is exhausted, generate_variants() returns [] with a WARNING and makes no call."""
+    """When the token bucket is exhausted, generate_variants() raises a rate-limit failure with a WARNING and makes no call."""
     generator, client = _generator("v1\nv2", max_requests_per_minute=1)
 
     result1 = await generator.generate_variants("query 1")
     with caplog.at_level(logging.WARNING, logger=_WARN_LOGGER):
-        result2 = await generator.generate_variants("query 2")
+        failure = await _failed(generator, "query 2")
 
     assert result1 == ["v1", "v2"]
-    assert result2 == []
+    assert failure.reason is RAGFusionFailureReason.RATE_LIMITED
     assert len(client.requests) == 1, "the rate-limited call must not reach the client"
     assert _warnings(caplog), "WARNING should be logged on rate limit"
 
@@ -378,19 +442,21 @@ async def test_rate_limit_applies_to_cloud_providers(provider: str) -> None:
     generator, client = _generator("v1\nv2", provider=provider)
     generator._rpm_tokens = 0
 
-    assert await generator.generate_variants("test query") == []
+    assert (await _failed(generator, "test query")).reason is RAGFusionFailureReason.RATE_LIMITED
     assert client.requests == []
 
 
 @pytest.mark.asyncio
 async def test_concurrent_generate_variants_respects_token_limit() -> None:
-    """With capacity 2, exactly 2 of 5 concurrent calls return variants and 3 return []."""
+    """With capacity 2, exactly 2 of 5 concurrent calls return variants and 3 are refused by the rate limit."""
     generator, client = _generator("v1\nv2", max_requests_per_minute=2, num_queries=2)
 
-    results = await asyncio.gather(*[generator.generate_variants(f"query {i}") for i in range(5)])
+    results = await asyncio.gather(*[generator.generate_variants(f"query {i}") for i in range(5)], return_exceptions=True)
 
-    assert len([r for r in results if r]) == 2
-    assert len([r for r in results if not r]) == 3
+    assert len([r for r in results if r == ["v1", "v2"]]) == 2
+    refused = [r for r in results if isinstance(r, RAGFusionFailure)]
+    assert len(refused) == 3
+    assert {r.reason for r in refused} == {RAGFusionFailureReason.RATE_LIMITED}
     assert len(client.requests) == 2
 
 
@@ -407,9 +473,9 @@ async def test_fingerprint_no_raw_query_in_log(caplog: pytest.LogCaptureFixture)
     generator, _client = _generator(failure=LlmCallTimeout("ollama", "no answer"))
 
     with caplog.at_level(logging.WARNING):
-        result = await generator.generate_variants(_SECRET_QUERY)
+        failure = await _failed(generator, _SECRET_QUERY)
 
-    assert result == []
+    assert failure.reason is RAGFusionFailureReason.TIMEOUT
     log_text = " ".join(r.getMessage() for r in caplog.records)
     assert _SECRET_QUERY not in log_text, f"Raw query leaked into log: {log_text!r}"
     assert _query_fingerprint(_SECRET_QUERY) in log_text
@@ -469,10 +535,10 @@ async def test_rag_fusion_end_to_end_with_llama_cpp_client(monkeypatch: pytest.M
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_rag_fusion_llama_cpp_unreachable_returns_no_variants(
+async def test_rag_fusion_llama_cpp_unreachable_raises_a_provider_failure(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """llama-server unreachable → the client raises, RAG Fusion yields no variants with one WARNING and no exception."""
+    """llama-server unreachable → the client raises, RAG Fusion raises a provider failure with one WARNING."""
     from archon_search.llm_client.llama_cpp_client import LlamaCppClient
     from tests._fake_model_server import keep_loopback_out_of_proxies, unreachable_port
 
@@ -482,7 +548,7 @@ async def test_rag_fusion_llama_cpp_unreachable_returns_no_variants(
         base_url = f"http://127.0.0.1:{port}"
         config = _make_config(provider="llama_cpp", llama_cpp_base_url=base_url)
         generator = RAGFusionGenerator(config, LlamaCppClient(model="local-model", base_url=base_url))
-        variants = [await generator.generate_variants("archon search query") for _ in range(2)]
+        failures = [await _failed(generator, "archon search query") for _ in range(2)]
 
-    assert variants == [[], []]
+    assert {f.reason for f in failures} == {RAGFusionFailureReason.PROVIDER_FAILED}
     assert len([r for r in _warnings(caplog) if r.name == _WARN_LOGGER]) == 1

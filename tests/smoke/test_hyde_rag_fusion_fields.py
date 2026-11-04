@@ -105,7 +105,7 @@ async def test_hyde_and_rag_fusion_fields_via_cli_and_mcp_with_a_fake_llm(smoke_
 async def test_unusable_model_answer_degrades_to_the_plain_query_via_cli_and_mcp(
     smoke_server, smoke_fake_llm, failing_model_answer
 ) -> None:
-    """A model that answers nothing degrades to the plain query on both interfaces: HyDE says so in the warning, RAG Fusion reports an attempt with no variants used."""
+    """A model that answers nothing degrades to the plain query on both interfaces: both say so in the warning (HyDE's and RAG Fusion's fixed texts), and RAG Fusion reports an attempt with no variants used."""
     chats_before = len(smoke_fake_llm.requests_to(_CHAT_PATH))
 
     cli_hyde = _cli_json(smoke_server, "warning hyde cli", "--hyde")
@@ -124,3 +124,4 @@ async def test_unusable_model_answer_degrades_to_the_plain_query_via_cli_and_mcp
         assert fusion_payload["rag_fusion_applied"] is False
         assert fusion_payload["rag_fusion_attempted"] is True
         assert fusion_payload["rag_fusion_queries_used"] == 0
+        assert fusion_payload["expansion_warning"] == "RAG Fusion expansion failed"

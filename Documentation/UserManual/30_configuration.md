@@ -174,7 +174,7 @@ Optional LLM-backed recall boosters, both **disabled by default**. They share th
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `false` | Master switch. When off, the matching request flag has no effect (`hyde_applied`/`rag_fusion_applied: false`; a `hyde=true` request additionally reports `expansion_warning: "HyDE expansion failed"`, a `rag_fusion=true` one reports nothing). |
+| `enabled` | `false` | Master switch. When off, the matching request flag has no effect (`hyde_applied`/`rag_fusion_applied: false`; a `hyde=true` request additionally reports `expansion_warning: "HyDE expansion failed"`; a `rag_fusion=true` one reports nothing and leaves `rag_fusion_attempted: false`). |
 | `provider` | `anthropic` | One of `anthropic`, `ollama`, `openai`, `claude_cli`, `llama_cpp`. Use `ollama` or `llama_cpp` for air-gapped deployments (query text stays local). |
 | `model` | `claude-haiku-4-5-20251001` | Generation model. Required for `ollama`/`openai`/`llama_cpp`; a model tag/id for those providers. |
 | `ollama_base_url` | `http://localhost:11434` | Ollama server URL; used only when `provider = "ollama"`. |

@@ -108,7 +108,7 @@ def test_live_rag_fusion_via_llama_cpp(tmp_path: Path, monkeypatch: pytest.Monke
     """S2: ``[rag_fusion] provider="llama_cpp"`` against a live llama-server.
 
     ``POST /search rag_fusion=true`` makes a real RAG Fusion call through ``LlamaCppClient``. On a transport failure the
-    client raises and the generator logs it once and returns no variants, so ``rag_fusion_applied`` stays ``False`` —
+    client raises and the generator logs it once and raises a ``RAGFusionFailure``, so ``rag_fusion_applied`` stays ``False`` —
     the assertion below fails loudly when llama-server is down.
     """
     toml_content = '[rag_fusion]\nenabled = true\nprovider = "llama_cpp"\n'
