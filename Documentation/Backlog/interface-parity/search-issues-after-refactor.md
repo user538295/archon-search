@@ -74,7 +74,9 @@ The plan has a "Documentation update" list. Every box except the brief is unchec
 
 **Recommendation: Option A**, combined with the human sign-offs in issue 8.
 
-### 3. RAG Fusion never tells the user when it fails
+### 3. RAG Fusion never tells the user when it fails (RESOLVED in commit `f3f5939d`)
+
+**Resolved.** A RAG Fusion failure now sets a fixed warning in `expansion_warning` ("RAG Fusion timed out" or "RAG Fusion expansion failed"), on REST, MCP and the terminal, and `/explain` reports the reason in `rag_fusion_failure_reason`. The generator now raises a typed `RAGFusionFailure` (`archon_search/rag_fusion_failure.py`) that never carries the query. `BREAKING.md` has the new entry (NR-86). The text below is the original problem statement.
 
 When the AI model is missing or broken, HyDE says "HyDE expansion failed". RAG Fusion says nothing. The response only shows "attempted: true, applied: false". The live test proved it: a wrong model name gave no warning for RAG Fusion. The code hides every failure (`generate_variants` in `archon_search/rag_fusion.py` returns an empty list on each failure and only logs once). The user manual (`60_searching.md`) promises a warning, so users are misled. This was true before the refactor. The refactor did not change it.
 
@@ -132,7 +134,9 @@ The test `test_watcher_ingested_new_file_is_tagged_watcher` waits for the macOS 
 
 **Recommendation: Option B.** The guard that already exists makes the cost of the duplicate low.
 
-### 7. Small gaps in the terminal command
+### 7. Small gaps in the terminal command (RESOLVED in commits `d69bcf54`, `99924057`, `87bea2ff`)
+
+**Resolved in three commits.** The 422 text now names the field (`top_k: Input should be greater than or equal to 1`), one helper `_response_message` replaces the three repeated calls, and a deeply nested JSON answer prints a clean "unexpected response" error. The nested-JSON fix also covers `collection`, `sync` and the `/ready` probe. Not changed: `key_cmd.py`, `maintenance_cmd.py`, `status.py` and `backup_cmd.py` still catch `ValueError` only. The text below is the original problem statement.
 
 - The terminal error text drops the field name in a validation message (`_server_message` ignores the `loc` part of the 422 list). An error reads "must be at least 1" instead of "top_k: must be at least 1".
 - The code that reads the server's error message is repeated in three places (`cli/search.py` and twice in `cli/collection.py`).
@@ -177,6 +181,6 @@ The test `test_watcher_ingested_new_file_is_tagged_watcher` waits for the macOS 
 
 ## Suggested order
 
-1. Decide issue 1 (contract folder) and issue 3 (RAG Fusion warning).
+1. Decide issue 1 (contract folder).
 2. Do the human sign-offs from issue 8 and the plan housekeeping from issue 2.
-3. Put issues 4 to 7 and 9 on the backlog. Act on 4 and 5 only if they fail again.
+3. Put issues 4 to 6 and 9 on the backlog. Act on 4 and 5 only if they fail again.
