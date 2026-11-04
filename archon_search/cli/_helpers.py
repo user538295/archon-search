@@ -104,10 +104,22 @@ def _clean(value: str) -> str:
     return "".join(ch if ch.isprintable() else " " for ch in value)
 
 
+def _json_payload(resp: httpx.Response) -> object:
+    """The decoded JSON of *resp*; ``ValueError`` when the body is not JSON or nests too deeply to decode.
+
+    ``json.loads`` raises ``RecursionError`` for a body of ~1000 nested arrays or objects; turning it into the
+    ``ValueError`` of any other malformed body lets every caller's ``except ValueError`` cover it.
+    """
+    try:
+        return resp.json()
+    except RecursionError:
+        raise ValueError("the JSON is nested too deeply") from None
+
+
 def _json_body(resp: httpx.Response) -> dict:
     """The JSON object of *resp*, or ``{}`` when the body is not JSON or not an object (a proxy's error page)."""
     try:
-        body = resp.json()
+        body = _json_payload(resp)
     except ValueError:
         return {}
     return body if isinstance(body, dict) else {}
@@ -205,7 +217,7 @@ def _server_connect_fail_msg(base_url: str | None = None) -> str:
         _is_custom = base_url.rstrip("/") != _DEFAULT_API_URL
         try:
             resp = httpx.get(f"{base_url}/ready", timeout=2)
-            body = resp.json()
+            body = _json_payload(resp)
             raw_checks = body.get("checks") if isinstance(body, dict) else None
             checks: dict = raw_checks if isinstance(raw_checks, dict) else {}
             usable = checks.get("models") is not None

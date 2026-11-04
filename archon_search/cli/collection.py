@@ -19,6 +19,7 @@ from archon_search.cli._helpers import (
     _clean,
     _jobs_status_hint,
     _json_body,
+    _json_payload,
     _poll_job,
     _poll_job_to_end,
     _resolve_api_key,
@@ -90,7 +91,7 @@ def list_cmd(api_url: str, api_key: str | None) -> None:
         raise SystemExit(1)
 
     try:
-        collections = resp.json()
+        collections = _json_payload(resp)
     except ValueError as exc:
         click.echo(f"Error: server returned unexpected response: {exc}", err=True)
         raise SystemExit(1)
@@ -143,7 +144,7 @@ def add(path: str, wait_flag: bool, api_url: str, api_key: str | None) -> None:
 
     if resp.status_code == 409:
         try:
-            detail = resp.json().get("detail", "collection already registered")
+            detail = _json_payload(resp).get("detail", "collection already registered")
         except (ValueError, AttributeError):
             detail = "collection already registered"
         click.echo(f"Error: {detail}", err=True)
@@ -489,7 +490,7 @@ def _fetch_namespace(base_url: str, headers: dict[str, str]) -> list[dict]:
         click.echo(f"Error: server returned {resp.status_code}: {_clean(resp.text)}", err=True)
         raise SystemExit(1)
     try:
-        body = resp.json()
+        body = _json_payload(resp)
     except ValueError:
         body = None
     if not isinstance(body, list):
@@ -706,7 +707,7 @@ def reindex_metadata_cmd(
 
     if resp.status_code == 409:
         try:
-            detail = resp.json().get("detail", "metadata reindex already in progress")
+            detail = _json_payload(resp).get("detail", "metadata reindex already in progress")
         except (ValueError, AttributeError):
             detail = "metadata reindex already in progress"
         click.echo(f"Error: {detail}", err=True)

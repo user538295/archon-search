@@ -679,6 +679,28 @@ def test_add_409_collection_already_registered() -> None:
     assert "already" in result.output.lower() or "409" in result.output
 
 
+def test_add_409_with_a_too_deeply_nested_body_prints_the_default_text_not_a_traceback() -> None:
+    resp = httpx.Response(409, text="[" * 100_000)
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=resp):
+        result = CliRunner().invoke(collection, ["add", "/some/path", "--api-key", "test-key"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Error: collection already registered" in result.stderr
+
+
+def test_list_cmd_a_too_deeply_nested_body_is_an_unexpected_response_not_a_traceback() -> None:
+    resp = httpx.Response(200, text="[" * 100_000)
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=resp):
+        result = CliRunner().invoke(collection, ["list", "--api-key", "testkey"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Error: server returned unexpected response: the JSON is nested too deeply" in result.stderr
+
+
 def test_add_server_not_running_exits_1() -> None:
     """ConnectError → human-readable error, exit 1."""
     runner = CliRunner()

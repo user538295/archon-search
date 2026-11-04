@@ -7,6 +7,7 @@ import httpx
 from archon_search.cli._helpers import (
     _CONNECT_FAIL,
     _DEFAULT_API_URL,
+    _json_payload,
     _poll_job,
     _resolve_api_key,
     _server_connect_fail_msg,
@@ -44,7 +45,7 @@ def sync(wait_flag: bool, api_url: str, api_key: str | None) -> None:
 
     if resp.status_code == 409:
         try:
-            detail = resp.json().get("detail", "sync already in progress")
+            detail = _json_payload(resp).get("detail", "sync already in progress")
         except (ValueError, AttributeError):
             detail = "sync already in progress"
         click.echo(f"Error: {detail}", err=True)

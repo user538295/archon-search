@@ -9,6 +9,7 @@ import httpx
 from archon_search.cli._helpers import (
     _DEFAULT_API_URL,
     _clean,
+    _json_payload,
     _resolve_api_key,
     _response_message,
     _send_or_exit,
@@ -231,7 +232,7 @@ def search(
         raise SystemExit(1)
 
     try:
-        payload = resp.json()
+        payload = _json_payload(resp)
     except ValueError as exc:
         click.echo(f"Error: server returned unexpected response: {_clean(str(exc))}", err=True)
         raise SystemExit(1)

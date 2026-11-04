@@ -142,6 +142,17 @@ def test_sync_409_already_in_progress() -> None:
     assert "{" not in result.output  # no raw JSON blob
 
 
+def test_sync_409_with_a_too_deeply_nested_body_prints_the_fallback_not_a_traceback() -> None:
+    resp_409 = httpx.Response(409, text="[" * 100_000)
+
+    with patch("httpx.post", return_value=resp_409):
+        result = CliRunner().invoke(sync, ["--api-url", "http://localhost:8765", "--api-key", "testkey"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Error: sync already in progress" in result.output
+
+
 # ---------------------------------------------------------------------------
 # test_sync_409_missing_detail_key_uses_fallback
 # ---------------------------------------------------------------------------

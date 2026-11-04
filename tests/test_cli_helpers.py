@@ -10,6 +10,8 @@ from _cli_server_stub import server_reported_stopped
 
 from archon_search.cli._helpers import (
     _SERVER_NOT_RUNNING_MSG,
+    _json_body,
+    _json_payload,
     _resolve_api_key,
     _response_message,
     _send_or_exit,
@@ -184,3 +186,19 @@ def test_send_or_exit_other_transport_error_prints_the_error_and_exits_1(capsys:
 
     assert exc.value.code == 1
     assert "Error contacting server: slow" in capsys.readouterr().err
+
+
+_DEEP_JSON = "[" * 100_000
+
+
+def test_json_payload_turns_a_too_deeply_nested_body_into_a_value_error() -> None:
+    with pytest.raises(ValueError, match="nested too deeply"):
+        _json_payload(httpx.Response(200, text=_DEEP_JSON))
+
+
+def test_json_payload_decodes_a_normal_body() -> None:
+    assert _json_payload(httpx.Response(200, json={"a": [1]})) == {"a": [1]}
+
+
+def test_json_body_is_empty_for_a_too_deeply_nested_body() -> None:
+    assert _json_body(httpx.Response(500, text=_DEEP_JSON)) == {}

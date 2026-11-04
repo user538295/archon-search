@@ -98,6 +98,27 @@ def test_search_422_list_drops_the_validator_prefix() -> None:
     assert "query must not be empty; bad filter" in result.stderr
 
 
+_DEEP_JSON = "[" * 100_000  # json.loads raises RecursionError, not ValueError
+
+
+def test_search_a_200_body_of_deeply_nested_json_is_an_unexpected_response_not_a_traceback() -> None:
+    result = _run(_answer(200, text=_DEEP_JSON))
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.stdout == ""
+    assert result.stderr.startswith("Error: server returned unexpected response: ")
+    assert "Traceback" not in result.stderr
+
+
+def test_search_an_error_answer_of_deeply_nested_json_prints_its_body_text_and_exits_1() -> None:
+    result = _run(_answer(500, text=_DEEP_JSON))
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr == f"Error: {_DEEP_JSON}\n"
+
+
 def test_search_503_shows_the_retry_after_in_seconds() -> None:
     resp = _answer(
         503,
