@@ -84,6 +84,15 @@ def test_watcher_manager_is_started_when_watch_enabled(
         )
 
 
+# macOS FSEvents delivers a file event late (seconds under load) and drops some outright: it only sees writes made after
+# its stream exists, which the emitter thread creates after ``start()`` returns. The test therefore re-writes the file
+# until the watcher has made it searchable: a missed event costs one more interval, not a failure; the deadline only
+# bounds a watcher that is broken.
+_SEARCHABLE_DEADLINE_SECONDS = 60.0
+_REWRITE_INTERVAL_SECONDS = 3.0
+_POLL_INTERVAL_SECONDS = 0.2
+
+
 @pytest.mark.asyncio
 async def test_watcher_ingested_new_file_is_tagged_watcher(tmp_path: Path) -> None:
     """A file the real watcher picks up must land with ingested_by='watcher'.
@@ -155,7 +164,10 @@ async def test_watcher_ingested_new_file_is_tagged_watcher(tmp_path: Path) -> No
         CollectionProgress(status=IndexingStatus.IN_PROGRESS, total_files=0),
     )
 
+    on_change_calls: list[str] = []
+
     async def _on_change(name: str) -> None:
+        on_change_calls.append(name)
         await col_sync.sync_collection(name, corpus)
 
     wm = WatcherManager(
@@ -165,13 +177,18 @@ async def test_watcher_ingested_new_file_is_tagged_watcher(tmp_path: Path) -> No
     )
     wm.add(col_name, corpus)
     try:
-        (corpus / "canary.md").write_text(
-            "# Canary\n\nxyzzy_watcher_canary_1234 unique canary content.\n" * 4
-        )
-
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _SEARCHABLE_DEADLINE_SECONDS
+        next_write = loop.time()
+        attempt = 0
         match = None
-        deadline = asyncio.get_running_loop().time() + 60.0
-        while asyncio.get_running_loop().time() < deadline:
+        while loop.time() < deadline:
+            if loop.time() >= next_write:
+                attempt += 1
+                next_write = loop.time() + _REWRITE_INTERVAL_SECONDS
+                (corpus / "canary.md").write_text(
+                    f"# Canary {attempt}\n\nxyzzy_watcher_canary_1234 unique canary content.\n" * 4
+                )
             results = await store.hybrid_search_with_trace(
                 col_name,
                 query_vector=[0.1, 0.2, 0.3, 0.4],
@@ -181,10 +198,11 @@ async def test_watcher_ingested_new_file_is_tagged_watcher(tmp_path: Path) -> No
             match = next((r for r in results if "canary.md" in r.source_path), None)
             if match is not None:
                 break
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
         assert match is not None, (
-            f"watcher never made canary.md searchable in collection {col_name!r} within 60s"
+            f"watcher never made canary.md searchable in collection {col_name!r} within {_SEARCHABLE_DEADLINE_SECONDS}s: "
+            f"{attempt} writes, the watcher called on_change {len(on_change_calls)} times (0 = no file event ever arrived)"
         )
         assert match.ingested_by == "watcher", (
             "a file picked up by the watcher must carry ingested_by='watcher' "

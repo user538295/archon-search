@@ -18,7 +18,6 @@ from __future__ import annotations
 import ast
 import os
 import re
-import socket
 import subprocess
 import tempfile
 import time
@@ -270,37 +269,31 @@ def test_maintenance_run_without_server(smoke_server) -> None:
     (server not running is informational, not a program error) and surface
     the "not running" message on stderr.
 
-    The closed port is obtained by binding then immediately releasing a
-    socket — guaranteed unused at the moment the subprocess starts, and
-    distinct from ``smoke_server.port`` (which is live).
+    The port comes from ``unreachable_port()``: reserved, and a connection to it is refused at once.
     """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    closed_port = sock.getsockname()[1]
-    sock.close()
-
     env = {
         **os.environ,
         "ARCHON_SEARCH_DATA_DIR": str(smoke_server.data_dir),
         "ARCHON_SEARCH_API_KEY": smoke_server.api_key,
     }
 
-    result = subprocess.run(
-        [
-            "uv",
-            "run",
-            "archon-search",
-            "maintenance",
-            "run",
-            "--api-url",
-            f"http://127.0.0.1:{closed_port}",
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    with unreachable_port() as closed_port:
+        result = subprocess.run(
+            [
+                "uv",
+                "run",
+                "archon-search",
+                "maintenance",
+                "run",
+                "--api-url",
+                f"http://127.0.0.1:{closed_port}",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
 
     assert result.returncode == 0
     assert "archon-search serve is not running." in result.stderr
