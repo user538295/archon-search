@@ -58,4 +58,4 @@ def test_search_top_k_zero_prints_the_servers_422_text_and_exits_1() -> None:
     assert post.call_args.kwargs["json"]["top_k"] == 0
     assert result.exit_code == 1
     assert result.stdout == ""
-    assert result.stderr == "Error: Input should be greater than or equal to 1\n"
+    assert result.stderr == "Error: top_k: Input should be greater than or equal to 1\n"

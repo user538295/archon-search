@@ -31,4 +31,4 @@ def test_cli_search_top_k_returns_exactly_n_results(tmp_path: Path, monkeypatch:
     assert len(json.loads(limited.stdout)["results"]) == _TOP_K
     assert invalid.exit_code == 1
     assert invalid.stdout == ""
-    assert invalid.stderr == "Error: Input should be greater than or equal to 1\n"
+    assert invalid.stderr == "Error: top_k: Input should be greater than or equal to 1\n"

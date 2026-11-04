@@ -113,6 +113,22 @@ def _json_body(resp: httpx.Response) -> dict:
     return body if isinstance(body, dict) else {}
 
 
+def _validation_item_text(item: dict) -> str:
+    """One FastAPI ``{"loc", "msg"}`` item as text: the field name before a built-in message ("top_k: Input should be
+    greater than or equal to 1"), the bare message for a value error (our validators already name the field) or an
+    item with no field. The leading ``body`` and list indexes are dropped from ``loc``."""
+    message = str(item.get("msg", ""))
+    if not message:
+        return ""
+    if message.startswith(_PYDANTIC_VALUE_ERROR_PREFIX):
+        return message.removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX)
+    loc = item.get("loc")
+    parts = [str(part) for part in loc if isinstance(part, str)] if isinstance(loc, list) else []
+    if parts and parts[0] == "body":
+        parts = parts[1:]
+    return f"{'.'.join(parts)}: {message}" if parts else message
+
+
 def _server_message(detail: object, fallback: str, *, empty_text: str) -> str:
     """The words of a ``detail``: FastAPI's list of ``{"msg": ...}`` items (the validator prefix dropped), a coded
     ``{"code": ..., "message": ...}`` object (its message), a plain string, or *fallback* when the body had none.
@@ -121,8 +137,8 @@ def _server_message(detail: object, fallback: str, *, empty_text: str) -> str:
     its own words.
     """
     if isinstance(detail, list):
-        messages = [str(item.get("msg", "")) for item in detail if isinstance(item, dict)]
-        detail = "; ".join(message.removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX) for message in messages if message)
+        messages = [_validation_item_text(item) for item in detail if isinstance(item, dict)]
+        detail = "; ".join(message for message in messages if message)
     elif isinstance(detail, dict):
         detail = detail.get("message")
     text = _clean(str(detail)) if detail else _clean(fallback)

@@ -94,6 +94,36 @@ def test_server_message_joins_a_validation_list_and_drops_the_value_error_prefix
 
 
 @pytest.mark.parametrize(
+    ("loc", "field"),
+    [
+        (["body", "top_k"], "top_k"),
+        (["body", "filters", 0, "name"], "filters.name"),
+        (["query", "limit"], "query.limit"),
+        (["body"], ""),
+        ([], ""),
+    ],
+    ids=["body-field", "body-index-nested", "query-param", "body-only", "no-loc"],
+)
+def test_server_message_names_the_field_of_a_builtin_validation_message(loc: list, field: str) -> None:
+    detail = [{"loc": loc, "msg": "Input should be greater than or equal to 1", "type": "greater_than_equal"}]
+
+    expected = "Input should be greater than or equal to 1"
+    assert _server_message(detail, "", empty_text=_EMPTY) == (f"{field}: {expected}" if field else expected)
+
+
+def test_server_message_leaves_a_value_error_message_without_the_field_name() -> None:
+    detail = [{"loc": ["body", "query"], "msg": "Value error, query must not be empty", "type": "value_error"}]
+
+    assert _server_message(detail, "", empty_text=_EMPTY) == "query must not be empty"
+
+
+def test_server_message_cleans_a_hostile_field_name() -> None:
+    detail = [{"loc": ["body", "bad\x1b[31m"], "msg": "m"}]
+
+    assert _server_message(detail, "", empty_text=_EMPTY) == "bad [31m: m"
+
+
+@pytest.mark.parametrize(
     "detail",
     ["bad\x1b[31m text", {"code": "c", "message": "bad\x1b[31m text"}, [{"msg": "bad\x1b[31m text"}]],
     ids=["string", "coded", "list"],
