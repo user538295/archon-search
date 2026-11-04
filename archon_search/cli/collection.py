@@ -22,9 +22,9 @@ from archon_search.cli._helpers import (
     _poll_job,
     _poll_job_to_end,
     _resolve_api_key,
+    _response_message,
     _send_or_exit,
     _server_connect_fail_msg,
-    _server_message,
 )
 from archon_search.collection_meta import (
     DESCRIPTION_SOURCE_MANUAL,
@@ -291,7 +291,7 @@ def _description_error(name: str, resp: httpx.Response) -> str:
             " Retry after the active job completes."
         )
     if resp.status_code in (422, 503):
-        return f"Error: {_server_message(body.get('detail'), resp.text, empty_text=_EMPTY_SERVER_MESSAGE)}"
+        return f"Error: {_response_message(resp, empty_text=_EMPTY_SERVER_MESSAGE)}"
     return f"Error: server returned {resp.status_code}: {_clean(resp.text)}"
 
 
@@ -432,7 +432,7 @@ def _manual_message(name: str) -> str:
 
 
 def _not_configured_message(resp: httpx.Response) -> str:
-    return f"Error: {_server_message(_json_body(resp).get('detail'), resp.text, empty_text=_EMPTY_SERVER_MESSAGE)}"
+    return f"Error: {_response_message(resp, empty_text=_EMPTY_SERVER_MESSAGE)}"
 
 
 def _started_job_id(resp: httpx.Response) -> str:

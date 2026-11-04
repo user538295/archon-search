@@ -9,10 +9,9 @@ import httpx
 from archon_search.cli._helpers import (
     _DEFAULT_API_URL,
     _clean,
-    _json_body,
     _resolve_api_key,
+    _response_message,
     _send_or_exit,
-    _server_message,
 )
 from archon_search.constants import (
     CLI_SEARCH_REQUEST_TIMEOUT_SECONDS,
@@ -43,7 +42,7 @@ def _error_message(resp: httpx.Response) -> str:
         if resp.status_code == 401
         else _UNEXPLAINED_ERROR_MESSAGE.format(status=resp.status_code)
     )
-    message = _server_message(_json_body(resp).get("detail"), resp.text, empty_text=empty_text)
+    message = _response_message(resp, empty_text=empty_text)
     return f"Error: {message.strip()}{_retry_after_note(resp)}"
 
 

@@ -145,6 +145,11 @@ def _server_message(detail: object, fallback: str, *, empty_text: str) -> str:
     return text if text.strip() else empty_text
 
 
+def _response_message(resp: httpx.Response, *, empty_text: str) -> str:
+    """The cleaned words of an error response: its JSON ``detail`` (see ``_server_message``), else the body text."""
+    return _server_message(_json_body(resp).get("detail"), resp.text, empty_text=empty_text)
+
+
 def _send_or_exit(base_url: str, send: Callable[[], httpx.Response]) -> httpx.Response:
     """Return ``send()``'s response; a connect failure or another transport error exits 1 with its message."""
     try:

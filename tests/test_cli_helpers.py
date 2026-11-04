@@ -11,6 +11,7 @@ from _cli_server_stub import server_reported_stopped
 from archon_search.cli._helpers import (
     _SERVER_NOT_RUNNING_MSG,
     _resolve_api_key,
+    _response_message,
     _send_or_exit,
     _server_message,
 )
@@ -145,6 +146,22 @@ def test_server_message_for_a_coded_detail_without_a_message_uses_the_body_text(
 
 def test_server_message_falls_back_to_the_cleaned_body_text() -> None:
     assert _server_message(None, "plain\x1b text", empty_text=_EMPTY) == "plain  text"
+
+
+@pytest.mark.parametrize(
+    ("resp", "expected"),
+    [
+        (httpx.Response(422, json={"detail": [{"loc": ["body", "top_k"], "msg": "too small"}]}), "top_k: too small"),
+        (httpx.Response(409, json={"detail": {"code": "c", "message": "busy"}}), "busy"),
+        (httpx.Response(400, json={"detail": "plain"}), "plain"),
+        (httpx.Response(502, text="<html>bad\x1b gateway</html>"), "<html>bad  gateway</html>"),
+        (httpx.Response(500, json=["not", "an", "object"]), '["not","an","object"]'),
+        (httpx.Response(500, text=""), _EMPTY),
+    ],
+    ids=["list", "coded", "string", "non-json-body", "non-object-json", "empty"],
+)
+def test_response_message_reads_the_detail_of_the_response_or_its_body_text(resp: httpx.Response, expected: str) -> None:
+    assert _response_message(resp, empty_text=_EMPTY) == expected
 
 
 def test_send_or_exit_connect_failure_prints_the_shared_message_and_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
