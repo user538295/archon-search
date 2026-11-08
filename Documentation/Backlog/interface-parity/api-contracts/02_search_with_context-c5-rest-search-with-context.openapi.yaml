@@ -1,0 +1,356 @@
+openapi: 3.0.0
+info:
+  title: Archon Search REST search with context (S2)
+  version: 0.0.0
+tags: []
+paths:
+  /search-with-context:
+    post:
+      operationId: SearchWithContext_searchWithContext
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchWithContextResponse'
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedErrorDetail'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '422':
+          description: Client error
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/HttpValidationList'
+                  - $ref: '#/components/schemas/ErrorDetail'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '503':
+          description: Service unavailable.
+          headers:
+            Retry-After:
+              required: false
+              schema:
+                type: integer
+                format: int32
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '504':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchWithContextRequest'
+components:
+  schemas:
+    AclGate:
+      type: object
+      required:
+        - allowed_principals
+        - source
+        - sidecar_path
+        - warnings
+      properties:
+        allowed_principals:
+          type: array
+          items:
+            type: string
+          nullable: true
+        source:
+          type: string
+          enum:
+            - frontmatter
+            - sidecar
+            - collection_default
+          nullable: true
+        sidecar_path:
+          type: string
+          nullable: true
+        warnings:
+          type: array
+          items:
+            type: string
+    CodedErrorDetail:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          $ref: '#/components/schemas/CodedErrorMessage'
+    CodedErrorMessage:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    ContextChunk:
+      type: object
+      required:
+        - doc_id
+        - chunk_id
+        - text
+        - source_path
+        - indexed_at
+      properties:
+        doc_id:
+          type: string
+        chunk_id:
+          type: string
+        text:
+          type: string
+        source_path:
+          type: string
+        indexed_at:
+          type: string
+        file_type:
+          type: string
+          default: ''
+        language:
+          type: string
+          default: ''
+        updated_at:
+          type: string
+          default: ''
+        ingested_by:
+          type: string
+          default: cli
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        acl:
+          type: array
+          items:
+            type: string
+          nullable: true
+    ErrorDetail:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+        code:
+          type: string
+          nullable: true
+    HttpValidationList:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationItem'
+    SearchFilters:
+      type: object
+      properties:
+        file_type:
+          type: string
+        source_path_prefix:
+          type: string
+        source_path_glob:
+          type: string
+        indexed_after:
+          type: string
+        indexed_before:
+          type: string
+        language:
+          type: string
+        include_metadata:
+          type: boolean
+          default: false
+    SearchResultItem:
+      type: object
+      required:
+        - doc_id
+        - chunk_id
+        - text
+        - score
+        - source_path
+      properties:
+        doc_id:
+          type: string
+        chunk_id:
+          type: string
+        text:
+          type: string
+        score:
+          type: number
+          format: double
+        source_path:
+          type: string
+        file_type:
+          type: string
+          default: ''
+        language:
+          type: string
+          default: ''
+        indexed_at:
+          type: string
+          default: ''
+        updated_at:
+          type: string
+          default: ''
+        ingested_by:
+          type: string
+          default: cli
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        acl:
+          type: array
+          items:
+            type: string
+          nullable: true
+        collection:
+          type: string
+          default: ''
+        reranker_score:
+          type: number
+          format: double
+          nullable: true
+        acl_gate:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/AclGate'
+          nullable: true
+    SearchWithContextItem:
+      type: object
+      required:
+        - result
+        - context_before
+        - context_after
+      properties:
+        result:
+          $ref: '#/components/schemas/SearchResultItem'
+        context_before:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContextChunk'
+        context_after:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContextChunk'
+    SearchWithContextRequest:
+      type: object
+      required:
+        - collection
+        - query
+      properties:
+        collection:
+          type: string
+        query:
+          type: string
+        context_window:
+          type: integer
+          format: int32
+          default: 1
+        top_k:
+          type: integer
+          format: int32
+          nullable: true
+          minimum: 1
+        filters:
+          $ref: '#/components/schemas/SearchFilters'
+        hyde:
+          type: boolean
+          default: false
+        rag_fusion:
+          type: boolean
+          default: false
+        scope_filter:
+          type: string
+        acl_context:
+          type: boolean
+          default: false
+        include_metadata:
+          type: boolean
+          default: false
+      additionalProperties: false
+    SearchWithContextResponse:
+      type: object
+      required:
+        - results
+        - acl_filtered
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchWithContextItem'
+        acl_filtered:
+          type: boolean
+        embedding_model:
+          type: string
+          default: ''
+        hyde_applied:
+          type: boolean
+          default: false
+        rag_fusion_applied:
+          type: boolean
+          default: false
+        rag_fusion_queries_used:
+          type: integer
+          format: int32
+          default: 0
+        rag_fusion_attempted:
+          type: boolean
+          default: false
+        expansion_used:
+          type: boolean
+          default: false
+        expansion_warning:
+          type: string
+          nullable: true
+        applied_filters:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/SearchFilters'
+          nullable: true
+    ValidationItem:
+      type: object
+      required:
+        - loc
+        - msg
+        - type
+      properties:
+        loc:
+          type: array
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+                format: int32
+        msg:
+          type: string
+        type:
+          type: string

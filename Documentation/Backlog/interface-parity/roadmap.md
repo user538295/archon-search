@@ -51,7 +51,7 @@ Legend: **converge** = the feature already exists on all three interfaces and mo
 ### Phase A — Retrieval
 
 - [x] **S1 Search (pilot)**: CLI new; MCP gains `acl_context` and `top_k`; REST, MCP and the OpenAI shim move onto the service. [Brief](./01_search_brief.md), [Plan](./01_search-team-plan.md), [Tasks](./01_search-tasks.md)
-- [ ] **S2 Search with context**: REST new; CLI new.
+- [ ] **S2 Search with context**: REST new; CLI new; MCP converges (required collection, bounded wait, 30-second budget). [Brief](./02_search_with_context-brief.md), [Plan](./02_search_with_context-team-plan.md), [Tasks](./02_search_with_context-tasks.md)
 - [ ] **S3 Explain**: CLI new.
 - [ ] **S4 Route**: MCP new; CLI new.
 
