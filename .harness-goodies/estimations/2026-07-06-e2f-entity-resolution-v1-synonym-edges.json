@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "E2f",
+  "name": "Entity Resolution v1 — Synonym Edges",
+  "description": "Background job embeds entity names, links same-type similar entities with synonym edges, supports an operator alias file, rebuilds communities, exposes graph health metrics in status and graph endpoints, and adds an eval gate for bridge recall.",
+  "effort": "Spans graph store schema, new detector and alias modules, ingest hook with debounce in maintenance loop, config, API schemas and eval runner. New nullable vector column and index without version bump. Threshold calibration and honest retrieval testing are the unknowns.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 14,
+    "estimatedHours": 53.5
+  },
+  "git": {
+    "commits": 14,
+    "linesAdded": 6899,
+    "linesRemoved": 267
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e2f-entity-resolution-v1-brief.md",
+      "Documentation/Completed/e2f-entity-resolution-v1-team-plan.md"
+    ],
+    "commits": [
+      "556f72ad5f3f331af0b04ce706daed00304bd866",
+      "4fec49d0e2f473bfff60c5b1591bd18019dc52ee",
+      "9c4e6173f95d05d75f5ab9661950fe589f03a4f5",
+      "e7e0a73776bd53553dd7f7fb3a423fd78b76f021",
+      "f2fbfeafdb29082fedea4be4dc5ff9780489e0f8",
+      "45cffd5aab7c34f6a20ead3e1ebcbf2d2230beab",
+      "2f4852477a1a64e953eadfe69a8b0d8be0a7e02a",
+      "df194e848717613efc20c60cd4c45d419417785e",
+      "18119234e6f7694f4f1742125b39f64940b6a9f7",
+      "a4d650f822269925b38a37797f3efc5a803eda44",
+      "3cfb52f6ea14c2ec0f6b2b7dad7ecb687569b9d2",
+      "d992e5d0a88285c51df957eb80d740819ef84eec",
+      "efc370526e9a615e1f4b0cec37287e660104bdbd",
+      "2f88a5f52e74f2b41a85ffb973795976e79c9544"
+    ],
+    "sessions": []
+  }
+}

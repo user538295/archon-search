@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "id": "C2",
+  "name": "Multilingual Retrieval",
+  "description": "Per-document language detection with fasttext at ingest, tagging chunks with ISO codes, an unlocked single-collection language search filter, optional install extra with model download and license gate, startup guard, and multilingual eval fixtures.",
+  "effort": "Touches many parts: config, store read path, chunker, pipeline, install flow, server startup, filters, status, MCP, telemetry. New optional dependency and downloaded model with license gate. Spike on search tokenizer support, eval gate, type change from null to empty string breaks clients.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 13,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 13,
+    "tasks": 19,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 21,
+    "linesAdded": 9153,
+    "linesRemoved": 5190
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C2-multilingual-retrieval-brief.md",
+      "Documentation/Completed/C2-multilingual-retrieval-plan.md"
+    ],
+    "commits": [
+      "be6044a3af18f055500d8753aa3e6c4f71427dba",
+      "13d6629a5c0af7999ddb91211f1242337a8e493d",
+      "ff870831bc5c74be29be7e9dbd0371cbab2c7a6e",
+      "dcaf1d066a48f6a970a88b88f343c8d3b1ffaec6",
+      "fa86d85ea13c614da9cd06caca0fffcfc2cb6147",
+      "fbf2066cd9f0cf28336b342f72654e5ec876d5a5",
+      "af2847151fee230bbcbfe0229d32eb41d993b5e5",
+      "4de54be3a38826d5f37aa414fdc5a2495f6fc86f",
+      "f8987456218be316f0d0196c39d40910cc9d1722",
+      "809925984c28d165de0d7e14f9e74bd8d7b664e5",
+      "60579aa2edc70e3a7f5bb4209cc9eb02bd2b9095",
+      "96924205b16a939b68153887bc414e2f740bafea",
+      "33f20cb4ccf195601c17d4f108fd525fd9ebfe0b",
+      "b019b6f6900ff77f104da902db16738922a449e6",
+      "8580440449ded7215230c77c41566117b1a76113",
+      "ba1a48fe7c0d59293e25cb751c584c9c28fa6466",
+      "8758848155676c66bb74ef96cec4edf59a886888",
+      "eb7ebc83c75fc92ef9879fbaf673601bb4804cbc",
+      "317fe02f75227b7132bf0c216f23654b374e026e",
+      "bc536df2c94447ca5aa1096b652abed5a0956fbc",
+      "a0569ce7dae9a7da4a2fcc0b03576d8ce5d0b244"
+    ],
+    "sessions": []
+  }
+}

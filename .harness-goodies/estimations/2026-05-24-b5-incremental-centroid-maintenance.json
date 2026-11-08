@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "id": "B5",
+  "name": "Incremental Centroid Maintenance",
+  "description": "Collection routing centroids are now maintained incrementally as a running sum plus chunk count in the store layer on ingest and delete, under the per-collection lock. The full rescan was removed from the watcher-sync hot path and kept only for drift reset.",
+  "effort": "Touches dataclass, store, pipeline, sync, config and REST handler. New meta columns need an idempotent migration. Lock handling, circular-import and crash-window hazards are risky. Pre-existing collections need a one-time reseed. Docs, runbook and breaking-change notes updated.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 13,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 7,
+    "tasks": 20,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 24,
+    "linesAdded": 4012,
+    "linesRemoved": 432
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/B5-incremental-centroid-brief.md",
+      "Documentation/Completed/B5-incremental-centroid-plan.md"
+    ],
+    "commits": [
+      "b7026da41c29bfc06557f2b3ef10822f687ac09b",
+      "70d603c833253c8a2eaa6aa5eceec0b17ff94d17",
+      "3f999db63aeb98609aa23d05ea957be122f193da",
+      "b33578ef48973ade67867db3151a9836eaf38e39",
+      "d2fd6c381ec801205ef4fef3eb8c7d7b8913001b",
+      "906d0bd2863d53c1c3d6d57135e1cd6c8df4227d",
+      "16bdf0f682c9611dbfa96c5546cd8e3e0381b535",
+      "9d399f50989b3e4524e3a8ea5f0a48610bd8907c",
+      "b96748c453a1f83d92bc7c41d41cb03eef2efe89",
+      "116c48fff4dd9ea53f414aab0619160d8171140c",
+      "5fa886cbfc74b0b41be3087ec4e13615453f533d",
+      "ed7f7c1b693f4a0f8ba94404e4a3ac413962d914",
+      "f6f51a3417850b9d6504d27041a441b45ccd9145",
+      "55baa959da63febd6f132deb21494c9c00870623",
+      "7834e0298f32c67d78a3e62b96b781b7134b4add",
+      "65809ac6ddeb182323319beb6d7ccffa12de2857",
+      "7f4a153a5986321b6a3b457d2c76e135952da2b1",
+      "871d7a2448081fa1a72cc4ab98e58ce8da57819f",
+      "4a2303bcf1b5e757835ca1c1eb208c5bcd21ed5d",
+      "899893cf1f7169bf0bc384a0113329ec513119a0",
+      "9e0b5380f45ca6e6596bf4ef5a5ab6a768f85e2e",
+      "541d2a0a1d7821130ca5f094be86a8c2e5539ab4",
+      "5a671819444cdc610464ebe7b5912b3970f3cf48",
+      "31fb1c7d27296de8fc6413af3fb888540b81a79a"
+    ],
+    "sessions": []
+  }
+}

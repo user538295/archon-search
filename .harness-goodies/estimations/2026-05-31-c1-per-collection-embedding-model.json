@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "id": "C1",
+  "name": "Per-Collection Embedding Model",
+  "description": "Operators assign an embedding model per collection at creation or via a new PATCH endpoint. A lazy-load LRU embedder cache serves ingest and search; an explicit reindex lifecycle promotes pending models. Adds an MCP tool, CLI fix and status surfacing.",
+  "effort": "Wide cross-cutting change: pipeline, store, router, sync, REST, MCP and CLI. Needs a LanceDB metadata schema migration with crash recovery, a concurrency-safe async cache, a state machine and job type changes. Risky races, hot-path change, breaking rename.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 20,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 12,
+    "tasks": 36,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 39,
+    "linesAdded": 13987,
+    "linesRemoved": 5670
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C1-per-collection-embedding-model-brief.md",
+      "Documentation/Completed/C1-per-collection-embedding-model-plan.md"
+    ],
+    "commits": [
+      "c1210d5ef09408341e11159f9dd4cda987a5201a",
+      "9edf81fb324a254e73fdedfa505d0cb6c466a4b5",
+      "4a8b648ed590c1c3b3bec80942e4871d05f27d8a",
+      "60123a223e0d0c2f2ff5a9fb5554d68af28c0c0e",
+      "75c4a0cc741b57dfd57401dd9fe88b9314edc743",
+      "68b62b7e43afe6e7cbacfd2c8192eefd8eab8eb5",
+      "b6dc5a8f242f80312e2ee4b85f410dccceb7b691",
+      "e7351c1c97a67bfa5dfbd95a081ac7ff02402752",
+      "329c9f889f9ecde52577e592cb03796998e1ebcb",
+      "a545391cfb03d57b66484c31e24d95169b109fea",
+      "742b34b7bfb6499bae0dacf83034a994b248156f",
+      "4857891a89540cf28caec1b6ce469e8a237c4112",
+      "041748c39d2efef7cca9f9bd7013a2487feb2718",
+      "0031c07d483ebc936c99638f4a989e686b21fcca",
+      "471a8ae254372cb9d2da15593b4bc3fc7f8511ba",
+      "3bbdc87f3fc8b295121166f6ed9764a50648663d",
+      "e8a3b73d3f168dc1a330e0a2ab07c82b561c4735",
+      "112403ed88efada8dc46b57a048c46481f37666a",
+      "76a6a4babab4cdd1f52f013f033fb81a72288f14",
+      "0872e4ec5b446e92128739680d7d888af0227365",
+      "30c847eceea247ee2d8684d3be961813fbf6f460",
+      "807da900d454ac3805c76d193296dc4a70937aa1",
+      "b4942cf5ba3502a29df5cb7da2d61b6e6bf307f4",
+      "a0f3cb6793af1507e5ea50e67255b1e9da806902",
+      "6befd457de716cb4a65d6a3b0f111e8c92650973",
+      "da4f340222a47b31a21c1ff3c98dd9269b088c89",
+      "053a45324f146c38491eb47be1b54df21b6239dc",
+      "cd76806090b2eb6cc48ae1db000a021d5a733721",
+      "f2dae557224ae7670a3ac6e21a21017e3e42423c",
+      "e6099a480664b85a0ee161c33e1d730cec741fe2",
+      "26d61305174af54a27dbd0a898d878f40846ef18",
+      "687a588f9e92b59cae4cae526cab86a6da11fa33",
+      "bcf06f927013d34ec51ec029d941cdc329c4343c",
+      "bf4a9dcbdbfc0f044067a41ddbdf49c128b3b4a8",
+      "6be29d3fde4dbe756ad13444c40eec40b01efff6",
+      "b8b2e7b1b5eec45ead5f603a052483a7e3434046",
+      "8538926f9389c66ea611ce6a28503e03a7190254",
+      "50ec03e41387c8d6d60a93236fcd31950ea88b48",
+      "874b5c261e24d6aff8314c9591aad8abc93cbdf6"
+    ],
+    "sessions": []
+  }
+}

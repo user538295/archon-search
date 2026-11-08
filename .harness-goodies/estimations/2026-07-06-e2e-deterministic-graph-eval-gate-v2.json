@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "id": "e2e",
+  "name": "Deterministic Graph Eval Gate v2",
+  "description": "Replaces fake graph eval gates with real Recall@5 gates for naive, local and global modes on frozen public multi-hop datasets, plus a HotpotQA negative control. Adds a deterministic community backend, calibrated floors and baselines.",
+  "effort": "Medium: eval harness only, no production or storage changes. Needs three committed dataset corpora with licensing, a real community eval backend with a seeded Leiden partition, trace partitioning, calibration and a determinism check. Risk is flaky ranking and optional graph extras.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 17,
+    "estimatedHours": 36.5
+  },
+  "git": {
+    "commits": 19,
+    "linesAdded": 3600,
+    "linesRemoved": 320
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e2e-graph-eval-gate-v2-brief.md",
+      "Documentation/Completed/e2e-graph-eval-gate-v2-team-plan.md"
+    ],
+    "commits": [
+      "a1d636cb7e6cd1f07d1bf59245d3297459d9217b",
+      "d7c584741c00eaedd7b294a3deace7d837fa570d",
+      "9b26686b9846383e832906da8f7520d0e803d2dd",
+      "c25323b85ee818fd35ca9a8fcb7bd1602e16cd13",
+      "8d11e397f276ae4df868a683ae6811f2c4c281ef",
+      "7d9614664bb44ed9fd7f3f2956265a5b75b1fd59",
+      "2a21ca0e9e5dc4252cffbda6fc4b46c2ecb4bb0d",
+      "212c0f5543fa8cd14680764f7fba68b02f5e9c97",
+      "7ce21a9faac858c4ed918c6077e9134483707087",
+      "2f6fd3a56f462b729a260a552ac5ce9b05edb4e9",
+      "4c40de246a3d6f5e8d3edc7db677cd21acd8df68",
+      "0622617603f9d906654b92987a01e61d3ccc65a8",
+      "d69090653f436d4d09b984c54a51b3744cb4578f",
+      "6cb0c96ce0eecf2c72b40c558b2ee3f8c0ef2ee5",
+      "e8417146c4e947814f3bf01b0b9ead66226a7b97",
+      "54f20588a7d85c99e90d2b2408c76297db409e89",
+      "3323ec84ede7f8be4f3141136dc50b141f7b5293",
+      "a6ecdf140320d71ca6ec0226436e6e6442ecf52b",
+      "7a8485349f14392e79a883c52a879cb12d784e4f"
+    ],
+    "sessions": []
+  }
+}

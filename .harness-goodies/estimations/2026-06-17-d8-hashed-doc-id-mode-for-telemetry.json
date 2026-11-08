@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "D8",
+  "name": "Hashed doc_id Mode for Telemetry",
+  "description": "Opt-in setting that replaces result document ids in telemetry logs with keyed HMAC hashes, using a server-side salt file created on first start. Adds a marker field on log entries and a status flag shown by the API and CLI.",
+  "effort": "Narrow change: one config flag, one pure hash function, salt file lifecycle with safe fallback, hasher injected into the search entry factory. Small status and CLI addition, docs and ADR amendment. No storage migration or outside services. Risk is salt handling.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 11,
+    "estimatedHours": 27.0
+  },
+  "git": {
+    "commits": 12,
+    "linesAdded": 3687,
+    "linesRemoved": 532
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/D8-hashed-doc-id-telemetry-brief.md",
+      "Documentation/Completed/D8-hashed-doc-id-telemetry-team-plan.md"
+    ],
+    "commits": [
+      "fa0eca3eaa5b2be6a19eac1fb8e792d2bccb2883",
+      "db389c6edc6beaca47cbd018729b6b14ca337f0d",
+      "af0b0456896fd3cebaed0942e9d80b4bd96cddef",
+      "3eb2cbd010382e9b9eb1b775cfc87ff1fd3b7a06",
+      "356c8779860a0ab371419abab0ccb7c609ec998a",
+      "d3ff4d66ab1a5e4508c24c3a273913ae050fe40c",
+      "2cc31bc95ba44dffa1733391e664fb11be990c04",
+      "166beaa20c61ad4c6d9e42b96f6ef9571845c59d",
+      "9ae974e4e5389f0593129fc0f9d5d131cace9c69",
+      "3bb794d840ecb7a99eddc405f441781c3b416bc9",
+      "a12701538f8af2355c790741d6d30cf8e06b0206",
+      "5e686b0e74645f82e70ac0b1c55cb96f8c711d04"
+    ],
+    "sessions": []
+  }
+}

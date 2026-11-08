@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "E0d",
+  "name": "PDF Large-File Support",
+  "description": "Removes the implicit PDF size limit. Adds an optional configurable max file size guard applied in the pipeline and the REST ingest route, returning a clear file_too_large error, plus an MCP error code, a CLI large-file notice and single-file ingest.",
+  "effort": "Small, mostly guard logic across pipeline, REST route, MCP and CLI plus a config section. No storage changes or outside services; parser untouched. Main unknown was docling streaming support, resolved. Mostly tests and docs.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 11,
+    "estimatedHours": 23.5
+  },
+  "git": {
+    "commits": 10,
+    "linesAdded": 3476,
+    "linesRemoved": 1731
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e0d-pdf-large-file-support-brief.md",
+      "Documentation/Completed/e0d-pdf-large-file-support-team-plan.md"
+    ],
+    "commits": [
+      "dd59e8edf31eebb47cf468a0a01f21957f67993c",
+      "bc97a81ac9e842b4f62924a12dfe572cbdcb40e7",
+      "b73bd7a6b34c3b2a799724c5fb5ded8b57adff05",
+      "779a028c776a247694dd76737f389518175fcb46",
+      "9e32438149a234d48bae985cd043d3c9b9a05b27",
+      "3d9904288d748dd255154bebbdc9accdc7faacce",
+      "765ccbe55f84665aa2b35d8da7e0a120ec616b79",
+      "a3fdea5c8fd9e4f499d48b5c49ced7563e9bba13",
+      "5ca71c5f4a4b72222ac42c639d5e2b4665795c1f",
+      "31c1cbc4f4085d8a876aa7bf01c6c632dc117dbc"
+    ],
+    "sessions": []
+  }
+}

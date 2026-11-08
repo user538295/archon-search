@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "id": "C19",
+  "name": "Integration & E2E Test Coverage",
+  "description": "Test-only plan adding real-component integration and end-to-end tests across HTTP, MCP, CLI, job dispatch, backup, centroid, routing, ACL and collection lifecycle for features from the first phases through D2, in nineteen new test files.",
+  "effort": "Large breadth, no production code or storage change. Shared helpers for real app and pipeline in a new conftest. Risky parts: async timing, scheduler and backup loops, monkeypatched dependency absence, PDF and image ingest with stubs, flaky polling.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 7,
+    "tasks": 20,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 20,
+    "linesAdded": 7364,
+    "linesRemoved": 19
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C19-integration-e2e-test-coverage-plan.md"
+    ],
+    "commits": [
+      "d7c91095ce84f027652a4c6330715db4a419274e",
+      "5017b37a0faf086adcd96b02b1c0374c644b8f78",
+      "c85c74647266a2292ca0c746c69ba08028d57278",
+      "c07fedf24216125bc7a39619d3ac375bd77b440d",
+      "a786fe064a348ff546aac3da8bd74db0c8eda6f6",
+      "974a664212922b95e4bc36a49a55ca3f1d8b67fe",
+      "25be17fc5d5a8b4c087362fd1b2acceecfd5e44e",
+      "d27d5fa23278f1e8c973d21a683aed5b44c460b2",
+      "87a45a4b482fe2bda0c7da5a790f85b1f22ba1f6",
+      "126e632b6fec5160c5f90bd54365370d2a1a7039",
+      "eec691eb0939b4f1c78628024efd2348a7b8c4da",
+      "ccb64bbeef494be3af9a0108c7dcd23dcea5e264",
+      "b1efac0828cf46e4a3cdaef8199158285e1deffa",
+      "87aca9ab06969e44047fa58f06ebbf6cf8ec206c",
+      "26fc65ebc3250159cae270139f1a28e1047517b7",
+      "1b47978b2212101383357635d3ed6d3043dcf2e6",
+      "27adaa20ee41c8149d362a33562699fc7c22fc9e",
+      "c15c28009d82d521c7bfed794661d646a4917063",
+      "1e2f3b2b5af17f57e3a617ca31069d5bd307d5c1",
+      "0600b024bfe886be96615e4517efbe5e1894baf0"
+    ],
+    "sessions": []
+  }
+}

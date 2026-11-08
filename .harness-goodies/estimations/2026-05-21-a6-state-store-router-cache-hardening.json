@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "A6",
+  "name": "State-Store + Router Cache Hardening",
+  "description": "Added a reentrant lock to the indexing state store so concurrent writers lose no updates, moved the stale in-progress reset into a locked store method, added router cache invalidation and constructor metadata injection, plus regression tests.",
+  "effort": "Small, no storage or migrations or outside services. Touches three modules (state store, sync, router, eval runner). Hardest part is deterministic race tests needing injected interleaving; mostly mechanical locking.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 2,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 3,
+    "tasks": 7,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 11,
+    "linesAdded": 1413,
+    "linesRemoved": 216
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/A6-hardening-locks-brief.md",
+      "Documentation/Completed/A6-state-store-router-cache-hardening-plan.md"
+    ],
+    "commits": [
+      "7c8d21c99462b4a57f2ed0916304267ce0863f43",
+      "131ded3a6993386032c169387334642e6cb65132",
+      "7944ceaffa71e71b3d77afef9e7b8e7c6a404ffe",
+      "9a28a2f40df9f3bb4839d65ade6c12f01cc2b394",
+      "2ad0fd5d17f4b28c9e46c091965f4e4b123957a1",
+      "1d0f45061edba3cc77de0eb3df05d7dfdbc73ae6",
+      "bbdd32c87cbd08b9ebc4f5c017215c91bfbf21ac",
+      "768e03608d654c1b8f675e46174e383756b05a17",
+      "3e498a37bb512b24acfaa8cb06c9f507c333498a",
+      "a77aec0e27c20b1eba23e39e7a64293f88629307",
+      "5b951015c252fdd24351fac50d54e0a4698f3267"
+    ],
+    "sessions": []
+  }
+}

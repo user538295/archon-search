@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "id": "E2g",
+  "name": "Code Def/Ref Typed Graph",
+  "description": "Connects code in the knowledge graph: syntax-tree chunking, typed call, import, define and inherit edges labelled proven or best guess across nine languages, PageRank importance, a graph_impact tool on MCP and HTTP, and a code-lane quality gate.",
+  "effort": "Very large, five parts shipped together: chunker, extractor per language, ranking, impact tool on two surfaces, eval gate. New grammar dependencies may slip, schema and enum cascades, background recompute, cross-file guessing risk, staged measurement of two retrieval changes, wizard handling.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 20,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 10,
+    "tasks": 18,
+    "estimatedHours": 139.0
+  },
+  "git": {
+    "commits": 19,
+    "linesAdded": 14259,
+    "linesRemoved": 447
+  },
+  "usage": {
+    "matchedBy": "prompt",
+    "sessions": 1,
+    "agentTimeMinutes": 47,
+    "tokens": {
+      "input": 2659730,
+      "output": 139415,
+      "reasoning": null,
+      "cacheRead": 41957760,
+      "cacheWrite": 0,
+      "total": 44756905
+    },
+    "costUsd": 34.9
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e2g-code-defref-graph-brief.md",
+      "Documentation/Completed/e2g-code-defref-graph-team-plan.md"
+    ],
+    "commits": [
+      "e0686e4da58c62982aa8842da9a852cbc4f23a62",
+      "53ade6d940ed94a43ba607b473e0d31d00a9f7da",
+      "023679f1b3e3282573629f5d94882265488865cf",
+      "3d186fee6f49c602ef4e5783682296b7fce31dde",
+      "5b20e2def1b207a42858c4e5eb9bfa6076675a04",
+      "b3ef86c09bbed4e9f7b588ea50193326a8ea6181",
+      "6c812cde6014fcee618fad024c95948f91e772be",
+      "710805c9f57846f1d4a73126e675bf0a8d2d1587",
+      "839e717981698f93bf3d654a9d7dbba53e5716f3",
+      "a13e0dae56565c03651b46818da93505019877ea",
+      "57985bd27e88b4cd721c8f569d9a483b5b1d67c1",
+      "7cc8703bbd8df536bfc4cec583046ae649cf4202",
+      "6c1a45cde3ec310a5d446919529dea7c0a16d2af",
+      "60b5c8fdd58cd2cba3522d47c32f4e4f8535a54b",
+      "0ad401daf4176710b2db4f156d6718d8a4cfac9f",
+      "e5649378fe4a0697af73855a3c89bd6aaed0b571",
+      "2b42e2aab565867beaace801589113b1801c119e",
+      "24ca5733f17e3c29da0668bcd0a89a923aa5f081",
+      "cbb40ff0bcd0bd1583d9772393c289684aee6508"
+    ],
+    "sessions": [
+      {
+        "harness": "codex",
+        "models": [
+          "codex-auto-review",
+          "gpt-5.5"
+        ],
+        "id": "019f43be-c11c-7293-8cd2-82007e09870b",
+        "path": "/Users/manczg/.codex/sessions/2026/07/09/rollout-2026-07-09T00-00-02-019f43be-c11c-7293-8cd2-82007e09870b.jsonl.zst",
+        "log": null,
+        "prompts": [
+          {
+            "number": 1,
+            "at": "2026-07-08T22:01:31+00:00",
+            "text": "/implement-next Documentation/Backlog/e2g-code-defref-graph-",
+            "reason": "names e2g-code-defref-graph-team-plan.md"
+          },
+          {
+            "number": 2,
+            "at": "2026-07-08T22:38:09+00:00",
+            "text": "how many review cycles did you run by using the iterative-re",
+            "reason": "follows prompt 1"
+          },
+          {
+            "number": 3,
+            "at": "2026-07-08T22:38:58+00:00",
+            "text": "but the implement-next instructs you to use iterative-review",
+            "reason": "follows prompt 1"
+          },
+          {
+            "number": 4,
+            "at": "2026-07-08T22:40:31+00:00",
+            "text": "you should have run the /iterative-review on the BE-12 imple",
+            "reason": "follows prompt 1"
+          },
+          {
+            "number": 5,
+            "at": "2026-07-08T22:40:52+00:00",
+            "text": "then do it now",
+            "reason": "follows prompt 1"
+          },
+          {
+            "number": 6,
+            "at": "2026-07-09T06:56:40+00:00",
+            "text": "resume",
+            "reason": "follows prompt 1"
+          },
+          {
+            "number": 7,
+            "at": "2026-07-09T07:07:31+00:00",
+            "text": "You don't know when the final round will be. The loop ends w",
+            "reason": "follows prompt 1"
+          },
+          {
+            "number": 8,
+            "at": "2026-07-09T09:19:08+00:00",
+            "text": "Try to fix this: ~/.Codex/scripts/check-task-commit.sh Check",
+            "reason": "follows prompt 1"
+          },
+          {
+            "number": 9,
+            "at": "2026-07-09T09:22:03+00:00",
+            "text": "I think we don't need check-task-commit.sh script. Which fil",
+            "reason": "follows prompt 1"
+          }
+        ],
+        "agentTimeMinutes": 47,
+        "tokens": {
+          "input": 2659730,
+          "output": 139415,
+          "reasoning": null,
+          "cacheRead": 41957760,
+          "cacheWrite": 0,
+          "total": 44756905
+        },
+        "costUsd": 34.9
+      }
+    ]
+  }
+}

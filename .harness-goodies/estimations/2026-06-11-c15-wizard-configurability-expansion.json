@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "C15",
+  "name": "Wizard Configurability Expansion",
+  "description": "Added wizard flags for host, port, db path, log level, stderr logging, result count and telemetry retention; full API key shown at install end; ANTHROPIC-key-gated HyDE/RAG Fusion prompt with extras install; validated custom server key flag.",
+  "effort": "Small to medium: confined to the installer module and one CLI command, no storage or migrations, no outside services. Follows an existing flag pattern; fiddly parts are flag-versus-default detection, validation edge cases, interactive prompt gating and extras installation.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 11,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 11,
+    "linesAdded": 2743,
+    "linesRemoved": 208
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C15-wizard-configurability-expansion-brief.md",
+      "Documentation/Completed/C15-wizard-configurability-expansion-plan.md"
+    ],
+    "commits": [
+      "e8309074e74f82a324a8931c9f592040df0376a1",
+      "1f336362a2149a739b06d5dba0dcc6bd6e5b68cc",
+      "13415148fc2e77de2a44582a8fde465c823fcbd1",
+      "4f5cf77c881569c3f0ce0dacc4609bd7b968ae20",
+      "2e97da0015fef03ac1a1499ff088d0d861d2b33c",
+      "9dc5dffbde72932e35e2f892a9333a6c170a013f",
+      "a9144de3cd488235ebd1fdcb7155427cb97eb2fb",
+      "511bfe3a509dba678935e0ac512dd135730cfa47",
+      "be63671eb558e1912d140be5a08ffccd299e75dc",
+      "0bf92b19787c612904e7debc530c44a7ff4e0ac6",
+      "4e71b0d3e8be48458594539c7931b357908b3327"
+    ],
+    "sessions": []
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "B6",
+  "name": "Production-Model Eval Lane",
+  "description": "Second eval lane (pytest -m live_eval) running the corpus through real fastembed embedder and cross-encoder reranker. Adds a parameterized pipeline factory, model-version fields on baselines, non-raising threshold report (JSON and Markdown), and a report-only tag-push workflow.",
+  "effort": "Mostly Python test-harness work in one eval package plus a new CI workflow. No database or migrations. Outside dependencies: real model weights and GitHub Actions caching. Risks: fixture isolation from the deterministic lane, noisy CI latency, human-driven calibration.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 12,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 12,
+    "linesAdded": 1971,
+    "linesRemoved": 51
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/B6-production-model-eval-lane-brief.md",
+      "Documentation/Completed/B6-production-model-eval-lane-plan.md"
+    ],
+    "commits": [
+      "aa5d5e22aa366b7ab10cf87331e10a5e14d355f6",
+      "4c7918f1d2fdab0baba6ebd3eb6cd932d328b1a9",
+      "7698eb6429d007fc851315359e72475568bb5b90",
+      "38a7f5a308e3b292f712840463e163263322afc1",
+      "d02c587e7a34d9744560e4e748250bfd3d50b325",
+      "21d1081d707e6687ae4282c64262d67cf334c378",
+      "9d65b255b808814c27d9e72e46f2c6809143f754",
+      "28d86bbad91b07e3573fd451622ea324bc88e956",
+      "871d4e20b10554a22d48579affb8ed4e05b1a172",
+      "9e4e887113c2c708b68e1268a1f938d2fe1e3991",
+      "b94819ac34198ac67d7a2356ec91c75b6c14a7d5",
+      "4cbb19fb9a495b22481631e1c54728c92040d96f"
+    ],
+    "sessions": []
+  }
+}

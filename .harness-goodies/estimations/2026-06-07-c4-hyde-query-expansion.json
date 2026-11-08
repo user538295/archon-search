@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "C4",
+  "name": "HyDE Query Expansion",
+  "description": "Opt-in HyDE: a Claude Haiku hypothetical answer passage is embedded and used as the ANN vector for search and explain on REST and MCP, with silent fallback, a hyde_applied flag, rate limiting, a config section and an optional dependency.",
+  "effort": "Medium-large: new module, config section, optional dependency, signature changes in three pipeline methods, nine wiring sites across REST and MCP, outside LLM API, privacy ADR, prompt safety, log-leak guards, eval and latency checks. No storage change.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 13,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 7,
+    "tasks": 15,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 16,
+    "linesAdded": 3324,
+    "linesRemoved": 78
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C4-hyde-query-expansion-brief.md",
+      "Documentation/Completed/C4-hyde-query-expansion-plan.md"
+    ],
+    "commits": [
+      "5239cfd4ab138ca866323fe9c88c981d3db6c19a",
+      "c879e698cb212c3008b1c91c97fe3317c1c8dd20",
+      "6af4b5bed83f72df0df334fca1376ee208b5bced",
+      "a2f3e1a50927b4285829c30391a7f6184b2d0a0e",
+      "63da136fe52e8e8196640606ef54a14014cfd9c6",
+      "89867ce19b2481995ac97014f1b0b966af0606e7",
+      "8f1b23d26cc59bae2e3caf797a02c196c33c23a6",
+      "51c3318a96f3ab23f49f5f3a3c6f28c58c099360",
+      "ea375033c0bbf7121f31c630da5675c6a64d42d4",
+      "b17c3ea4ca8e47e5914e3241ca76b7ccf16b5b73",
+      "8cb1dd39f8bc2457d1b085b87c9e0910c552b66a",
+      "07ffa392c4b536265b3769ff1529b34204ecb8f5",
+      "6815ea68fa8511f0a6f41968c91d72b24d467eff",
+      "b0f38919f64e6629eab905d4c06a977b6cc7f8a9",
+      "439f554c7848b45dc9dc70c4438d90a26bfa7354",
+      "1db773b7c6547b3caab5dcabe1d158a307949400"
+    ],
+    "sessions": []
+  }
+}

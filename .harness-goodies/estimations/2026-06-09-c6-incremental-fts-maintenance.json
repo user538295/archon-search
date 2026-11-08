@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "C6",
+  "name": "Incremental FTS Maintenance",
+  "description": "Replaces full full-text index rebuilds on every ingest, sync and metadata reindex with incremental optimize calls, adds index maintenance on document delete, fixes a missing language argument, and adds an ingest latency regression guard in the eval harness.",
+  "effort": "Changes the store, pipeline, watcher sync and reindex paths. Starts with a spike to verify unproven LanceDB optimize behavior and a fallback flag. Delete handling is net-new. Needs a large corpus and equivalence tests against full rebuild. No migration or outside services.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 10,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 11,
+    "linesAdded": 3333,
+    "linesRemoved": 67
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C6-incremental-fts-maintenance-brief.md",
+      "Documentation/Completed/C6-incremental-fts-maintenance-plan.md"
+    ],
+    "commits": [
+      "8de4922e16ef32c47a4f311a2957151aa6fdc0a1",
+      "942d0f5b689b581ec3931603eab11b52a850de22",
+      "a4a1c6a24b2b64066c464965ecfa968c2e72fa58",
+      "a333616ed867af26b91895cb13d1146248aa10a3",
+      "0c6250a004d7f5db5c6b5da1248eab8b6ca401f8",
+      "7faca4bc0705fc4d552ce870e1c7b83366af2018",
+      "fff24f49b48b686b2ac759823d61757802010296",
+      "699184f3542054c4644f4a67a0fef3c22d36a29d",
+      "acdef4da66ed3b9db6bc9f4ef42ea0ccd1ae061a",
+      "b0897539ec8de23e3665cd56feed6042b82dade2",
+      "10c1c8c41cd700b8200dad926de1eae1a3166192"
+    ],
+    "sessions": []
+  }
+}

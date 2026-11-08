@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "C10",
+  "name": "Test Suite Speed Optimization",
+  "description": "Cut the default pytest run from about ten minutes to a few minutes by enabling pytest-xdist parallelism with per-file distribution, fixing one racy PDF fixture, shortening a thirty-second lock-timeout test, and updating CI flags and docs.",
+  "effort": "Small, test-infrastructure only, no production code, storage or outside services. Touches one dependency entry, one fixture, one test, pytest config, two CI workflows and several docs. Main unknown is measured speedup, limited by two huge test files pinned to single workers.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 2,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 6,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 6,
+    "linesAdded": 296,
+    "linesRemoved": 24
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C10-test-suite-speed-brief.md",
+      "Documentation/Completed/C10-test-suite-speed-plan.md"
+    ],
+    "commits": [
+      "56354510838afaf653c860ed887782d94290e4b5",
+      "23afc54807fd9d3dbc17dbb1891c3d9cd3fceb89",
+      "66d93bd106bb6644fc2d19e66f2e3ef024a865fd",
+      "3e31cdf2bac5c0553b195e6144ab56b46f7f72ac",
+      "6f8ea7e9283fb165f19f11c3454c896813272d9e",
+      "6ae526cb7c947c54fe50b54e4383136fd5b471c1"
+    ],
+    "sessions": []
+  }
+}

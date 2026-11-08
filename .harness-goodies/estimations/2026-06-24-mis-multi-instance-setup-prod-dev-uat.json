@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "MIS",
+  "name": "Multi-Instance Setup (Prod + Dev-UAT)",
+  "description": "A user manual and example environment file for running a native GPU prod service and a version-pinned Docker dev-UAT instance side by side, with port, data, API key isolation, client configuration and shared model cache guidance.",
+  "effort": "Documentation only, no code changes since isolation primitives already exist. Small effort: one manual, one env example edit, an end-to-end check of the compose services and manual walkthroughs on macOS or Linux. Low risk, no storage or outside services.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 9,
+    "estimatedHours": 22.5
+  },
+  "git": {
+    "commits": 9,
+    "linesAdded": 1893,
+    "linesRemoved": 80
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/multi-instance-setup-brief.md",
+      "Documentation/Completed/multi-instance-setup-team-plan.md"
+    ],
+    "commits": [
+      "cbf6441162f8071ebd6d37943aa7ac40d60b336e",
+      "0f87376e292944b9fec2856ae4d1694a1f919c90",
+      "15381f77152820d73179a46e00ef098275d03c3d",
+      "96fa26c961d076c94829919fdca4e783b2c4399e",
+      "5c7e1d5b07cdc952cb840364fe89c44113e90ad0",
+      "da918139e7f19cae27e8a8f3ab8915d73bd64144",
+      "8d07f36a0360626ff07cd22d2d42c25f5e763628",
+      "ccd443e253073a2b138e3574131c7bce13572b3a",
+      "f787806874d88cbd0b71e215ea906a750b942c3a"
+    ],
+    "sessions": []
+  }
+}

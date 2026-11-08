@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "02-SWC",
+  "name": "S2 Search with context on one shared service",
+  "description": "Search with context moves onto one SearchService method shared with search, adds a REST route and a CLI command, rewrites the MCP tool as a thin adapter, and moves the context-window cap from the pipeline to config.",
+  "effort": "Wide cross-layer change: service extraction, new REST route, new CLI command, MCP cutover with many pinning tests rewritten, cap removal, parity guards, many docs. No storage or migration. Risks: atomic cutover commits and shared-step extraction that must not change search.",
+  "status": "estimated",
+  "storyPoints": 20,
+  "updatedStoryPoints": null,
+  "estimatedAt": "2026-11-07",
+  "estimatedBy": {
+    "harness": "omp",
+    "models": null
+  },
+  "updatedBy": null,
+  "plan": {
+    "phases": 7,
+    "tasks": 29,
+    "estimatedHours": 127.5
+  },
+  "git": {
+    "commits": 0,
+    "linesAdded": 0,
+    "linesRemoved": 0
+  },
+  "usage": null,
+  "sources": {
+    "docs": [
+      "Documentation/Backlog/interface-parity/02_search_with_context-brief.md",
+      "Documentation/Backlog/interface-parity/02_search_with_context-design.md",
+      "Documentation/Backlog/interface-parity/02_search_with_context-team-plan.md",
+      "Documentation/Backlog/interface-parity/02_search_with_context-tasks.md"
+    ],
+    "commits": [],
+    "sessions": []
+  }
+}

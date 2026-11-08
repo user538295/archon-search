@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "id": "C5",
+  "name": "RAG Fusion / Multi-Query Decomposition",
+  "description": "Opt-in rag_fusion flag: an LLM generates query variants, each is searched in parallel, results are fused by a second-pass RRF then reranked. Includes config, fallback, explain detail, REST and MCP wiring, telemetry, eval scenarios, ADR.",
+  "effort": "Wide change across config, new LLM generator module, pipeline orchestration, store method needing filter support, schemas, REST and MCP, telemetry. Outside LLM service, privacy and rate-limit risks, prompt tuning unknown, eval harness and live tests.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 7,
+    "tasks": 18,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 25,
+    "linesAdded": 8563,
+    "linesRemoved": 297
+  },
+  "usage": {
+    "matchedBy": "prompt",
+    "sessions": 1,
+    "agentTimeMinutes": 32,
+    "tokens": {
+      "input": 35153,
+      "output": 195365,
+      "reasoning": 0,
+      "cacheRead": 50926534,
+      "cacheWrite": 1588107,
+      "total": 52745159
+    },
+    "costUsd": 13.63
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C5-rag-fusion-brief.md",
+      "Documentation/Completed/C5-rag-fusion-plan.md"
+    ],
+    "commits": [
+      "ef8232db0ddeedc80d176f45bc4d4410ae4a546d",
+      "faac984129f2e324c2541e51be8f25c2f8cef5d5",
+      "9cc6e763b4cdad0858b6b2b86a1600f24d1336b7",
+      "d7cd3dfa401c408827457dee445cc4b3da4ce92d",
+      "3c49c423d07c7220fa44b5d9cb60021aa1e31744",
+      "573dcbec018a18c6008312c891656a55ce1d26f3",
+      "be214eebd3a43622246fc8ee2bdf7eb468a805be",
+      "777e9c939cadd2b2814f07b900b1b8e8aa083a76",
+      "a5f7422160facc70fe3dc04026c18c806d019aaf",
+      "d0dcebcb669e7ff5b5273771391543f2ef36c072",
+      "9a730c5ce583d065758a3df788a2bf1b5bc313d6",
+      "ee97febe549f742923d4a523b2b528d3bd238376",
+      "189cbf079eb0dbab4d2a24b4689d545b0e1c4e1c",
+      "aab7482e2d873dabba53ca5d648b71535a8deea4",
+      "9bf172fa95ebea4f9d58ee9424e131cbff506814",
+      "3f998be0c7f0eb70947af081334c99a29d5cd23d",
+      "0f80fad7ee5878c19504528de4cef3d6aad59503",
+      "b66caa79d6c6ddf9d0da14e0767e539fcccb445b",
+      "2cf37f2594ad63f7ceae89a44e3a3daa82b0f5ea",
+      "89011774ee3a590b48987a31ca00e26296d35a1f",
+      "4da6cffea2dfcaf33247ca46c9d4f3f25899d43a",
+      "293222662d7533d9d13dd97decbc62647d10a647",
+      "1b5e30cb500b3fe35b12952727c90c5cd0abdb8f",
+      "f86b5544f47c3a125e95598d89f733a031ae91e1",
+      "f3f5939dd6240ce189e03ad301bb31b6573d1b37"
+    ],
+    "sessions": [
+      {
+        "harness": "omp",
+        "models": [
+          "anthropic/claude-opus-5-5",
+          "anthropic/claude-sonnet-5-5"
+        ],
+        "id": "01a18ed5-41fc-7523-b6c5-939f96451df1",
+        "path": "/Users/manczg/.omp/agent/sessions/-Documents-development-archon-search/2026-10-30T22-01-43-164Z_01a18ed5-41fc-7523-b6c5-939f96451df1.jsonl",
+        "log": "/Users/manczg/.omp/agent/prompt-logs/archon-search-8daeee78061f/session_2026-10-30_22-01-43_01a18ed5-41fc-7523-b6c5-939f96451df1.md",
+        "prompts": [
+          {
+            "number": 78,
+            "at": "2026-11-04T05:45:43+00:00",
+            "text": "[IMPORTANT: User invoked the \"commit\" skill; follow its inst",
+            "reason": "made 1 of its commits"
+          },
+          {
+            "number": 79,
+            "at": "2026-11-04T06:14:50+00:00",
+            "text": "[IMPORTANT: User invoked the \"plain-language\" skill; follow",
+            "reason": "follows prompt 78"
+          },
+          {
+            "number": 80,
+            "at": "2026-11-04T08:06:38+00:00",
+            "text": "ok, merge the small shared steps",
+            "reason": "follows prompt 78"
+          }
+        ],
+        "agentTimeMinutes": 32,
+        "tokens": {
+          "input": 35153,
+          "output": 195365,
+          "reasoning": 0,
+          "cacheRead": 50926534,
+          "cacheWrite": 1588107,
+          "total": 52745159
+        },
+        "costUsd": 13.63
+      }
+    ]
+  }
+}

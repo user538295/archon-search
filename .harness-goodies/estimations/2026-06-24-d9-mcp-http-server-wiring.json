@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "id": "D9",
+  "name": "MCP HTTP Server Wiring",
+  "description": "Mounts the already-built MCP HTTP app on the existing REST port at startup, with config gate, namespace-correct tool calls, telemetry and key store wiring, status and health fields, plus end-to-end tests for every tool.",
+  "effort": "Mostly wiring, but namespace propagation touches every tool closure and needed an up-front spike on mounting and context passing. No storage change. Heavy end-to-end test load; risky areas are auth isolation and lifecycle.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 17,
+    "estimatedHours": 33.25
+  },
+  "git": {
+    "commits": 17,
+    "linesAdded": 9626,
+    "linesRemoved": 4057
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/mcp-wiring-brief.md",
+      "Documentation/Completed/mcp-wiring-team-plan.md"
+    ],
+    "commits": [
+      "2dc1eb819411360425c58ac1d2bd9b5c715a022b",
+      "4c13f80d1ab0724b99a858029a806518419d6fdb",
+      "baaa16454bd05e0576326089acc8bb206dae135c",
+      "1cc8c6edb1eb9cca2768f1957402d2c7352486d4",
+      "3817df8683f1835c856e90d23615bf628a0e2c11",
+      "085abdb5faf900fae1c1ad0486b13ae0a16ff7fd",
+      "ffecdc0fffd846e7b5b926229c01401a7af2e1e3",
+      "bc8103b8808ec7a0ba4253b5120418a7406b2bb7",
+      "548627fe6f957fbe4a2693a378f09234cd2a8e1b",
+      "2e47f429536ae15753c5c7170e66e31ad47e15a1",
+      "afe141ed97dc920f61b70c14a55c24293985b4d4",
+      "d1d3dcc3aec8062ea9da319dd187aa0518048ece",
+      "6a9bcbe4454ba427d115d9123a92c78f58c3111e",
+      "68a9204fca87e275168a99856929473fd9ec5fbb",
+      "16c51102086664f29ecf66ee209288426a1f97a7",
+      "ce60a6a212c2042fb145421e3b198fc1e8fe8bb2",
+      "9c1edf7838ad46e728a9811aecf411a82844cf76"
+    ],
+    "sessions": []
+  }
+}

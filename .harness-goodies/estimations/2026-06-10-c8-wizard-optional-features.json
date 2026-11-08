@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "C8",
+  "name": "Wizard Optional Features",
+  "description": "Interactive archon-search wizard questions for code enrichment, multilingual, reranker toggle, GPU confirmation, file watcher, telemetry, eager loading, routing strategy and log format, with new CLI flags, config writing, code extra install and summary.",
+  "effort": "Confined to the install module and its CLI command; no storage, migrations or outside services. Many small prompt functions with retry and end-of-input handling, TOML writing, subprocess package install, and heavy test coverage. Risks are prompt ordering and non-idempotent reruns.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 12,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 12,
+    "linesAdded": 2567,
+    "linesRemoved": 71
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C8-wizard-optional-features-plan.md"
+    ],
+    "commits": [
+      "4e0bd6e27efdecfbe7fd5ebb30bf7b86a72965db",
+      "652df1b7b7ed012a8cda5a05e95650489d90d78c",
+      "70db09159295a8df3e8a1802c57851d60baef518",
+      "9ee16fff0b3f34baafc0b12526e311f949008499",
+      "a7453ef68afe9a6eacdc0b3a0d27a3abf0bcc320",
+      "79e1d36e003e7850b076ff9150a105692e3d4c22",
+      "2ab826c40e0ccefaf7aafaaa9b01e9db235a0f5f",
+      "b7010d9c09bc718a5e88214161719aa650451c48",
+      "bda404c0788042022a6a8932886380b72fe660ae",
+      "e3dfca235bd7d0b1228bd0a363c2145fd7e9bc6a",
+      "ff012a28314d236ae91a6d45b94f2e4a0a372811",
+      "b31620b5c733d578e6d144f46424f172aed18b16"
+    ],
+    "sessions": []
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "D4",
+  "name": "Streaming / Incremental Chunking",
+  "description": "Ingest flushes embed and write in fixed-size chunk batches per file, and directory ingest drops its all-vectors and all-chunks accumulators, using incremental centroid updates so large files and corpora ingest on low-memory hosts.",
+  "effort": "Refactor of the pipeline ingest loops only; store already compatible, no migration or outside services. Risky bits: per-file once-only collection setup and delete, document count continuity across batches, centroid and description state, memory validation.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 8,
+    "estimatedHours": 24.5
+  },
+  "git": {
+    "commits": 9,
+    "linesAdded": 1892,
+    "linesRemoved": 233
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/D4-streaming-incremental-chunking-brief.md",
+      "Documentation/Completed/D4-streaming-incremental-chunking-team-plan.md"
+    ],
+    "commits": [
+      "dae8814d2e1aac3b7bf8ee909059becdfd6e532f",
+      "09dc50f5482bf071cfa1eed579f29aee326fb10b",
+      "40648f0f1c5282d1db5b0d4fb2b81934b69416e1",
+      "bdd05d05a941c7c5ecf4f8b40a7b69665db04061",
+      "62ff0c9738d28ecace7c54f627af388487743f21",
+      "cdb9d3859a2428339c1887f7b4990d666979f60e",
+      "bb7f68d547996d48ea2211d57e5361964b8c2670",
+      "b62148cfcc4fbffa0797e8a4cf9ee3b3d3411b14",
+      "ad00793b81888f520b7347e655611c5598e4202f"
+    ],
+    "sessions": []
+  }
+}

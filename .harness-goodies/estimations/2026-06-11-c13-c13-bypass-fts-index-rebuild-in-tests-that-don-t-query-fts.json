@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "C13",
+  "name": "C13 — Bypass FTS-index rebuild in tests that don't query FTS",
+  "description": "Added a keyword-only rebuild_fts flag (default true) to SearchPipeline.ingest_directory that skips the FTS optimize/rebuild block, new unit tests for it, and switched eligible ingest tests to opt out to cut xdist wall time.",
+  "effort": "Small production change: one parameter and one guard in a single method, no storage or migrations. Bulk is a mechanical per-test audit of two test files plus a stability and coverage measurement gate. Main risk is silent misclassification of tests that still query search.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 2,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 6,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 8,
+    "linesAdded": 505,
+    "linesRemoved": 86
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C13-fts-rebuild-test-bypass-brief.md",
+      "Documentation/Completed/C13-fts-rebuild-test-bypass-plan.md"
+    ],
+    "commits": [
+      "d250f739e4d7d866ab0299ccfb4dc7be7bcbbf9a",
+      "1d2c34fed27c1fcd5144693df2fb2982d6b46056",
+      "1d47af77feba7902a756f45a0f7c4799d763c339",
+      "c51e11bdbfc0d1c5238ccb62bc9c187aaf99b44b",
+      "17b59220cddad8b44cc39ac510733b6e465e6793",
+      "7b13d80ea20058e133793c3b9507d58d636ddd71",
+      "834e19f79a5e66653f71ea1cca11a1ab9cb13ce1",
+      "7db9195c70e3438e907a8dfcc4bce535989052fa"
+    ],
+    "sessions": []
+  }
+}

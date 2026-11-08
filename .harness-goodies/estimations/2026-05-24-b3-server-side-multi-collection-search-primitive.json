@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "B3",
+  "name": "Server-Side Multi-Collection Search Primitive",
+  "description": "Server-side multi-collection search: embed the query once, fan out hybrid retrieval across an explicit collection list in parallel, merge with provenance, run one global rerank, and return results tagged with their source collection via REST, MCP and explain.",
+  "effort": "Large cross-cutting change: unifies two candidate and rerank type systems, touches store, pipeline, reranker, REST, MCP, explain, telemetry and config. Concurrency with timeouts, namespace and model gating, ranking-merge soundness, eval baseline must not move. No storage migration.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 8,
+    "tasks": 11,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 12,
+    "linesAdded": 3242,
+    "linesRemoved": 62
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/B3-server-side-multi-collection-search-brief.md",
+      "Documentation/Completed/B3-server-side-multi-collection-search-plan.md"
+    ],
+    "commits": [
+      "d4e7e46f5049f5de9f7243fb42cfe9bc1b491592",
+      "de7c3701c0180e599bc1ec7925e8aaeb8b345d84",
+      "c203a581779cf349ef65d5ac1abcde20d8c5e923",
+      "b5d5820c385dcedeb2b3450e9bbd201ab8173665",
+      "bf59cba1c0193b82cc822ef8d93a1df71bffce6a",
+      "25c9741bbb66e95cb14988cfbd0dc10cb544b869",
+      "ebb8df21b737fc023c2de76b64d75ac3b3a11d37",
+      "3caf220500df236154a586d8d5d732fe8983c75b",
+      "c76526f1d8a0b1a39cb48e65f8bb38e8656cb576",
+      "a909665ce874e2635371bf29d57a5350f45ca17d",
+      "ba153e2f4a932eed17448cee0e022d8a3cf40766",
+      "42a7c65b7a1ab9cb6314f5a280befb83e8d811ee"
+    ],
+    "sessions": []
+  }
+}

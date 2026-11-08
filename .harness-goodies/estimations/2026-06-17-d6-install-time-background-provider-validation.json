@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "id": "D6",
+  "name": "Install-time / Background Provider Validation",
+  "description": "Background and install-time validation of ONNX provider and reranker model config. Non-blocking startup task stores a result shown in status and ready endpoints, plus the install wizard reranker check and maintenance CLI status output.",
+  "effort": "Moderate, backend-heavy: shared validation logic, background task in app lifespan, new pending and warn readiness states, config key, wizard refactor, CLI rendering. No storage change. Risks are async timing, startup speed and exhaustive status checks.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 14,
+    "estimatedHours": 32.5
+  },
+  "git": {
+    "commits": 20,
+    "linesAdded": 2820,
+    "linesRemoved": 299
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/D6-provider-validation-brief.md",
+      "Documentation/Completed/D6-provider-validation-team-plan.md"
+    ],
+    "commits": [
+      "18011b7aaf0cb07a9060d165263b2944ef79c336",
+      "05f43688cb46539f831e7b560e6dcf5e9d33441a",
+      "05e4e18123ead344d28787f9904d3e28daae1a04",
+      "e991543edb736bf68d98d0f25e04adbb31e7e0cf",
+      "1d99f3c830abe7f97f449a79de9d2e2ef5439d83",
+      "61524a9690843b8af3dc430ca5810de89fc19bb2",
+      "fc08d69413035cfd3206a5891ea679e6d6a6da28",
+      "b2453b52d9ec7e9be936b3b1d8e7074e4b0b2679",
+      "dad0be2b4c0b964a6d569cf84183bf2c3168fc5e",
+      "ee3a6c9e9470ee0db6bb690f89e044ec65270254",
+      "133e18b5638a748a41c7e5820c581837ef54774a",
+      "a9be4639209acf5579dd8f5af93ce6b1ae08e050",
+      "8e65df137e7e9f550e41a55b1ebfa45870805e75",
+      "72232ef7edc4e7663348347865e0868f82229fa6",
+      "bfd3878c3c4576055b7d585c2d7b96eab707639e",
+      "68c97a7effb68064dfee2be7997b4b8eff9bf58f",
+      "5fae54a56d2a527320e26763506c12fb8235ca63",
+      "e52e4f018106b7e2777e15bbf50915f81e925089",
+      "8b5bb251be4d8183ce9fecbc99c06025c26272df",
+      "11c4f41e21c222f02f4281a255976734973238ac"
+    ],
+    "sessions": []
+  }
+}

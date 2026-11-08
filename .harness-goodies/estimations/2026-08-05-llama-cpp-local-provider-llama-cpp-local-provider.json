@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "id": "llama-cpp-local-provider",
+  "name": "llama.cpp Local Provider",
+  "description": "Local llama.cpp provider: llama-server over httpx for HyDE and RAG Fusion, plus first-time knowledge-graph enrichment via a new pluggable factory with Ollama, OpenAI, Anthropic and llama.cpp clients, wizard model picker, startup probe in status.",
+  "effort": "Wide change across config, server wiring, wizard and graph code. Greenfield enrichment factory replaces two stubs and moves an existing client. Centralised provider registry. No schema change or new dependency. Risks: server model quirks, structured-output fallback, privacy log guards.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 13,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 16,
+    "estimatedHours": 60.5
+  },
+  "git": {
+    "commits": 19,
+    "linesAdded": 8594,
+    "linesRemoved": 308
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Backlog/llama-cpp-local-provider-brief.md",
+      "Documentation/Backlog/llama-cpp-local-provider-tasks.md",
+      "Documentation/Backlog/llama-cpp-local-provider-team-plan.md"
+    ],
+    "commits": [
+      "1bcf6a840a175066bfa86381a08b36e95386b42c",
+      "37e6fb1ba4a09da1094ba0e413e5e0bbed86720f",
+      "3c88edcfc8025e826216633020bd001556ffc95b",
+      "e7e51e474cf8f992b6de754545dd9bc28ff02ba9",
+      "c25de4afd0804ac192ca314e041f336367804a63",
+      "ff496fb93d64e3e87e6c48887eefa3c424e60048",
+      "5354f5783c457b6fce6f3dc130017436696f9680",
+      "a734b48a18d15e30e627a01b3d5803a8d0fae978",
+      "b49ee947f3dc6b77662905a910cac135995cc93a",
+      "21e073f9852dab381ffdbaf89c33fdacc7bcbea5",
+      "20a06e5192baf8fa99cfa6e4ed19984f3afe8d42",
+      "fbc34f74217b9bdc50321ba5498d54f9c4ef3b71",
+      "eaf00b35f474ec7bb66822e7659b0968d6d78404",
+      "cedc03f96a7a0e8c0923977323f4f0b78e818e0c",
+      "fb7191a8467da07aa538059a58bdf5b90399699f",
+      "07db6b724bd12d839bb06aa2334a83a85d0c2517",
+      "53bfeaf39089c77581272d6ab0452913f2228755",
+      "b7bc50d829196d4737ce995291df2fc9ae285283",
+      "e35e4f818b547c8b602a805d6205de243a74f9fb"
+    ],
+    "sessions": []
+  }
+}

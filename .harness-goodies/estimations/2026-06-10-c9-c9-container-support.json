@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "id": "C9",
+  "name": "C9 — Container Support",
+  "description": "Container support: Dockerfile with CPU and GPU variants, compose file with dev/test/prod services, env-var config overrides, relocatable data directory, serve subcommand, stderr logging, container smoke test and release publishing.",
+  "effort": "Cross-cutting: config layer, several hardcoded home paths, new CLI command, Docker images, release pipeline. GPU dependency conflicts with the embedding library are an unknown. Single-writer store constraint, non-root volumes, signal handling and registry publishing add risk.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 15,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 20,
+    "linesAdded": 3859,
+    "linesRemoved": 2085
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C9-container-support-brief.md",
+      "Documentation/Completed/C9-container-support-plan.md"
+    ],
+    "commits": [
+      "ea8f593b60b6ca7741a377ceeb4f6c5f87b58bf2",
+      "47f5f1dcd648486d5a0e1630483003a497e244f8",
+      "9fb17a373bf2b213331b29b45599d45409a48384",
+      "5556cb84176597a9dfafedf00dccd5497ddf5056",
+      "75340398b784bb74e60039cf95c7b6f56c89ed02",
+      "a745a3bf37414f1a68f5eabd17f30bc36ec33584",
+      "cc04498afc8340b9c5d6493536f0eaab726431fb",
+      "27e55d1a2221d26fa9ef9e692327fe7d7d8de702",
+      "ad91cb1947e311016563e74225887846fab9ee3e",
+      "643bd2988535757af04432d38513525710d0b6fa",
+      "0863f6c4e8f5022fae856ffd59cf552854f44a75",
+      "e446a7de43d0cac22a1bad5d41954b79eb4d8261",
+      "21d987497e419b388f4d16e55390238f3eabb34e",
+      "8dd4217a74e073d245c84acd2a57b469b686e3b8",
+      "215de9a77a1ffbdf28558d2dea6d26102996a5eb",
+      "db7c74361462d7ee7b8ada675d129a112bfeb8ea",
+      "25a679ba6a7f69ae5b4940628a2efcea7495ef39",
+      "0198a05cfd0ab9d5464a60b1b08b1d907bf3d0cd",
+      "f44633513cc3d3bb4735fea93014b93f2ff26f21",
+      "2aa55c1c770381b3a3add6509a5e9de01b176a03"
+    ],
+    "sessions": []
+  }
+}

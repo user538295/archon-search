@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "id": "B4",
+  "name": "Stronger Collection Routing",
+  "description": "Opt-in hybrid collection routing: embeds each collection's generated description and blends it with the centroid score under a config strategy and weight. Also adds rank-sensitive routing eval metrics (MRR, P@1) with an expanded fixture, plus MCP, config and docs changes.",
+  "effort": "Spans eval harness, store schema (new meta column with old-table tolerance), ingest pipeline, router, config, server and MCP surface. Largest risk is the eval gate: coupled fixture edits, regenerated baselines and hashes. Deterministic embedder cannot prove lift, only no regression.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 7,
+    "tasks": 17,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 22,
+    "linesAdded": 2963,
+    "linesRemoved": 214
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/B4-stronger-collection-routing-brief.md",
+      "Documentation/Completed/B4-stronger-collection-routing-plan.md"
+    ],
+    "commits": [
+      "c9c92dc253f55e4229a235dfa42167ca5f702c04",
+      "1ca582f3a9d326f62ca6a5d6ee7819d0a69c8420",
+      "ee90a39c252edc2f10ca4f211f38faf519016f04",
+      "0fcf68aac699afdbe9fb14521e914852b119f376",
+      "1d3ea246f826ec19e46008d1698c42b29cfb38b0",
+      "0e7b26723fdb4a9da9ac2802e10c0e5625a25629",
+      "4b32d5e982d7a337f9224a7737936086a94b0e54",
+      "6a2a16b797cad3f559de26eca308eec8288dca43",
+      "f8efba2c6b1d8e2893390fc5209d0ff3127a25d2",
+      "9ae6f6918d3a17bdecd0235b7deb104d85c2b9d8",
+      "3f8fd8ee0a059801fd20c8471c4ee63e059df3e7",
+      "454d447b0fa9ed3d16e4be3edaacb62385508e10",
+      "5f76ab0356703ffeb4a7fd62b3881bd325b6eacc",
+      "4ef0ea1f0793157277d415a891bbd8496917ed00",
+      "704d044ff2cf3b8fe5443519a04ac445ed0562a6",
+      "3414f2fab30c415650fcfa27e5ef985fbdc0e956",
+      "2dbd8af223f0bbedca10f1529b10a4e73d015c62",
+      "52eced03231ca3e77adb492f54e34c1d37265e8a",
+      "b45b8b7e1e236e63485189a3ecfa16dc6d3e917a",
+      "4cbd4af91d94fba9d38ae24ff0e6fd566f84ac38",
+      "945365fd93696c2f3855764d974b259afdfa32ef",
+      "b51795575d4bcb487570fad1dc41ddec0c5f4b5c"
+    ],
+    "sessions": []
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "id": "G9",
+  "name": "OpenAI-Compatible API Shim",
+  "description": "Adds OpenAI-style models listing and chat completions endpoints that return retrieved chunks with citations as the assistant reply, with collection routing by model name, SSE streaming per chunk, OpenAI-shaped errors, and a disabled-by-default config.",
+  "effort": "Medium: new config section, new schemas and router in the existing server, auth error rewriting middleware, streaming branch, OpenAPI snapshot refresh. No storage change or new outside service; main risk is compatibility with real IDE clients, checked manually.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 12,
+    "estimatedHours": 35.0
+  },
+  "git": {
+    "commits": 17,
+    "linesAdded": 4403,
+    "linesRemoved": 193
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/g9-openai-shim-brief.md",
+      "Documentation/Completed/g9-openai-shim-team-plan.md"
+    ],
+    "commits": [
+      "e8b0584f3e90c6c16f2eb8810f5afd5d23bbbed8",
+      "e01369a65b355df382c8427713b0197b89785405",
+      "56b2260f281839d518c3ad32a0babcd811edf3eb",
+      "96e0c8cf404555dcada5eb77299c8802370070f8",
+      "fed5d84b07a515aebec106d7d8428dceccdc6101",
+      "4b2302f7fe037ac7e9f6a4fe0dc3a858a2b481c3",
+      "3449d6ea5da6e1d2a661e2ad095f7f1baede10c2",
+      "0b16264747862f56272f05107e198b0ae778796f",
+      "c4a90e10b9c987f353d5281b9ec319f02facaa59",
+      "e55ed1801ecfccf7d709034d94e2f420d9caad47",
+      "c552299088f3ceee25a09ee04c71d771b057dc3f",
+      "df2c20c7e9c9f9b42d78f7d631c16d82810ff524",
+      "f4b097db6c11914f0af2b00e7f9ba53cf60b56ac",
+      "a5ff43dd9de1a0fe73be0f4741e07e07978c1f67",
+      "f983d065e5d252b73a486c776484ab751ba9a77b",
+      "0cdf3373679a3e5e1d71996a1709b422d9946b12",
+      "9015c236192c90acd2324f3128d19c6549d2cf9f"
+    ],
+    "sessions": []
+  }
+}

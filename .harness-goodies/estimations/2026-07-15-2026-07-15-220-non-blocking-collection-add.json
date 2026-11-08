@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "2026-07-15-220",
+  "name": "Non-Blocking Collection Add",
+  "description": "Verification and gap-closing plan for an already-shipped non-blocking collection add: CLI posts to the server, gets a job id, optional wait polling. Added missing unit tests, a closed-port smoke test, and a manual string check.",
+  "effort": "Small: no production code change, no storage or migrations, no outside services. Work was three CLI unit tests, one route field check, one smoke test against a closed port, a manual wording check, and a close-out. Brief had stale details to reconcile.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 2,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 8,
+    "estimatedHours": 9.0
+  },
+  "git": {
+    "commits": 9,
+    "linesAdded": 1112,
+    "linesRemoved": 77
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/2026-07-15-220-collection-add-async-brief.md",
+      "Documentation/Completed/2026-07-15-220-collection-add-async-tasks.md",
+      "Documentation/Completed/2026-07-15-220-collection-add-async-team-plan.md"
+    ],
+    "commits": [
+      "61e24aa3f42f3c13b4e3f4b2268ff9f74fe3015e",
+      "77c800d08ed555aeba5b9c5e9860c940f3f119f7",
+      "8782c1f0c0e48ce86cd27aa90b057f84c8953b94",
+      "41c8357e10c2a2a7523dcfdd6ddbccd16282e74a",
+      "83bf7498b941939a3fa7f4ada6d2cd1b7e744356",
+      "b266ba52ce03aded8439d80dd54f181f3a4b948b",
+      "8b6564d604cb478cd1dafe3c0a4b5c6264cf6fde",
+      "b6722ae6a830caca97307d391c6afab0f793d251",
+      "8f574da50dfabba715f5a101b179761590a38857"
+    ],
+    "sessions": []
+  }
+}

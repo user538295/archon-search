@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "id": "CSP120",
+  "name": "CLI Write Operations Must Route Through the Server",
+  "description": "Converted CLI write commands (collection add, remove, reindex, reindex-metadata, ingest, sync) from in-process work into HTTP proxies that submit server jobs, with --wait polling, a new jobs status command, and two new server endpoints.",
+  "effort": "Spans CLI and server. Two new job kinds with store persistence, two new endpoints, a new metadata field on collection meta, and a lock on delete. Shared poll helper replaced duplicates. Risky around concurrent writes and lock registries; many end-to-end tests.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 13,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 20,
+    "estimatedHours": 61.0
+  },
+  "git": {
+    "commits": 21,
+    "linesAdded": 5739,
+    "linesRemoved": 1726
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/2026-07-15-120-cli-server-proxy-brief.md",
+      "Documentation/Completed/2026-07-15-120-cli-server-proxy-tasks.md",
+      "Documentation/Completed/2026-07-15-120-cli-server-proxy-team-plan.md"
+    ],
+    "commits": [
+      "6480a76ceb56c60d851b0efec4f2817aad4089c4",
+      "902c9de121164dcc3f120dafe1521dcc58eccfcf",
+      "31dfeb28be2ee56b2fbbb5f59572c889b977b9e5",
+      "738edad4250d6a16eabb2ab9086e1629fa2337d5",
+      "f195d2fda6f5a376fc50080fffa475190172daa0",
+      "dfc5dae5ce8f75c0b3a11f6d40110316c973fe7d",
+      "6faddd750a2fc4c76f7d28093c476259dcf1b70b",
+      "8c36a6f747bba1206bf1b2e71b6730bc716574d1",
+      "9da5e688a11ecacc794a61703cde8b929f92ef5a",
+      "dcaf7d777302ad59f7a7c65e19618325d3a6ce98",
+      "bb2d4446b421e9d6e23c6233a31a76050c734265",
+      "d093df97ad16bc2aba3aec607bd53afc5ccff9b1",
+      "586fab78ab0a6687268a5a9e8ccf1e91d72b61fe",
+      "1823e15bf44361de6294be143e6a513bb9b039c9",
+      "48efb97ba1b5bf0ad703ee4e3a9d713f54941fff",
+      "bed36021750820782f18c8cba6d3417521210d68",
+      "7601bf34550e6af72c9fd052fc12c9e29ca3682b",
+      "9dda85a3f7c61a543895b318c537f3bd39b1bea2",
+      "6184ed657407a77c4d895d95f6af0f825fc2364a",
+      "40f8e6f69ede47eb9e4f19bf3a1d6f69a63a485c",
+      "4cca67b03a7097527514768f263de6dd4f7e829d"
+    ],
+    "sessions": []
+  }
+}

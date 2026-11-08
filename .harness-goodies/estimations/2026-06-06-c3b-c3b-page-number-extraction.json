@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "C3b",
+  "name": "C3b — Page Number Extraction",
+  "description": "PDF and image chunks now carry page provenance metadata (start page, and end page when spanning), derived from docling's page-break placeholder, removed from text before chunking, with one new eval query and test fixture.",
+  "effort": "Small, contained change in parser, enricher and pipeline; no schema change or new runtime dependency. Tricky part is the offset coordinate transform between marked and cleaned text. Depends on offsets from a prior feature. Test-only PDF generator dependency added.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 3,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 13,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 12,
+    "linesAdded": 1597,
+    "linesRemoved": 145
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C3b-page-number-extraction-brief.md",
+      "Documentation/Completed/C3b-page-number-extraction-plan.md"
+    ],
+    "commits": [
+      "6091869a1128c1af433a21d895e5c00f71dcc3dc",
+      "0c0baf1058b141a79f3b8790929835409405f668",
+      "91a93f9a0dd31b83b9ded0e4f75620c3eb11f19c",
+      "c91a8d0d385a833e53cc2f28343eec34960b0d5e",
+      "59d03a77885e9cdcc631c560116913e2d0cf3bc1",
+      "cd1de9df9811ec363ef914cd190cc669af81f468",
+      "0738cbd59502c59bb2332dcba4ad0047e088897f",
+      "0404e8c9a893aa4be9936c7d12dba10851fb4f51",
+      "448205c0ed823ee0ef18b14d842a0cc436593cf0",
+      "09c67fd8a6013174b9e64e82f0a191a9f5818dcd",
+      "be08f8ecefcf0d5d4d10806a5b67db6540df6fd6",
+      "84d6f8a6f54a6a4371c2e15e106966375d867c8d"
+    ],
+    "sessions": []
+  }
+}

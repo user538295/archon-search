@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "A7",
+  "name": "A7 — fsync Hardening for Durable State Writes",
+  "description": "Shared durable-write helper (fsync file, replace, fsync parent dir) migrated into progress, sync, job store and key manager; telemetry writer keeps a per-date file handle synced on rotation; lint gate, crash-injection tests, new ADR.",
+  "effort": "Many small call sites across several modules, plus a structural rework of the telemetry writer. Needs a CI workflow change, a coverage gate, crash-injection tests on a real disk filesystem, route error handling, ADR and architecture doc updates. No storage migrations or outside services.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 23,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 10,
+    "linesAdded": 2077,
+    "linesRemoved": 192
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/A7-fsync-hardening-brief.md",
+      "Documentation/Completed/A7-fsync-hardening-plan.md"
+    ],
+    "commits": [
+      "150aae58025dc370be82bc5da79d79dfa5052d94",
+      "e1ae90fed0f0fc42ff9238698b1c343e29d26eff",
+      "9724101a6a0b13ec6023c18a6c1d4a87382e4503",
+      "e367b5cd896ffcb3272a0cb4485c494bfa76cd68",
+      "260f758135c8550297470410f049bedf21f0594c",
+      "2351301e2e8d4e463d11ff36b1db88ce066de86e",
+      "f1df9b82e134f119cb4f1a7afdb29609eae068d4",
+      "47afc0f8d1d6e7cb765f8beffad59b868603d693",
+      "4a6ae80d2c52a617b0d8b335fb14b1120d5bf7e8",
+      "ae58a98c9cda859c7f5ad000c7dafa46c159d09b"
+    ],
+    "sessions": []
+  }
+}

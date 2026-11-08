@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "id": "C14",
+  "name": "Wizard UX Improvements",
+  "description": "Fixed wizard dry-run to make no writes across all install branches, reordered prompts, added explanation text for optional features, tri-state multilingual flag, expanded summary, next-steps block, and overwrite warning for hand-edited config.",
+  "effort": "Mostly one large installer module plus a CLI option; no storage, migrations or outside services. Risky parts: gating every write path in three install branches, prompt reordering, and hand-edit detection without false positives.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 12,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 11,
+    "linesAdded": 2680,
+    "linesRemoved": 161
+  },
+  "usage": {
+    "matchedBy": "prompt",
+    "sessions": 1,
+    "agentTimeMinutes": 237,
+    "tokens": {
+      "input": 247618,
+      "output": 2622390,
+      "reasoning": 0,
+      "cacheRead": 484308719,
+      "cacheWrite": 11154756,
+      "total": 498333483
+    },
+    "costUsd": 119.77
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C14-wizard-ux-improvements-brief.md",
+      "Documentation/Completed/C14-wizard-ux-improvements-plan.md"
+    ],
+    "commits": [
+      "bf64452c2b8384c6164d34f8ee0871eb23e61247",
+      "baf206e08c1b938f211fafa65ef27502da101b94",
+      "880270cb2d12065e9020f8e3a3c0711950ffe879",
+      "c6cc7307a69a1f3c34f5527a717402e5b19b6ce7",
+      "0707c2782a755bd82abe6e818f676cd8088f89df",
+      "fb58f04f569df35df9dfb8a2cee63cf1552c5e76",
+      "02eb7db758c6f9315ebfac87a28b1451fd2aebbb",
+      "64e10900493642ffd3e67077e8a8473c4061e580",
+      "7eaf6b4d85c65d68c036952e188c74d156068abf",
+      "1170eb9c4251807f8b3ccf612651e0892fb096a9",
+      "f690aad40473673fc6caf163b7a33b731ec3fa10"
+    ],
+    "sessions": [
+      {
+        "harness": "omp",
+        "models": [
+          "anthropic/claude-sonnet-5-5"
+        ],
+        "id": "01a18ed5-41fc-7523-b6c5-939f96451df1",
+        "path": "/Users/manczg/.omp/agent/sessions/-Documents-development-archon-search/2026-10-30T22-01-43-164Z_01a18ed5-41fc-7523-b6c5-939f96451df1.jsonl",
+        "log": "/Users/manczg/.omp/agent/prompt-logs/archon-search-8daeee78061f/session_2026-10-30_22-01-43_01a18ed5-41fc-7523-b6c5-939f96451df1.md",
+        "prompts": [
+          {
+            "number": 23,
+            "at": "2026-11-01T19:33:47+00:00",
+            "text": "/iterative-review @Documentation/Backlog/interface-parity/00",
+            "reason": "names 5.5"
+          },
+          {
+            "number": 24,
+            "at": "2026-11-01T20:20:01+00:00",
+            "text": "[IMPORTANT: User invoked the \"options\" skill; follow its ins",
+            "reason": "follows prompt 23"
+          },
+          {
+            "number": 25,
+            "at": "2026-11-01T20:22:01+00:00",
+            "text": "B",
+            "reason": "follows prompt 23"
+          },
+          {
+            "number": 52,
+            "at": "2026-11-02T17:00:38+00:00",
+            "text": "/iterative-review both files with 3 cycles: 1. Documentation",
+            "reason": "names 5.5"
+          },
+          {
+            "number": 53,
+            "at": "2026-11-02T19:00:38+00:00",
+            "text": "What do you mean chat app? There are 3 interfaces: MCP, HTTP",
+            "reason": "follows prompt 52"
+          },
+          {
+            "number": 54,
+            "at": "2026-11-02T19:06:23+00:00",
+            "text": "Q1C, Q2A",
+            "reason": "follows prompt 52"
+          },
+          {
+            "number": 55,
+            "at": "2026-11-02T19:38:03+00:00",
+            "text": "Where is the brooks-review from the double-check list? You d",
+            "reason": "follows prompt 52"
+          },
+          {
+            "number": 59,
+            "at": "2026-11-02T20:24:29+00:00",
+            "text": "/iterative-review @Documentation/Backlog/interface-parity/01",
+            "reason": "names 5.5"
+          },
+          {
+            "number": 60,
+            "at": "2026-11-02T21:12:19+00:00",
+            "text": "don't run more cycles after the fix",
+            "reason": "follows prompt 59"
+          },
+          {
+            "number": 61,
+            "at": "2026-11-03T05:56:31+00:00",
+            "text": "D",
+            "reason": "follows prompt 59"
+          },
+          {
+            "number": 62,
+            "at": "2026-11-03T05:59:16+00:00",
+            "text": "update the plan as well.",
+            "reason": "follows prompt 59"
+          },
+          {
+            "number": 63,
+            "at": "2026-11-03T06:07:15+00:00",
+            "text": "/cle§",
+            "reason": "follows prompt 59"
+          }
+        ],
+        "agentTimeMinutes": 237,
+        "tokens": {
+          "input": 247618,
+          "output": 2622390,
+          "reasoning": 0,
+          "cacheRead": 484308719,
+          "cacheWrite": 11154756,
+          "total": 498333483
+        },
+        "costUsd": 119.77
+      }
+    ]
+  }
+}

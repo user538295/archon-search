@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "E2b",
+  "name": "Entity Graph Inspection Endpoint",
+  "description": "Two REST endpoints, single and cross-collection, return the knowledge graph as adjacency JSON or GraphML with derived salience, weight and provenance; plus two MCP summary tools, a mentions table, size caps and truncation.",
+  "effort": "Medium, backend only: new storage table written by the ingest hook with idempotent re-ingest, extractor change to keep chunk incidence, derived-at-read aggregation, two routes, export, MCP tools, config caps, API snapshot update. Hard part is delete-then-add idempotency.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 14,
+    "estimatedHours": 31.0
+  },
+  "git": {
+    "commits": 15,
+    "linesAdded": 4512,
+    "linesRemoved": 93
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e2b-graph-inspection-brief.md",
+      "Documentation/Completed/e2b-graph-inspection-team-plan.md"
+    ],
+    "commits": [
+      "bfdc8e78098fbef2894085a2f17a1176a21720ec",
+      "beca16b2f764845cb59c4505d6d821e996994be1",
+      "cc24961fc3da7d766dc4e0ab43f8c7f06419650f",
+      "16fb058bca0020518fd179307f8acb6514f4bbf5",
+      "15d4857a550a28df63829d3daae21a0b9366ac8f",
+      "1a919a6cef82815d81d83b3e30458c78bf89af22",
+      "d85a6915c40244569fd5da4030b65408e1f56dba",
+      "9b277e07b38b26df19286429a7a1ade3a42dca27",
+      "4876ba5f6359359b9ce562ed41d17cf21f6a6698",
+      "bf365d53056629115d6311d889077bfa0ae69b96",
+      "8b2be98aee5437dca2841eeadc7f779aa9f49a4a",
+      "28ce6e0178c888a7cdf2abdb18f4c463d45a310d",
+      "4f46e729194c470f3d6ed77a4a2d14d56a49776d",
+      "70a539b6a822c34f794ba7d6402036b4b2d7daf7",
+      "51c57ed716702ef2f152cbc920590dded82f4e68"
+    ],
+    "sessions": []
+  }
+}

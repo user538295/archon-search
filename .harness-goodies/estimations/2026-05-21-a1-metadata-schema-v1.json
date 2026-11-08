@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "id": "A1",
+  "name": "Metadata Schema v1",
+  "description": "End-to-end per-chunk metadata: file type, updated time and ingest source wired from parser through chunker into the store, exposed in REST and MCP search responses, plus an opt-in reindex-metadata backfill CLI and per-collection ingest locks.",
+  "effort": "Wide cross-cutting change: parser, chunker, store, REST, MCP, CLI, watcher, jobs. No schema migration but a backfill command, new in-process lock map, legacy value normalization, breaking MCP response shape, many unit and integration tests, docs updates.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 8,
+    "tasks": 19,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 23,
+    "linesAdded": 2508,
+    "linesRemoved": 135
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/A1-metadata-schema-v1-brief.md",
+      "Documentation/Completed/A1-metadata-schema-v1-plan.md"
+    ],
+    "commits": [
+      "58a50bff31268c85e1441269355d9591f46b4458",
+      "612d1ad615ecf757ec3c7d4340a1b6a7f6d5e104",
+      "9411b0b67c7a3fb2bad5cc607914f62eae918a73",
+      "a4f2bebde50f4b0ca1f22b6807c99ff989d7cf81",
+      "06c568c91725f8348309ec1d434c15ce06346853",
+      "1a709c0b81bca18732d42622b05c49634dbb6f7d",
+      "8218fd3b27af8ac6ab497e4d29b57a9aa7703e51",
+      "2a4fa9358898ee455e211e352bb2b1346af10efe",
+      "0109a209fb5828cebfbf5c59b9ac00383bbb9b3f",
+      "ddb9d288f13de5622fb6b0a5bcd704d33b6b6bb9",
+      "4b136255c78b70fd4cbb81178ba8918712b50fcf",
+      "90fe70fc9534e84bc8173bc37af3468ce8d83bf4",
+      "c556eb995a39a6ecb1b04f51982efa4b61197556",
+      "568f0633d77d85b0ca11f0676cf71f33343702f7",
+      "d6b2c35b28b865f30b5f0894fca0895bbddbd874",
+      "5522f1800446848211b8bd049dfcc79418b76f85",
+      "aa0550888c54e10ecc5ee161da3db8e8c4f86e6e",
+      "fced2a6b813d8842fc88f5fa1a5953da366c876d",
+      "d6389a279c1cb924fab65f7a1e1284bde8f3213c",
+      "236982efd8b15076094193cdaf578fdb00bd300c",
+      "435acc1987bad607d9ff178186d10957139c93ea",
+      "585bc2ae0946d82176122031f4aaeb02abf6b6d4",
+      "02a837498f8339668b79c9e65b4082aa8db42319"
+    ],
+    "sessions": []
+  }
+}

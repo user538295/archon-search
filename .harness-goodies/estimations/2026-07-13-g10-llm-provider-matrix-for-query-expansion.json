@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "G10",
+  "name": "LLM Provider Matrix for Query Expansion",
+  "description": "Operators can set a provider (anthropic, openai, ollama) for HyDE and RAG Fusion via config. A shared provider protocol wraps all three, status reports the active provider, and the install wizard offers provider selection.",
+  "effort": "Touches config, generators, app wiring, status API with schema snapshot, install wizard and optional extras. Refactors existing Anthropic code behind a protocol without behaviour change. Two new outside services, startup config guards, silent fallback and privacy invariants to preserve.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 12,
+    "estimatedHours": 29.0
+  },
+  "git": {
+    "commits": 14,
+    "linesAdded": 5689,
+    "linesRemoved": 669
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/g10-llm-provider-matrix-brief.md",
+      "Documentation/Completed/g10-llm-provider-matrix-team-plan.md"
+    ],
+    "commits": [
+      "89b31cb0b377c94c6bf3379243f02364b3b90c4c",
+      "61c344ef05e1ba5047554e85bf2a655526776631",
+      "c833df825c11d851570eb171b7da19d2554a92a5",
+      "6bf1cf81f61a893ba3e117a11574582743b2c9c2",
+      "d5b7ec5dd9b4a4ee5b54b53928bea804fd8dc707",
+      "3e11e394f913cc268be1fee17fd70bdfe836f13b",
+      "0870eeb4dde80f42b3679ce4eb71edbfc4ce0cd8",
+      "99bfa75819b118462fc8aa0a9da0e5f18757cecb",
+      "ec79fc78b6d2942c7d5cdfdedccc6dda670e5996",
+      "b8062bd52f0d01b06b1e4018bf0e8f08cb8d2d99",
+      "8bea4d406cde787773f7a98b822cc2014f96109d",
+      "e91f701c590323134607fe386aa874b9724b5cdd",
+      "943fc5d870abd30774da15d0ecc70070533c82ca",
+      "94ac2597a32bb8c2cfafce3fb5879599378d434c"
+    ],
+    "sessions": []
+  }
+}

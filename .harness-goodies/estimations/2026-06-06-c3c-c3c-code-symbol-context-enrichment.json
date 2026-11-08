@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "id": "C3c",
+  "name": "C3c Code Symbol Context Enrichment",
+  "description": "Code file chunks get symbol metadata (symbol type, containing function and class, module path, language subtype) derived from tree-sitter parse trees at ingest, for Python and TypeScript, degrading gracefully on parse or grammar failure.",
+  "effort": "New enricher module plus pipeline dispatch and an optional dependency group for coupled tree-sitter grammars. No storage migration since metadata is a dict. Risks: decorators, nested scopes, module path rules, graceful degradation, fixtures, eval queries.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 8,
+    "tasks": 12,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 13,
+    "linesAdded": 3502,
+    "linesRemoved": 87
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C3c-code-symbol-context-brief.md",
+      "Documentation/Completed/C3c-code-symbol-context-plan.md"
+    ],
+    "commits": [
+      "60c50f960216a270a343c40b1e58cbb6e974bb54",
+      "fb2be564465c7ad7125c5e3ac8c86b221c2dc0df",
+      "367f616cad97f07aafbe36faf962d914ef7b88bb",
+      "a3b24e776a797b5826f72816d26a58c847d1bb73",
+      "8540de767d5d05ec2facdfe9c514202c22370050",
+      "86604a1df570509295da5aa25d0ff667b03ba4da",
+      "d53273284d839f8dc990c6936c681ce2a55c2855",
+      "c8b7dc1173fb486b22ebe799ddd2a873f62560e3",
+      "fd10b93ca92120e3db74cddcdeb840398c37b147",
+      "c551132852ad7c7b18aca2448cb67886c2dc37f4",
+      "10803f0d08b5865fbb2da3fda74904d9fe0f0cc0",
+      "cc514184ae1431618c1ab0e0e2123317bca0941b",
+      "eb9d4a836e6686b28a9de76c685d3d17e8b19942"
+    ],
+    "sessions": []
+  }
+}

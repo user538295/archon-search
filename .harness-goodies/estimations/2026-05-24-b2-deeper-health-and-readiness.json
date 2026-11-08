@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "B2",
+  "name": "Deeper Health and Readiness",
+  "description": "Added an unauthenticated GET /ready endpoint gated on a cached storage ping, kept /health as liveness, and enriched authenticated /status with a readiness block: model warmth, job counts, index states, watcher report. Updated security, ops and error docs.",
+  "effort": "Medium, spread over store, embedder, reranker, pipeline, job store, schemas, routes, auth middleware and three architecture docs. No migrations or outside services. Care needed to keep warmth reads free of model loads, avoid leaking topology, and update protocol mocks in existing tests.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 7,
+    "tasks": 11,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 14,
+    "linesAdded": 4258,
+    "linesRemoved": 2267
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/B2-deeper-health-readiness-brief.md",
+      "Documentation/Completed/B2-deeper-health-readiness-plan.md"
+    ],
+    "commits": [
+      "15e63386a1b1b240b1d786c808bc77d184873b00",
+      "6c61c2d6f10b872a2291cb93fe6b4498eccb4dd0",
+      "1abf17a29f686a0797b052241504c5f13aa936e7",
+      "03e38132140ec3ea5ef7bbbb2c2870085d900af9",
+      "00bf4543bba82cc9f2834394a26ccf97202fad07",
+      "46ed278f5632846ebc8154090f67c2cab1dd263f",
+      "e5aa575f9c8302f454523f0a3037a20d843f4f43",
+      "fa2323c335de3016751b3aafb1362570b504ed46",
+      "d8d46b7fc3f73b518323ca85c004e1cc8fb7a41b",
+      "7a108dd7984115dfd8584bf628d9808781444b99",
+      "94679e631f6a55aa4073294b02e821ce90d24329",
+      "412357c68b69285f2330cc8d1e0dcfb7e9046781",
+      "72f84fc90ef9993bfbed2340c2a19f539cd8fe6b",
+      "95cb265f4ea932ff7e843fbf2e11fbd65a770c36"
+    ],
+    "sessions": []
+  }
+}

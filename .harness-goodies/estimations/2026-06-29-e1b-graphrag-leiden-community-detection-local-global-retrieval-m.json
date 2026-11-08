@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "id": "e1b",
+  "name": "GraphRAG Leiden Community Detection + Local/Global Retrieval Modes",
+  "description": "Adds a build-communities CLI that clusters the entity graph with Leiden, stores communities with MMR-picked representative chunks (optional LLM summary), and adds local and global graph_mode to search (REST and MCP), status stats and eval gate.",
+  "effort": "Large: new community builder with Leiden dependency, new per-collection LanceDB table, pipeline dispatch refactor with multi-collection fanout, REST, MCP and status changes, new CLI group, eval fixtures and gate. Tuning of clustering parameters and fallback edge cases are risky.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 18,
+    "estimatedHours": 47.5
+  },
+  "git": {
+    "commits": 20,
+    "linesAdded": 10216,
+    "linesRemoved": 121
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e1b-graphrag-leiden-local-global-modes-brief.md",
+      "Documentation/Completed/e1b-graphrag-leiden-local-global-modes-team-plan.md"
+    ],
+    "commits": [
+      "160852303efc6d49877b1fa37f5c0a8c3b8a8b75",
+      "adcad531e82d2993e77fa551c718b5dcd89e836e",
+      "1c91caa5cd3b611bf5a1051a5f31a37771fde81f",
+      "904ae0ae658cbf91974b7886457bc1f852184ebe",
+      "bad5b3dcd2d8af0486c036a32d988fde018680b0",
+      "7d72dad3cdb1ea70a2e437725dbcbcb7e139d2c2",
+      "9bcd62a573c6ae73d435dd067defb864364f4326",
+      "e05a754611abfe1c28516b94f2bb7492edf0c108",
+      "bdc11b566bf436d5f971b284ef56cc0e6751a02d",
+      "c6e1c181197b24b8eefb10fb2d24990a1feeb6df",
+      "3dd7f1f8453454c1aa52d225d9dd8a58a1c7fc04",
+      "70529db996cacdc4dceb1e35cca45009e3471ae4",
+      "29ad1e64ab744f4001b8e542caf77b17cd754164",
+      "b27f5297bf480c35026834a26fe8fae5e1a7bae2",
+      "1d609419b6afefc2aa374e137777a5aad858ed20",
+      "844e9b87ac46af49e21a49efe57325a734a986df",
+      "1b008253097fb5411f015947b0071892abffd5ed",
+      "5330b4ea2c7ea489e7b893a65875753250828c23",
+      "5d7feb57f2304e19f2f528d126829942436302a3",
+      "123feb21ffc03e2599bc2c9b6b23f52e5de42fa0"
+    ],
+    "sessions": []
+  }
+}

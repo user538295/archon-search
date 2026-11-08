@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": null,
+  "name": "Docker CLI Smoke Tests",
+  "description": "Fixes CLI crashes inside Docker: status skips the service layer and uses the HTTP endpoint, while start, stop, install and uninstall print a clean container-mode message. Adds a smoke test suite run inside the test container covering every CLI command group.",
+  "effort": "Small production changes across a few CLI command files, plus a new smoke test directory with a self-spawned server fixture. No storage or migrations. Container-only behaviour needs a real image to verify; test-first approach. No CI wiring.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 9,
+    "estimatedHours": 24.0
+  },
+  "git": {
+    "commits": 11,
+    "linesAdded": 1514,
+    "linesRemoved": 165
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/docker-cli-smoke-tests-brief.md",
+      "Documentation/Completed/docker-cli-smoke-tests-tasks.md",
+      "Documentation/Completed/docker-cli-smoke-tests-team-plan.md"
+    ],
+    "commits": [
+      "11db7c8c8f7f894560eb539097d29cd75a007008",
+      "09848e868c271fa3f1c52d37dd314945b4dc3e6e",
+      "8f4cbdfb10cd763a5d70281ded886cbba78e7b0b",
+      "a04a43ee5b2f93b154a5a553278418d5ef50ac3f",
+      "e69be5d33cbe3cd34029e9dd6ef94c474b418e8a",
+      "b72dcb107e7a9f572c4a907761593fd55e543576",
+      "fa94ad086dd8b6ba9c704c3900a6c89e813ed219",
+      "ead119d37fbf3f113fd310bd00f7a8bf54f782b1",
+      "c361cff67336aa4c66980fcff1f9e06d39361445",
+      "9a075d89de1adf0a671958f8e27969fab4f70489",
+      "403b15857c00da5242f8c1f79e39e03391c3c908"
+    ],
+    "sessions": []
+  }
+}

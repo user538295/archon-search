@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "E0a",
+  "name": "File-Type Completeness",
+  "description": "Made common document formats ingest on a fresh install: declared markitdown (and olefile) as core dependencies, added legacy Office, odt, rtf, epub, eml and msg extensions to the office parser, tsv to plain text, a clear ImportError message, and docs.",
+  "effort": "Small: a dependency declaration, extension list additions and one error branch in the parser, plus a manual table and integration smoke tests. No storage or migrations. Unknown was whether msg needed an extra transitive dependency; it did.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 1,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 3,
+    "tasks": 6,
+    "estimatedHours": 6.5
+  },
+  "git": {
+    "commits": 8,
+    "linesAdded": 1278,
+    "linesRemoved": 74
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e0a-file-type-completeness-brief.md",
+      "Documentation/Completed/e0a-file-type-completeness-team-plan.md"
+    ],
+    "commits": [
+      "64d6e17ebef9416a0a1f5749a77496ab5271d105",
+      "c78c03e088b3c94d8f6327ba5502fad88cadbdaf",
+      "5b89f34363543476f0d36cb57581b947bb78f1de",
+      "0a6c52882bd8eddd9b96a51967331f67365eac3d",
+      "71a46d5043a4ce562e2031b4273d0890c0098097",
+      "79d5401c98f6d4a110218e754ec74cf55a10699f",
+      "1ab3b350ed70dc60b3a84bff39c731a9b713def8",
+      "955b2adae77d7fabf2614d2d74b8a9ec6c4b6067"
+    ],
+    "sessions": []
+  }
+}

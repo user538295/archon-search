@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "GBC110",
+  "name": "Per-Collection Community Rebuild via REST API",
+  "description": "New POST /graph/{collection}/rebuild-communities endpoint enqueues a tracked async community-rebuild job; the graph build-communities CLI now proxies to the server with --wait and a server-not-running error, with duplicate-rebuild 409 guard and shared rebuild lock.",
+  "effort": "Touches route, CLI, job store, collection metadata (new nullable column, no migration), community builder and maintenance loop. Concurrency is the risky part: shared module-level lock registry, crash-recovery lazy clear, GC-versus-user race. Needs a graph-enabled smoke fixture and end-to-end test.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 12,
+    "estimatedHours": 37.0
+  },
+  "git": {
+    "commits": 13,
+    "linesAdded": 3414,
+    "linesRemoved": 520
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/2026-07-15-110-graph-build-communities-bypass-brief.md",
+      "Documentation/Completed/2026-07-15-110-graph-build-communities-bypass-tasks.md",
+      "Documentation/Completed/2026-07-15-110-graph-build-communities-bypass-team-plan.md"
+    ],
+    "commits": [
+      "dde9b1fb7f4915ab8051416647ee3e2cac940d09",
+      "078ff670e167dd73b25f2d218afa3feac00f4749",
+      "c8b775fd0029ec6ef42811b0ca124f89299b3113",
+      "0949ce86345765151b1f2d4cbb56e4b0ef8d8dda",
+      "dfc198ac9424a4927c1661e3e9325f65f28e903c",
+      "7706530a501747004025853a8783753c9ecd9d05",
+      "1a6e21b80ee1e866e8539fc1af41eab924924fa8",
+      "8d8bf23728f5442eaab67ac703f4f0e724bef752",
+      "ecb9618b298d55aea8cc0705f5d0b6ea27db6435",
+      "3e17c8fe83622afb1eb0b6517c480b5851d34379",
+      "ecf8935a61db8378047026f3998a923c06471885",
+      "307de6065f0b8b2abc165a9e8340f525f739115a",
+      "7706dc75a68c203f4607e3860ca010990b901bf4"
+    ],
+    "sessions": []
+  }
+}

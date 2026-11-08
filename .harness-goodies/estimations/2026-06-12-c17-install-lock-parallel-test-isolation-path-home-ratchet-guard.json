@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "C17",
+  "name": "Install-Lock Parallel-Test Isolation + Path.home() Ratchet Guard",
+  "description": "Install lock path moved onto the configurable data dir, per-worker isolated data dir in the test fixtures with an opt-out marker, a hash-pinned allowlist test that blocks new hardcoded home-path calls, and a two-process lock test.",
+  "effort": "Small source change but wide test-infrastructure risk: an autouse fixture alters every test, five fallback tests need an opt-out marker, plus a new scan guard and multiprocess tests. No storage, migrations or outside services; three separable pull requests.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 10,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 11,
+    "linesAdded": 1344,
+    "linesRemoved": 75
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C17-install-lock-parallel-isolation-brief.md",
+      "Documentation/Completed/C17-install-lock-parallel-isolation-plan.md"
+    ],
+    "commits": [
+      "cf19951831ddcf05f32f26fa62c373977e321d60",
+      "4d4d538e3e06754b7afcf0b3bd50d52162148a58",
+      "f3376c3b62ddf59c0b7be8564b7ec5a36fab52ff",
+      "f7e4dcdfaa0be087479e3e8d19ecdaf2222c89f9",
+      "3f75adb45ecf39541c628baf48fc80be5150dd33",
+      "3d83e73f442137c7c015076f1c7eafecaabf9c7e",
+      "78574a533abb113a395590d4204cfd4a43f1ae97",
+      "d73500113bcec34d41ca0181cd019ea73d76307f",
+      "b77613381c2fe67a48ce5acfb74e6c0a006bfa4b",
+      "d13c04dff37f706441d2b7d157497ebf1cc39186",
+      "fe1e12975c8b7de9c8b0fbd8f7c11ab8f8b7621d"
+    ],
+    "sessions": []
+  }
+}

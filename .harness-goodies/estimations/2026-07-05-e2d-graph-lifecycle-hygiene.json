@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "E2d",
+  "name": "Graph Lifecycle Hygiene",
+  "description": "Deleting a document removes its graph mentions at once; a maintenance pass drops orphan nodes, edges and stale mentions, rebuilds communities in the background at low priority, isolates graph tables per namespace, and shows graph freshness in status.",
+  "effort": "Large cross-cutting change: graph table names and every store call gain a namespace, new garbage-collection methods and policy, background rebuild job with process priority, config, status schema, CLI output. No data migration, but upgrade warning for old tables; races and platform limits.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 16,
+    "estimatedHours": 38.0
+  },
+  "git": {
+    "commits": 16,
+    "linesAdded": 5743,
+    "linesRemoved": 449
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e2d-graph-lifecycle-hygiene-brief.md",
+      "Documentation/Completed/e2d-graph-lifecycle-hygiene-team-plan.md"
+    ],
+    "commits": [
+      "afca4f0614447f42a9e4e939074964debc8c91db",
+      "76b233edca488e25ae428a6c435010b5b459e520",
+      "5f661988ade7f7297cbfa10a7c4f5b13f17a6d7b",
+      "7e5baddf88a1275739aab89ebfe55eb25327e5dd",
+      "fec5f6f0595ab23c83b6734eaabe049b47c45171",
+      "e54da52010573dadcf626378ff5b94e5eaf67eea",
+      "0d3c81f7f06f1d22f3890fe10f28879d407dc1af",
+      "cbc1f606eb0740088f63b1162545f790192fd3a5",
+      "c6739a80df31891ba9f18a78bb02f63652695185",
+      "646cc649152ad97af9c158c629aeacacd817edb7",
+      "3c5254e9097d4bb9bcd765adc5560becbbf99e52",
+      "dfab539c857613f5f3af98b7fb20312d6007ea35",
+      "517f51eeefe431ecacea2c110e08340c84d8c87b",
+      "d3577413a7f16bb648e6b71591890e3271eb644f",
+      "894e064592279a04ded0d3c15a67a11de2c12420",
+      "ea16115f8559e3b5ee8b99db7cdad92038dc46f1"
+    ],
+    "sessions": []
+  }
+}

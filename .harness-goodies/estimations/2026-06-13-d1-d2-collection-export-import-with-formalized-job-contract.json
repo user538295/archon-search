@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "id": "D1-D2",
+  "name": "Collection Export/Import with Formalized Job Contract",
+  "description": "Export a collection to a tar.gz archive and import it back via REST, CLI and MCP tools. Adds queued bulk jobs with a scheduler, structured progress, checkpointed resume after crash, job listing, and path allowlist safety.",
+  "effort": "Large, cross-cutting: new job kinds and queued status, background scheduler, archive format with manifest, path-safety validation, config section, endpoints, MCP tools and CLI. Checkpoint and resume design is the risky part; no new database storage.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 13,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 9,
+    "tasks": 18,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 21,
+    "linesAdded": 6521,
+    "linesRemoved": 85
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/D1-D2-collection-export-import-brief.md",
+      "Documentation/Completed/D1-D2-collection-export-import-plan.md"
+    ],
+    "commits": [
+      "7f955831e61d7ad63d4656a45941b3d7d3625f80",
+      "1940b24915d0a136aca79277b1932ac0828305cd",
+      "d66cc9ad9d4a8f77c34d623713ad37080519c38a",
+      "fd8cfa64be26ef26414a020a52f2336cbabacbb1",
+      "bd30f0e80be448a0eda50b2af8d548af42202a38",
+      "a2315ddadb9950f39fcb238b2cf48e20f94711af",
+      "8fa0f555eed2b423d4b1c0e135c6322680a284e1",
+      "7ea70a6bef8a59f9b89356d81fa4079c9dd1ada7",
+      "68e35e759e115688c0f76da515646c27fc724a66",
+      "42e047ae495bffa03a874445d37d2f1773960770",
+      "d9a49e5e664a7ad41319871c8a1d2eb0c99ed222",
+      "5e80ec734f9e6aef5e59369768ea44ee74ec67b6",
+      "d7ab22e9c1e556d5ceb78ee74cbfd3ba90044b10",
+      "a44db1188853352369328f7fd9101acf00c4cd27",
+      "183696d92a87d413b080c5e2c2548ae537d4d6c4",
+      "241b3cf7ea5ff312907e265611f81844f5008649",
+      "d80d93ce64986bf6cbbb311efd57e5e6c45d439d",
+      "6d253ddc74a5f56fa8476b52a01cc83a9763ee05",
+      "5cc2520e773f19b2bc1189440a96bcc42c27c26f",
+      "c99613b35d78c88fc2132abf494462a6887a8415",
+      "d8b4e6696147b68eb0cf9360827d3666e5f83fb6"
+    ],
+    "sessions": []
+  }
+}

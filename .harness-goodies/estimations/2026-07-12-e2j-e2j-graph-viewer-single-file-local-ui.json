@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "E2j",
+  "name": "E2j — Graph Viewer (Single-File Local UI)",
+  "description": "Interactive knowledge-graph viewer served at GET /graph/{collection}/view as one self-contained HTML page with inlined force-layout library, embedded token, node search, click-to-inspect panel and truncation banner.",
+  "effort": "Mostly one large front-end HTML resource with an inlined library, plus one route, one additive response field and an auth middleware exception for query-string tokens. Security of token exposure and offline-only constraint are the risky parts. Manual browser testing needed.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 3,
+    "tasks": 7,
+    "estimatedHours": 24.0
+  },
+  "git": {
+    "commits": 7,
+    "linesAdded": 2948,
+    "linesRemoved": 142
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e2j-graph-viewer-brief.md",
+      "Documentation/Completed/e2j-graph-viewer-team-plan.md"
+    ],
+    "commits": [
+      "68fc95d037791b8b5f579431a0275e94399ac168",
+      "9b4d211c86263829ba6076b18bbc95f24d7530ec",
+      "7bd0699c807bceaf3f1e616ccb1469abeb33daf3",
+      "5583976b7a2dbaa909051e2b623bcb8c1c45c9d0",
+      "b26da4fa989a0f7966f7ab9dbfe61b1a450354e6",
+      "c635cf61145fe36370bef62649f7c13e1e09d577",
+      "d43430750b1dcccff3798b42625494bb74558d5e"
+    ],
+    "sessions": []
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "E0C",
+  "name": "E0c — API Surface Fixes",
+  "description": "Four API fixes: REST cursor-paginated list_documents endpoint with MCP cursor, max_fanout and top_k cap read from TOML config, status endpoint shows search limits, description sampling made random and wider.",
+  "effort": "Backend only, no migrations. Touches store, pipeline, config, schemas, several route handlers and MCP tool. Moderate risk: moving validation out of Pydantic into handlers, cursor over in-memory aggregation, schema change for clients, LanceDB random support unknown.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 10,
+    "estimatedHours": 24.0
+  },
+  "git": {
+    "commits": 14,
+    "linesAdded": 3131,
+    "linesRemoved": 138
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e0c-api-surface-fixes-brief.md",
+      "Documentation/Completed/e0c-api-surface-fixes-team-plan.md"
+    ],
+    "commits": [
+      "1ee5910e200c2bebf2ed26f23cbfdff334b73e37",
+      "b8dfc3f684de1d9a70758e25d56e9e4eda50fac7",
+      "5f005daa7cc42d00e4a76cf28a4e90d91bda2fbc",
+      "bb035635f88da9a18b49a79860cb83eeeb98395c",
+      "daab19567b357c25825e80a4b28b2f90c834eafe",
+      "025dd8f543450057307ea2b5989e9c9f7ebb3cc7",
+      "22294b1a630a978795a1956c6a1fe13eddfeca5f",
+      "96cec9c7d7f25637be837ead4ddbde601d198364",
+      "c081f11c2a0041fed4e5738a50429d95b7fda9a0",
+      "55f614621f641e150f5c45c418068488faf89d95",
+      "051734815cfac6f6a4856ab2f8bb764c11389ce5",
+      "b5cd7c2b59c6ab60a076371e32103f3885a3933a",
+      "e9681d407a02957939951d61123de70a78959000",
+      "aa0665ea97493468a8e616ca162b405a0145d9f4"
+    ],
+    "sessions": []
+  }
+}

@@ -1,0 +1,351 @@
+{
+  "version": 1,
+  "id": "S0",
+  "name": "Application-service layer foundation",
+  "description": "Application-service layer foundation: new services/ package with four shared modules moved out of server/ (search budget, HyDE, validators, authz policy), an AST layer-boundary test, a parity registry test, CLI helper consolidation and architecture docs.",
+  "effort": "Mostly structural moves with no wire change, no storage, migrations or outside services. Risk is many tests patching old module paths by string, plus two new guard test suites seeded from the live tree and a wide documentation sweep across architecture docs and agent files.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 13,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 9,
+    "tasks": 27,
+    "estimatedHours": 75.5
+  },
+  "git": {
+    "commits": 28,
+    "linesAdded": 4500,
+    "linesRemoved": 695
+  },
+  "usage": {
+    "matchedBy": "prompt",
+    "sessions": 2,
+    "agentTimeMinutes": 811,
+    "tokens": {
+      "input": 768916,
+      "output": 3674367,
+      "reasoning": 0,
+      "cacheRead": 514374820,
+      "cacheWrite": 19286075,
+      "total": 538104178
+    },
+    "costUsd": 166.86
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Backlog/interface-parity/00_service_layer_foundation-tasks.md",
+      "Documentation/Backlog/interface-parity/00_service_layer_foundation-team-plan.md",
+      "Documentation/Backlog/interface-parity/00_service_layer_foundation_brief.md"
+    ],
+    "commits": [
+      "dee2861341702e769d1bc130993a2b1e7f94250e",
+      "a069bf5d1d3c1472a3e7d56ce7b06df1a3b813d5",
+      "3e9a7efd61de8628ebd3963c54d17933edf8a36d",
+      "3554b638c5119cee1cd7ff7c27aab897bdf56f0e",
+      "1f31a38489cc5b590d8b5b9636d798f043c7ed83",
+      "94c35b5fad33654b1a1794352ac57d547f954645",
+      "9a9c915c781293be2ca46ff43795a7c89dc9580d",
+      "c87223286c3ad94ff04109fda2ee8999913b9146",
+      "f745ade1c0444df010431a9251556c1bba5cbe72",
+      "3d174ec099278d6d598d7a56a5decaffe9369185",
+      "4120f71ab60f03408064b53629d88857390a523b",
+      "61a8a77a162f2adc5cc7ee580012efb896ffab50",
+      "ba293eb9efaa161dfa81bc8af86f22cd90083108",
+      "8fc55c056f3726e1ad81a48439418d0c270a0a89",
+      "6624a17d2db902282645cf488dafeb17cf478f3a",
+      "9284bef910285cba934af94799ff29c1e538a0aa",
+      "23c174e325c472f5296058907ef6e0b494ea7ef7",
+      "f4b09ffcbef34897143fb91b0a7b526dc4f50bc4",
+      "58bde5f7ca2a8ec472ce567d77ff876168d559f1",
+      "9f7ccdc5542f70d10dcd7b3785ed51786cd9f08b",
+      "0ca5def0b43a6ae3fe04c0e716982c9d205188bb",
+      "8c96f91d67ce59abee8f07b8175cbef2175f63ff",
+      "437c83062cb6620fe19f2503ff0a1231d0461e4c",
+      "7e6b46ee4ff25c173e4ef2f2bfb673f4d407aea2",
+      "d71a180c04f35646e7b68d03cc16b17e222f3f57",
+      "0aef74474c2177aa92d061e551e2e7213a3247d4",
+      "82a1ed9690c77648d45996480e0f815941c939c6",
+      "1c147e7e0339ae3960ed1a5ab3fe1c87b3f5ca01"
+    ],
+    "sessions": [
+      {
+        "harness": "omp",
+        "models": [
+          "anthropic/claude-sonnet-5-5"
+        ],
+        "id": "01a18c4a-9a1a-73ed-9923-80a8b7f7d104",
+        "path": "/Users/manczg/.omp/agent/sessions/-Documents-development-archon-search/2026-10-30T10-11-01-786Z_01a18c4a-9a1a-73ed-9923-80a8b7f7d104.jsonl",
+        "log": "/Users/manczg/.omp/agent/prompt-logs/archon-search-8daeee78061f/session_2026-10-30_10-11-01_01a18c4a-9a1a-73ed-9923-80a8b7f7d104.md",
+        "prompts": [
+          {
+            "number": 1,
+            "at": "2026-10-30T10:11:44+00:00",
+            "text": "how to run query via cli? from http there is an example in t",
+            "reason": "before prompt 8"
+          },
+          {
+            "number": 2,
+            "at": "2026-10-30T10:13:35+00:00",
+            "text": "I thought that every feature mirrored between MCP, HTTP and",
+            "reason": "before prompt 8"
+          },
+          {
+            "number": 3,
+            "at": "2026-10-30T10:22:26+00:00",
+            "text": "Ok, I think if we have a feature via an interface it should",
+            "reason": "before prompt 8"
+          },
+          {
+            "number": 4,
+            "at": "2026-10-30T10:39:49+00:00",
+            "text": "I accept your proposal. The layer above of the core shouldn'",
+            "reason": "before prompt 8"
+          },
+          {
+            "number": 5,
+            "at": "2026-10-30T11:00:12+00:00",
+            "text": "1. Can we use an MCP-agent-admin-key instead of the current",
+            "reason": "before prompt 8"
+          },
+          {
+            "number": 6,
+            "at": "2026-10-30T11:28:43+00:00",
+            "text": "1. If we revoke the mcp admin right, then the key should be",
+            "reason": "before prompt 8"
+          },
+          {
+            "number": 7,
+            "at": "2026-10-30T11:34:31+00:00",
+            "text": "1. ok 2. ok, brief 0 id the contract, and refer to it from t",
+            "reason": "before prompt 8"
+          },
+          {
+            "number": 8,
+            "at": "2026-10-30T12:31:28+00:00",
+            "text": "use checkmarks isntead of these: ☐ not started, ◐ in progres",
+            "reason": "names 00_service_layer_foundation_brief.md"
+          },
+          {
+            "number": 9,
+            "at": "2026-10-30T12:34:10+00:00",
+            "text": "[IMPORTANT: User invoked the \"plan-maker-for-team\" skill; fo",
+            "reason": "names Documentation/Backlog/interface-parity/00_service_layer_foundation_brief.md"
+          },
+          {
+            "number": 10,
+            "at": "2026-10-30T13:58:13+00:00",
+            "text": "[IMPORTANT: User invoked the \"options\" skill; follow its ins",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 11,
+            "at": "2026-10-30T14:02:54+00:00",
+            "text": "I already aksed you to use service layer so the answer is st",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 12,
+            "at": "2026-10-30T14:06:41+00:00",
+            "text": "[IMPORTANT: User invoked the \"commit\" skill; follow its inst",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 13,
+            "at": "2026-10-30T14:07:58+00:00",
+            "text": "[IMPORTANT: User invoked the \"iterative-review\" skill; follo",
+            "reason": "names Documentation/Backlog/interface-parity/00_service_layer_foundation-team-plan.md"
+          },
+          {
+            "number": 14,
+            "at": "2026-10-30T14:54:26+00:00",
+            "text": "[IMPORTANT: User invoked the \"commit\" skill; follow its inst",
+            "reason": "made 1 of its commits"
+          }
+        ],
+        "agentTimeMinutes": 71,
+        "tokens": {
+          "input": 71001,
+          "output": 911270,
+          "reasoning": 0,
+          "cacheRead": 106774431,
+          "cacheWrite": 4552892,
+          "total": 112309594
+        },
+        "costUsd": 38.14
+      },
+      {
+        "harness": "omp",
+        "models": [
+          "anthropic/claude-sonnet-5-5"
+        ],
+        "id": "01a18ed5-41fc-7523-b6c5-939f96451df1",
+        "path": "/Users/manczg/.omp/agent/sessions/-Documents-development-archon-search/2026-10-30T22-01-43-164Z_01a18ed5-41fc-7523-b6c5-939f96451df1.jsonl",
+        "log": "/Users/manczg/.omp/agent/prompt-logs/archon-search-8daeee78061f/session_2026-10-30_22-01-43_01a18ed5-41fc-7523-b6c5-939f96451df1.md",
+        "prompts": [
+          {
+            "number": 22,
+            "at": "2026-11-01T18:58:48+00:00",
+            "text": "/create-tasks Documentation/Backlog/interface-parity/ 00_ser",
+            "reason": "names 00_service_layer_foundation-team-plan.md"
+          },
+          {
+            "number": 23,
+            "at": "2026-11-01T19:33:47+00:00",
+            "text": "/iterative-review @Documentation/Backlog/interface-parity/00",
+            "reason": "names Documentation/Backlog/interface-parity/00_service_layer_foundation-tasks.md"
+          },
+          {
+            "number": 24,
+            "at": "2026-11-01T20:20:01+00:00",
+            "text": "[IMPORTANT: User invoked the \"options\" skill; follow its ins",
+            "reason": "follows prompt 23"
+          },
+          {
+            "number": 25,
+            "at": "2026-11-01T20:22:01+00:00",
+            "text": "B",
+            "reason": "follows prompt 23"
+          },
+          {
+            "number": 26,
+            "at": "2026-11-01T20:22:48+00:00",
+            "text": "[IMPORTANT: User invoked the \"commit\" skill; follow its inst",
+            "reason": "made 1 of its commits"
+          },
+          {
+            "number": 27,
+            "at": "2026-11-01T20:23:08+00:00",
+            "text": "[IMPORTANT: User invoked the \"implement\" skill; follow its i",
+            "reason": "names Documentation/Backlog/interface-parity/00_service_layer_foundation-tasks.md"
+          },
+          {
+            "number": 28,
+            "at": "2026-11-01T21:50:04+00:00",
+            "text": "[IMPORTANT: User invoked the \"status-report\" skill; follow i",
+            "reason": "made 1 of its commits"
+          },
+          {
+            "number": 29,
+            "at": "2026-11-01T21:53:01+00:00",
+            "text": "follow the skill instructions strictly. Don't prose.",
+            "reason": "follows prompt 28"
+          },
+          {
+            "number": 30,
+            "at": "2026-11-01T21:53:29+00:00",
+            "text": "[IMPORTANT: User invoked the \"status-report\" skill; follow i",
+            "reason": "follows prompt 28"
+          },
+          {
+            "number": 31,
+            "at": "2026-11-01T21:54:25+00:00",
+            "text": "show me the output of the status-repot skill exactly as it i",
+            "reason": "follows prompt 28"
+          },
+          {
+            "number": 32,
+            "at": "2026-11-01T21:55:18+00:00",
+            "text": "don't fucking mess with me. Show the fucking output of the s",
+            "reason": "made 20 of its commits"
+          },
+          {
+            "number": 33,
+            "at": "2026-11-02T05:42:55+00:00",
+            "text": "[IMPORTANT: User invoked the \"status-report\" skill; follow i",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 34,
+            "at": "2026-11-02T05:43:32+00:00",
+            "text": "this is not the expected format",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 35,
+            "at": "2026-11-02T05:44:52+00:00",
+            "text": "read the status-report skil ouput format and give the status",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 36,
+            "at": "2026-11-02T05:46:10+00:00",
+            "text": "don't fucking mess with me!!!!!!!!!! give it in the fucking",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 37,
+            "at": "2026-11-02T05:47:46+00:00",
+            "text": "finally! why did I have to ask 3 times???",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 38,
+            "at": "2026-11-02T05:49:14+00:00",
+            "text": "please stop the wokr. I'll resume later",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 39,
+            "at": "2026-11-02T06:50:26+00:00",
+            "text": "continue",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 40,
+            "at": "2026-11-02T08:45:59+00:00",
+            "text": "please stop",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 41,
+            "at": "2026-11-02T08:46:19+00:00",
+            "text": "stop all please",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 42,
+            "at": "2026-11-02T09:04:07+00:00",
+            "text": "ok, you can resume now again. tahnks",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 43,
+            "at": "2026-11-02T09:04:52+00:00",
+            "text": "Why does this last task run so long? (even if I exclude my s",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 44,
+            "at": "2026-11-02T09:45:31+00:00",
+            "text": "[IMPORTANT: User invoked the \"status-report\" skill; follow i",
+            "reason": "follows prompt 32"
+          },
+          {
+            "number": 45,
+            "at": "2026-11-02T09:46:57+00:00",
+            "text": "decompose the last T-6 Close out task next time to be able t",
+            "reason": "made 1 of its commits"
+          }
+        ],
+        "agentTimeMinutes": 740,
+        "tokens": {
+          "input": 697915,
+          "output": 2763097,
+          "reasoning": 0,
+          "cacheRead": 407600389,
+          "cacheWrite": 14733183,
+          "total": 425794584
+        },
+        "costUsd": 128.72
+      }
+    ]
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "id": "D5",
+  "name": "Maintenance Jobs and Policies",
+  "description": "Configurable in-process maintenance loop that periodically optimizes full-text indexes, removes orphaned chunks, and retries failed ingest jobs. Adds per-collection health in GET /status, a manual trigger endpoint, a state file, config section, and CLI status/run commands.",
+  "effort": "Spans config, a new background loop in the app lifespan, job store and model changes, schemas, a new route, status enrichment, and a new CLI group. New state file, no outside services. Risks: store locking, skipping watcher-managed collections, retry lineage.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 7,
+    "tasks": 16,
+    "estimatedHours": 39.5
+  },
+  "git": {
+    "commits": 19,
+    "linesAdded": 6239,
+    "linesRemoved": 209
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/D5-maintenance-jobs-policies-brief.md",
+      "Documentation/Completed/D5-maintenance-jobs-policies-team-plan.md"
+    ],
+    "commits": [
+      "2e8a14f8e14d001c448fd2d1b1044c0ba54ebc45",
+      "7ddbc2156323ac78d6bb4a55dfe8249f42c4bad8",
+      "5649358798909cc49903cd309cfb8c47859cab22",
+      "8518c84b61e0e12c2d0493c717484da1ec8dc9b9",
+      "5aa9d4ecf4ba43f1d2e0d008d83c1a03d93b317c",
+      "ecd8874d9a6c4edb208ddfbd4c9a59cc8fe0e921",
+      "bcf8f7687374b5f0fb0f990f50acd0592eccd2d4",
+      "1e8acd91551573bfcad6b32137c0af33839dca6d",
+      "013d60ab125bbac704ec9a60012e2adae7560380",
+      "4732b782fa8827aeb25fd96ade24223a18271d97",
+      "088fdd1eeb4f6d14960c625e418d363b7b137ab9",
+      "252e74ae589acbb38cc89f62cc011ac494177580",
+      "7aa07668df8a6a5f81696f2b7a51a682790e9813",
+      "23a2b0f34b2d96008dc6f45a28b66ff457b42e03",
+      "50b1a45de51e4d7f3e31431a7536378e10be3f6f",
+      "4c90a7db17be942319bbf4e584da90affd1aaad9",
+      "07c5c4ec2fd72e13994aeaa6aa8f2b4899060478",
+      "eb171759917449266b70402de3236d8b4ae94983",
+      "cb1ade6d3076b6a237942d418cd8d10e9c98e9c8"
+    ],
+    "sessions": []
+  }
+}

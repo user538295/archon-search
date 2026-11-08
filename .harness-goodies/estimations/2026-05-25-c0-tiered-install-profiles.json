@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "id": "C0",
+  "name": "Tiered Install Profiles",
+  "description": "Tiered install profiles (Minimal/Balanced/Max, optional multilingual) for archon-search install: profile registry, interactive or flag-driven selection, model pre-warm download, reinstall guard, force-delete rollback, thin Click shim.",
+  "effort": "Spans installer, config, CLI and search pipeline (optional reranker). No new storage or migrations, but destructive delete-db rollback, install lock, disk check, license gate and a big installer merge make it risky and wide.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 15,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 17,
+    "linesAdded": 4503,
+    "linesRemoved": 425
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C0-tiered-install-profiles-brief.md",
+      "Documentation/Completed/C0-tiered-install-profiles-plan.md"
+    ],
+    "commits": [
+      "0200511e9fd702512d58aa07c9b6908fd821d45a",
+      "2b3b263d727fc2db3c180503a15f45497a78cd30",
+      "f43ea667b9d18ab5810fb4e836120e35545d34d1",
+      "9b5fab45a9bd203f7aab830130a5b3b5ee95839d",
+      "6e648fc18c97857f7e986f7a0e0d3e5ace0e655a",
+      "3924b66e8610caf4f460e9adbb0b29c58490cbbf",
+      "4e79a6cb83afca2fa7efda11c04484fe1e9c9caa",
+      "6834aba6a0108f7f9d60afd0e2f34f9b456b4659",
+      "1d2315aceb79f87040e2ffdeeaed99f05e601718",
+      "39f81a83878de12488c311c9d3f740a5ee60c670",
+      "9482510700f4f74caabb73ecf3e035b8e0e8ac57",
+      "f9673329d16e334f8b129569cbd4b635734653a0",
+      "dc0ca48bf05a22c5659edd500e1acb3b1d520bc0",
+      "de9ff8291cc9b2e9813e76e119b4ea15c52e2332",
+      "a356a6924ea3bbb93ac4834d14c49e8dbcdc27a8",
+      "ed3c685ba5402ec50a3c0ac357fc11d3cfd08acb",
+      "bca06cd75c4995c57ebfe878596bbbcb486b9094"
+    ],
+    "sessions": []
+  }
+}

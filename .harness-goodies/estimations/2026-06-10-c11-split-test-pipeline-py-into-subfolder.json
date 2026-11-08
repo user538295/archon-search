@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "C11",
+  "name": "Split test_pipeline.py into Subfolder",
+  "description": "Split the monolithic pipeline test file into a tests/pipeline/ package with a shared conftest of plain helpers and three test files (ingest, search, multi-collection), deleted the original, and updated the testing strategy doc.",
+  "effort": "Pure test reorganisation, no production code, no storage, no outside services. Mechanical but large file; risk lies in routing ambiguous tests and section-local helpers, relative imports, preserving the collected count, and the wall-time target.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 2,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 6,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 6,
+    "linesAdded": 7414,
+    "linesRemoved": 7198
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C11-split-test-pipeline-brief.md",
+      "Documentation/Completed/C11-split-test-pipeline-plan.md"
+    ],
+    "commits": [
+      "e9d70d6ecae3bab6c9198efb5cd16be92b7cdddb",
+      "813443bc13cec4ed1f8477f522a5c4adeddcf322",
+      "55cc756e1e0780c07ac73d92a8b2a60c3b44b214",
+      "aab6d638a018b3dee8567cff45a43d0866662ad4",
+      "576a3224deeae945152108e4073d59ced1fd3519",
+      "a29a329840d48fa6b1bfb7258e350d675ce4a90d"
+    ],
+    "sessions": []
+  }
+}

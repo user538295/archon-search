@@ -1,0 +1,311 @@
+{
+  "version": 1,
+  "id": "01-SEARCH",
+  "name": "Search on one implementation across REST, MCP, OpenAI shim and CLI",
+  "description": "A single SearchService now owns validation, collection resolution, embedder choice, HyDE, RAG Fusion, budget, telemetry and derived fields for REST, MCP and the OpenAI shim. Adds a real per-request top_k, a new CLI search command and a field-level parity check.",
+  "effort": "Large cross-cutting refactor of three server adapters plus a new CLI command and pipeline top_k change. Needs characterization tests, response schema unification, API snapshot regeneration, many test re-pointings and docs. No storage or migration changes; risk is wire-text and behavior drift.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 40,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 8,
+    "tasks": 44,
+    "estimatedHours": 167.5
+  },
+  "git": {
+    "commits": 44,
+    "linesAdded": 14886,
+    "linesRemoved": 2660
+  },
+  "usage": {
+    "matchedBy": "prompt",
+    "sessions": 1,
+    "agentTimeMinutes": 1028,
+    "tokens": {
+      "input": 943712,
+      "output": 6961949,
+      "reasoning": 0,
+      "cacheRead": 1387036675,
+      "cacheWrite": 34155808,
+      "total": 1429098144
+    },
+    "costUsd": 408.93
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Backlog/interface-parity/01_search-tasks.md",
+      "Documentation/Backlog/interface-parity/01_search-team-plan.md",
+      "Documentation/Backlog/interface-parity/01_search_brief.md"
+    ],
+    "commits": [
+      "f4347773ea0562a1d8044c09ab793ba9c4ffa71e",
+      "975e49a66e989cba207d18bbedf13843dd3a5052",
+      "11e8368f08c7b9373d1b22917b3ea7e3016b4bb3",
+      "c82568858e67fc60387d79217263c781e6c0806c",
+      "3d9f94d8b9b5379528c5ccad47a00c8b370d2bf9",
+      "2c2da76b2cbdf9251ec899437498b3412e52b0b5",
+      "b110d9dd409c4a505e18b7743d988c5b38889811",
+      "03dc43911c8bfde83d3fc123c0634a244a6be699",
+      "a00d0dc7c0f12d68143356a2685a0f0c21e63d74",
+      "0d8a2ea8f9aaa1f85dbc7f956484df4f770eddee",
+      "c34a038d315464244562b49c60d21ead30d7fdbe",
+      "30cbe4aecbb58229221fca7b16e4e30cc019d7b4",
+      "43d29515bb818ea2a9f0af9d74799f3c353995d0",
+      "eab0d63d8d1d26c1a9f7bf96125f8ae3f589ab76",
+      "ca82a11524ffb08ce0bc8046e8265432235810b8",
+      "bebfd8180b94574fb08dbd495780b8d375c317e0",
+      "736157d95f4b35cf729393dd3693d878751d0823",
+      "49db301c0ce1b55e61a1f8bc4a6799bff47ee130",
+      "4b6320707c93d2f3bf0af48017439f6e51b7675a",
+      "c1eaf14c42fb0262ad274bdbe13facdb3423bc0a",
+      "5f036232e67d135090520c534e63f66c805a9352",
+      "87694ecf95a6908b029074f9fc6d4989a415b945",
+      "aced1f141876c9bf7e7f96aa070941efe5cec9f1",
+      "747d03278cc8d338d44f7c174ef6e3562e0e93fb",
+      "8922baf00b9c197e24f304dae2e9a7d1caefffdd",
+      "722be3d57ef5140d51e6e31aae3963e3fef72088",
+      "607861b36eec76b5a349b79cb53de168329e61fc",
+      "4c2c6e60674818cdfb30e97ecc663e50e15516de",
+      "621fe9acfd75e279076a3c5fe282e14bbfb2244f",
+      "44df0de879f70921f632dbbc5c3e51b9841380a0",
+      "ef426955c323a78dcc43ade3fa277f86e6daebe6",
+      "0e4b179d4920eb83056b7c86052a219e53968dac",
+      "1f00948e631eea7b23c10d1594d303b9e14fb80a",
+      "ef7f4fa750c1c593e4eee519637f87545cc2476a",
+      "4f4576d59898ed5fe17ad8031daf6ba4d504e42e",
+      "b4eaf8e5005ed9e62bc99d6bf9e1187d6a8c9571",
+      "c58dae99f6b5eecbc695e680f8238a5c2cc17e3b",
+      "9bb5ae09052a705cae38b0c8566475798a63db45",
+      "9184bf3106a17a4081c65dd09911e930af5ce01f",
+      "635e7c266b9aa9528f3bb4de263cb7548aba01ef",
+      "63416e4ce8834bc2e7316b6490f5d79f7a013a3f",
+      "b1cf3015fb5f074afd2f0914523a5a0a47829f9d",
+      "6e0d8afec283cf40fbe6b08f6774a3af9d22279b",
+      "e050474a503444f0b1d6459c8d0d10ee4b108593"
+    ],
+    "sessions": [
+      {
+        "harness": "omp",
+        "models": [
+          "anthropic/claude-opus-5-5",
+          "anthropic/claude-sonnet-5-5"
+        ],
+        "id": "01a18ed5-41fc-7523-b6c5-939f96451df1",
+        "path": "/Users/manczg/.omp/agent/sessions/-Documents-development-archon-search/2026-10-30T22-01-43-164Z_01a18ed5-41fc-7523-b6c5-939f96451df1.jsonl",
+        "log": "/Users/manczg/.omp/agent/prompt-logs/archon-search-8daeee78061f/session_2026-10-30_22-01-43_01a18ed5-41fc-7523-b6c5-939f96451df1.md",
+        "prompts": [
+          {
+            "number": 46,
+            "at": "2026-11-02T11:45:24+00:00",
+            "text": "[IMPORTANT: User invoked the \"options\" skill; follow its ins",
+            "reason": "names Documentation/Backlog/interface-parity/01_search_brief.md"
+          },
+          {
+            "number": 47,
+            "at": "2026-11-02T11:50:12+00:00",
+            "text": "Q1A, Q2A but I think there is an algorithm which define whic",
+            "reason": "follows prompt 46"
+          },
+          {
+            "number": 48,
+            "at": "2026-11-02T11:54:35+00:00",
+            "text": "ok, agree. auto-routed search is a future thing",
+            "reason": "follows prompt 46"
+          },
+          {
+            "number": 49,
+            "at": "2026-11-02T15:07:39+00:00",
+            "text": "[IMPORTANT: User invoked the \"plan-maker-for-team\" skill; fo",
+            "reason": "names Documentation/Backlog/interface-parity/01_search_brief.md"
+          },
+          {
+            "number": 50,
+            "at": "2026-11-02T16:57:50+00:00",
+            "text": "update the brief if it is out of date",
+            "reason": "follows prompt 49"
+          },
+          {
+            "number": 51,
+            "at": "2026-11-02T17:00:08+00:00",
+            "text": "[IMPORTANT: User invoked the \"commit\" skill; follow its inst",
+            "reason": "made 1 of its commits"
+          },
+          {
+            "number": 52,
+            "at": "2026-11-02T17:00:38+00:00",
+            "text": "/iterative-review both files with 3 cycles: 1. Documentation",
+            "reason": "names Documentation/Backlog/interface-parity/01_search-team-plan.md, Documentation/Backlog/interface-parity/01_search_brief.md"
+          },
+          {
+            "number": 53,
+            "at": "2026-11-02T19:00:38+00:00",
+            "text": "What do you mean chat app? There are 3 interfaces: MCP, HTTP",
+            "reason": "follows prompt 52"
+          },
+          {
+            "number": 54,
+            "at": "2026-11-02T19:06:23+00:00",
+            "text": "Q1C, Q2A",
+            "reason": "follows prompt 52"
+          },
+          {
+            "number": 55,
+            "at": "2026-11-02T19:38:03+00:00",
+            "text": "Where is the brooks-review from the double-check list? You d",
+            "reason": "follows prompt 52"
+          },
+          {
+            "number": 56,
+            "at": "2026-11-02T19:40:40+00:00",
+            "text": "[IMPORTANT: User invoked the \"create-tasks\" skill; follow it",
+            "reason": "names Documentation/Backlog/interface-parity/01_search-team-plan.md"
+          },
+          {
+            "number": 57,
+            "at": "2026-11-02T20:14:47+00:00",
+            "text": "[IMPORTANT: User invoked the \"plain-language\" skill; follow",
+            "reason": "follows prompt 56"
+          },
+          {
+            "number": 58,
+            "at": "2026-11-02T20:18:54+00:00",
+            "text": "[IMPORTANT: User invoked the \"iterative-review\" skill; follo",
+            "reason": "names Documentation/Backlog/interface-parity/01_search-tasks.md"
+          },
+          {
+            "number": 59,
+            "at": "2026-11-02T20:24:29+00:00",
+            "text": "/iterative-review @Documentation/Backlog/interface-parity/01",
+            "reason": "names Documentation/Backlog/interface-parity/01_search-tasks.md"
+          },
+          {
+            "number": 60,
+            "at": "2026-11-02T21:12:19+00:00",
+            "text": "don't run more cycles after the fix",
+            "reason": "follows prompt 59"
+          },
+          {
+            "number": 61,
+            "at": "2026-11-03T05:56:31+00:00",
+            "text": "D",
+            "reason": "follows prompt 59"
+          },
+          {
+            "number": 62,
+            "at": "2026-11-03T05:59:16+00:00",
+            "text": "update the plan as well.",
+            "reason": "follows prompt 59"
+          },
+          {
+            "number": 63,
+            "at": "2026-11-03T06:07:15+00:00",
+            "text": "/cle§",
+            "reason": "follows prompt 59"
+          },
+          {
+            "number": 64,
+            "at": "2026-11-03T06:07:21+00:00",
+            "text": "[IMPORTANT: User invoked the \"commit\" skill; follow its inst",
+            "reason": "made 1 of its commits"
+          },
+          {
+            "number": 65,
+            "at": "2026-11-03T06:08:08+00:00",
+            "text": "[IMPORTANT: User invoked the \"implement\" skill; follow its i",
+            "reason": "names Documentation/Backlog/interface-parity/01_search-tasks.md"
+          },
+          {
+            "number": 66,
+            "at": "2026-11-03T08:07:12+00:00",
+            "text": "the full test suit runs for 6 mins. I want it to run under 3",
+            "reason": "follows prompt 65"
+          },
+          {
+            "number": 67,
+            "at": "2026-11-03T08:45:04+00:00",
+            "text": "ok, don't spend too much time with the measurement. If you s",
+            "reason": "follows prompt 65"
+          },
+          {
+            "number": 68,
+            "at": "2026-11-03T09:07:21+00:00",
+            "text": "Ok, improve the test runs. 1. ok 2. fix it now",
+            "reason": "follows prompt 65"
+          },
+          {
+            "number": 69,
+            "at": "2026-11-03T09:37:42+00:00",
+            "text": "[IMPORTANT: User invoked the \"commit\" skill; follow its inst",
+            "reason": "follows prompt 65"
+          },
+          {
+            "number": 70,
+            "at": "2026-11-03T10:13:56+00:00",
+            "text": "A",
+            "reason": "follows prompt 65"
+          },
+          {
+            "number": 71,
+            "at": "2026-11-03T10:27:39+00:00",
+            "text": "[IMPORTANT: User invoked the \"implement\" skill; follow its i",
+            "reason": "names Documentation/Backlog/interface-parity/01_search-tasks.md"
+          },
+          {
+            "number": 72,
+            "at": "2026-11-03T10:28:09+00:00",
+            "text": "[IMPORTANT: User invoked the \"implement\" skill; follow its i",
+            "reason": "names Documentation/Backlog/interface-parity/01_search-tasks.md"
+          },
+          {
+            "number": 73,
+            "at": "2026-11-03T12:09:11+00:00",
+            "text": "[IMPORTANT: User invoked the \"status-report\" skill; follow i",
+            "reason": "made 6 of its commits"
+          },
+          {
+            "number": 74,
+            "at": "2026-11-03T13:15:15+00:00",
+            "text": "follow the status-report output format precisely. This is no",
+            "reason": "made 5 of its commits"
+          },
+          {
+            "number": 75,
+            "at": "2026-11-03T14:34:01+00:00",
+            "text": "stop all please",
+            "reason": "follows prompt 74"
+          },
+          {
+            "number": 76,
+            "at": "2026-11-03T16:12:40+00:00",
+            "text": "now you can resume",
+            "reason": "made 21 of its commits"
+          },
+          {
+            "number": 77,
+            "at": "2026-11-03T22:21:27+00:00",
+            "text": "[IMPORTANT: User invoked the \"options\" skill; follow its ins",
+            "reason": "made 1 of its commits"
+          }
+        ],
+        "agentTimeMinutes": 1028,
+        "tokens": {
+          "input": 943712,
+          "output": 6961949,
+          "reasoning": 0,
+          "cacheRead": 1387036675,
+          "cacheWrite": 34155808,
+          "total": 1429098144
+        },
+        "costUsd": 408.93
+      }
+    ]
+  }
+}

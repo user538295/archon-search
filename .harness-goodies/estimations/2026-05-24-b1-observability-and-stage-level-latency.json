@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "id": "B1",
+  "name": "Observability and Stage-Level Latency",
+  "description": "Per-request correlation IDs via X-Request-ID middleware, per-stage perf_counter timings for retrieval and ingest, structured log records, stage_timings_ms on /explain, correlation_id in telemetry, new observability config section.",
+  "effort": "Cross-cutting: new module and pure-ASGI middleware on both REST and MCP apps, instrumentation threaded through embedder, router, store, reranker, pipeline, CLI; context-variable subtleties; no storage migration, no outside services; docs updates.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 16,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 23,
+    "linesAdded": 6834,
+    "linesRemoved": 2653
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/B1-observability-stage-latency-brief.md",
+      "Documentation/Completed/B1-observability-stage-latency-plan.md"
+    ],
+    "commits": [
+      "4d20d6683684cb1b9112a2670729290018127f9e",
+      "c98d9c03c1fd49b6b4a9c19eefdcef5e4e8b8f67",
+      "9cfeb12adfac40fdef9001553cc661a2c7569d39",
+      "be12decb7ba3a52fb068080ad0e4cb0cdbdda4ae",
+      "99df4eb970f4a39fc5922f06d706f20bb0cf525d",
+      "4908d4cc766fd4fb42e8149452ff9b2030f8716c",
+      "7138167a0306ef71add8d4e0ddfe252aeb09609f",
+      "9ede66e245a0c330f1cfad6b1bf50ffec1096ca6",
+      "4e6a9674f38271f99d0b40c0cccb966bd514b774",
+      "7818c4cb21389f8da456a210e000f3486b2360b3",
+      "42eecd0289650a94d4911c6162acf74770c8e13b",
+      "97ad4668258d7ab35d2fd80377e446e7bc16d3f3",
+      "d9261739dec9a6652917210cc25536667309c5fe",
+      "15aa3c03ee3b57475ba4722c1f848cc9820048da",
+      "b20375a66c47c9694ea4eca64a96085bfd4f3fe9",
+      "881bce926cb430ac2a97512fc5a0011e67e7ff00",
+      "043d3ca6329a67e98b7bae00b52de3df81f377e8",
+      "0cb7ef884cba2d405a77433d8bd177bc9579357c",
+      "6582f48017ce88d650b9fd7d9fba76a64fdb0b15",
+      "576989cefa91d3d524ff5eabb05e9acfd8f78e04",
+      "d33b0fe0bed10de19226f0821688c57800a976a2",
+      "0eb0ce307d54e985a217e3df582fda1d707f048c",
+      "6cddb2096704fad3837f821c698f2cfe6461e92b"
+    ],
+    "sessions": []
+  }
+}

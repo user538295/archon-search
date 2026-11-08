@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "id": "E1a",
+  "name": "GraphRAG Entity Extraction + Naive Query Expansion",
+  "description": "Optional graph feature: ingest extracts entities and relationships per chunk into per-collection graph tables; a naive graph_mode on REST and MCP search expands queries with first-degree neighbour entity names; status reports graph stats; eval gains a graph MRR metric.",
+  "effort": "New optional dependencies (spaCy model, networkx), new graph storage tables, extraction wired into the ingest transaction, query-time expansion across single and fanout search, REST, MCP, status and eval changes. Risky: entity-type mapping, extraction quality, language-model fallback, access control",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 17,
+    "estimatedHours": 55.0
+  },
+  "git": {
+    "commits": 17,
+    "linesAdded": 9140,
+    "linesRemoved": 174
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e1a-graphrag-entity-extraction-naive-mode-brief.md",
+      "Documentation/Completed/e1a-graphrag-entity-extraction-naive-mode-team-plan.md"
+    ],
+    "commits": [
+      "95475dde6dc610d314af1db414c8f418340743c9",
+      "a2f7aaf58c95b32322a0139ee32d72e338064457",
+      "6d02b9b7868a86dab762ad2c68519d2c4e76778c",
+      "71de27a1a915ca2acd1c2ba6d169436d7877cb96",
+      "1b5b2a36c7b70d57f5bdbeab6a38429e3dcd781d",
+      "b80de193e21ab2483f583befab005fab8dd0c4fe",
+      "35039b926b2306622afb283c8b04ffdf25a820d4",
+      "87f284e3464e03fdea45779090614f289acc287c",
+      "244fe2d79b13f4695bb4b02d9eff7114565072af",
+      "bcf1dc6fd4b82f187be129595131378b3034eecc",
+      "c5b21200549801e219f69ac5fb41dad33daaad20",
+      "18e0aea60340f37b135c2b0974cfe1c17789d49d",
+      "95893128784676f3313018451e11de1e08b44b34",
+      "a5548633b52fcfce64445383d446beecd0842da1",
+      "7e538ce0bc7e784fc1cdc50eb985ab7fbb2c1763",
+      "2d7b3d8468831b5f344ad36fab3ca3d6573b3ed7",
+      "9e812eadc61cd92bd543c387eec5b6c68a07bc4c"
+    ],
+    "sessions": []
+  }
+}

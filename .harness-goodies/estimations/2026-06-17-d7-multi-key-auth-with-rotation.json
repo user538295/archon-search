@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "id": "D7",
+  "name": "Multi-Key Auth with Rotation",
+  "description": "Operators issue, list, revoke and rotate API keys without server restart, via CLI, REST and MCP. Durable hashed key store with expiry and a rotation grace period; auth middleware checks the store alongside legacy keys.",
+  "effort": "Touches auth middleware on every request, a new durable file store with fsync and permissions, CLI, REST routes and MCP tools. Security-sensitive: timing-safe comparison, hashing, corruption handling, grace-period revocation. No outside services or migrations.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 17,
+    "estimatedHours": 38.0
+  },
+  "git": {
+    "commits": 19,
+    "linesAdded": 9550,
+    "linesRemoved": 166
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/D7-multi-key-auth-rotation-brief.md",
+      "Documentation/Completed/D7-multi-key-auth-rotation-team-plan.md"
+    ],
+    "commits": [
+      "952c917df9584392e29a99e44bd9ce875d1f6b6b",
+      "8c3ec00484ef3d3fab067fca2642280791cf5327",
+      "af1be55db12670c8e36e34ae780d72f57bd20172",
+      "45ab445f0b41410edbf52c902aedfe49ebef8495",
+      "26adc245e596d47e760a378496edcbe795ca5ebf",
+      "80465464fbd0a2192cfa3b48af8754924f00a266",
+      "653a290aa32710aba3668bf241c127abe24c74b7",
+      "6a0559aa3829dd3b8cf4095279a4b61698568938",
+      "c6b3660f9c057484f500f7423ccead4042803758",
+      "359de0606bb120c8b31d3ab93e7217dd1829faaa",
+      "b52ae3b01a618e025ac33bb9d69fc6227ad96c71",
+      "d416f722f3cf4084959766a25d31e46f2a7cfef7",
+      "df42f67e9da481a5f9bf91a967537031c56b0ce0",
+      "b37a4c600670ffe207c96d1e66b9afa0beea758f",
+      "f0d7bb5b2221950feb317518155496c31d5d9fce",
+      "ba64f4e0e5d92cfc4a8177149f4dd5d274c840f0",
+      "e1486ed5c4b62ce4f5454775f2522e4942d2d071",
+      "92bc842e4cfee85e490516d162d724331b2e5f8a",
+      "905d349c344fbf1d41fb53ff15866c7ec5ddbabd"
+    ],
+    "sessions": []
+  }
+}

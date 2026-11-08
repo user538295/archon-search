@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "id": "A5",
+  "name": "A5 — Ingest Hardening (Path Safety + SQL Builder Defense-in-Depth)",
+  "description": "Ingest hardening: shared path validator rejecting traversal, empty, NUL and relative paths on HTTP and MCP ingest entry points; SQL where-clause helpers replacing f-strings in the store with a CI guard; synchronous busy-store 503 on ingest.",
+  "effort": "Spans HTTP routes, MCP tools, store layer and a new validation module. No schema or migrations. Depends on an earlier shared quoting helper. Unknowns: whether LanceDB supports bound parameters. Lock handoff to background task is the risky part.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 18,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 15,
+    "linesAdded": 129,
+    "linesRemoved": 81
+  },
+  "usage": {
+    "matchedBy": "prompt",
+    "sessions": 1,
+    "agentTimeMinutes": 268,
+    "tokens": {
+      "input": 226,
+      "output": 56144,
+      "reasoning": 0,
+      "cacheRead": 15217917,
+      "cacheWrite": 384167,
+      "total": 15658454
+    },
+    "costUsd": 7.24
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/A5-ingest-hardening-brief.md",
+      "Documentation/Completed/A5-ingest-hardening-plan.md"
+    ],
+    "commits": [
+      "a0a798b34741a7d741e7795b5c7ab42a8a01c85d",
+      "de71674e12282cd823fb0f1940104ca25c3fb670",
+      "1133ce032a17976fbe1f161b26b63fde73849c41",
+      "e9695d46854d7315442af45e328cba80e0f57a2b",
+      "bca0dd3a875e0b2f8e9affc500ce83809aed47e1",
+      "08f2678e707414ec7ef63901480388bb6070fbae",
+      "4e396a51c1f25634ba10d383fc88f4c15280ed59",
+      "56f701f59cba5f5a73ee21a97b7c9733a091bfd4",
+      "37a40fcfbb406e7fcce6dd1a6dc9d23bfeae0e4a",
+      "6221dab2e78ff06605c5bf501f3bc07d92373c9a",
+      "f8c2527ada17168c890142756b6d77c852526818",
+      "a5a04784c898ead33d7801712695663d2bd66af7",
+      "2a7d86f6389b23456b531c6fdf4b900077740031",
+      "07909ba6d93c808d003b6dfb743d7361b83d8fa0",
+      "35df0398162b2a728b1002f39b5aaa38f6bd9235"
+    ],
+    "sessions": [
+      {
+        "harness": "omp",
+        "models": [
+          "anthropic/claude-opus-5-5"
+        ],
+        "id": "01a1287c-8a57-700d-a6e8-b8da813e7209",
+        "path": "/Users/manczg/.omp/agent/sessions/-Documents-development-archon-search/2026-10-11T01-03-32-951Z_01a1287c-8a57-700d-a6e8-b8da813e7209.jsonl",
+        "log": null,
+        "prompts": [
+          {
+            "number": 1,
+            "at": "2026-10-11T01:03:51+00:00",
+            "text": "I have an issue during the release: > assert result.returnco",
+            "reason": "names 1.7"
+          },
+          {
+            "number": 2,
+            "at": "2026-10-11T01:24:50+00:00",
+            "text": "If you fixed everything, the push your changes, the run the",
+            "reason": "follows prompt 1"
+          },
+          {
+            "number": 3,
+            "at": "2026-10-11T07:01:54+00:00",
+            "text": "Githabb actions said: FAILED tests/test_c1_bug_repros.py::te",
+            "reason": "follows prompt 1"
+          },
+          {
+            "number": 4,
+            "at": "2026-10-11T10:40:38+00:00",
+            "text": "I don't see any releases on the github page. investigate and",
+            "reason": "follows prompt 1"
+          },
+          {
+            "number": 5,
+            "at": "2026-10-11T10:40:43+00:00",
+            "text": "I don't see any releases on the github page. investigate and",
+            "reason": "follows prompt 1"
+          },
+          {
+            "number": 6,
+            "at": "2026-10-11T10:40:51+00:00",
+            "text": "I don't see any releases on the github page. investigate and",
+            "reason": "follows prompt 1"
+          }
+        ],
+        "agentTimeMinutes": 268,
+        "tokens": {
+          "input": 226,
+          "output": 56144,
+          "reasoning": 0,
+          "cacheRead": 15217917,
+          "cacheWrite": 384167,
+          "total": 15658454
+        },
+        "costUsd": 7.24
+      }
+    ]
+  }
+}

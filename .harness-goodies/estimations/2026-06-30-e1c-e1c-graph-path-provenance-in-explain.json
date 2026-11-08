@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "E1c",
+  "name": "E1c — Graph-Path Provenance in /explain",
+  "description": "POST /explain and the MCP explain tool accept graph_mode and return graph_mode_applied plus a per-result graph_provenance list of traversal steps (entity, relationship, community, chunk) for naive, local and global graph retrieval.",
+  "effort": "Medium: threads traversal metadata from the graph layer through pipeline candidates to the route and MCP handlers, with new response schemas and validation guards. No storage or migrations. Depends on the earlier graph retrieval and community features; mixed-result dedup is subtle.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 16,
+    "estimatedHours": 36.0
+  },
+  "git": {
+    "commits": 16,
+    "linesAdded": 7357,
+    "linesRemoved": 132
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e1c-graphrag-explain-provenance-brief.md",
+      "Documentation/Completed/e1c-graphrag-explain-provenance-team-plan.md"
+    ],
+    "commits": [
+      "4a801e166064eaa472e2215ff5b950d866194479",
+      "00a28eb3d5d0b4abc0753aa7404f0dc01597bda0",
+      "19e742f80bd5ab0f436628ea6b67b594ca567639",
+      "f1645f38969265e8cfedad075b6068b99afd0f85",
+      "4a55d0aeefef881fa1f24c3fe40f7856f5f146c3",
+      "ecb71280a8150c2f95dd17d91ca235edb9bec5e5",
+      "9c6a86e7137317113b3bc4654bd3e69536c66b63",
+      "fa3679b54800df41cf73bd862e47a643251d0ea0",
+      "63363551fee544e2de0af2286dab7774aec55f15",
+      "b6949cd949159164605e3037395e3c7ade5ecbd0",
+      "79a9a3fce703be5c17e8f931e4fe9ec1d1bcda07",
+      "0d11f0c939c25949772ef02543c841a36b9fe737",
+      "42ce8c0e893f253b66a665d92485138cddc72cd6",
+      "0ff2105f11ac57a1cbac759268c463c2cc4f9c23",
+      "160ea3eb0e8992a6e2a5304d19463d014762c8e4",
+      "13621e21d74f0d2d57b2b9e7ebeb473b7fd03dc8"
+    ],
+    "sessions": []
+  }
+}

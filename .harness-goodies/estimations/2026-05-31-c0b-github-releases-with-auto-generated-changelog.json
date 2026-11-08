@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "C0b",
+  "name": "GitHub Releases with Auto-Generated Changelog",
+  "description": "Every release.sh run generates a changelog via git-cliff, commits CHANGELOG.md, then a new CI job creates a GitHub Release from it via curl after PyPI publish; includes dry-run, cliff config, docs.",
+  "effort": "Mostly shell and CI work in one script and one workflow job, plus a config file. Risky parts: provisional tag arithmetic, count verification, partial-failure paths, least-privilege permissions. No storage or migrations; tests are subprocess based.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 3,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 9,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 9,
+    "linesAdded": 1683,
+    "linesRemoved": 56
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C0b-github-releases-changelog-brief.md",
+      "Documentation/Completed/C0b-github-releases-changelog-plan.md"
+    ],
+    "commits": [
+      "444d669d4c87f72c58d6e68607a749f5bf387c6e",
+      "603d082106186d46a45e798369197dcecb2da5c9",
+      "29fbacba3ca369815b4a4c1e74df2ca7a25516d1",
+      "a4a2b9e0ae3c094387f5fda5bc87fb52f52f495e",
+      "c7f4d427463e19aec4f2b7a2b454ea2ddba27f0c",
+      "54d15270be8e4e85abba3ea164cc51182f7dca49",
+      "572e77f4d5853e3ea7c0fcf18680604dd3e6588a",
+      "c2fede5a97013063233b87aa19ac5cbe45402e4d",
+      "f1a2b4aa8140650dafd45bf7bf5496c7dce26b3c"
+    ],
+    "sessions": []
+  }
+}

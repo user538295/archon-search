@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "C16",
+  "name": "Real-Model Search Latency Benchmark",
+  "description": "CI-gated PR benchmark running pipeline.search() with the real fastembed embedder and cross-encoder reranker: steady-state and cold-load p95 tests, new marker, threshold loader and file section, conftest stub bypass, prefetch workflow step.",
+  "effort": "Small code change but calibration-heavy: thresholds must be measured on CI hardware. Touches test config, one threshold loader, workflow cache and prefetch with retries. Risks: stub removal, thread settings, network flake, noisy timings.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 3,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 9,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 7,
+    "linesAdded": 1231,
+    "linesRemoved": 33
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C16-real-model-search-latency-benchmark-brief.md",
+      "Documentation/Completed/C16-real-model-search-latency-benchmark-plan.md"
+    ],
+    "commits": [
+      "6aa7ac739e0323d8e2003efa3c8795f1209b5518",
+      "9f63ed17bbc7ca7f1c5b9da9ad5aeae8b8feddc4",
+      "48c2a0620f88777d1d89bddd02d3bbc88a0f0e77",
+      "142a1f345ca7d000a337fe63d7b9b9d7365ec463",
+      "46cdb9b811605acf388a67e33cb12dc88d21392f",
+      "bd945bbdf47bc01fd95d1ceeec49df7726fea1da",
+      "e3ff28985a39e57ae4296938177e11ce42694d56"
+    ],
+    "sessions": []
+  }
+}

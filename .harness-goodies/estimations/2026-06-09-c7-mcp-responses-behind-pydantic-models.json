@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "C7",
+  "name": "MCP Responses Behind Pydantic Models",
+  "description": "Every MCP tool response now goes through Pydantic models with forbid-extra instead of raw asdict output. New MCP schema module, explicit field mapping that hides internal collection fields, a schema-drift error code, and migration of all tools.",
+  "effort": "Moderate: one new schema module plus edits across every MCP tool. No storage or outside services. Risky parts: narrowing leaked fields is a client-visible break, nested context-search shapes, and drift tests per tool and per schema.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 13,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 11,
+    "linesAdded": 2646,
+    "linesRemoved": 197
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C7-mcp-pydantic-responses-brief.md",
+      "Documentation/Completed/C7-mcp-pydantic-responses-plan.md"
+    ],
+    "commits": [
+      "3ff9f85596df7b558c0407e98148cd1b35bdd3f6",
+      "ce0f03aee6c1689627533d275e72ac9caf77d5a4",
+      "be238ff266d43a37b122843a9bcfb922fed4b3b0",
+      "882ac06f7a78d00d6723861ce34240d6649fcfb1",
+      "e647ecda1f42f26b49c38780b0dc82edaafb353b",
+      "64370789470cd6ffd7241411078317830c7d8789",
+      "4ba78e33175cacd0166de84508e7fed74f23fe35",
+      "06234e949dec59018b9c4df2148d41fa81bee4e6",
+      "b471775ad9cd86f48602464dd71cb4a7f27de82f",
+      "9e3904e921d33e9f34fa81644a6aaaf61cd8a807",
+      "0c5c36c5aecf046ca2d2f4f132e13a62af6cb7b8"
+    ],
+    "sessions": []
+  }
+}

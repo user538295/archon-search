@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "id": "E2a",
+  "name": "E2a — TTL and Scoping",
+  "description": "Optional per-chunk expiry and scope tags: new chunk columns with migration, collection default lifetime, automatic pruning in the maintenance loop, expiring-chunks endpoint, scope_filter on search and explain over REST and MCP.",
+  "effort": "Touches store schema with migration, entities, pipeline, REST, MCP, maintenance loop, config and status. Additive, no outside services. Tricky parts: wildcard scope match done in Python since the vector store lacks prefix predicates, and prune racing ingest.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 19,
+    "estimatedHours": 44.0
+  },
+  "git": {
+    "commits": 21,
+    "linesAdded": 11844,
+    "linesRemoved": 604
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e2a-ttl-scoping-brief.md",
+      "Documentation/Completed/e2a-ttl-scoping-team-plan.md"
+    ],
+    "commits": [
+      "14b84729cb96000fe31adbbfab394ea84ed34323",
+      "83a1465d25ef49a06c355c01cdc9384389a41aff",
+      "0ae4bdf707068978fd0e3ecf359db4c5b3ea0469",
+      "df755123d1a9323c844ab37def680ef54ba70ec2",
+      "d862c769b99f07564bc4668c9cca0e341b8218a4",
+      "1887025a8b64443e25e463a190b3137f09ed95de",
+      "68b0f65e24b27ddb7230d8cc2b3e73580188c1c0",
+      "f91bd7fed664e106f1a69a8f0e2c09370fb96743",
+      "07495e0a4d3d6f5ef12867ded62276c10a515398",
+      "7d25188489b5e83533b9f3fb2e1741de51a4de8c",
+      "5c5481a47200b66f3c62d4c259482ee492834258",
+      "64004b907e42830b953689575bfe20c945b94554",
+      "6a3b2ac696131551db6dfcabbf68129d6232fd46",
+      "b38c619b5f7d32a8d5f3efcf267ebaef7985d9ee",
+      "34e21c9d338b1940806910467c30bb33ba33b183",
+      "71f012f8fbda5709615d0f1b5727e42ed5a1dcd9",
+      "3385cb0031be53a47405a99105439b8cebfb8a81",
+      "18014a82384b6a8180d12643d47ef5125256c76e",
+      "4468b7bd88cf7c87e7d823cf723ab0bcdbcb7dc5",
+      "dae4833c56d55ab5957058935d1fa35a210dfbe3",
+      "280b3ad5306df5d774ae53f5e98854f9328773e4"
+    ],
+    "sessions": []
+  }
+}

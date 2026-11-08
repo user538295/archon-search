@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "E0e",
+  "name": "Multi-Collection Filter Support",
+  "description": "Lets POST /search and the MCP search tools combine a collections list with filters. The shared filter is threaded to every collection leg before merge and rerank, and the response now reports applied_filters.",
+  "effort": "Moderate, no storage or migrations. Changes span the search pipeline fan-out, REST handler, MCP tools and response schema. MCP path was also silently dropping filters, a hidden bug. Several call sites per leg plus glob post-filtering; needs end-to-end and integration tests and doc updates.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 3,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 9,
+    "estimatedHours": 15.0
+  },
+  "git": {
+    "commits": 9,
+    "linesAdded": 3814,
+    "linesRemoved": 65
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e0e-multi-collection-filters-brief.md",
+      "Documentation/Completed/e0e-multi-collection-filters-team-plan.md"
+    ],
+    "commits": [
+      "e679ca96cc958715e7f470571f89d45238353fa6",
+      "94252b1c8491130e12cfe67b6dbf24954dac8f1b",
+      "a1d39a255f6afafb498e577e48c51a80e05a3a51",
+      "ee133f5c2a0d396429ba15bcbbc334dedcfda65f",
+      "5c69155a54403bacf012ab915950729c90f9d196",
+      "a43d18fd2bf501452ab4173b8d2c2a2bd9b7eb4e",
+      "e64a1ce9fff4deb4427a1098af777f904a7eac05",
+      "3f8ed948b6ce00d31a88a3976434c2b86f1af0cf",
+      "0fbc295723f06d84e349f3a094bd24aa65fd29c2"
+    ],
+    "sessions": []
+  }
+}

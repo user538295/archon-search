@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "E2c",
+  "name": "Graph Salience Upgrade (TF-IDF Entity Scoring)",
+  "description": "Adds ?salience=frequency|tfidf to both graph inspection endpoints, ranking nodes by TF-IDF across namespace collections; new graph store batch method for entity presence, salience_mode echoed in responses, default unchanged.",
+  "effort": "Small, additive, no new storage or migration. Touches graph store, inspector and two response schemas on both endpoints. Risks: IDF formula ambiguity, namespace isolation, one read per collection, deterministic tie ordering.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 3,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 10,
+    "estimatedHours": 19.5
+  },
+  "git": {
+    "commits": 10,
+    "linesAdded": 4843,
+    "linesRemoved": 274
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e2c-graph-salience-tfidf-brief.md",
+      "Documentation/Completed/e2c-graph-salience-tfidf-team-plan.md"
+    ],
+    "commits": [
+      "ac62dae24a5bfd3aecb59fca3b5b0908362754f4",
+      "8af6e0877edee19049f119ea83f6afef090bd0ae",
+      "3470025ed9019c6d1dc8d5ff2c664c3b7b150810",
+      "9de15d88557954ac9e6aa97f2f4eb6e134cdb68f",
+      "c271b0d49139e7ef48f31d875113338d68ace00f",
+      "419aa19a46518049e3d885bbd2ca1f9e04a63f69",
+      "7d14acdbfc52146882b0d5586b3c137530d207b3",
+      "6c3e2c4fd539ca527b7dc638931a1080eb2b8caa",
+      "a8c24eb9fb2ee4f89a57e657be446e76c5ba2eb8",
+      "d0634cb7d50abc9d51d55cc574b3f880e5654e6e"
+    ],
+    "sessions": []
+  }
+}

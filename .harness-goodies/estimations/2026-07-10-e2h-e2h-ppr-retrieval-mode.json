@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "id": "e2h",
+  "name": "E2h PPR Retrieval Mode",
+  "description": "New graph_mode ppr runs Personalized PageRank from query-matched entities over co-occurrence, synonym and code edges, blends top chunks into hybrid results before reranking, with explain provenance, config, MCP guard and eval gate.",
+  "effort": "Spans config, schemas, pipeline dispatch, graph store lookup, a new walker module, explain output, naive expansion cap and a breaking-change note. Risky: multi-hop retrieval quality needs a two-sided eval gate with new labelled queries and thresholds; depends on sibling graph edge features.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 15,
+    "estimatedHours": 35.0
+  },
+  "git": {
+    "commits": 17,
+    "linesAdded": 5412,
+    "linesRemoved": 268
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e2h-ppr-retrieval-mode-brief.md",
+      "Documentation/Completed/e2h-ppr-retrieval-mode-team-plan.md"
+    ],
+    "commits": [
+      "c5c56d46959a982d1af26c258c937f4e5990ca58",
+      "8231000cd63b4ff3cc3f66e37d9641961cb45cc3",
+      "f88b91d2f71bc244209ade0888f42bfd43992ba3",
+      "e64e889dc4414647a2cadb3068a8726a32943f30",
+      "4570160268f4d07b90fac561e3d19ff627918bc7",
+      "5e9deb06e5705a3b86335527553d93daabbdf6e6",
+      "74445b8d966f9fb925ca30c5cb628d2c23d4f89b",
+      "076d20df5a1abf5cf0914734cd8c17f949ccb05d",
+      "f41acb5deda29a6e8ea47e18134a15c72d170db2",
+      "96eefb968fb9f3af9b7c3236083d6432a29b98bd",
+      "5f0663231b287f753f2ecf3f04052ca4a94ee271",
+      "9899eba7a639c4a4dacb814facf5f881784938e9",
+      "f7beebf052ac96d3fb4625b08a03f9e02509137c",
+      "14885e4f29df704e33f72d4f180fdeab19691c68",
+      "2cfbaf79d0b5fbc24f7cb49e50833ed6f554715f",
+      "56d54d9b4fa92c3c28eeb210f73a5f0144d76747",
+      "385d6da38d5aba4a55c0afe9c006eea6be62ac5f"
+    ],
+    "sessions": []
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "C18",
+  "name": "Test Suite Speed Fixes",
+  "description": "Test-only change: the autouse fixture in tests/conftest.py clears ANTHROPIC_API_KEY so local pytest runs skip the slow SDK wait in description, HyDE and RAG Fusion guards. Adds guard-existence and composition tests, plus measured baselines.",
+  "effort": "Very small code change: one fixture block plus a small new test file. Most effort is measurement: serial full-suite timing runs, test enumeration, coverage and pass-count checks. No production code, storage or services; low risk, with live tests now always skipping.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 1,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 3,
+    "tasks": 7,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 10,
+    "linesAdded": 1318,
+    "linesRemoved": 61
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/C18-test-suite-speed-fixes-brief.md",
+      "Documentation/Completed/C18-test-suite-speed-fixes-plan.md"
+    ],
+    "commits": [
+      "8906bb2f6f0d80d550ee1f7d3b318857a2db767e",
+      "60f5089080dd61c17d051d4464401a39e9b23bb3",
+      "557c7551f26034a835317cfe4b5fa27636adfc54",
+      "626a99da7b024945a2c19677a3496a5eda2a39e3",
+      "fbb11f4d2d871c718e3e89701dd8c9b509d927f0",
+      "6c6d35ea817a77fef119e3a91c17732b72bddc5f",
+      "65638648a709316cdc940a03411ceee7038a1357",
+      "3ba5e623c4af5a95151b30785a46065edaa0f8dd",
+      "2c2f241169a53e1600e102fce8b2df1b549c5494",
+      "76eb486e145516e389cb8ffb3653f79c3344fc9e"
+    ],
+    "sessions": []
+  }
+}

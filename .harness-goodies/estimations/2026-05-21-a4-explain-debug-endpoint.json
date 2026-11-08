@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "A4",
+  "name": "Explain / Debug Endpoint",
+  "description": "POST /explain REST endpoint and parallel MCP explain tool returning per-stage score breakdown (vector, FTS, RRF, reranker), near-miss candidates without text, and routing candidates with centroid scores when no collection is pinned.",
+  "effort": "Touches many parts: store, router refactor, pipeline orchestration, diagnostics types, telemetry, REST route, MCP tool. No new storage or outside services. Risky: ACL filtering, public versus private schema boundary, query-free telemetry, and exact parity with search.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 9,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 16,
+    "linesAdded": 4165,
+    "linesRemoved": 97
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/A4-explain-endpoint-brief.md",
+      "Documentation/Completed/A4-explain-endpoint-plan.md"
+    ],
+    "commits": [
+      "a2c2be4d9b2cd1ff117094204fd1beef645f5e20",
+      "58355bbb7b5d054fbc91e7fcf9ac9833795689ee",
+      "2447bf20d8d3679ca9ae874dc9c340295e5be028",
+      "df80e91057a894cebeed283b0b3993d1dd942b60",
+      "8cddbf3026405cb3ae87f808bee59c9ae252d622",
+      "545045664df70a55d3d1655cac44d9ac08ceb867",
+      "d172535c6bfb509f7cf505c96c9ea52bdddb01be",
+      "cdefd1eac66d6133c711c58447188ea732ee874c",
+      "c986402ad1567dc9e39089c9c501da9304a3cab5",
+      "f560a24585b8a7b61d16da242c121f33da4dd3e8",
+      "74bb76a5f109a69307df8dcef6fb42e3aa87c148",
+      "6b671049154713a0c8548a7a03c78c5e646f4f87",
+      "474b21056f4af581968c5fe1b613e7a204354581",
+      "5d9a02ed129a0caf48695bc805df4e13987d81b1",
+      "5334ba9ae51cd3dfbedaf2c7a14828764ce54db8",
+      "cf9b58f4f414ca5c49a46458250a7a919dc199e9"
+    ],
+    "sessions": []
+  }
+}

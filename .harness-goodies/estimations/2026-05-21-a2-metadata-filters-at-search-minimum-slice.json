@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "id": "A2",
+  "name": "Metadata Filters at Search (minimum slice)",
+  "description": "Metadata filters on REST /search and MCP search tools: file type, path prefix, glob, indexed date range, reserved language, include_metadata. Shared Pydantic model, safe-quoted LanceDB predicates on vector and FTS branches, glob post-filter, response widening, telemetry flags.",
+  "effort": "Touches store, pipeline, REST, MCP, telemetry, CLI and docs. Risky parts: SQL escaping without parameterization, timestamp format normalization with legacy-row backfill, glob over-fetch tuning, ACL ordering matrix, benchmark thresholds. No new storage tables.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 7,
+    "tasks": 18,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 18,
+    "linesAdded": 6737,
+    "linesRemoved": 1760
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/A2-metadata-filters-at-search-brief.md",
+      "Documentation/Completed/A2-metadata-filters-at-search-plan.md"
+    ],
+    "commits": [
+      "a994a0ed4ba7294a8747f3a3213c2bdd699ed58e",
+      "475caa2d307dd0278b3f7ca788e887d8d57bfd97",
+      "b06095df412ed095b10a2b8f53bb22919df3ca9c",
+      "92f8a80d11771574fbafae38a91ede9b2aa906a1",
+      "d372d233824e5ecafd861ace414a8180dc8d7a84",
+      "468e51044275815df3b99d8633cfea671f09e42c",
+      "2c8d925e70c2027da80b0622700c1cc8565bc9fd",
+      "8a864808409b32fc9cbd661149a7c2654287227d",
+      "02f936e54412d959945d00c5fb548f2044c9e681",
+      "174eadff5f84e37d996da4075245462f22221744",
+      "251b7aebd9e210ef63575fb97340ffe807912d88",
+      "8f5b89dc7d5f317aee247e5b6bfc44d246d9934d",
+      "b135e6dfc294f135c2c36a691872c82ced3bf536",
+      "1af048e50b15e9f5de2a1ba49de59a9ff2d28e6c",
+      "746cbb2054752e009495c6d838dce2db7d309388",
+      "85e2485edb34e819435d9786880879562038e855",
+      "a15fa6e079aea70d2cb21b73f7e68984ab665d9b",
+      "cbe9f1719b53cccb91779b9aa63836cf21474934"
+    ],
+    "sessions": []
+  }
+}

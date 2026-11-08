@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "g15",
+  "name": "Permission-Aware Search Snippets",
+  "description": "Opt-in acl_context flag on search adds an acl_gate object per result (allowed principals, rule source, sidecar path, load warnings); explain always returns it. Provenance is captured at ingest into three new nullable chunk columns.",
+  "effort": "Touches every layer: entities, ACL resolver refactor to surface all fail-open warnings, ingest pipeline, store schema with idempotent per-collection startup migration, two routes, OpenAPI snapshot. Old chunks stay null. Backend only.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 5,
+    "tasks": 10,
+    "estimatedHours": 24.5
+  },
+  "git": {
+    "commits": 13,
+    "linesAdded": 5821,
+    "linesRemoved": 250
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/2026-07-15-360-permission-aware-search-snippets-brief.md",
+      "Documentation/Completed/2026-07-15-360-permission-aware-search-snippets-tasks.md",
+      "Documentation/Completed/2026-07-15-360-permission-aware-search-snippets-team-plan.md"
+    ],
+    "commits": [
+      "8e45ae3bfa813998e4d830c8ce960beefc425eef",
+      "b43c6a44713c5e4a854c7bc2faf918e00e96365d",
+      "d34a5ddab0ac733edcfef636f328334dd0d2f958",
+      "4b1eca4cef73cfdff666f899abfd95cd63c77a16",
+      "247277df8ed583c2fec83e032cc576618388f80e",
+      "27db0a966ce16bbb26134d18a04910b1701d80af",
+      "980eab52bd94049a11ced66ed302c995d20bc510",
+      "515efe4d01ffd8b347e0a5d7bbc90a0deef92eb3",
+      "0ba6b44c5da07b3cf980558486a1ae3dae17d1e5",
+      "1428c509b8bcc1ffcf6880a86d0822242c107dd9",
+      "ad044aa6ca38799f39dc8d6f3f540542d7da12bd",
+      "197378eb36bb0b6cd43d395fe74903859c9fe075",
+      "3ce3a71cbee45088a55e5a5be2a5c330b6fb05d1"
+    ],
+    "sessions": []
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "D2",
+  "name": "D2 — Scheduled Backup & Export/Import Completion",
+  "description": "Fixed the no-op export/import dispatch so jobs actually run, added a user/backup priority field to jobs, and an in-process backup loop with rotation, trigger endpoint, status reporting and CLI commands.",
+  "effort": "Touches job model and store, server startup wiring, config, schemas, routes and CLI. Needs a state file, archive rotation, deduplication between manual and scheduled jobs, and queue ordering change. Schema additions need a breaking-change note. Concurrency between two loops is the risky part.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 5,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 11,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 12,
+    "linesAdded": 4319,
+    "linesRemoved": 35
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/D2-scheduled-backup-brief.md",
+      "Documentation/Completed/D2-scheduled-backup-plan.md"
+    ],
+    "commits": [
+      "7c9fde314c943e2a8789e168666d241f63dd6e0b",
+      "0386717aad4bfd137253681446fd7d27e93cf9a1",
+      "e60e1d9a804c22980c83b1fb68a1f1d129b311b2",
+      "9d5456751dd07eb0d4117f1346186828ba239f78",
+      "bfc94d02845c504b51488a729f55174a595c85a1",
+      "a5d173fc083a840464eddff3b59067b5f31e1196",
+      "d535d5b2fa04de682921ed27f209c6d20b046cfb",
+      "9ac865c388dede883213899c4391e0149dfbc765",
+      "f77cf7b9e9c6f58fb97c34bab54181570e4c01ef",
+      "b7f72f05e37fe7ee5bfbcba9c4f88347469ad30a",
+      "a9c3ce7ee27d4bad07b56721ffe3f045358f723c",
+      "b5fb115d757ed45e760ca3bcb63d42e86388aaf5"
+    ],
+    "sessions": []
+  }
+}

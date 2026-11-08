@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "id": "E0b",
+  "name": "Silent Failure Transparency",
+  "description": "Makes six silent failures observable: HyDE/RAG Fusion fallback warnings, API key status and service env file, expired ingest job state, telemetry truncation count, ACL sidecar warnings, and CLI wait timeout handling.",
+  "effort": "Wide but shallow: many small changes across search routes, pipeline, job states, maintenance loop, telemetry, status, service templates, wizard and several CLI commands. No new storage. Exit-code behavior changes and OpenAPI snapshot update add some risk.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 8,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 6,
+    "tasks": 22,
+    "estimatedHours": 44.0
+  },
+  "git": {
+    "commits": 23,
+    "linesAdded": 6926,
+    "linesRemoved": 396
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/e0b-silent-failure-transparency-brief.md",
+      "Documentation/Completed/e0b-silent-failure-transparency-team-plan.md"
+    ],
+    "commits": [
+      "c4b8e6dd13ee214fd63046ccd0ef483816f49fd9",
+      "40af488758531d0d7e3eace1367694e422baf57d",
+      "c03c701a4e32164185ce5c05ab8acd415154a04a",
+      "e1484abe8b47071d066f562d918314e3366274ae",
+      "e684e26706bb6074792c5e8c0caf864c90b43d60",
+      "e9c08bfa35d57136cc4218e476cfce7c2b4e41bb",
+      "b29d60621ab4217ea4c979b5b014d3ed1c419606",
+      "c0ac77a9cc1bff9785c6a3ebf4e7864f726a6cec",
+      "1aad2f252febbc45cc5c6ff9d116ca0beff4061d",
+      "b4b2adf91f0c40cfb331b21d4a022eff4241ed80",
+      "9667f1cf59993f582a7aef9e84bf20fc0cbe9735",
+      "ba141ba57df7e0e3d310f930322de5b5831acfcc",
+      "eb0cf108807d5d98e5a1982ca3851c80de6dffad",
+      "3bb854cc1aa41702aa2f189dcc6a862d07963104",
+      "75fb6edc29b9481c8e935fae273820846d3a4b55",
+      "44435699ffb938893e7aa31cd9ee06e190d539e7",
+      "f84dbee4635cf9b7fe891ba5f66ccf7684846c6d",
+      "2716741443533307bca8b58eb8042ba88fa69e7a",
+      "e5c53ffdb29ed46f59796331d56ac50371c974f4",
+      "1dd4295ecc04654062810126b71d70ae2f9c74e8",
+      "116e71ecf60fbeb019995bdb41ec2eeae0bc99c8",
+      "25a74a5814450d78fb6ff3e4e861ef212c1725b1",
+      "cbb8e23c7b80dc57d3e2138ef63422e95d823793"
+    ],
+    "sessions": []
+  }
+}

@@ -1,0 +1,624 @@
+{
+  "version": 1,
+  "id": "LCD",
+  "name": "Provider-based collection descriptions and a shared LLM client",
+  "description": "One shared LLM client over five providers (anthropic, openai, ollama, claude_cli, llama_cpp) now serves HyDE, RAG Fusion, graph enrichment and collection descriptions; adds wizard step, manual set/clear, describe job, backfill, status block, export v2, and drops claude-agent-sdk.",
+  "effort": "Very large: cuts across client layer, context-window sizing with a new token counter, four feature migrations, store columns via startup migration, REST, MCP, CLI, wizard, export format change, background lifecycle. Risky: local model windows, subprocess lockdown, breaking backups.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 40,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 13,
+    "tasks": 66,
+    "estimatedHours": 318.0
+  },
+  "git": {
+    "commits": 67,
+    "linesAdded": 45549,
+    "linesRemoved": 11695
+  },
+  "usage": {
+    "matchedBy": "prompt",
+    "sessions": 2,
+    "agentTimeMinutes": 2660,
+    "tokens": {
+      "input": 2277930,
+      "output": 17319375,
+      "reasoning": 0,
+      "cacheRead": 3747633948,
+      "cacheWrite": 81065130,
+      "total": 3848296383
+    },
+    "costUsd": 876.77
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Backlog/2026-10-30-010-llm-collection-descriptions-brief.md",
+      "Documentation/Backlog/2026-10-30-010-llm-collection-descriptions-tasks.md",
+      "Documentation/Backlog/2026-10-30-010-llm-collection-descriptions-team-plan.md"
+    ],
+    "commits": [
+      "2866eddcf30c80f8d14579485611f7da7f9a9810",
+      "822e096e4d78b17efd5b78e8a2808176a1521326",
+      "546483522e5bab7775fd3976d9e0b7cceb5bf127",
+      "56171290b0bd9eb0a18abde403d87c2658608199",
+      "5c5334da76afeae126b63e8d2bf8f9f95ca72504",
+      "248443a253907e0394811c93c23e436b06ba0d28",
+      "7f905f467f3c620d81136da705be7c41e17f49a6",
+      "82a2361313b3c1505f69f578093b228d574db624",
+      "584a543e0d434b8f50167f195d610e5afebb03aa",
+      "b2d5d6a4ed40b1f098708783e24c5f650a9b2805",
+      "7d34166750132bed14abba5229fa1886f349126f",
+      "ede1815add07466c74d1cfdde92e8430415c3d86",
+      "0502537f0f42ca8e9f74d80e036fa300e11648b3",
+      "f582e5959faf98a966ec4fe760277efeba005019",
+      "3af8bdbe5bfe34cca9474e722b2c36f10ca2e03e",
+      "f63399a17ae0e916c54b9081ff062767ee461abc",
+      "5f73c5495334339194451f52b5fc535bdd08220a",
+      "5c1d318dbaec4f611608528b168d2581739cad44",
+      "2c5ea547afa6b00f5b55e1afa55d80b525cda963",
+      "dcc4a72f22bc43b294cf7340a25d550d3f4d89ba",
+      "9127abd6e042ed6cc0f1e86085bdc9b58d5bbac0",
+      "f60c6847552debfd8c1be259ef5bfde4c26a5342",
+      "b21882df0599e9e9ee614d3515d3bd5d378999b6",
+      "8dff59e6524ecbf0f18a8aa181551acad0074f5d",
+      "596a97ba37b584d22051ccd72db5a29834a63699",
+      "64131e8aa68eae51a1aa23ffcad317c8ebd6ab75",
+      "12004c8c9b9a95bd19c909fd98f14618c8757419",
+      "649d6ebe12cf0fb16872fbde5ff382ce2feb107c",
+      "09ce84d60e7e193b812546b35438771913fdf1ce",
+      "bc3f99914c4ce07c2afc37efcfda425f7a7bd62e",
+      "e96808c2a236bb7448ed9d4caed1956930c2e978",
+      "3b085c0a5898443f887d24ec732c6c7cd5c493a9",
+      "0ab3e8d56a47cd6a72dcb2575a8159c0122ca269",
+      "96300bea84db3ab0c81de88e76ff0ef4142077bd",
+      "3a3ebe77552e77f46198089749fb4977170be060",
+      "e3b931eff9e0c18296e176f6eb7bda579bcb871c",
+      "1468ed8002ec010f276df98c68b96f90ff9ba29d",
+      "1ada499e303e1ade3bd45f6e05c81c3544a6ec8e",
+      "0f3e9c395bef33ec4ee88115e9453c6b8e1b1c1e",
+      "86b5633f304e4c2f16b0de91f63c385271ed2ef3",
+      "1167cf217338ea6e1c3b8f5d0d3d3ba8ef43b747",
+      "7ad351cf0524be878a8c208022969b42fb2998d8",
+      "dc4e76cb6626c2be6617f67a21428e79a78ca528",
+      "97d2826b76f2534caa7ecc61d85d17510f5debd1",
+      "71e53fa740ae5f0dc43ec94bbc9752f697b3665f",
+      "dfaabe263afee57595917b2926a734f5931a7f66",
+      "0fcc74432a49f4dd1dfc4071660e9a7e6f2feaf3",
+      "75c2538e9b0e3665f3de09612ce9ea3105ddde17",
+      "83f8281999080acdf6ab5919091f14ed7fa3dd84",
+      "72b496c9f2ceae6a6dfb8a9c356d3c89e1e71ed4",
+      "ae46c8785c481195adf138837ba1cdfcc21cde47",
+      "fce56ea97b28ef8a69803315c812e80340effff9",
+      "f4f8a34df36de7d11e9a3ddc1cf3850789352ed5",
+      "c5a1d285c0d33edb16b3a3c8e2354d96c6ba07fd",
+      "cbe60cee378a84b23b3e0a7dd364013eafb58204",
+      "dd5fb5ac5dc22ca6a40418b374ae0a0e588061fe",
+      "e22545e3e35c5c3412e5572ba85d3a77cfdcbf1d",
+      "90ca3a1376019421193f2369ee979450ad85c8a4",
+      "c099e5c5a6ed37ca3ff053634115708b7b7f2746",
+      "bd4e27f0bc5cfccde8416d09f90c271400ec39f9",
+      "6a707f490a7be4102cdd4fd511ffe567e4308a50",
+      "9155e5000a412ab6a39bb8cf0bc4ffbbd4997e23",
+      "98624e5130ca9db93e8102ea87130e19563534ae",
+      "629e71eb519972a2447e3e55f9a3139b3ce097bc",
+      "329d6ee3cb38bcf9eee104472269c62d87788ed3",
+      "68f1cd28f55de6308ae8ac2687002704b97a5fae",
+      "c15811646ffd2d075fff8aa1d7e76c324e033f32"
+    ],
+    "sessions": [
+      {
+        "harness": "omp",
+        "models": [
+          "anthropic/claude-sonnet-5-5"
+        ],
+        "id": "01a18bc9-b9cf-73c8-8549-1cf080ec8aea",
+        "path": "/Users/manczg/.omp/agent/sessions/-Documents-development-archon-search/2026-10-30T07-50-15-759Z_01a18bc9-b9cf-73c8-8549-1cf080ec8aea.jsonl",
+        "log": "/Users/manczg/.omp/agent/prompt-logs/archon-search-8daeee78061f/session_2026-10-30_07-50-15_01a18bc9-b9cf-73c8-8549-1cf080ec8aea.md",
+        "prompts": [
+          {
+            "number": 1,
+            "at": "2026-10-30T07:50:50+00:00",
+            "text": "Why do we need to download Claude Agent SDK for the Archon S",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 2,
+            "at": "2026-10-30T07:53:16+00:00",
+            "text": "But the description can be generated by a local running LLM",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 3,
+            "at": "2026-10-30T07:56:04+00:00",
+            "text": "I don't care what is in the code today. I'm talking about wh",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 4,
+            "at": "2026-10-30T08:01:40+00:00",
+            "text": "don't push me what to do. You follow me, not reversed. I don",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 5,
+            "at": "2026-10-30T08:13:01+00:00",
+            "text": "I agree with them. 6. How do you use the local models? Does",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 6,
+            "at": "2026-10-30T08:24:37+00:00",
+            "text": "6. so what is the solution? You just listed the info but you",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 7,
+            "at": "2026-10-30T08:31:31+00:00",
+            "text": "I wouldn't limit the context window by default. Use the curr",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 8,
+            "at": "2026-10-30T08:36:25+00:00",
+            "text": "optional per-feature override in every section and for llms",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 9,
+            "at": "2026-10-30T08:50:42+00:00",
+            "text": "claude_cli uses the same model as the cloud version via clau",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 10,
+            "at": "2026-10-30T08:52:51+00:00",
+            "text": "[IMPORTANT: User invoked the \"feature-refinement\" skill; fol",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 11,
+            "at": "2026-10-30T09:49:28+00:00",
+            "text": "A: Off by default, with a startup notice and a BREAKING.md e",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 12,
+            "at": "2026-10-30T09:53:36+00:00",
+            "text": "Why didn't you ask the remaining open questions?",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 13,
+            "at": "2026-10-30T09:57:29+00:00",
+            "text": "A: /status and the startup log only. I said to ask in the wi",
+            "reason": "before prompt 14"
+          },
+          {
+            "number": 14,
+            "at": "2026-10-30T10:08:36+00:00",
+            "text": "[IMPORTANT: User invoked the \"plan-maker-for-team\" skill; fo",
+            "reason": "names Documentation/Backlog/2026-10-30-010-llm-collection-descriptions-brief.md"
+          },
+          {
+            "number": 15,
+            "at": "2026-10-30T10:24:24+00:00",
+            "text": "Spawn agent to check the open questions, some of them may be",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 16,
+            "at": "2026-10-30T10:42:54+00:00",
+            "text": "[IMPORTANT: User invoked the \"options\" skill; follow its ins",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 17,
+            "at": "2026-10-30T10:48:44+00:00",
+            "text": "If we know the context window (we know or for cloud provider",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 18,
+            "at": "2026-10-30T10:51:45+00:00",
+            "text": "yes",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 19,
+            "at": "2026-10-30T11:22:22+00:00",
+            "text": "B",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 20,
+            "at": "2026-10-30T11:38:27+00:00",
+            "text": "Option A, but in this case we have to tell the rules ot the",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 21,
+            "at": "2026-10-30T11:42:05+00:00",
+            "text": "1. amend the brief. 2. ok, but the failure should stop worki",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 22,
+            "at": "2026-10-30T12:42:22+00:00",
+            "text": "Option A, The operator can change the default on a slower ma",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 23,
+            "at": "2026-10-30T13:19:02+00:00",
+            "text": "add to config this switch: think=false, or think=true or thi",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 24,
+            "at": "2026-10-30T13:37:12+00:00",
+            "text": "I accept",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 25,
+            "at": "2026-10-30T13:41:29+00:00",
+            "text": "A",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 26,
+            "at": "2026-10-30T14:04:13+00:00",
+            "text": "A",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 27,
+            "at": "2026-10-30T14:10:18+00:00",
+            "text": "A",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 28,
+            "at": "2026-10-30T14:15:51+00:00",
+            "text": "A",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 29,
+            "at": "2026-10-30T14:21:36+00:00",
+            "text": "B",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 30,
+            "at": "2026-10-30T14:24:05+00:00",
+            "text": "A",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 31,
+            "at": "2026-10-30T14:48:48+00:00",
+            "text": "A",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 32,
+            "at": "2026-10-30T14:53:10+00:00",
+            "text": "B",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 33,
+            "at": "2026-10-30T14:54:52+00:00",
+            "text": "B",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 34,
+            "at": "2026-10-30T14:56:57+00:00",
+            "text": "B",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 35,
+            "at": "2026-10-30T14:57:55+00:00",
+            "text": "A",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 36,
+            "at": "2026-10-30T14:58:50+00:00",
+            "text": "C",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 37,
+            "at": "2026-10-30T14:59:38+00:00",
+            "text": "A",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 38,
+            "at": "2026-10-30T15:31:18+00:00",
+            "text": "B",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 39,
+            "at": "2026-10-30T15:34:16+00:00",
+            "text": "how many questions do you have? i'm getting very angry.",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 40,
+            "at": "2026-10-30T15:40:56+00:00",
+            "text": "I don't think all of them are real questions. Don't ask ques",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 41,
+            "at": "2026-10-30T15:50:52+00:00",
+            "text": "A. But if the operator set local llm it should be configurab",
+            "reason": "follows prompt 14"
+          },
+          {
+            "number": 42,
+            "at": "2026-10-30T16:13:30+00:00",
+            "text": "/iterative-review 2026-10-30-010-llm-collection-descriptions",
+            "reason": "names 2026-10-30-010-llm-collection-descriptions-team-plan.md"
+          },
+          {
+            "number": 43,
+            "at": "2026-10-30T16:17:26+00:00",
+            "text": "[IMPORTANT: User invoked the \"iterative-review\" skill; follo",
+            "reason": "names 2026-10-30-010-llm-collection-descriptions-team-plan.md"
+          },
+          {
+            "number": 44,
+            "at": "2026-10-30T17:58:17+00:00",
+            "text": "[IMPORTANT: User invoked the \"options\" skill; follow its ins",
+            "reason": "names 2026-10-30-010-llm-collection-descriptions-team-plan.md"
+          },
+          {
+            "number": 45,
+            "at": "2026-10-30T18:17:08+00:00",
+            "text": "A",
+            "reason": "follows prompt 44"
+          },
+          {
+            "number": 46,
+            "at": "2026-10-30T18:20:57+00:00",
+            "text": "why didn't ask the Q44 too?????",
+            "reason": "follows prompt 44"
+          },
+          {
+            "number": 47,
+            "at": "2026-10-30T18:21:37+00:00",
+            "text": "Ok, then what does this row means? You said: \" - Plan, open-",
+            "reason": "follows prompt 44"
+          },
+          {
+            "number": 48,
+            "at": "2026-10-30T18:23:43+00:00",
+            "text": "whatt?????? Fuck, you just asked a couple of questions, I an",
+            "reason": "follows prompt 44"
+          },
+          {
+            "number": 49,
+            "at": "2026-10-30T18:24:47+00:00",
+            "text": "ok, thank you. always be straight.",
+            "reason": "follows prompt 44"
+          },
+          {
+            "number": 50,
+            "at": "2026-10-30T18:26:05+00:00",
+            "text": "[IMPORTANT: User invoked the \"create-tasks\" skill; follow it",
+            "reason": "names Documentation/Backlog/2026-10-30-010-llm-collection-descriptions-team-plan.md"
+          },
+          {
+            "number": 51,
+            "at": "2026-10-30T18:50:56+00:00",
+            "text": "I don't think all of them are real questions. Don't ask ques",
+            "reason": "follows prompt 50"
+          },
+          {
+            "number": 52,
+            "at": "2026-10-30T19:19:38+00:00",
+            "text": "Option C. Only check if claude is set to use in the config.",
+            "reason": "follows prompt 50"
+          },
+          {
+            "number": 53,
+            "at": "2026-10-30T19:41:39+00:00",
+            "text": "List here the tasks in /plain-language to be able to underst",
+            "reason": "follows prompt 50"
+          },
+          {
+            "number": 54,
+            "at": "2026-10-30T21:47:44+00:00",
+            "text": "move the tsp contracts to the api-contracts folder. Update t",
+            "reason": "follows prompt 50"
+          },
+          {
+            "number": 55,
+            "at": "2026-10-30T21:59:38+00:00",
+            "text": "[IMPORTANT: User invoked the \"commit\" skill; follow its inst",
+            "reason": "made 1 of its commits"
+          },
+          {
+            "number": 56,
+            "at": "2026-10-30T22:00:47+00:00",
+            "text": "[IMPORTANT: User invoked the \"implement\" skill; follow its i",
+            "reason": "names Documentation/Backlog/2026-10-30-010-llm-collection-descriptions-tasks.md"
+          }
+        ],
+        "agentTimeMinutes": 155,
+        "tokens": {
+          "input": 112965,
+          "output": 1485368,
+          "reasoning": 0,
+          "cacheRead": 252446939,
+          "cacheWrite": 6804925,
+          "total": 260850197
+        },
+        "costUsd": 67.54
+      },
+      {
+        "harness": "omp",
+        "models": [
+          "anthropic/claude-sonnet-5-5"
+        ],
+        "id": "01a18ed5-41fc-7523-b6c5-939f96451df1",
+        "path": "/Users/manczg/.omp/agent/sessions/-Documents-development-archon-search/2026-10-30T22-01-43-164Z_01a18ed5-41fc-7523-b6c5-939f96451df1.jsonl",
+        "log": "/Users/manczg/.omp/agent/prompt-logs/archon-search-8daeee78061f/session_2026-10-30_22-01-43_01a18ed5-41fc-7523-b6c5-939f96451df1.md",
+        "prompts": [
+          {
+            "number": 1,
+            "at": "2026-10-30T22:04:13+00:00",
+            "text": "[IMPORTANT: User invoked the \"implement\" skill; follow its i",
+            "reason": "names Documentation/Backlog/2026-10-30-010-llm-collection-descriptions-tasks.md"
+          },
+          {
+            "number": 2,
+            "at": "2026-10-30T22:06:41+00:00",
+            "text": "[IMPORTANT: User invoked the \"status-report\" skill; follow i",
+            "reason": "made 23 of its commits"
+          },
+          {
+            "number": 3,
+            "at": "2026-10-31T13:14:16+00:00",
+            "text": "Are you stuck in this task? Check it please",
+            "reason": "made 41 of its commits"
+          },
+          {
+            "number": 4,
+            "at": "2026-11-01T07:49:30+00:00",
+            "text": "you must test the manual tests too!",
+            "reason": "follows prompt 3"
+          },
+          {
+            "number": 5,
+            "at": "2026-11-01T07:51:36+00:00",
+            "text": "you say: Plan vs code gaps left unchanged. why? what is the",
+            "reason": "follows prompt 3"
+          },
+          {
+            "number": 6,
+            "at": "2026-11-01T07:52:53+00:00",
+            "text": "if you need to download model you can do it for testing purp",
+            "reason": "follows prompt 3"
+          },
+          {
+            "number": 7,
+            "at": "2026-11-01T07:55:32+00:00",
+            "text": "don't forget to update the related documentation at the end",
+            "reason": "follows prompt 3"
+          },
+          {
+            "number": 8,
+            "at": "2026-11-01T09:02:28+00:00",
+            "text": "[IMPORTANT: User invoked the \"status-report\" skill; follow i",
+            "reason": "follows prompt 3"
+          },
+          {
+            "number": 9,
+            "at": "2026-11-01T11:57:35+00:00",
+            "text": "ping",
+            "reason": "made 2 of its commits"
+          },
+          {
+            "number": 10,
+            "at": "2026-11-01T15:39:23+00:00",
+            "text": "Explain these in /plain-language one by one: Behaviour chang",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 11,
+            "at": "2026-11-01T16:00:42+00:00",
+            "text": "We shouldn't trim the query if there local llm also has a bi",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 12,
+            "at": "2026-11-01T16:01:56+00:00",
+            "text": "We shouldn't trim the query if the local llm also has a big",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 13,
+            "at": "2026-11-01T16:13:31+00:00",
+            "text": "A",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 14,
+            "at": "2026-11-01T18:33:11+00:00",
+            "text": "/commit",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 15,
+            "at": "2026-11-01T18:33:30+00:00",
+            "text": "Git push",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 16,
+            "at": "2026-11-01T18:34:35+00:00",
+            "text": "/clear",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 17,
+            "at": "2026-11-01T18:35:05+00:00",
+            "text": "Howe can I clear the session from remote?",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 18,
+            "at": "2026-11-01T18:36:50+00:00",
+            "text": "I use collab from mobile. How to clear session from mobile i",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 19,
+            "at": "2026-11-01T18:38:13+00:00",
+            "text": "/session-log usage",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 20,
+            "at": "2026-11-01T18:48:41+00:00",
+            "text": "where is this conversation log?",
+            "reason": "follows prompt 9"
+          },
+          {
+            "number": 21,
+            "at": "2026-11-01T18:50:01+00:00",
+            "text": "[IMPORTANT: User invoked the \"iterative-review\" skill; follo",
+            "reason": "follows prompt 9"
+          }
+        ],
+        "agentTimeMinutes": 2505,
+        "tokens": {
+          "input": 2164965,
+          "output": 15834007,
+          "reasoning": 0,
+          "cacheRead": 3495187009,
+          "cacheWrite": 74260205,
+          "total": 3587446186
+        },
+        "costUsd": 809.23
+      }
+    ]
+  }
+}

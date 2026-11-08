@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "B7",
+  "name": "Structured Logs + Log Rotation",
+  "description": "Wired the dead [logging] config: daily-rotating file handler, enforced log level, optional JSON format via python-json-logger, correlation_id filter, logger names normalized to archon_search.* across the package, plus a CI guard test.",
+  "effort": "Mostly small one-line edits across many files, but wide touch surface. One new module, config fields with validation, one new dependency, docs update. No storage or migrations. Risks: uvicorn logging propagation, single-process-only rotation, upgrade turning file logging on by default.",
+  "status": "delivered",
+  "storyPoints": null,
+  "updatedStoryPoints": 3,
+  "estimatedAt": null,
+  "estimatedBy": null,
+  "updatedBy": {
+    "harness": "omp",
+    "models": [
+      "anthropic/claude-sonnet-5-5"
+    ]
+  },
+  "plan": {
+    "phases": 4,
+    "tasks": 7,
+    "estimatedHours": null
+  },
+  "git": {
+    "commits": 7,
+    "linesAdded": 1386,
+    "linesRemoved": 105
+  },
+  "usage": {
+    "matchedBy": "none",
+    "sessions": 0,
+    "agentTimeMinutes": null,
+    "tokens": {
+      "input": null,
+      "output": null,
+      "reasoning": null,
+      "cacheRead": null,
+      "cacheWrite": null,
+      "total": null
+    },
+    "costUsd": null
+  },
+  "sources": {
+    "docs": [
+      "Documentation/Completed/B7-structured-logs-rotation-brief.md",
+      "Documentation/Completed/B7-structured-logs-rotation-plan.md"
+    ],
+    "commits": [
+      "4cc19fd05bc6eea1642cbb65ce2aa5a5ec6f1eda",
+      "44653d92112eadb48edeb28b3c3c971e0b822475",
+      "c7d10f7d7cb65f16807b7ee9189bafdf3b6b241e",
+      "95973cb3f19c0209c90ad8d6d7066916a46d6247",
+      "288647852ea7733f83a5a00f0679c66d37b107a0",
+      "d691cda6ed26416abeb0f8983649a27e73ccc567",
+      "b6f7b172b9339aecc4cb4eda22d2b8c71930c8f7"
+    ],
+    "sessions": []
+  }
+}
